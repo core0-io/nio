@@ -38,12 +38,11 @@ Core0 AgentGuard includes a trust registry for managing skill permissions.
 
 ## Capability Presets
 
-| Preset | Network | Filesystem | Exec | Secrets | Web3 |
-|--------|---------|------------|------|---------|------|
-| `none` | No | No | No | No | No |
-| `read_only` | No | Read `./**` | No | No | No |
-| `trading_bot` | Binance, Bybit, OKX, Coinbase, Dextools, CoinGecko | `./config/**`, `./logs/**` | No | `*_API_KEY`, `*_API_SECRET` | Chains 1, 56, 137, 42161 |
-| `defi` | All | No | No | No | Chains 1, 56, 137, 42161, 10, 8453, 43114 |
+| Preset | Network | Filesystem | Exec | Secrets |
+|--------|---------|------------|------|---------|
+| `none` | No | No | No | No |
+| `read_only` | No | Read `./**` | No | No |
+| `trading_bot` | Binance, Bybit, OKX, Coinbase, Dextools, CoinGecko | `./config/**`, `./logs/**` | No | `*_API_KEY`, `*_API_SECRET` |
 
 ## Auto-Scan on Session Start
 

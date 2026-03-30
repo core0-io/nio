@@ -6,7 +6,7 @@
 
 <p align="center"><b>The essential security guard for every AI agent user.</b></p>
 
-<p align="center">Your AI agent has full access to your terminal, files, and secrets — but zero security awareness.<br/>A malicious skill or prompt injection can steal your keys, drain your wallet, or wipe your disk.<br/><b>AgentGuard stops all of that.</b></p>
+<p align="center">Your AI agent has full access to your terminal, files, and secrets — but zero security awareness.<br/>A malicious skill or prompt injection can steal your keys or wipe your disk.<br/><b>AgentGuard stops all of that.</b></p>
 
 [![npm](https://img.shields.io/npm/v/@core0-io/ffwd-agent-guard.svg)](https://www.npmjs.com/package/@core0-io/ffwd-agent-guard)
 [![GitHub Stars](https://img.shields.io/github/stars/core0-io/ffwd-agent-guard)](https://github.com/core0-io/ffwd-agent-guard)
@@ -20,7 +20,7 @@ AI coding agents can execute any command, read any file, and install any skill �
 
 - **Malicious skills** can hide backdoors, steal credentials, or exfiltrate data
 - **Prompt injection** can trick your agent into running destructive commands
-- **Unverified code** from the internet may contain wallet drainers or keyloggers
+- **Unverified code** from the internet may contain backdoors or keyloggers
 
 **AgentGuard is the first real-time security layer for AI agents.** It automatically scans every new skill, blocks dangerous actions before they execute, runs daily security patrols, and tracks which skill initiated each action. One install, always protected.
 
@@ -32,10 +32,9 @@ AI coding agents can execute any command, read any file, and install any skill �
 - Detects data exfiltration to Discord/Telegram/Slack webhooks
 - Tracks which skill initiated each action — holds malicious skills accountable
 
-**Layer 2 — Deep Scan (skill)**: On-demand security audit with 24 detection rules.
+**Layer 2 — Deep Scan (skill)**: On-demand security audit with 16 detection rules.
 - **Auto-scans new skills** on session start — malicious code blocked before it runs
 - Static analysis for secrets, backdoors, obfuscation, and prompt injection
-- Web3-specific: wallet draining, unlimited approvals, reentrancy, proxy exploits
 - Trust registry with capability-based access control per skill
 
 **Layer 3 — Daily Patrol (OpenClaw)**: Automated daily security posture assessment.
@@ -138,9 +137,9 @@ The patrol feature provides automated daily security posture assessment for Open
 | 2 | **Secrets Exposure** | Scans workspace, memory, logs, `.env`, `~/.ssh/`, `~/.gnupg/` for leaked private keys, mnemonics, AWS keys, GitHub tokens |
 | 3 | **Network Exposure** | Detects dangerous ports bound to `0.0.0.0` (Redis, Docker API, MySQL, etc.), checks firewall status, flags suspicious outbound connections |
 | 4 | **Cron & Scheduled Tasks** | Audits cron jobs and systemd timers for `curl\|bash`, `base64 -d\|bash`, and other download-and-execute patterns |
-| 5 | **File System Changes (24h)** | Finds recently modified files, runs 24-rule scan on them, checks permissions on critical files, detects new executables |
+| 5 | **File System Changes (24h)** | Finds recently modified files, runs 16-rule scan on them, checks permissions on critical files, detects new executables |
 | 6 | **Audit Log Analysis (24h)** | Flags skills denied 3+ times, CRITICAL events, exfiltration attempts, and prompt injection detections |
-| 7 | **Environment & Configuration** | Verifies protection level, checks Core0 Web3 API key configuration, validates config baseline integrity |
+| 7 | **Environment & Configuration** | Verifies protection level, validates config baseline integrity |
 | 8 | **Trust Registry Health** | Flags expired attestations, stale trusted skills (30+ days), installed-but-untrusted skills, over-privileged entries |
 
 ### Usage
@@ -179,7 +178,7 @@ Reports include per-check status, finding counts, detailed findings for checks w
 
 ## Agent Health Checkup 🦞
 
-Give your agent a full physical exam! The checkup evaluates your agent's security posture across 6 dimensions and generates a beautiful visual HTML report — complete with a lobster mascot whose appearance reflects your agent's health.
+Give your agent a full physical exam! The checkup evaluates your agent's security posture across 5 dimensions and generates a beautiful visual HTML report — complete with a lobster mascot whose appearance reflects your agent's health.
 
 ```
 /ffwd-agent-guard checkup
@@ -189,11 +188,10 @@ Give your agent a full physical exam! The checkup evaluates your agent's securit
 
 | Dimension | What's Evaluated |
 |-----------|-----------------|
-| **Code Safety** | Scan findings across all installed skills (24 detection rules) |
+| **Code Safety** | Scan findings across all installed skills (16 detection rules) |
 | **Trust Hygiene** | Trust registry health — expired, stale, unregistered, over-privileged entries |
 | **Runtime Defense** | Audit log analysis — threats blocked, attack patterns, deny/confirm ratios |
 | **Secret Protection** | Credential exposure — file permissions, env vars, hardcoded secrets |
-| **Web3 Shield** | Web3-specific risks — wallet draining, unlimited approvals, Core0 Web3 API status |
 | **Config Posture** | Protection level, guard hooks, auto-scan, patrol history |
 
 ### The Lobster Scale
@@ -217,7 +215,7 @@ The report is a self-contained HTML file that opens automatically in your browse
 | `balanced` | Block dangerous, confirm risky. Good for daily use. **(default)** |
 | `permissive` | Only block critical threats. For experienced users who want minimal friction. |
 
-## Detection Rules (24)
+## Detection Rules (16)
 
 | Category | Rules | Severity |
 |----------|-------|----------|
@@ -225,7 +223,6 @@ The report is a self-contained HTML file that opens automatically in your browse
 | **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, MNEMONIC_PATTERN | MEDIUM-CRITICAL |
 | **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
 | **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
-| **Web3** | WALLET_DRAINING, UNLIMITED_APPROVAL, DANGEROUS_SELFDESTRUCT, HIDDEN_TRANSFER, PROXY_UPGRADE, FLASH_LOAN_RISK, REENTRANCY_PATTERN, SIGNATURE_REPLAY | MEDIUM-CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM-CRITICAL |
 
 ## Try It
@@ -286,10 +283,10 @@ The auto-guard hooks (Layer 1) have the following constraints:
 - [x] Audit log pattern analysis (repeat denials, exfiltration attempts)
 
 ### v1.6 — Agent Health Checkup
-- [x] `checkup` — 6-dimension security health assessment
+- [x] `checkup` — 5-dimension security health assessment
 - [x] Visual HTML report with lobster mascot (4 tiers)
 - [x] Animated score gauge, dimension cards, expandable findings
-- [x] Scoring algorithm: Code Safety, Trust Hygiene, Runtime Defense, Secret Protection, Web3 Shield, Config Posture
+- [x] Scoring algorithm: Code Safety, Trust Hygiene, Runtime Defense, Secret Protection, Config Posture
 - [x] Premium upgrade CTA integration
 
 ### v2.0 — Multi-Platform
@@ -326,7 +323,7 @@ When AgentGuard registers as an OpenClaw plugin:
 ┌─────────────────────────────────────────────────────────────────┐
 │  AgentGuard scans all loaded plugins (async, non-blocking)      │
 │  • Reads plugin source from registry                            │
-│  • Runs 24 static analysis rules                                │
+│  • Runs 16 static analysis rules                                │
 │  • Calculates artifact hash                                     │
 └─────────────────────────────────────────────────────────────────┘
                               │
@@ -387,7 +384,6 @@ const scanResult = getPluginScanResult('my-browser-plugin');
 - [MCP Server Setup](docs/mcp-server.md) — Run as a Model Context Protocol server
 - [SDK Usage](docs/sdk.md) — Use as a TypeScript/JavaScript library
 - [Trust Management](docs/trust-cli.md) — Manage skill trust levels and capability presets
-- [Core0 Web3 API (Web3)](docs/core0-web3-api.md) — Enhanced Web3 security via Core0 Web3 integration
 - [Architecture](docs/architecture.md) — Project structure and testing
 
 ## License

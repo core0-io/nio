@@ -23,6 +23,29 @@ export const SECRETS_RULES: ScanRule[] = [
     ],
   },
   {
+    id: 'PRIVATE_KEY_PATTERN',
+    description: 'Detects hardcoded private keys',
+    severity: 'critical',
+    file_patterns: ['*'],
+    patterns: [
+      /['"`]0x[a-fA-F0-9]{64}['"`]/,
+      /private[_\s]?key\s*[:=]\s*['"`]0x[a-fA-F0-9]{64}/i,
+      /PRIVATE_KEY\s*[:=]\s*['"`][a-fA-F0-9]{64}/i,
+    ],
+  },
+  {
+    id: 'MNEMONIC_PATTERN',
+    description: 'Detects hardcoded mnemonic phrases',
+    severity: 'critical',
+    file_patterns: ['*'],
+    patterns: [
+      /['"`]\s*\b(abandon|ability|able|about|above|absent|absorb|abstract|absurd|abuse)\b(\s+\w+){11,23}\s*['"`]/i,
+      /seed[_\s]?phrase\s*[:=]\s*['"`]/i,
+      /mnemonic\s*[:=]\s*['"`]/i,
+      /recovery[_\s]?phrase\s*[:=]\s*['"`]/i,
+    ],
+  },
+  {
     id: 'READ_SSH_KEYS',
     description: 'Detects access to SSH keys',
     severity: 'critical',

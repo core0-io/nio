@@ -9,9 +9,7 @@ export type ActionType =
   | 'exec_command'
   | 'read_file'
   | 'write_file'
-  | 'secret_access'
-  | 'web3_tx'
-  | 'web3_sign';
+  | 'secret_access';
 
 /**
  * Policy decision
@@ -87,39 +85,13 @@ export interface SecretAccessData {
 }
 
 /**
- * Web3 transaction action data
- */
-export interface Web3TxData {
-  chain_id: number;
-  from: string;
-  to: string;
-  value: string;
-  data?: string;
-  gas_limit?: string;
-  origin?: string;
-}
-
-/**
- * Web3 signature action data
- */
-export interface Web3SignData {
-  chain_id: number;
-  signer: string;
-  message?: string;
-  typed_data?: unknown;
-  origin?: string;
-}
-
-/**
  * Union type for all action data
  */
 export type ActionData =
   | NetworkRequestData
   | ExecCommandData
   | FileOperationData
-  | SecretAccessData
-  | Web3TxData
-  | Web3SignData;
+  | SecretAccessData;
 
 /**
  * Action context
@@ -153,77 +125,4 @@ export interface ActionEnvelope {
   };
   /** Action context */
   context: ActionContext;
-}
-
-/**
- * Web3 intent for simulation
- */
-export interface Web3Intent {
-  chain_id: number;
-  from: string;
-  to: string;
-  value: string;
-  data?: string;
-  origin?: string;
-  kind: 'tx' | 'sign';
-}
-
-/**
- * Asset change from simulation
- */
-export interface AssetChange {
-  asset_type: 'native' | 'erc20' | 'erc721' | 'erc1155';
-  token_address?: string;
-  token_id?: string;
-  amount: string;
-  direction: 'in' | 'out';
-}
-
-/**
- * Approval change from simulation
- */
-export interface ApprovalChange {
-  token_address: string;
-  spender: string;
-  amount: string;
-  is_unlimited: boolean;
-}
-
-/**
- * Web3 simulation result
- */
-export interface Web3SimulationResult {
-  /** Decision */
-  decision: Decision;
-  /** Risk level */
-  risk_level: RiskLevel;
-  /** Risk tags */
-  risk_tags: string[];
-  /** Human-readable explanation */
-  explanation: string;
-  /** Core0 Web3 security API raw response envelope */
-  core0Web3?: {
-    simulation?: {
-      success: boolean;
-      balance_changes: AssetChange[];
-      approval_changes: ApprovalChange[];
-    };
-    address_risk?: {
-      is_malicious: boolean;
-      is_phishing: boolean;
-      risk_type?: string[];
-    };
-    token_risk?: {
-      is_honeypot: boolean;
-      has_hidden_tax: boolean;
-      buy_tax?: string;
-      sell_tax?: string;
-    };
-  };
-  /** Guardrail recommendations */
-  guardrail?: {
-    require_user_confirmation: boolean;
-    suggested_change?: string;
-    capabilities_patch?: Partial<CapabilityModel>;
-  };
 }

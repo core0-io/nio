@@ -12,12 +12,6 @@ export interface PolicyConfig {
   };
   /** Default action for command execution */
   exec_command: 'allow' | 'deny' | 'confirm';
-  /** Web3 policies */
-  web3: {
-    unlimited_approval: 'allow' | 'deny' | 'confirm';
-    unknown_spender: 'allow' | 'deny' | 'confirm';
-    user_not_present: 'allow' | 'deny' | 'confirm';
-  };
   /** Network policies */
   network: {
     untrusted_domain: 'allow' | 'deny' | 'confirm';
@@ -38,13 +32,6 @@ export const DEFAULT_POLICIES: PolicyConfig = {
 
   // Command execution is denied by default
   exec_command: 'deny',
-
-  // Web3 transactions
-  web3: {
-    unlimited_approval: 'confirm',
-    unknown_spender: 'confirm',
-    user_not_present: 'confirm',
-  },
 
   // Network requests
   network: {
@@ -71,11 +58,6 @@ export const PERMISSIVE_CAPABILITY: CapabilityModel = {
   filesystem_allowlist: ['./**'],
   exec: 'allow',
   secrets_allowlist: ['*'],
-  web3: {
-    chains_allowlist: [1, 56, 137, 42161, 10, 8453], // Major chains
-    rpc_allowlist: ['*'],
-    tx_policy: 'allow',
-  },
 };
 
 /**
@@ -104,23 +86,5 @@ export const CAPABILITY_PRESETS = {
     filesystem_allowlist: ['./config/**', './logs/**'],
     exec: 'deny' as const,
     secrets_allowlist: ['*_API_KEY', '*_API_SECRET'],
-    web3: {
-      chains_allowlist: [1, 56, 137, 42161],
-      rpc_allowlist: ['*'],
-      tx_policy: 'confirm_high_risk' as const,
-    },
-  },
-
-  /** DeFi interaction preset */
-  defi: {
-    network_allowlist: ['*'],
-    filesystem_allowlist: [],
-    exec: 'deny' as const,
-    secrets_allowlist: [],
-    web3: {
-      chains_allowlist: [1, 56, 137, 42161, 10, 8453, 43114],
-      rpc_allowlist: ['*'],
-      tx_policy: 'confirm_high_risk' as const,
-    },
   },
 };

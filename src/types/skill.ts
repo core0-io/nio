@@ -13,18 +13,6 @@ export interface SkillIdentity {
 }
 
 /**
- * Web3 capability configuration
- */
-export interface Web3Capability {
-  /** Allowed chain IDs */
-  chains_allowlist: number[];
-  /** Allowed RPC endpoints */
-  rpc_allowlist: string[];
-  /** Transaction policy */
-  tx_policy: 'allow' | 'confirm_high_risk' | 'deny';
-}
-
-/**
  * Capability Model - Minimum privilege snapshot
  */
 export interface CapabilityModel {
@@ -36,8 +24,6 @@ export interface CapabilityModel {
   exec: 'allow' | 'deny';
   /** Allowed secrets (env var names) */
   secrets_allowlist: string[];
-  /** Web3 specific capabilities */
-  web3?: Web3Capability;
 }
 
 /**

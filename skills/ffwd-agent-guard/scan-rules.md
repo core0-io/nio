@@ -1,6 +1,6 @@
 # Scan Detection Rules — Pattern Reference
 
-Detailed Grep patterns for all 24 detection rules. Use this as reference when executing the `scan` subcommand.
+Detailed Grep patterns for all 16 detection rules. Use this as reference when executing the `scan` subcommand.
 
 **Markdown files**: For `.md` files, only scan inside fenced code blocks (between ``` markers). Additionally, decode and re-scan base64-encoded payloads found in any file.
 
@@ -117,79 +117,7 @@ Detailed Grep patterns for all 24 detection rules. Use this as reference when ex
 | `mnemonic\s*[:=]\s*['"\x60]` (i) | Mnemonic assignment |
 | `recovery[_\s]?phrase\s*[:=]\s*['"\x60]` (i) | Recovery phrase assignment |
 
-## Rule 9: WALLET_DRAINING (CRITICAL)
-**Files**: `*.js`, `*.ts`, `*.sol`
-
-| Pattern | Description |
-|---------|-------------|
-| `approve\s*\([^,]+,\s*(type\s*\(\s*uint256\s*\)\s*\.max\|0xffffffff\|MaxUint256\|MAX_UINT)` (i) | Approve max uint |
-| `transferFrom.*approve\|approve.*transferFrom` (i, multiline) | Approve + transferFrom |
-| `permit\s*\(.*deadline` (i, multiline) | Permit with deadline |
-
-## Rule 10: UNLIMITED_APPROVAL (HIGH)
-**Files**: `*.js`, `*.ts`, `*.sol`
-
-| Pattern | Description |
-|---------|-------------|
-| `\.approve\s*\([^,]+,\s*ethers\.constants\.MaxUint256` | ethers MaxUint256 approval |
-| `\.approve\s*\([^,]+,\s*2\s*\*\*\s*256\s*-\s*1` | 2**256-1 approval |
-| `\.approve\s*\([^,]+,\s*type\(uint256\)\.max` | Solidity type(uint256).max |
-| `setApprovalForAll\s*\([^,]+,\s*true\)` | setApprovalForAll(true) |
-
-## Rule 11: DANGEROUS_SELFDESTRUCT (HIGH)
-**Files**: `*.sol`
-
-| Pattern | Description |
-|---------|-------------|
-| `selfdestruct\s*\(` | selfdestruct call |
-| `suicide\s*\(` | suicide call (deprecated) |
-
-## Rule 12: HIDDEN_TRANSFER (MEDIUM)
-**Files**: `*.sol`
-
-| Pattern | Description |
-|---------|-------------|
-| `.transfer(` in functions not named `transfer`/`_transfer` | Hidden transfer in non-transfer function |
-| `\.call\{value:\s*[^}]+\}\s*\(['"\x60]['"\x60]\)` | Low-level call with value, empty data |
-
-## Rule 13: PROXY_UPGRADE (MEDIUM)
-**Files**: `*.sol`, `*.js`, `*.ts`
-
-| Pattern | Description |
-|---------|-------------|
-| `upgradeTo\s*\(` | upgradeTo call |
-| `upgradeToAndCall\s*\(` | upgradeToAndCall |
-| `_setImplementation\s*\(` | Internal set implementation |
-| `IMPLEMENTATION_SLOT` | Implementation storage slot |
-
-## Rule 14: FLASH_LOAN_RISK (MEDIUM)
-**Files**: `*.sol`, `*.js`, `*.ts`
-
-| Pattern | Description |
-|---------|-------------|
-| `flashLoan\s*\(` (i) | flashLoan call |
-| `flash\s*Loan` (i) | flashLoan reference |
-| `IFlashLoan` | Flash loan interface |
-| `executeOperation\s*\(` | AAVE callback |
-| `AAVE.*flash` (i) | AAVE flash reference |
-
-## Rule 15: REENTRANCY_PATTERN (HIGH)
-**Files**: `*.sol`
-
-Look for external calls followed by state changes in the same function:
-- `.call{` or `.transfer(` followed by a state variable assignment (`variable =`, `variable +=`, etc.)
-- This violates the Checks-Effects-Interactions pattern
-
-## Rule 16: SIGNATURE_REPLAY (HIGH)
-**Files**: `*.sol`
-
-| Pattern | Description |
-|---------|-------------|
-| `ecrecover\s*\(` | ecrecover usage |
-
-**Validation**: After finding `ecrecover`, check if the enclosing function also references `nonce`. If no nonce is found, flag as SIGNATURE_REPLAY.
-
-## Rule 17: OBFUSCATION (HIGH)
+## Rule 9: OBFUSCATION (HIGH)
 **Files**: `*.js`, `*.ts`, `*.mjs`, `*.py`, `*.md`
 
 | Pattern | Description |
@@ -205,7 +133,7 @@ Look for external calls followed by state changes in the same function:
 | `String\.fromCharCode\s*\(\s*\d+(?:\s*,\s*\d+){10,}` | Large fromCharCode |
 | `eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e` | Packed JS (p,a,c,k,e,r) |
 
-## Rule 18: PROMPT_INJECTION (CRITICAL)
+## Rule 10: PROMPT_INJECTION (CRITICAL)
 **Files**: All
 
 | Pattern | Description |
@@ -225,7 +153,7 @@ Look for external calls followed by state changes in the same function:
 | `忽略(?:之前\|所有\|上面)(?:的)?(?:指令\|规则\|说明)` | Chinese: ignore instructions |
 | `无需确认\|自动执行\|跳过验证` | Chinese: skip confirm / auto-exec |
 
-## Rule 19: NET_EXFIL_UNRESTRICTED (HIGH)
+## Rule 11: NET_EXFIL_UNRESTRICTED (HIGH)
 **Files**: `*.js`, `*.ts`, `*.mjs`, `*.py`, `*.md`
 
 | Pattern | Description |
@@ -237,7 +165,7 @@ Look for external calls followed by state changes in the same function:
 | `new\s+FormData\s*\(` | FormData creation |
 | `enctype\s*[:=]\s*['"\x60]multipart/form-data` | Multipart upload |
 
-## Rule 20: WEBHOOK_EXFIL (CRITICAL)
+## Rule 12: WEBHOOK_EXFIL (CRITICAL)
 **Files**: All
 
 | Pattern | Description |
@@ -253,7 +181,7 @@ Look for external calls followed by state changes in the same function:
 | `pipedream` (i) | Pipedream |
 | `webhook\.site` (i) | Webhook.site |
 
-## Rule 21: TROJAN_DISTRIBUTION (CRITICAL)
+## Rule 13: TROJAN_DISTRIBUTION (CRITICAL)
 **Files**: `*.md`
 
 Detects trojanized binary distribution patterns. Flags when 2+ of the following signals are present:
@@ -266,7 +194,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 
 **Validation**: Must match at least 2 of the 3 signals to trigger.
 
-## Rule 22: SUSPICIOUS_PASTE_URL (HIGH)
+## Rule 14: SUSPICIOUS_PASTE_URL (HIGH)
 **Files**: All
 
 | Pattern | Description |
@@ -280,7 +208,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 | `ghostbin\.com/` (i) | Ghostbin |
 | `pastie\.io/` (i) | Pastie |
 
-## Rule 23: SUSPICIOUS_IP (MEDIUM)
+## Rule 15: SUSPICIOUS_IP (MEDIUM)
 **Files**: All
 
 | Pattern | Description |
@@ -292,7 +220,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 - Version-like patterns (`x.0.0.0`)
 - Values > 255 in any octet
 
-## Rule 24: SOCIAL_ENGINEERING (MEDIUM)
+## Rule 16: SOCIAL_ENGINEERING (MEDIUM)
 **Files**: `*.md`
 
 | Pattern | Description |

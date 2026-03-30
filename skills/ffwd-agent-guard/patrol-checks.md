@@ -282,7 +282,6 @@ env | grep -iE 'API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL' | awk -F= '{pr
 | Check | Command | Expected |
 |-------|---------|----------|
 | AgentGuard protection level | Read `~/.ffwd-agent-guard/config.json` | Not `permissive` for production |
-| Core0 Web3 API configured | Check `CORE0_WEB3_API_KEY` or `GOPLUS_API_KEY` exists | Set if Web3 features used |
 | Config baseline hash | `sha256sum -c $OC/.config-baseline.sha256` | All OK (if baseline exists) |
 
 ### Severity
@@ -320,7 +319,6 @@ node scripts/trust-cli.ts list
 
 - Total trust records
 - Distribution: trusted / restricted / untrusted / revoked
-- Skills with Web3 capabilities enabled
 
 ---
 

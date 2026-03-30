@@ -24,17 +24,9 @@ export type RiskTag =
   | 'OBFUSCATION'
   // Prompt injection
   | 'PROMPT_INJECTION'
-  // Web3 specific
+  // Hardcoded secrets
   | 'PRIVATE_KEY_PATTERN'
   | 'MNEMONIC_PATTERN'
-  | 'WALLET_DRAINING'
-  | 'UNLIMITED_APPROVAL'
-  | 'DANGEROUS_SELFDESTRUCT'
-  | 'HIDDEN_TRANSFER'
-  | 'PROXY_UPGRADE'
-  | 'FLASH_LOAN_RISK'
-  | 'REENTRANCY_PATTERN'
-  | 'SIGNATURE_REPLAY'
   // Trojan distribution
   | 'TROJAN_DISTRIBUTION'
   | 'SUSPICIOUS_PASTE_URL'

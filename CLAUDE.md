@@ -7,7 +7,7 @@ Security framework for AI agents. Provides code scanning, runtime action evaluat
 This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ```
-/ffwd-agent-guard scan <path>          — Scan code for security risks (24 detection rules)
+/ffwd-agent-guard scan <path>          — Scan code for security risks (16 detection rules)
 /ffwd-agent-guard action <description> — Evaluate runtime action safety (allow/deny/confirm)
 /ffwd-agent-guard patrol [run|setup|status] — Daily security patrol for OpenClaw environments
 /ffwd-agent-guard trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
@@ -29,12 +29,4 @@ The `trust` and `action` subcommands use CLI scripts that require the @core0-io/
 
 ```bash
 cd skills/ffwd-agent-guard/scripts && npm install
-```
-
-For Core0 Web3 API (optional Web3 enhancement for action evaluation):
-
-```bash
-export CORE0_WEB3_API_KEY=your_key
-export CORE0_WEB3_API_SECRET=your_secret
-# or legacy: GOPLUS_API_KEY / GOPLUS_API_SECRET
 ```

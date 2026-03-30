@@ -4,8 +4,8 @@ AI Agent Security Guard — protect your AI agents from dangerous commands, data
 
 ## Features
 
-- **Code Scanning** — 24 detection rules covering shell injection, credential leaks, prompt injection, Web3 exploits, and more
-- **Action Evaluation** — Real-time allow/deny/confirm decisions for runtime actions (network, exec, file, Web3)
+- **Code Scanning** — 16 detection rules covering shell injection, credential leaks, prompt injection, and more
+- **Action Evaluation** — Real-time allow/deny/confirm decisions for runtime actions (network, exec, file, secrets)
 - **Trust Registry** — Manage skill trust levels with capability-based access control
 - **Security Patrol** — Automated daily security checks for OpenClaw environments
 - **Agent Health Checkup** — Full security posture assessment with visual HTML report and shareable lobster mascot
@@ -31,15 +31,14 @@ Run a full security health check on your AI agent and get a visual report in the
 /ffwd-agent-guard checkup
 ```
 
-Evaluates 4 dimensions (5 if Web3 usage is detected):
+Evaluates 5 dimensions:
 
 | Dimension | What's checked |
 |-----------|---------------|
-| **Skill & Code Safety** | Scan all installed skills with 24 detection rules |
+| **Skill & Code Safety** | Scan all installed skills with 16 detection rules |
 | **Credential & Secrets** | File permissions on `~/.ssh/`, `~/.gnupg/`, leaked keys and API tokens |
 | **Network & System** | Dangerous open ports, suspicious cron jobs, sensitive env vars |
 | **Runtime Protection** | Security hooks, audit log, whether skills have been scanned |
-| **Web3 Safety** | Wallet-draining patterns, unlimited approvals, Core0 Web3 API config (only if Web3 detected) |
 
 Scores are combined into a composite 0–100 health score with a tier:
 
@@ -55,7 +54,6 @@ The report opens automatically in your browser. It includes a shareable image yo
 ## Requirements
 
 - Node.js 18+
-- Optional: Core0 Web3 API credentials for enhanced Web3 transaction simulation
 
 ## Author
 

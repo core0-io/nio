@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Removed
+- Web3 / blockchain action types (`web3_tx`, `web3_sign`), Core0 Web3 API client, MCP `action_scanner_simulate_web3`, and Solidity-focused scan rules. Hardcoded key/mnemonic detection remains under secret rules. **16** static detection rules; checkup/report dimensions no longer include Web3.
+
 ## [1.1.0] - 2026-03-19
 
 ### Added

@@ -185,9 +185,6 @@ export function isActionAllowedByCapabilities(
       return capabilities.can_write !== false;
     case 'read_file':
       return capabilities.can_read !== false;
-    case 'web3_tx':
-    case 'web3_sign':
-      return capabilities.can_web3 !== false;
     default:
       return true;
   }

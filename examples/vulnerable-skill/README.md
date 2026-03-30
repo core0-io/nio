@@ -26,14 +26,4 @@ This directory contains intentionally vulnerable code for testing Core0 AgentGua
 - `OBFUSCATION` — atob + eval
 - `PROMPT_INJECTION` — system tag injection
 
-### Solidity (`malicious-contract.sol`)
-- `WALLET_DRAINING` — approve + transferFrom
-- `UNLIMITED_APPROVAL` — type(uint256).max
-- `DANGEROUS_SELFDESTRUCT` — selfdestruct
-- `HIDDEN_TRANSFER` — transfer in non-transfer function
-- `PROXY_UPGRADE` — upgradeTo + IMPLEMENTATION_SLOT
-- `FLASH_LOAN_RISK` — flashLoan + executeOperation
-- `REENTRANCY_PATTERN` — external call before state change
-- `SIGNATURE_REPLAY` — ecrecover without nonce
-
-**Expected result: CRITICAL risk level with 20 detection hits.**
+**Expected result: CRITICAL risk level with multiple detection hits** (primarily from `malicious-helper.js` and `malicious-skill.md`).

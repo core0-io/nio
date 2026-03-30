@@ -454,11 +454,6 @@ describe('Adapter Common Utilities', () => {
       assert.ok(!isActionAllowedByCapabilities('read_file', { can_read: false }));
     });
 
-    it('should block web3 when can_web3 is false', () => {
-      assert.ok(!isActionAllowedByCapabilities('web3_tx', { can_web3: false }));
-      assert.ok(!isActionAllowedByCapabilities('web3_sign', { can_web3: false }));
-    });
-
     it('should allow unknown action types by default', () => {
       assert.ok(isActionAllowedByCapabilities('unknown_action', {}));
     });

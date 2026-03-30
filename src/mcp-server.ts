@@ -13,7 +13,7 @@ import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';
 import { ActionScanner } from './action/index.js';
 import type { SkillIdentity, CapabilityModel } from './types/skill.js';
-import type { ActionEnvelope, Web3Intent } from './types/action.js';
+import type { ActionEnvelope } from './types/action.js';
 import type { TrustLevel } from './types/registry.js';
 
 // Module instances (initialized in createServer)
@@ -34,11 +34,6 @@ const CapabilityModelSchema = z.object({
   filesystem_allowlist: z.array(z.string()),
   exec: z.enum(['allow', 'deny']),
   secrets_allowlist: z.array(z.string()),
-  web3: z.object({
-    chains_allowlist: z.array(z.number()),
-    rpc_allowlist: z.array(z.string()),
-    tx_policy: z.enum(['allow', 'confirm_high_risk', 'deny']),
-  }).optional(),
 });
 
 const ActionContextSchema = z.object({
@@ -57,7 +52,7 @@ const ActionEnvelopeSchema = z.object({
   action: z.object({
     type: z.enum([
       'network_request', 'exec_command', 'read_file',
-      'write_file', 'secret_access', 'web3_tx', 'web3_sign',
+      'write_file', 'secret_access',
     ]),
     data: z.record(z.unknown()),
   }),
@@ -244,7 +239,7 @@ function createServer(options?: { registryPath?: string }): Server {
                 properties: {
                   type: {
                     type: 'string',
-                    enum: ['network_request', 'exec_command', 'read_file', 'write_file', 'secret_access', 'web3_tx', 'web3_sign'],
+                    enum: ['network_request', 'exec_command', 'read_file', 'write_file', 'secret_access'],
                   },
                   data: { type: 'object', description: 'Action-specific data' },
                 },
@@ -261,22 +256,6 @@ function createServer(options?: { registryPath?: string }): Server {
               },
             },
             required: ['actor', 'action', 'context'],
-          },
-        },
-        {
-          name: 'action_scanner_simulate_web3',
-          description: 'Simulate a Web3 transaction using Core0 Web3 API. Returns risk analysis.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              chain_id: { type: 'number', description: 'Chain ID (e.g., 1 for Ethereum)' },
-              from: { type: 'string', description: 'Sender address' },
-              to: { type: 'string', description: 'Target address' },
-              value: { type: 'string', description: 'Value in wei' },
-              data: { type: 'string', description: 'Transaction calldata' },
-              origin: { type: 'string', description: 'DApp origin URL' },
-            },
-            required: ['chain_id', 'from', 'to', 'value'],
           },
         },
       ],
@@ -412,30 +391,6 @@ function createServer(options?: { registryPath?: string }): Server {
           envelope.context.time = new Date().toISOString();
 
           const result = await actionScanner.decide(envelope);
-
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result, null, 2),
-              },
-            ],
-          };
-        }
-
-        // Action scanner: simulate_web3
-        case 'action_scanner_simulate_web3': {
-          const intent: Web3Intent = {
-            chain_id: args?.chain_id as number,
-            from: args?.from as string,
-            to: args?.to as string,
-            value: args?.value as string,
-            data: args?.data as string | undefined,
-            origin: args?.origin as string | undefined,
-            kind: 'tx',
-          };
-
-          const result = await actionScanner.simulateWeb3(intent);
 
           return {
             content: [

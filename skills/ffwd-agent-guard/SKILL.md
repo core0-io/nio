@@ -2,11 +2,10 @@
 name: ffwd-agent-guard
 description: Core0 AgentGuard — AI agent security guard. Run /ffwd-agent-guard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
 license: MIT
-compatibility: Requires Node.js 18+. Optional Core0 Web3 API credentials (CORE0_WEB3_* or GOPLUS_* env vars).
+compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
   version: "1.1"
-  optional_env: "CORE0_WEB3_API_KEY, CORE0_WEB3_API_SECRET (or GOPLUS_* for compatibility; Web3 simulation only)"
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
 argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
@@ -74,22 +73,14 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 | 6 | READ_KEYCHAIN | CRITICAL | all | System keychain / browser profiles |
 | 7 | PRIVATE_KEY_PATTERN | CRITICAL | all | Hardcoded private keys |
 | 8 | MNEMONIC_PATTERN | CRITICAL | all | Hardcoded mnemonic phrases |
-| 9 | WALLET_DRAINING | CRITICAL | js,ts,sol | Approve + transferFrom patterns |
-| 10 | UNLIMITED_APPROVAL | HIGH | js,ts,sol | Unlimited token approvals |
-| 11 | DANGEROUS_SELFDESTRUCT | HIGH | sol | selfdestruct in contracts |
-| 12 | HIDDEN_TRANSFER | MEDIUM | sol | Non-standard transfer implementations |
-| 13 | PROXY_UPGRADE | MEDIUM | sol,js,ts | Proxy upgrade patterns |
-| 14 | FLASH_LOAN_RISK | MEDIUM | sol,js,ts | Flash loan usage |
-| 15 | REENTRANCY_PATTERN | HIGH | sol | External call before state change |
-| 16 | SIGNATURE_REPLAY | HIGH | sol | ecrecover without nonce |
-| 17 | OBFUSCATION | HIGH | js,ts,mjs,py,md | Code obfuscation techniques |
-| 18 | PROMPT_INJECTION | CRITICAL | all | Prompt injection attempts |
-| 19 | NET_EXFIL_UNRESTRICTED | HIGH | js,ts,mjs,py,md | Unrestricted POST / upload |
-| 20 | WEBHOOK_EXFIL | CRITICAL | all | Webhook exfiltration domains |
-| 21 | TROJAN_DISTRIBUTION | CRITICAL | md | Trojanized binary download + password + execute |
-| 22 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
-| 23 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
-| 24 | SOCIAL_ENGINEERING | MEDIUM | md | Pressure language + execution instructions |
+| 9 | OBFUSCATION | HIGH | js,ts,mjs,py,md | Code obfuscation techniques |
+| 10 | PROMPT_INJECTION | CRITICAL | all | Prompt injection attempts |
+| 11 | NET_EXFIL_UNRESTRICTED | HIGH | js,ts,mjs,py,md | Unrestricted POST / upload |
+| 12 | WEBHOOK_EXFIL | CRITICAL | all | Webhook exfiltration domains |
+| 13 | TROJAN_DISTRIBUTION | CRITICAL | md | Trojanized binary download + password + execute |
+| 14 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
+| 15 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
+| 16 | SOCIAL_ENGINEERING | MEDIUM | md | Pressure language + execution instructions |
 
 ### Risk Level Calculation
 
@@ -160,8 +151,6 @@ Evaluate whether a proposed runtime action should be allowed, denied, or require
 - `exec_command` — Shell command execution
 - `read_file` / `write_file` — File system operations
 - `secret_access` — Environment variable access
-- `web3_tx` — Blockchain transactions
-- `web3_sign` — Message signing
 
 ### Decision Framework
 
@@ -170,7 +159,6 @@ Parse the user's action description and apply the appropriate detector:
 **Network Requests**: Check domain against webhook list and high-risk TLDs, check body for secrets
 **Command Execution**: Check against dangerous/sensitive/system/network command lists, detect shell injection
 **Secret Access**: Classify secret type and apply priority-based risk levels
-**Web3 Transactions**: Check for unlimited approvals, unknown spenders, user presence
 
 ### Default Policies
 
@@ -180,43 +168,18 @@ Parse the user's action description and apply the appropriate detector:
 | Mnemonic exfiltration | **DENY** (always) |
 | API secret exfiltration | CONFIRM |
 | Command execution | **DENY** (default) |
-| Unlimited approval | CONFIRM |
-| Unknown spender | CONFIRM |
 | Untrusted domain | CONFIRM |
 | Body contains secret | **DENY** |
 
-### Web3 Enhanced Detection
+### Action CLI (`action-cli.ts`)
 
-When the action involves **web3_tx** or **web3_sign**, use AgentGuard's bundled `action-cli.ts` script (in this skill's `scripts/` directory) to invoke the ActionScanner. This script integrates the trust registry and optionally the Core0 Web3 API (set `CORE0_WEB3_API_KEY` / `CORE0_WEB3_API_SECRET`, or `GOPLUS_API_KEY` / `GOPLUS_API_SECRET` for compatibility):
-
-For web3_tx:
-```
-node scripts/action-cli.ts decide --type web3_tx --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>] [--user-present]
-```
-
-For web3_sign:
-```
-node scripts/action-cli.ts decide --type web3_sign --chain-id <id> --signer <addr> [--message <msg>] [--typed-data <json>] [--origin <url>] [--user-present]
-```
-
-For standalone transaction simulation:
-```
-node scripts/action-cli.ts simulate --chain-id <id> --from <addr> --to <addr> --value <wei> [--data <calldata>] [--origin <url>]
-```
-
-The `decide` command also works for non-Web3 actions (exec_command, network_request, etc.) and automatically resolves the skill's trust level and capabilities from the registry:
+For structured decisions, use AgentGuard's bundled `action-cli.ts` (in this skill's `scripts/` directory). It resolves the trust registry and returns JSON.
 
 ```
 node scripts/action-cli.ts decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
 ```
 
-Parse the JSON output and incorporate findings into your evaluation:
-- If `decision` is `deny` → override to **DENY** with the returned evidence
-- If `core0Web3.address_risk.is_malicious` → **DENY** (critical)
-- If `core0Web3.simulation.approval_changes` has `is_unlimited: true` → **CONFIRM** (high)
-- If the Web3 API is unavailable (`SIMULATION_UNAVAILABLE` tag) → fall back to prompt-based rules and note the limitation
-
-Always combine script results with the policy-based checks (webhook domains, secret scanning, etc.) — the script enhances but does not replace rule-based evaluation.
+Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the returned evidence. Combine with policy-based checks (webhook domains, secret scanning, etc.).
 
 ### Output Format
 
@@ -346,9 +309,8 @@ Verify security configuration is production-appropriate.
 
 **Steps**:
 1. List environment variables matching sensitive names (values masked): `API_KEY`, `SECRET`, `PASSWORD`, `TOKEN`, `PRIVATE`, `CREDENTIAL`
-2. Check if `GOPLUS_API_KEY`/`GOPLUS_API_SECRET` are configured (if Web3 features are in use)
-3. Read `~/.ffwd-agent-guard/config.json` — flag `permissive` protection level in production
-4. If `$OC/.config-baseline.sha256` exists, verify: `sha256sum -c $OC/.config-baseline.sha256`
+2. Read `~/.ffwd-agent-guard/config.json` — flag `permissive` protection level in production
+3. If `$OC/.config-baseline.sha256` exists, verify: `sha256sum -c $OC/.config-baseline.sha256`
 
 #### [8] Trust Registry Health
 
@@ -477,9 +439,6 @@ network_allowlist: string[]     — Allowed domains (supports *.example.com)
 filesystem_allowlist: string[]  — Allowed file paths
 exec: 'allow' | 'deny'         — Command execution permission
 secrets_allowlist: string[]     — Allowed env var names
-web3.chains_allowlist: number[] — Allowed chain IDs
-web3.rpc_allowlist: string[]    — Allowed RPC endpoints
-web3.tx_policy: 'allow' | 'confirm_high_risk' | 'deny'
 ```
 
 ### Presets
@@ -488,8 +447,7 @@ web3.tx_policy: 'allow' | 'confirm_high_risk' | 'deny'
 |--------|-------------|
 | `none` | All deny, empty allowlists |
 | `read_only` | Local filesystem read-only |
-| `trading_bot` | Exchange APIs (Binance, Bybit, OKX, Coinbase), Web3 chains 1/56/137/42161 |
-| `defi` | All network, multi-chain DeFi (1/56/137/42161/10/8453/43114), no exec |
+| `trading_bot` | Exchange APIs (Binance, Bybit, OKX, Coinbase), config and logs paths |
 
 ### Operations
 
@@ -606,13 +564,13 @@ If the log file doesn't exist, inform the user that no security events have been
 
 ## Subcommand: checkup
 
-Run a comprehensive agent health checkup across 6 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
+Run a comprehensive agent health checkup across 5 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
 
 ### Step 1: Data Collection
 
 Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
 
-1. **Discover & scan installed skills**: Glob `~/.claude/skills/*/SKILL.md` and `~/.openclaw/skills/*/SKILL.md`. For each discovered skill, **run `/ffwd-agent-guard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Collect the scan results (risk level, findings count, risk tags) for each skill.
+1. **Discover & scan installed skills**: Glob `~/.claude/skills/*/SKILL.md` and `~/.openclaw/skills/*/SKILL.md`. For each discovered skill, **run `/ffwd-agent-guard scan <skill_path>`** using the scan subcommand logic (16 detection rules). Collect the scan results (risk level, findings count, risk tags) for each skill.
 2. **Credential file permissions**: `stat` on `~/.ssh/`, `~/.gnupg/`, and if OpenClaw: `stat` on `$OC/openclaw.json`, `$OC/devices/paired.json`
 3. **Sensitive credential scan (DLP)**: Use Grep to scan workspace memory/logs directories for leaked secrets:
    - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
@@ -625,11 +583,11 @@ Run these checks in parallel where possible. These are **universal agent securit
 
 ### Step 2: Score Calculation
 
-Checklist-based scoring across 6 security dimensions. **Every failed check = 1 finding with severity and description.**
+Checklist-based scoring across 5 security dimensions. **Every failed check = 1 finding with severity and description.**
 
 #### Dimension 1: Skill & Code Safety (weight: 25%)
 
-Uses AgentGuard's 24-rule scan engine (`/ffwd-agent-guard scan`) to audit each installed skill.
+Uses AgentGuard's 16-rule scan engine (`/ffwd-agent-guard scan`) to audit each installed skill.
 
 | Check | Score | If failed → finding |
 |-------|-------|---------------------|
@@ -674,19 +632,9 @@ Checks whether the agent has active security monitoring.
 | Security audit log exists with recent events | +30 | "No security audit log — no threat history available" (MEDIUM) |
 | Skills have been security-scanned at least once | +30 | "Installed skills have never been security-scanned" (MEDIUM) |
 
-#### Dimension 5: Web3 Safety (weight: 15% if applicable)
-
-Only if Web3 usage is detected (env vars like `GOPLUS_API_KEY`, `CHAIN_ID`, `RPC_URL`, or web3-related skills installed). Otherwise `{ "score": null, "na": true }`.
-
-| Check | Score | If failed → finding |
-|-------|-------|---------------------|
-| No wallet-draining patterns (approve+transferFrom) in skill code | +40 | "Wallet-draining pattern detected in <skill>" (CRITICAL) |
-| No unlimited token approval patterns in skill code | +30 | "Unlimited approval pattern detected in <skill>" (HIGH) |
-| Transaction security API configured (Core0 Web3 API or equivalent) | +30 | "No transaction security API — Web3 calls are unverified" (MEDIUM) |
-
 #### Composite Score
 
-Weighted average of all applicable dimensions. If Web3 Safety is N/A, redistribute its 15% weight proportionally.
+Weighted average of all five dimensions (25% + 25% + 20% + 15% + 15%).
 
 Determine tier:
 - 90–100 → Tier **S** (JACKED)
@@ -722,8 +670,7 @@ Assemble the results into a JSON object and pipe it to the report generator:
     "code_safety": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
     "credential_safety": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
     "network_exposure": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
-    "runtime_protection": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
-    "web3_safety": { "score": <n|null>, "na": <bool>, "findings": [...], "details": "<one-line summary>" }
+    "runtime_protection": { "score": <n>, "findings": [...], "details": "<one-line summary>" }
   },
   "skills_scanned": <count>,
   "protection_level": "<level>",
@@ -757,7 +704,6 @@ After the report generates, output a brief summary in the terminal:
 | 🤝 Trust Hygiene | <n>/100 | <status> |
 | 🛡️ Runtime Defense | <n>/100 | <status> |
 | 🔐 Secret Protection | <n>/100 | <status> |
-| ⛓️ Web3 Shield | <n>/100 or N/A | <status> |
 | ⚙️ Config Posture | <n>/100 | <status> |
 
 **Full visual report**: <path> (opened in browser)

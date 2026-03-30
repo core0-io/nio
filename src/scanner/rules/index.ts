@@ -4,7 +4,6 @@ import type { ScanRule, RiskTag } from '../../types/scanner.js';
 import { SHELL_EXEC_RULES } from './shell-exec.js';
 import { REMOTE_LOADER_RULES } from './remote-loader.js';
 import { SECRETS_RULES } from './secrets.js';
-import { WEB3_RULES } from './web3.js';
 import { OBFUSCATION_RULES } from './obfuscation.js';
 import { PROMPT_INJECTION_RULES } from './prompt-injection.js';
 import { EXFILTRATION_RULES } from './exfiltration.js';
@@ -17,7 +16,6 @@ export const ALL_RULES: ScanRule[] = [
   ...SHELL_EXEC_RULES,
   ...REMOTE_LOADER_RULES,
   ...SECRETS_RULES,
-  ...WEB3_RULES,
   ...OBFUSCATION_RULES,
   ...PROMPT_INJECTION_RULES,
   ...EXFILTRATION_RULES,

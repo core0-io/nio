@@ -359,9 +359,6 @@ export class SkillScanner {
     if (tags.has('PROMPT_INJECTION')) {
       parts.push('prompt injection attempts');
     }
-    if (tags.has('WALLET_DRAINING') || tags.has('UNLIMITED_APPROVAL')) {
-      parts.push('dangerous Web3 patterns');
-    }
     if (tags.has('WEBHOOK_EXFIL') || tags.has('NET_EXFIL_UNRESTRICTED')) {
       parts.push('data exfiltration risks');
     }

@@ -65,7 +65,7 @@ export async function evaluateHook(
       if (!policy.isKnown || policy.trustLevel === 'untrusted') {
         if (!isActionAllowedByCapabilities(
           envelope.action.type,
-          { can_exec: false, can_network: false, can_write: false, can_read: true, can_web3: false }
+          { can_exec: false, can_network: false, can_write: false, can_read: true }
         )) {
           const reason = `Core0 AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} — register it with /ffwd-agent-guard trust attest to allow`;
           writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['UNTRUSTED_SKILL', ...(decision.risk_tags || [])] }, initiatingSkill);

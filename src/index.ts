@@ -22,7 +22,6 @@ export {
 } from './registry/index.js';
 export {
   ActionScanner,
-  Core0Web3Client,
   type ActionScannerOptions,
 } from './action/index.js';
 

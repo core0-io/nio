@@ -16,7 +16,7 @@ npm test
 
 - `src/` — TypeScript source code
   - `scanner/` — Static analysis engine (20 detection rules)
-  - `action/` — Runtime action evaluator (exec, network, file, web3 detectors)
+  - `action/` — Runtime action evaluator (exec, network, file, secret detectors)
   - `registry/` — Trust level management
   - `policy/` — Default policies and capability presets
   - `tests/` — Test suite (Node.js built-in test runner)

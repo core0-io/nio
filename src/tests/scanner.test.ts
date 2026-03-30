@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import { ALL_RULES, getRuleById, getRulesBySeverity, getRulesForExtension } from '../scanner/rules/index.js';
 
 describe('Scanner Rules', () => {
-  it('should have 24 detection rules', () => {
-    // Each RiskTag should map to at least one rule
+  it('should have 16 detection rules', () => {
     const ruleIds = new Set(ALL_RULES.map((r) => r.id));
-    assert.ok(ruleIds.size >= 24, `Expected at least 24 unique rules, got ${ruleIds.size}`);
+    assert.equal(ruleIds.size, 16, `Expected 16 unique rules, got ${ruleIds.size}`);
   });
 
   it('should find rule by ID', () => {
@@ -30,17 +29,14 @@ describe('Scanner Rules', () => {
     assert.ok(tsRules.length > 0, 'Should have rules for .ts files');
   });
 
-  it('should filter rules for .sol extension', () => {
+  it('should match universal file patterns for .sol extension', () => {
     const solRules = getRulesForExtension('.sol');
-    assert.ok(solRules.length > 0, 'Should have rules for .sol files');
-    const solRuleIds = solRules.map((r) => r.id);
-    assert.ok(solRuleIds.includes('WALLET_DRAINING') || solRuleIds.includes('REENTRANCY_PATTERN'),
-      'Solidity rules should include Web3-specific rules');
+    assert.ok(solRules.length > 0, 'Should have rules applying to .sol via * patterns');
   });
 
   it('should have CRITICAL rules for key security threats', () => {
     const criticalIds = ['AUTO_UPDATE', 'REMOTE_LOADER', 'READ_SSH_KEYS', 'READ_KEYCHAIN',
-      'PRIVATE_KEY_PATTERN', 'MNEMONIC_PATTERN', 'WALLET_DRAINING', 'PROMPT_INJECTION', 'WEBHOOK_EXFIL'];
+      'PRIVATE_KEY_PATTERN', 'MNEMONIC_PATTERN', 'PROMPT_INJECTION', 'WEBHOOK_EXFIL'];
 
     for (const id of criticalIds) {
       const rule = getRuleById(id as any);

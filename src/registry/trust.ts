@@ -95,29 +95,6 @@ export function isCapabilityEscalation(
     escalations.push(`secrets_allowlist: added ${newSecrets.join(', ')}`);
   }
 
-  // Check Web3 capabilities
-  if (requested.web3 && existing.web3) {
-    const newChains = requested.web3.chains_allowlist.filter(
-      (c) => !existing.web3!.chains_allowlist.includes(c)
-    );
-    if (newChains.length > 0) {
-      escalations.push(`web3.chains_allowlist: added ${newChains.join(', ')}`);
-    }
-
-    // Check tx_policy
-    const txPolicyPriority = { deny: 0, confirm_high_risk: 1, allow: 2 };
-    if (
-      txPolicyPriority[requested.web3.tx_policy] >
-      txPolicyPriority[existing.web3.tx_policy]
-    ) {
-      escalations.push(
-        `web3.tx_policy: ${existing.web3.tx_policy} -> ${requested.web3.tx_policy}`
-      );
-    }
-  } else if (requested.web3 && !existing.web3) {
-    escalations.push('web3: added');
-  }
-
   return {
     isEscalation: escalations.length > 0,
     escalations,
@@ -174,23 +151,5 @@ export function mergeCapabilities(
     secrets_allowlist: a.secrets_allowlist.filter((s) =>
       b.secrets_allowlist.includes(s)
     ),
-    web3:
-      a.web3 && b.web3
-        ? {
-            chains_allowlist: a.web3.chains_allowlist.filter((c) =>
-              b.web3!.chains_allowlist.includes(c)
-            ),
-            rpc_allowlist: a.web3.rpc_allowlist.filter((r) =>
-              b.web3!.rpc_allowlist.includes(r)
-            ),
-            tx_policy:
-              a.web3.tx_policy === 'deny' || b.web3.tx_policy === 'deny'
-                ? 'deny'
-                : a.web3.tx_policy === 'confirm_high_risk' ||
-                  b.web3.tx_policy === 'confirm_high_risk'
-                ? 'confirm_high_risk'
-                : 'allow',
-          }
-        : undefined,
   };
 }

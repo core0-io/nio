@@ -11,17 +11,11 @@ Add to your MCP configuration:
   "mcpServers": {
     "ffwd-agent-guard": {
       "command": "npx",
-      "args": ["-y", "@core0-io/ffwd-agent-guard"],
-      "env": {
-        "GOPLUS_API_KEY": "your_key",
-        "GOPLUS_API_SECRET": "your_secret"
-      }
+      "args": ["-y", "@core0-io/ffwd-agent-guard"]
     }
   }
 }
 ```
-
-Core0 Web3 API keys are optional — the scanner and registry work without them. They enable enhanced Web3 security features.
 
 ## Available Tools
 
@@ -33,4 +27,3 @@ Core0 Web3 API keys are optional — the scanner and registry work without them.
 | `registry_revoke` | Revoke a skill's trust |
 | `registry_list` | List all registered skills |
 | `action_scanner_decide` | Evaluate an action's safety |
-| `action_scanner_simulate_web3` | Simulate a Web3 transaction |

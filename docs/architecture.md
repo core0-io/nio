@@ -8,12 +8,11 @@ ffwd-agent-guard/
 │   ├── SKILL.md               # Skill entry point
 │   ├── scan-rules.md          # Detection rule reference
 │   ├── action-policies.md     # Action policy reference
-│   ├── web3-patterns.md       # Web3 patterns reference
 │   └── scripts/               # CLI tools (trust-cli, action-cli, guard-hook)
 ├── hooks/hooks.json           # Plugin hooks configuration
 ├── src/                       # TypeScript source
 │   ├── scanner/               # 20-rule static analysis engine
-│   ├── action/                # Runtime action evaluator + Core0 Web3 integration
+│   ├── action/                # Runtime action evaluator
 │   ├── registry/              # Trust level management
 │   ├── policy/                # Default policies and presets
 │   └── tests/                 # Test suite
