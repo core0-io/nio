@@ -1,4 +1,4 @@
-# Core0 AgentGuard
+# FFWD AgentGuard
 
 AI Agent Security Guard — protect your AI agents from dangerous commands, data leaks, and malicious skills.
 

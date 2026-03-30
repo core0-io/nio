@@ -1,5 +1,5 @@
 /**
- * Core0 AgentGuard — Security guard for AI agents
+ * FFWD AgentGuard — Security guard for AI agents
  *
  * Three-module security framework:
  * - Skill Scanner: Static analysis of skill code

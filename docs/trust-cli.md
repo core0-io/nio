@@ -1,6 +1,6 @@
 # Trust Management
 
-Core0 AgentGuard includes a trust registry for managing skill permissions.
+FFWD AgentGuard includes a trust registry for managing skill permissions.
 
 ## Commands
 

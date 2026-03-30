@@ -48,7 +48,7 @@ const SAFE_COMMAND_PREFIXES = [
  * (can execute arbitrary code via postinstall scripts, hooks, or setup.py)
  */
 const AUDIT_COMMAND_PREFIXES = [
-  'npm install', 'pip install', 'pip3 install', 'git clone',
+  'npm install', 'pnpm install', 'yarn install', 'pip install', 'pip3 install', 'git clone',
 ];
 
 /**

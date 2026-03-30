@@ -1,5 +1,5 @@
 /**
- * Core0 AgentGuard — OpenClaw Plugin
+ * FFWD AgentGuard — OpenClaw Plugin
  *
  * Registers before_tool_call, after_tool_call, and session_start hooks
  * with the OpenClaw plugin API to evaluate tool safety at runtime and
@@ -402,7 +402,7 @@ export function registerOpenClawPlugin(
         if (scanResult?.riskLevel === 'critical') {
           return {
             block: true,
-            blockReason: `Core0 AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /ffwd-agent-guard trust attest to manually approve.`,
+            blockReason: `FFWD AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /ffwd-agent-guard trust attest to manually approve.`,
           };
         }
       }
@@ -415,7 +415,7 @@ export function registerOpenClawPlugin(
       if (result.decision === 'deny') {
         return {
           block: true,
-          blockReason: result.reason || 'Blocked by Core0 AgentGuard',
+          blockReason: result.reason || 'Blocked by FFWD AgentGuard',
         };
       }
 
@@ -423,7 +423,7 @@ export function registerOpenClawPlugin(
       if (result.decision === 'ask') {
         return {
           block: true,
-          blockReason: result.reason || 'Requires confirmation (Core0 AgentGuard)',
+          blockReason: result.reason || 'Requires confirmation (FFWD AgentGuard)',
         };
       }
 

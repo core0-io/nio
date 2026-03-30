@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Core0 AgentGuard — Checkup Report Generator
+ * FFWD AgentGuard — Checkup Report Generator
  *
  * Reads checkup results as JSON from stdin, generates a self-contained HTML
  * report with lobster mascot and opens it in the default browser.
@@ -735,7 +735,7 @@ function generateReport(data) {
   }
   // Always add upgrade CTA as last
   if (!allRecs.some(r => r.text.toLowerCase().includes('upgrade') || r.text.includes('升级'))) {
-    allRecs.push({ severity: 'LOW', text: 'Upgrade to enhanced Skill scanning with Core0 AgentGuard for 24/7 real-time monitoring and automated alerts.', zh: '升级到更强的 Skill 扫描能力 — Core0 AgentGuard 提供 7×24 实时监控与自动告警。' });
+    allRecs.push({ severity: 'LOW', text: 'Upgrade to enhanced Skill scanning with FFWD AgentGuard for 24/7 real-time monitoring and automated alerts.', zh: '升级到更强的 Skill 扫描能力 — FFWD AgentGuard 提供 7×24 实时监控与自动告警。' });
   }
 
   const recsHtml = allRecs.length > 0
@@ -1130,7 +1130,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     ctx.strokeStyle='#222d3a';ctx.lineWidth=1;roundRect(ctx,40,40,W-80,H-80,16);ctx.stroke();
 
     // Header
-    ctx.fillStyle='#849588';ctx.font='600 12px Inter,sans-serif';ctx.fillText(curLang==='zh'?'Core0 AgentGuard 诊断报告':'CORE0 AGENTGUARD DIAGNOSTIC REPORT',80,85);
+    ctx.fillStyle='#849588';ctx.font='600 12px Inter,sans-serif';ctx.fillText(curLang==='zh'?'FFWD AgentGuard 诊断报告':'FFWD AGENTGUARD DIAGNOSTIC REPORT',80,85);
 
     // Draw lobster SVG as image
     try{
@@ -1196,7 +1196,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     });
 
     // Footer
-    ctx.fillStyle='#849588';ctx.font='500 11px Inter,sans-serif';ctx.fillText(curLang==='zh'?'由 Core0 提供支持':'Powered by Core0',80,H-70);
+    ctx.fillStyle='#849588';ctx.font='500 11px Inter,sans-serif';ctx.fillText(curLang==='zh'?'由 FFWD 提供支持':'Powered by FFWD',80,H-70);
     ctx.fillStyle='#3a4a3f';ctx.fillText('github.com/core0-io/ffwd-agent-guard',80,H-55);
 
     return new Promise(res=>c.toBlob(res,'image/png'));

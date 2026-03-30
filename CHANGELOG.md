@@ -70,7 +70,7 @@
 ## [1.0.0] - 2026-02-16
 
 ### Added
-- Initial release of Core0 AgentGuard
+- Initial release of FFWD AgentGuard
 - 24 detection rules covering execution, secrets, exfiltration, obfuscation, Web3, and social engineering
 - Runtime action evaluation (allow/deny/confirm) for commands, network requests, file ops, and Web3 transactions
 - Trust registry with capability-based access control per skill

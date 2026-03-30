@@ -1,4 +1,6 @@
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
+import type { RiskLevel } from '../types/scanner.js';
+import { riskLevelToNumericScore } from '../types/scanner.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -7,6 +9,22 @@ import {
   getSkillTrustPolicy,
   isActionAllowedByCapabilities,
 } from './common.js';
+
+function scoreForLevel(level: string | undefined): number {
+  return riskLevelToNumericScore((level || 'medium') as RiskLevel);
+}
+
+function policyHookReason(
+  explanation: string,
+  skillTag: string,
+  riskTags: string[] | undefined,
+  riskLevel: string
+): string {
+  const score = scoreForLevel(riskLevel);
+  const tagPart =
+    riskTags && riskTags.length > 0 ? ` [${riskTags.join(', ')}]` : '';
+  return `[score: ${score}][level: ${riskLevel}]${tagPart} FFWD AgentGuard: ${explanation}${skillTag}`;
+}
 
 /**
  * Evaluate a hook event using the common AgentGuard decision engine.
@@ -43,14 +61,33 @@ export async function evaluateHook(
                      (input.toolInput.path as string) || '';
     if (isSensitivePath(filePath)) {
       const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
-      const reason = `Core0 AgentGuard: blocked write to sensitive path "${filePath}"${skillTag}`;
+      const reason = policyHookReason(
+        `blocked write to sensitive path "${filePath}"`,
+        skillTag,
+        ['SENSITIVE_PATH'],
+        'critical'
+      );
       writeAuditLog(input, { decision: 'deny', risk_level: 'critical', risk_tags: ['SENSITIVE_PATH'] }, initiatingSkill);
 
       // In permissive mode, ask for user-initiated writes
       if (options.config.level === 'permissive' && !initiatingSkill) {
-        return { decision: 'ask', reason, riskLevel: 'critical', riskTags: ['SENSITIVE_PATH'], initiatingSkill };
+        return {
+          decision: 'ask',
+          reason,
+          riskLevel: 'critical',
+          riskScore: scoreForLevel('critical'),
+          riskTags: ['SENSITIVE_PATH'],
+          initiatingSkill,
+        };
       }
-      return { decision: 'deny', reason, riskLevel: 'critical', riskTags: ['SENSITIVE_PATH'], initiatingSkill };
+      return {
+        decision: 'deny',
+        reason,
+        riskLevel: 'critical',
+        riskScore: scoreForLevel('critical'),
+        riskTags: ['SENSITIVE_PATH'],
+        initiatingSkill,
+      };
     }
   }
 
@@ -67,17 +104,31 @@ export async function evaluateHook(
           envelope.action.type,
           { can_exec: false, can_network: false, can_write: false, can_read: true }
         )) {
-          const reason = `Core0 AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} — register it with /ffwd-agent-guard trust attest to allow`;
+          const reason = `FFWD AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} — register it with /ffwd-agent-guard trust attest to allow [score: ${scoreForLevel('high')}]`;
           writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['UNTRUSTED_SKILL', ...(decision.risk_tags || [])] }, initiatingSkill);
-          return { decision: 'ask', reason, riskLevel: 'high', riskTags: ['UNTRUSTED_SKILL'], initiatingSkill };
+          return {
+            decision: 'ask',
+            reason,
+            riskLevel: 'high',
+            riskScore: scoreForLevel('high'),
+            riskTags: ['UNTRUSTED_SKILL'],
+            initiatingSkill,
+          };
         }
       }
 
       if (policy.isKnown && policy.capabilities) {
         if (!isActionAllowedByCapabilities(envelope.action.type, policy.capabilities)) {
-          const reason = `Core0 AgentGuard: skill "${initiatingSkill}" is not allowed to ${envelope.action.type} per its trust policy`;
+          const reason = `FFWD AgentGuard: skill "${initiatingSkill}" is not allowed to ${envelope.action.type} per its trust policy [score: ${scoreForLevel('high')}]`;
           writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['CAPABILITY_EXCEEDED', ...(decision.risk_tags || [])] }, initiatingSkill);
-          return { decision: 'deny', reason, riskLevel: 'high', riskTags: ['CAPABILITY_EXCEEDED'], initiatingSkill };
+          return {
+            decision: 'deny',
+            reason,
+            riskLevel: 'high',
+            riskScore: scoreForLevel('high'),
+            riskTags: ['CAPABILITY_EXCEEDED'],
+            initiatingSkill,
+          };
         }
       }
     }
@@ -87,13 +138,19 @@ export async function evaluateHook(
 
     // Apply protection level thresholds
     const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
-    const tags = (decision.risk_tags || []).join(', ');
+    const riskScore = scoreForLevel(decision.risk_level);
 
     if (shouldDenyAtLevel(decision, options.config)) {
       return {
         decision: 'deny',
-        reason: `Core0 AgentGuard: ${decision.explanation || 'Action blocked'}${skillTag} [${tags}]`,
+        reason: policyHookReason(
+          decision.explanation || 'Action blocked',
+          skillTag,
+          decision.risk_tags,
+          decision.risk_level
+        ),
         riskLevel: decision.risk_level,
+        riskScore,
         riskTags: decision.risk_tags,
         initiatingSkill,
       };
@@ -102,8 +159,14 @@ export async function evaluateHook(
     if (shouldAskAtLevel(decision, options.config)) {
       return {
         decision: 'ask',
-        reason: `Core0 AgentGuard: ${decision.explanation || 'Action requires confirmation'}${skillTag} [${tags}]`,
+        reason: policyHookReason(
+          decision.explanation || 'Action requires confirmation',
+          skillTag,
+          decision.risk_tags,
+          decision.risk_level
+        ),
         riskLevel: decision.risk_level,
+        riskScore,
         riskTags: decision.risk_tags,
         initiatingSkill,
       };

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Core0 AgentGuard — SessionStart Auto-Scan Hook
+ * FFWD AgentGuard — SessionStart Auto-Scan Hook
  *
  * Runs on session startup to discover and scan newly installed skills.
  * For each skill in ~/.claude/skills/:
@@ -156,7 +156,7 @@ async function main() {
       `  ${r.name}: ${r.risk_level}${r.risk_tags.length ? ` [${r.risk_tags.join(', ')}]` : ''}`
     );
     process.stderr.write(
-      `Core0 AgentGuard: scanned ${scanned} skill(s)\n${lines.join('\n')}\n` +
+      `FFWD AgentGuard: scanned ${scanned} skill(s)\n${lines.join('\n')}\n` +
       `Use /ffwd-agent-guard trust attest to register trusted skills.\n`
     );
   }

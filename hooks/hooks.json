@@ -9,7 +9,7 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/auto-scan.js\"",
             "timeout": 30,
             "async": true,
-            "statusMessage": "Core0 AgentGuard: scanning installed skills..."
+            "statusMessage": "FFWD AgentGuard: scanning installed skills..."
           }
         ]
       }
@@ -22,7 +22,7 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "Core0 AgentGuard: checking command safety..."
+            "statusMessage": "FFWD AgentGuard: checking command safety..."
           }
         ]
       },
@@ -33,7 +33,7 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "Core0 AgentGuard: checking file write safety..."
+            "statusMessage": "FFWD AgentGuard: checking file write safety..."
           }
         ]
       },
@@ -44,7 +44,7 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "Core0 AgentGuard: checking network request..."
+            "statusMessage": "FFWD AgentGuard: checking network request..."
           }
         ]
       }

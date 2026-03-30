@@ -1,6 +1,6 @@
 {
   "id": "ffwd-agent-guard",
-  "name": "Core0 AgentGuard",
+  "name": "FFWD AgentGuard",
   "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
   "configSchema": {
     "type": "object",

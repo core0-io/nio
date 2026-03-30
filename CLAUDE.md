@@ -1,4 +1,4 @@
-# Core0 AgentGuard
+# FFWD AgentGuard
 
 Security framework for AI agents. Provides code scanning, runtime action evaluation, and trust management.
 

@@ -1,6 +1,6 @@
 ---
 name: ffwd-agent-guard
-description: Core0 AgentGuard — AI agent security guard. Run /ffwd-agent-guard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
+description: FFWD AgentGuard — AI agent security guard. Run /ffwd-agent-guard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
 license: MIT
 compatibility: Requires Node.js 18+.
 metadata:
@@ -11,9 +11,9 @@ allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cl
 argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
 ---
 
-# Core0 AgentGuard — AI Agent Security Framework
+# FFWD AgentGuard — AI Agent Security Framework
 
-You are a security auditor powered by the Core0 AgentGuard framework. Route the user's request based on the first argument.
+You are a security auditor powered by the FFWD AgentGuard framework. Route the user's request based on the first argument.
 
 ## Important: Resolving Script Paths
 
@@ -92,7 +92,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 ### Output Format
 
 ```
-## Core0 AgentGuard Security Scan Report
+## FFWD AgentGuard Security Scan Report
 
 **Target**: <scanned path>
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
@@ -184,7 +184,7 @@ Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the retu
 ### Output Format
 
 ```
-## Core0 AgentGuard Action Evaluation
+## FFWD AgentGuard Action Evaluation
 
 **Action**: <action type and description>
 **Decision**: ALLOW | DENY | CONFIRM
@@ -328,7 +328,7 @@ Check for expired, stale, or over-privileged trust records.
 ### Patrol Report Format
 
 ```
-## Core0 AgentGuard Patrol Report
+## FFWD AgentGuard Patrol Report
 
 **Timestamp**: <ISO datetime>
 **OpenClaw Home**: <$OC path>
@@ -385,7 +385,7 @@ Configure the patrol as an OpenClaw daily cron job.
 ```bash
 openclaw cron add \
   --name "ffwd-agent-guard-patrol" \
-  --description "Core0 AgentGuard daily security patrol" \
+  --description "FFWD AgentGuard daily security patrol" \
   --cron "<schedule>" \
   --tz "<timezone>" \
   --session "isolated" \
@@ -422,7 +422,7 @@ Show the current patrol state.
 
 ## Subcommand: trust
 
-Manage skill trust levels using the Core0 AgentGuard registry.
+Manage skill trust levels using the FFWD AgentGuard registry.
 
 ### Trust Levels
 
@@ -465,7 +465,7 @@ List all trust records with optional filters.
 
 ### Script Execution
 
-If the @core0-io/ffwd-agent-guard package is installed, execute trust operations via Core0 AgentGuard's own bundled script:
+If the @core0-io/ffwd-agent-guard package is installed, execute trust operations via FFWD AgentGuard's own bundled script:
 ```
 node scripts/trust-cli.ts <subcommand> [args]
 ```
@@ -478,7 +478,7 @@ If scripts are not available, help the user inspect `data/registry.json` directl
 
 ## Subcommand: config
 
-Set the Core0 AgentGuard protection level.
+Set the FFWD AgentGuard protection level.
 
 ### Protection Levels
 
@@ -507,7 +507,7 @@ If no level is specified, read and display the current config.
 
 ## Subcommand: report
 
-Display recent security events from the Core0 AgentGuard audit log.
+Display recent security events from the FFWD AgentGuard audit log.
 
 ### Log Location
 
@@ -529,7 +529,7 @@ The `initiating_skill` field is present when the action was triggered by a skill
 ### Output Format
 
 ```
-## Core0 AgentGuard Security Report
+## FFWD AgentGuard Security Report
 
 **Events**: <total count>
 **Blocked**: <deny count>
@@ -693,7 +693,7 @@ The script outputs the HTML file path to stdout (e.g. `/tmp/ffwd-agent-guard-che
 After the report generates, output a brief summary in the terminal:
 
 ```
-## 🦞 Core0 AgentGuard Health Checkup
+## 🦞 FFWD AgentGuard Health Checkup
 
 **Overall Health Score**: <score> / 100 (Tier <grade> — <label>)
 **Quote**: "<lobster quote>"

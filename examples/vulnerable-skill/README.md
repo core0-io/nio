@@ -1,6 +1,6 @@
 # Vulnerable Skill Demo
 
-This directory contains intentionally vulnerable code for testing Core0 AgentGuard security scanning.
+This directory contains intentionally vulnerable code for testing FFWD AgentGuard security scanning.
 
 **DO NOT use any code from this directory in production.**
 
@@ -10,7 +10,7 @@ This directory contains intentionally vulnerable code for testing Core0 AgentGua
 /ffwd-agent-guard scan examples/vulnerable-skill
 ```
 
-## What Core0 AgentGuard Should Detect
+## What FFWD AgentGuard Should Detect
 
 ### JavaScript (`malicious-helper.js`)
 - `SHELL_EXEC` — child_process exec

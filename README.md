@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="Core0 AgentGuard" width="120" />
+  <img src="assets/logo.svg" alt="FFWD AgentGuard" width="120" />
 </p>
 
-<h1 align="center">Core0 AgentGuard</h1>
+<h1 align="center">FFWD AgentGuard</h1>
 
 <p align="center"><b>The essential security guard for every AI agent user.</b></p>
 
@@ -237,7 +237,7 @@ Expected output: **CRITICAL** risk level with detection hits across JavaScript, 
 
 ## Compatibility
 
-Core0 AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
+FFWD AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
 
 | Platform | Support | Features |
 |----------|---------|----------|

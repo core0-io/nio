@@ -28,6 +28,8 @@ export interface HookOutput {
   reason?: string;
   /** Risk level */
   riskLevel?: string;
+  /** Numeric severity in [0, 1] (higher = more severe), derived from risk level */
+  riskScore?: number;
   /** Risk tags */
   riskTags?: string[];
   /** Initiating skill (if detected) */

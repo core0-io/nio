@@ -6,6 +6,23 @@ import type { SkillIdentity } from './skill.js';
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
 
 /**
+ * Map risk level to a 0–1 severity score (higher = more severe).
+ * Used in hook messages and audit logs for consistent numeric feedback.
+ */
+export function riskLevelToNumericScore(level: RiskLevel): number {
+  switch (level) {
+    case 'low':
+      return 0.25;
+    case 'medium':
+      return 0.5;
+    case 'high':
+      return 0.75;
+    case 'critical':
+      return 1;
+  }
+}
+
+/**
  * Risk tag identifiers
  */
 export type RiskTag =

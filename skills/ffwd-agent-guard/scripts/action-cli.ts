@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Core0 AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
+ * FFWD AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
  *
  * Usage:
  *   node action-cli.ts decide --type <action_type> [action-specific args]

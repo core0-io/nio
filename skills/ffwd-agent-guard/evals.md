@@ -1,6 +1,6 @@
-# Core0 AgentGuard Evaluation Scenarios
+# FFWD AgentGuard Evaluation Scenarios
 
-These scenarios verify that Core0 AgentGuard correctly detects threats and handles commands.
+These scenarios verify that FFWD AgentGuard correctly detects threats and handles commands.
 
 ## Scenario 1: Scan Vulnerable Code
 

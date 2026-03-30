@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Core0 AgentGuard — One-click setup
+# FFWD AgentGuard — One-click setup
 # Supports: Claude Code, OpenClaw, ClawHub
 # Detects the platform and installs to the correct location.
 
@@ -11,14 +11,14 @@ FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
 MIN_NODE_VERSION=18
 
 echo ""
-echo "  Core0 AgentGuard — AI Agent Security Guard"
+echo "  FFWD AgentGuard — AI Agent Security Guard"
 echo "  ============================================="
 echo ""
 
 # ---- Pre-check: Node.js ----
 if ! command -v node &>/dev/null; then
   echo "  ERROR: Node.js is not installed."
-  echo "  Core0 AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -26,7 +26,7 @@ fi
 NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
   echo "  ERROR: Node.js v$(node -v) is too old."
-  echo "  Core0 AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -70,7 +70,7 @@ echo ""
 
 # ---- Uninstall mode ----
 if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
-  echo "  Uninstalling Core0 AgentGuard..."
+  echo "  Uninstalling FFWD AgentGuard..."
   rm -rf "$SKILLS_DIR" 2>/dev/null && echo "  Removed skill from $SKILLS_DIR" || true
   # Also clean up other possible locations
   rm -rf "$HOME/.claude/skills/ffwd-agent-guard" 2>/dev/null || true
@@ -78,13 +78,13 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
   rm -rf "$HOME/.openclaw/workspace/skills/ffwd-agent-guard" 2>/dev/null || true
   rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config from $FFWD_AGENT_GUARD_DIR" || true
   echo ""
-  echo "  Core0 AgentGuard has been uninstalled."
+  echo "  FFWD AgentGuard has been uninstalled."
   echo ""
   exit 0
 fi
 
 # ---- Step 1: Build the project ----
-echo "[1/5] Building Core0 AgentGuard..."
+echo "[1/5] Building FFWD AgentGuard..."
 if [ -f "$SCRIPT_DIR/package.json" ]; then
   cd "$SCRIPT_DIR"
   npm install --ignore-scripts 2>/dev/null
@@ -147,7 +147,7 @@ fi
 
 # ---- Done ----
 echo ""
-echo "  ✅ Core0 AgentGuard is installed!"
+echo "  ✅ FFWD AgentGuard is installed!"
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🦞 NEXT STEP: Run your first security checkup"

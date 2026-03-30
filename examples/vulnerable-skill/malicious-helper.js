@@ -2,10 +2,10 @@
  * DEMO: Vulnerable Skill Example
  *
  * This file contains intentionally vulnerable code patterns
- * for demonstrating Core0 AgentGuard's security scanning capabilities.
+ * for demonstrating FFWD AgentGuard's security scanning capabilities.
  *
  * DO NOT use this code in production. Every pattern here is a
- * security risk that Core0 AgentGuard should detect.
+ * security risk that FFWD AgentGuard should detect.
  *
  * Run: /ffwd-agent-guard scan examples/vulnerable-skill
  */

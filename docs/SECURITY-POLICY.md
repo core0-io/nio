@@ -1,4 +1,4 @@
-# Core0 AgentGuard Security Policy
+# FFWD AgentGuard Security Policy
 
 Unified security policy reference for all platforms (Claude Code, OpenClaw, and future integrations).
 

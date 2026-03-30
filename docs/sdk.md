@@ -1,6 +1,6 @@
 # SDK Usage
 
-Use Core0 AgentGuard as a library in your own project.
+Use FFWD AgentGuard as a library in your own project.
 
 ## Installation
 

@@ -1,6 +1,6 @@
 # MCP Server Setup
 
-Core0 AgentGuard can run as an MCP (Model Context Protocol) server, providing security tools to any MCP-compatible AI agent.
+FFWD AgentGuard can run as an MCP (Model Context Protocol) server, providing security tools to any MCP-compatible AI agent.
 
 ## Configuration
 

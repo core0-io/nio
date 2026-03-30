@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Core0 AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
+ * FFWD AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
  *
  * Usage:
  *   node trust-cli.ts lookup --id <id> --source <source> --version <version> --hash <hash>

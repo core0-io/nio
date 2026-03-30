@@ -1,7 +1,9 @@
 import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { HookInput, HookOutput } from './types.js';
+import type { HookInput } from './types.js';
+import type { RiskLevel } from '../types/scanner.js';
+import { riskLevelToNumericScore } from '../types/scanner.js';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -111,13 +113,15 @@ export function writeAuditLog(
 ): void {
   try {
     ensureDir();
+    const rl = decision?.risk_level || 'low';
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
       tool_name: input.toolName,
       tool_input_summary: summarizeToolInput(input),
       decision: decision?.decision || 'allow',
-      risk_level: decision?.risk_level || 'low',
+      risk_level: rl,
       risk_tags: decision?.risk_tags || [],
+      risk_score: riskLevelToNumericScore(rl as RiskLevel),
     };
     if (initiatingSkill) {
       entry.initiating_skill = initiatingSkill;
