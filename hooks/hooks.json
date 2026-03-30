@@ -6,10 +6,10 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/auto-scan.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/auto-scan.js\"",
             "timeout": 30,
             "async": true,
-            "statusMessage": "GoPlus AgentGuard: scanning installed skills..."
+            "statusMessage": "Core0 AgentGuard: scanning installed skills..."
           }
         ]
       }
@@ -20,9 +20,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "GoPlus AgentGuard: checking command safety..."
+            "statusMessage": "Core0 AgentGuard: checking command safety..."
           }
         ]
       },
@@ -31,9 +31,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "GoPlus AgentGuard: checking file write safety..."
+            "statusMessage": "Core0 AgentGuard: checking file write safety..."
           }
         ]
       },
@@ -42,9 +42,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 10,
-            "statusMessage": "GoPlus AgentGuard: checking network request..."
+            "statusMessage": "Core0 AgentGuard: checking network request..."
           }
         ]
       }
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/agentguard/scripts/guard-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 5,
             "async": true
           }

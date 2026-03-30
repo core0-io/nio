@@ -13,5 +13,6 @@ coverage/
 .vscode/
 tmp/
 .npmrc
-skills/agentguard/scripts/data/
-skills/agentguard/scripts/package-lock.json
+.pnpm-store/
+skills/ffwd-agent-guard/scripts/data/
+skills/ffwd-agent-guard/scripts/package-lock.json

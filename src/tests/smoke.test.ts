@@ -12,7 +12,7 @@ import { SkillScanner } from '../scanner/index.js';
 
 // __dirname points to dist/tests/ after compilation, project root is 2 levels up
 const projectRoot = resolve(__dirname, '..', '..');
-const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'agentguard', 'scripts', 'guard-hook.js');
+const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'ffwd-agent-guard', 'scripts', 'guard-hook.js');
 
 function runGuardHook(input: Record<string, unknown>): Promise<{
   exitCode: number;
@@ -20,8 +20,8 @@ function runGuardHook(input: Record<string, unknown>): Promise<{
   stderr: string;
 }> {
   return new Promise((resolvePromise) => {
-    // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.agentguard/
-    const tempHome = mkdtempSync(join(tmpdir(), 'agentguard-smoke-'));
+    // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.ffwd-agent-guard/
+    const tempHome = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-smoke-'));
     const child = spawn('node', [GUARD_HOOK_PATH], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: tempHome },

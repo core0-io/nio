@@ -2,12 +2,12 @@
  * DEMO: Vulnerable Skill Example
  *
  * This file contains intentionally vulnerable code patterns
- * for demonstrating GoPlus AgentGuard's security scanning capabilities.
+ * for demonstrating Core0 AgentGuard's security scanning capabilities.
  *
  * DO NOT use this code in production. Every pattern here is a
- * security risk that GoPlus AgentGuard should detect.
+ * security risk that Core0 AgentGuard should detect.
  *
- * Run: /agentguard scan examples/vulnerable-skill
+ * Run: /ffwd-agent-guard scan examples/vulnerable-skill
  */
 
 const { exec } = require('child_process');  // SHELL_EXEC

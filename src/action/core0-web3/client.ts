@@ -1,9 +1,17 @@
 import axios, { type AxiosInstance } from 'axios';
 
 /**
- * GoPlus API base URL
+ * Core0 Web3 security API — HTTP backend (GoPlus Security provider).
+ * @see https://gopluslabs.io/security-api
  */
 const API_BASE_URL = 'https://api.gopluslabs.io/api/v1';
+
+function web3ApiCredentials(): { key: string | undefined; secret: string | undefined } {
+  return {
+    key: process.env.CORE0_WEB3_API_KEY || process.env.GOPLUS_API_KEY,
+    secret: process.env.CORE0_WEB3_API_SECRET || process.env.GOPLUS_API_SECRET,
+  };
+}
 
 /**
  * Token security result
@@ -122,9 +130,9 @@ export interface PhishingSiteResult {
 }
 
 /**
- * GoPlus API client
+ * Core0 Web3 API client (calls the configured HTTP security provider above).
  */
-export class GoPlusClient {
+export class Core0Web3Client {
   private client: AxiosInstance;
   private accessToken: string | null = null;
   private tokenExpiresAt: number = 0;
@@ -145,12 +153,11 @@ export class GoPlusClient {
       return this.accessToken;
     }
 
-    const apiKey = process.env.GOPLUS_API_KEY;
-    const apiSecret = process.env.GOPLUS_API_SECRET;
+    const { key: apiKey, secret: apiSecret } = web3ApiCredentials();
 
     if (!apiKey || !apiSecret) {
       throw new Error(
-        'GoPlus API credentials not found. Set GOPLUS_API_KEY and GOPLUS_API_SECRET environment variables.'
+        'Core0 Web3 API credentials not found. Set CORE0_WEB3_API_KEY and CORE0_WEB3_API_SECRET (or GOPLUS_API_KEY and GOPLUS_API_SECRET for compatibility).'
       );
     }
 
@@ -170,7 +177,7 @@ export class GoPlusClient {
       throw new Error(response.data.message || 'Failed to get access token');
     } catch (error) {
       if (axios.isAxiosError(error)) {
-        throw new Error(`GoPlus auth failed: ${error.message}`);
+        throw new Error(`Core0 Web3 API auth failed: ${error.message}`);
       }
       throw error;
     }
@@ -200,7 +207,7 @@ export class GoPlusClient {
         : await this.client.post(path, data, config);
 
     if (response.data.code !== 1) {
-      throw new Error(response.data.message || 'GoPlus API error');
+      throw new Error(response.data.message || 'Core0 Web3 API error');
     }
 
     return response.data.result;
@@ -355,12 +362,13 @@ export class GoPlusClient {
   }
 
   /**
-   * Check if GoPlus credentials are configured
+   * Whether Core0 Web3 API credentials are set (Core0 or legacy GOPLUS_* env names).
    */
   static isConfigured(): boolean {
-    return !!(process.env.GOPLUS_API_KEY && process.env.GOPLUS_API_SECRET);
+    const { key, secret } = web3ApiCredentials();
+    return !!(key && secret);
   }
 }
 
-// Export singleton instance
-export const goplusClient = new GoPlusClient();
+/** Singleton Core0 Web3 client */
+export const core0Web3Client = new Core0Web3Client();

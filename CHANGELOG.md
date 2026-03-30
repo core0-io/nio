@@ -11,7 +11,7 @@
   - Premium upgrade CTA integration (agentguard.gopluslabs.io)
   - Cross-platform browser opening (macOS/Linux/Windows)
 - `checkup-report.js` script for HTML report generation (zero external dependencies)
-- Checkup results logged to `~/.agentguard/audit.jsonl`
+- Checkup results logged to `~/.ffwd-agent-guard/audit.jsonl`
 
 ## [1.0.5] - 2026-03-18
 
@@ -22,17 +22,17 @@
   - `patrol status` — View last patrol results and cron schedule
 - 8 patrol checks: skill integrity, secrets exposure, network exposure, cron/scheduled task audit, file system changes (24h), audit log analysis, environment & config validation, trust registry health
 - Patrol report with overall status (PASS / WARN / FAIL) and actionable recommendations
-- Patrol results logged to `~/.agentguard/audit.jsonl`
+- Patrol results logged to `~/.ffwd-agent-guard/audit.jsonl`
 - Updated README with full patrol documentation and Layer 3 security description
 
 ## [1.0.4] - 2026-02-18
 
 ### Security
 - Auto-scan is now **opt-in** (disabled by default) to address ClawHub security review
-  - Claude Code: requires `AGENTGUARD_AUTO_SCAN=1` environment variable
+  - Claude Code: requires `FFWD_AGENT_GUARD_AUTO_SCAN=1` environment variable
   - OpenClaw: requires `{ skipAutoScan: false }` when registering the plugin
 - Auto-scan now operates in **report-only mode** — scans skills and reports results to stderr, but no longer calls `forceAttest` or modifies the trust registry
-- Audit log (`~/.agentguard/audit.jsonl`) no longer records code snippets, evidence details, or scan summaries — only skill name, risk level, and risk tag names
+- Audit log (`~/.ffwd-agent-guard/audit.jsonl`) no longer records code snippets, evidence details, or scan summaries — only skill name, risk level, and risk tag names
 
 ### Removed
 - `forceAttest` calls from `auto-scan.js` and `openclaw-plugin.ts`
@@ -54,7 +54,7 @@
 
 ### Fixed
 - Harden security across 6 vulnerabilities (P0+P1)
-- Use `~/.agentguard/registry.json` as default registry path
+- Use `~/.ffwd-agent-guard/registry.json` as default registry path
 - Balanced mode prompts user instead of hard-blocking non-critical commands
 
 ### Added
@@ -65,11 +65,11 @@
 ## [1.0.0] - 2026-02-16
 
 ### Added
-- Initial release of GoPlus AgentGuard
+- Initial release of Core0 AgentGuard
 - 24 detection rules covering execution, secrets, exfiltration, obfuscation, Web3, and social engineering
 - Runtime action evaluation (allow/deny/confirm) for commands, network requests, file ops, and Web3 transactions
 - Trust registry with capability-based access control per skill
 - Claude Code hook integration (`PreToolUse` / `PostToolUse`)
-- Audit logging to `~/.agentguard/audit.jsonl`
+- Audit logging to `~/.ffwd-agent-guard/audit.jsonl`
 - Protection levels: strict, balanced, permissive
-- GoPlus API integration for Web3 transaction simulation (optional)
+- Core0 Web3 API integration for Web3 transaction simulation (optional)

@@ -2,13 +2,13 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in GoPlus AgentGuard, please report it responsibly.
+If you discover a security vulnerability in Core0 AgentGuard, please report it responsibly.
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
 ### How to Report
 
-Email: **security@gopluslabs.io**
+Use [GitHub private vulnerability reporting](https://github.com/core0-io/ffwd-agent-guard/security/advisories/new) for this repository, or contact the [core0-io](https://github.com/core0-io) maintainers through an appropriate private channel.
 
 Please include:
 - Description of the vulnerability

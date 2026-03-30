@@ -7,13 +7,13 @@ import type { HookInput, HookOutput } from './types.js';
 // Paths
 // ---------------------------------------------------------------------------
 
-const AGENTGUARD_DIR = process.env.AGENTGUARD_HOME || join(homedir(), '.agentguard');
-const CONFIG_PATH = join(AGENTGUARD_DIR, 'config.json');
-const AUDIT_PATH = join(AGENTGUARD_DIR, 'audit.jsonl');
+const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
+const CONFIG_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json');
+const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
-  if (!existsSync(AGENTGUARD_DIR)) {
-    mkdirSync(AGENTGUARD_DIR, { recursive: true });
+  if (!existsSync(FFWD_AGENT_GUARD_DIR)) {
+    mkdirSync(FFWD_AGENT_GUARD_DIR, { recursive: true });
   }
 }
 

@@ -5,7 +5,7 @@
     "url": "https://github.com/core0-io"
   },
   "metadata": {
-    "description": "FFWD AgentGuard — AI agent security framework",
+    "description": "Core0 AgentGuard — AI agent security framework",
     "version": "1.0.0"
   },
   "plugins": [

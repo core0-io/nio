@@ -1,4 +1,4 @@
-# GoPlus AgentGuard Security Policy
+# Core0 AgentGuard Security Policy
 
 Unified security policy reference for all platforms (Claude Code, OpenClaw, and future integrations).
 
@@ -17,7 +17,7 @@ Unified security policy reference for all platforms (Claude Code, OpenClaw, and 
 
 | Module | Purpose | When Invoked |
 |--------|---------|--------------|
-| **Static Scanner** | Detect malicious patterns in code/prompts | Before execution (`/agentguard scan`) |
+| **Static Scanner** | Detect malicious patterns in code/prompts | Before execution (`/ffwd-agent-guard scan`) |
 | **Action Evaluator** | Runtime policy decisions on agent actions | On tool calls (hooks) |
 | **Trust Registry** | Skill identity and capability attestation | Skill invocation & lookup |
 
@@ -25,7 +25,7 @@ Unified security policy reference for all platforms (Claude Code, OpenClaw, and 
 
 ## 2. Protection Levels
 
-Configure via `/agentguard config <level>`:
+Configure via `/ffwd-agent-guard config <level>`:
 
 | Level | Description | DENY Behavior | CONFIRM Behavior |
 |-------|-------------|---------------|------------------|
@@ -216,7 +216,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
 
 ### 4.5 Web3 Operations (`web3_tx` / `web3_sign`)
 
-#### GoPlus Integration
+#### Core0 Web3 integration
 
 | Check | Description | Trigger → Action |
 |-------|-------------|------------------|
@@ -235,7 +235,7 @@ GOPLUS_API_SECRET=your_secret   # Required for simulation
 
 #### Degradation Strategy
 
-When GoPlus is unavailable:
+When the Web3 API is unavailable:
 1. `SIMULATION_UNAVAILABLE` tag is set
 2. Decision falls back to policy-based rules only
 3. Capability model and secret scanning still apply
@@ -402,7 +402,7 @@ interface CapabilityModel {
     "PreToolUse": [
       {
         "matcher": { "tool_name": "*" },
-        "hooks": ["agentguard-hook"]
+        "hooks": ["ffwd-agent-guard-hook"]
       }
     ]
   }
@@ -445,7 +445,7 @@ When AgentGuard registers as an OpenClaw plugin, it automatically:
 **Configuration** (Plugin registration):
 
 ```typescript
-import { registerOpenClawPlugin } from '@goplus/agentguard';
+import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
 
 // Basic registration (auto-scan enabled)
 registerOpenClawPlugin(api);
@@ -463,7 +463,7 @@ registerOpenClawPlugin(api, {
 import {
   getPluginIdFromTool,    // Get plugin ID from tool name
   getPluginScanResult,    // Get cached scan result for plugin
-} from '@goplus/agentguard';
+} from '@core0-io/ffwd-agent-guard';
 ```
 
 ---
@@ -478,7 +478,7 @@ import {
 | **Key exfiltration** | Private keys (0x+64 hex), mnemonics (12-24 BIP39), SSH keys |
 | **Webhook exfil** | Discord/Telegram/Slack webhooks (unless allowlisted) |
 | **Prompt injection** | `ignore previous instructions`, jailbreak attempts |
-| **Malicious addresses** | GoPlus-flagged phishing/blacklisted addresses |
+| **Malicious addresses** | Core0 Web3–flagged phishing/blacklisted addresses |
 
 ### Require Confirmation (High — CONFIRM in balanced)
 
@@ -555,4 +555,4 @@ file:
 
 ---
 
-*This document consolidates security policies from `skills/agentguard/action-policies.md`, `skills/agentguard/scan-rules.md`, and implementation in `src/action/detectors/`.*
+*This document consolidates security policies from `skills/ffwd-agent-guard/action-policies.md`, `skills/ffwd-agent-guard/scan-rules.md`, and implementation in `src/action/detectors/`.*

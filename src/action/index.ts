@@ -17,7 +17,7 @@ import { SkillRegistry } from '../registry/index.js';
 import { analyzeNetworkRequest } from './detectors/network.js';
 import { analyzeExecCommand } from './detectors/exec.js';
 import { detectSecretLeak, containsCriticalSecrets } from './detectors/secret-leak.js';
-import { GoPlusClient, goplusClient } from './goplus/client.js';
+import { Core0Web3Client, core0Web3Client } from './core0-web3/client.js';
 import { extractDomain } from '../utils/patterns.js';
 import * as nodePath from 'path';
 
@@ -27,8 +27,8 @@ import * as nodePath from 'path';
 export interface ActionScannerOptions {
   /** Registry instance */
   registry?: SkillRegistry;
-  /** GoPlus client */
-  goplusClient?: GoPlusClient;
+  /** Core0 Web3 security API client */
+  core0Web3Client?: Core0Web3Client;
   /** Default capabilities when no registry record found */
   defaultCapabilities?: CapabilityModel;
 }
@@ -39,12 +39,12 @@ export interface ActionScannerOptions {
  */
 export class ActionScanner {
   private registry: SkillRegistry;
-  private goplus: GoPlusClient;
+  private web3: Core0Web3Client;
   private defaultCapabilities: CapabilityModel;
 
   constructor(options: ActionScannerOptions = {}) {
     this.registry = options.registry || new SkillRegistry();
-    this.goplus = options.goplusClient || goplusClient;
+    this.web3 = options.core0Web3Client || core0Web3Client;
     this.defaultCapabilities = options.defaultCapabilities || DEFAULT_CAPABILITY;
   }
 
@@ -260,7 +260,7 @@ export class ActionScanner {
     // Check origin for phishing
     if (tx.origin) {
       try {
-        const phishingResult = await this.goplus.phishingSite(tx.origin);
+        const phishingResult = await this.web3.phishingSite(tx.origin);
         if (phishingResult.is_phishing || phishingResult.phishing_site) {
           evidence.push({
             type: 'phishing_origin',
@@ -279,7 +279,7 @@ export class ActionScanner {
 
     // Check target address
     try {
-      const addressResult = await this.goplus.addressSecurity(
+      const addressResult = await this.web3.addressSecurity(
         tx.chain_id.toString(),
         [tx.to]
       );
@@ -317,10 +317,10 @@ export class ActionScanner {
       // Address check failed, continue
     }
 
-    // Simulate transaction if GoPlus is configured
-    if (GoPlusClient.isConfigured() && decision !== 'deny') {
+    // Simulate transaction if Core0 Web3 API is configured
+    if (Core0Web3Client.isConfigured() && decision !== 'deny') {
       try {
-        const simulation = await this.goplus.simulateTransaction({
+        const simulation = await this.web3.simulateTransaction({
           chain_id: tx.chain_id.toString(),
           from: tx.from,
           to: tx.to,
@@ -427,7 +427,7 @@ export class ActionScanner {
     // Check origin for phishing
     if (sign.origin) {
       try {
-        const phishingResult = await this.goplus.phishingSite(sign.origin);
+        const phishingResult = await this.web3.phishingSite(sign.origin);
         if (phishingResult.is_phishing || phishingResult.phishing_site) {
           evidence.push({
             type: 'phishing_origin',
@@ -624,13 +624,13 @@ export class ActionScanner {
     let riskLevel: RiskLevel = 'low';
     let decision: Decision = 'allow';
 
-    // Check if GoPlus is configured
-    if (!GoPlusClient.isConfigured()) {
+    // Check if Core0 Web3 API is configured
+    if (!Core0Web3Client.isConfigured()) {
       return {
         decision: 'confirm',
         risk_level: 'medium',
         risk_tags: ['SIMULATION_UNAVAILABLE'],
-        explanation: 'GoPlus API not configured - cannot simulate transaction',
+        explanation: 'Core0 Web3 API not configured - cannot simulate transaction',
         guardrail: {
           require_user_confirmation: true,
           suggested_change: 'Configure GOPLUS_API_KEY and GOPLUS_API_SECRET',
@@ -641,14 +641,14 @@ export class ActionScanner {
     // Check origin for phishing
     if (intent.origin) {
       try {
-        const phishingResult = await this.goplus.phishingSite(intent.origin);
+        const phishingResult = await this.web3.phishingSite(intent.origin);
         if (phishingResult.is_phishing || phishingResult.phishing_site) {
           return {
             decision: 'deny',
             risk_level: 'critical',
             risk_tags: ['PHISHING_ORIGIN'],
             explanation: 'Transaction origin is a known phishing site',
-            goplus: {
+            core0Web3: {
               address_risk: {
                 is_malicious: false,
                 is_phishing: true,
@@ -663,7 +663,7 @@ export class ActionScanner {
 
     // Check target address
     try {
-      const addressResult = await this.goplus.addressSecurity(
+      const addressResult = await this.web3.addressSecurity(
         intent.chain_id.toString(),
         [intent.to]
       );
@@ -681,7 +681,7 @@ export class ActionScanner {
             risk_level: 'critical',
             risk_tags: ['MALICIOUS_ADDRESS'],
             explanation: 'Target address is flagged as malicious',
-            goplus: {
+            core0Web3: {
               address_risk: {
                 is_malicious: true,
                 is_phishing: addressRisk.is_phishing_activities,
@@ -702,7 +702,7 @@ export class ActionScanner {
 
     // Simulate transaction
     try {
-      const simulation = await this.goplus.simulateTransaction({
+      const simulation = await this.web3.simulateTransaction({
         chain_id: intent.chain_id.toString(),
         from: intent.from,
         to: intent.to,
@@ -744,7 +744,7 @@ export class ActionScanner {
           : riskTags.length > 0
           ? `Risks detected: ${riskTags.join(', ')}`
           : 'Transaction appears safe',
-        goplus: {
+        core0Web3: {
           simulation: {
             success: simulation.success,
             balance_changes: simulation.balance_changes.map((c) => ({
@@ -785,4 +785,4 @@ export const actionScanner = new ActionScanner();
 
 // Re-export types and sub-modules
 export * from './detectors/index.js';
-export * from './goplus/client.js';
+export * from './core0-web3/client.js';

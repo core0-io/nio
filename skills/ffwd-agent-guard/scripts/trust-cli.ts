@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
+ * Core0 AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
  *
  * Usage:
  *   node trust-cli.ts lookup --id <id> --source <source> --version <version> --hash <hash>
@@ -11,7 +11,7 @@
  *   node trust-cli.ts hash    --path <dir>
  */
 
-import { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } from '@goplus/agentguard';
+import { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } from '@core0-io/ffwd-agent-guard';
 
 const args = process.argv.slice(2);
 const command = args[0];

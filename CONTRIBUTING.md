@@ -20,7 +20,7 @@ npm test
   - `registry/` — Trust level management
   - `policy/` — Default policies and capability presets
   - `tests/` — Test suite (Node.js built-in test runner)
-- `skills/agentguard/` — Claude Code skill definition (SKILL.md + reference docs)
+- `skills/ffwd-agent-guard/` — Claude Code skill definition (SKILL.md + reference docs)
 - `hooks/` — Plugin hooks configuration for auto-guard
 - `examples/` — Demo projects for testing
 

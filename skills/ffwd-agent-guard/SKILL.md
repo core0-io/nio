@@ -1,32 +1,32 @@
 ---
-name: agentguard
-description: GoPlus AgentGuard — AI agent security guard. Run /agentguard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
+name: ffwd-agent-guard
+description: Core0 AgentGuard — AI agent security guard. Run /ffwd-agent-guard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
 license: MIT
-compatibility: Requires Node.js 18+. Optional GoPlus API credentials for enhanced Web3 simulation.
+compatibility: Requires Node.js 18+. Optional Core0 Web3 API credentials (CORE0_WEB3_* or GOPLUS_* env vars).
 metadata:
   author: core0-io
   version: "1.1"
-  optional_env: "GOPLUS_API_KEY, GOPLUS_API_SECRET (for Web3 transaction simulation only)"
+  optional_env: "CORE0_WEB3_API_KEY, CORE0_WEB3_API_SECRET (or GOPLUS_* for compatibility; Web3 simulation only)"
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
 argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
 ---
 
-# GoPlus AgentGuard — AI Agent Security Framework
+# Core0 AgentGuard — AI Agent Security Framework
 
-You are a security auditor powered by the GoPlus AgentGuard framework. Route the user's request based on the first argument.
+You are a security auditor powered by the Core0 AgentGuard framework. Route the user's request based on the first argument.
 
 ## Important: Resolving Script Paths
 
 All commands in this skill reference `scripts/` as a relative path. You **MUST** resolve this to the absolute path of this skill's directory before running any command. To find the skill directory:
 
 1. This SKILL.md file's parent directory **is** the skill directory
-2. If this file is at `/path/to/agentguard/SKILL.md`, then scripts are at `/path/to/agentguard/scripts/`
+2. If this file is at `/path/to/ffwd-agent-guard/SKILL.md`, then scripts are at `/path/to/ffwd-agent-guard/scripts/`
 3. Before running any `node scripts/...` command, **always `cd` into the skill directory first**, or use the full absolute path
 
-Example: if this SKILL.md is at `~/.openclaw/skills/agentguard/SKILL.md`, run:
+Example: if this SKILL.md is at `~/.openclaw/skills/ffwd-agent-guard/SKILL.md`, run:
 ```bash
-cd ~/.openclaw/skills/agentguard && node scripts/checkup-report.js
+cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/checkup-report.js
 ```
 
 ## Command Routing
@@ -101,7 +101,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 ### Output Format
 
 ```
-## GoPlus AgentGuard Security Scan Report
+## Core0 AgentGuard Security Scan Report
 
 **Target**: <scanned path>
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
@@ -142,11 +142,11 @@ After outputting the scan report, if the scanned target appears to be a skill (c
    - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.ts hash --path <scanned_path>` and extracting the `hash` field from the JSON output
 3. Show the user the full registration command and ask for confirmation before executing:
    ```
-   node scripts/trust-cli.ts attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by agentguard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
+   node scripts/trust-cli.ts attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by ffwd-agent-guard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
    ```
 4. Only execute after user approval. Show the registration result.
 
-If scripts are not available (e.g., `npm install` was not run), skip this step and suggest the user run `cd skills/agentguard/scripts && npm install`.
+If scripts are not available (e.g., `npm install` was not run), skip this step and suggest the user run `cd skills/ffwd-agent-guard/scripts && npm install`.
 
 ---
 
@@ -187,7 +187,7 @@ Parse the user's action description and apply the appropriate detector:
 
 ### Web3 Enhanced Detection
 
-When the action involves **web3_tx** or **web3_sign**, use AgentGuard's bundled `action-cli.ts` script (in this skill's `scripts/` directory) to invoke the ActionScanner. This script integrates the trust registry and optionally the GoPlus API (requires `GOPLUS_API_KEY` and `GOPLUS_API_SECRET` environment variables, if available):
+When the action involves **web3_tx** or **web3_sign**, use AgentGuard's bundled `action-cli.ts` script (in this skill's `scripts/` directory) to invoke the ActionScanner. This script integrates the trust registry and optionally the Core0 Web3 API (set `CORE0_WEB3_API_KEY` / `CORE0_WEB3_API_SECRET`, or `GOPLUS_API_KEY` / `GOPLUS_API_SECRET` for compatibility):
 
 For web3_tx:
 ```
@@ -212,16 +212,16 @@ node scripts/action-cli.ts decide --type exec_command --command "<cmd>" [--skill
 
 Parse the JSON output and incorporate findings into your evaluation:
 - If `decision` is `deny` → override to **DENY** with the returned evidence
-- If `goplus.address_risk.is_malicious` → **DENY** (critical)
-- If `goplus.simulation.approval_changes` has `is_unlimited: true` → **CONFIRM** (high)
-- If GoPlus is unavailable (`SIMULATION_UNAVAILABLE` tag) → fall back to prompt-based rules and note the limitation
+- If `core0Web3.address_risk.is_malicious` → **DENY** (critical)
+- If `core0Web3.simulation.approval_changes` has `is_unlimited: true` → **CONFIRM** (high)
+- If the Web3 API is unavailable (`SIMULATION_UNAVAILABLE` tag) → fall back to prompt-based rules and note the limitation
 
 Always combine script results with the policy-based checks (webhook domains, secret scanning, etc.) — the script enhances but does not replace rule-based evaluation.
 
 ### Output Format
 
 ```
-## GoPlus AgentGuard Action Evaluation
+## Core0 AgentGuard Action Evaluation
 
 **Action**: <action type and description>
 **Decision**: ALLOW | DENY | CONFIRM
@@ -260,7 +260,7 @@ Before running any checks, verify the OpenClaw environment:
 If OpenClaw is not detected, output:
 ```
 This command requires an OpenClaw environment. Detected: <what was found/missing>
-For non-OpenClaw environments, use /agentguard scan and /agentguard report instead.
+For non-OpenClaw environments, use /ffwd-agent-guard scan and /ffwd-agent-guard report instead.
 ```
 
 Set `$OC` to the resolved OpenClaw state directory for all subsequent checks.
@@ -331,14 +331,14 @@ Detect suspicious file modifications in the last 24 hours.
 Analyze AgentGuard's audit trail for attack patterns.
 
 **Steps**:
-1. Read `~/.agentguard/audit.jsonl`, filter to last 24h by timestamp
+1. Read `~/.ffwd-agent-guard/audit.jsonl`, filter to last 24h by timestamp
 2. Compute statistics: total events, deny/confirm/allow counts, group denials by `risk_tags` and `initiating_skill`
 3. Flag patterns:
    - Same skill denied 3+ times → potential attack (HIGH)
    - Any event with `risk_level: critical` → (CRITICAL)
    - `WEBHOOK_EXFIL` or `NET_EXFIL_UNRESTRICTED` tags → (HIGH)
    - `PROMPT_INJECTION` tag → (CRITICAL)
-4. For skills with high deny rates still not revoked: recommend `/agentguard trust revoke`
+4. For skills with high deny rates still not revoked: recommend `/ffwd-agent-guard trust revoke`
 
 #### [7] Environment & Configuration
 
@@ -347,7 +347,7 @@ Verify security configuration is production-appropriate.
 **Steps**:
 1. List environment variables matching sensitive names (values masked): `API_KEY`, `SECRET`, `PASSWORD`, `TOKEN`, `PRIVATE`, `CREDENTIAL`
 2. Check if `GOPLUS_API_KEY`/`GOPLUS_API_SECRET` are configured (if Web3 features are in use)
-3. Read `~/.agentguard/config.json` — flag `permissive` protection level in production
+3. Read `~/.ffwd-agent-guard/config.json` — flag `permissive` protection level in production
 4. If `$OC/.config-baseline.sha256` exists, verify: `sha256sum -c $OC/.config-baseline.sha256`
 
 #### [8] Trust Registry Health
@@ -366,7 +366,7 @@ Check for expired, stale, or over-privileged trust records.
 ### Patrol Report Format
 
 ```
-## GoPlus AgentGuard Patrol Report
+## Core0 AgentGuard Patrol Report
 
 **Timestamp**: <ISO datetime>
 **OpenClaw Home**: <$OC path>
@@ -396,12 +396,12 @@ Check for expired, stale, or over-privileged trust records.
 1. [SEVERITY] <actionable recommendation>
 
 ### Next Patrol
-<Cron schedule if configured, or suggest: /agentguard patrol setup>
+<Cron schedule if configured, or suggest: /ffwd-agent-guard patrol setup>
 ```
 
 **Overall status**: Any CRITICAL → **FAIL**, any HIGH → **WARN**, else **PASS**
 
-After outputting the report, append a summary entry to `~/.agentguard/audit.jsonl`:
+After outputting the report, append a summary entry to `~/.ffwd-agent-guard/audit.jsonl`:
 ```json
 {"timestamp":"...","event":"patrol","overall_status":"PASS|WARN|FAIL","checks":8,"findings":<count>,"critical":<count>,"high":<count>}
 ```
@@ -422,12 +422,12 @@ Configure the patrol as an OpenClaw daily cron job.
 
 ```bash
 openclaw cron add \
-  --name "agentguard-patrol" \
-  --description "GoPlus AgentGuard daily security patrol" \
+  --name "ffwd-agent-guard-patrol" \
+  --description "Core0 AgentGuard daily security patrol" \
   --cron "<schedule>" \
   --tz "<timezone>" \
   --session "isolated" \
-  --message "/agentguard patrol run" \
+  --message "/ffwd-agent-guard patrol run" \
   --timeout-seconds 300 \
   --thinking off \
   # Only include these if notification is configured:
@@ -448,11 +448,11 @@ Show the current patrol state.
 
 **Steps**:
 
-1. Read `~/.agentguard/audit.jsonl`, find the most recent `event: "patrol"` entry
+1. Read `~/.ffwd-agent-guard/audit.jsonl`, find the most recent `event: "patrol"` entry
 2. If found, display: timestamp, overall status, finding counts
-3. Run `openclaw cron list` and look for `agentguard-patrol` job
+3. Run `openclaw cron list` and look for `ffwd-agent-guard-patrol` job
 4. If cron is configured, show: schedule, timezone, last run time, next run time
-5. If cron is not configured, suggest: `/agentguard patrol setup`
+5. If cron is not configured, suggest: `/ffwd-agent-guard patrol setup`
 
 ---
 
@@ -460,7 +460,7 @@ Show the current patrol state.
 
 ## Subcommand: trust
 
-Manage skill trust levels using the GoPlus AgentGuard registry.
+Manage skill trust levels using the Core0 AgentGuard registry.
 
 ### Trust Levels
 
@@ -493,21 +493,21 @@ web3.tx_policy: 'allow' | 'confirm_high_risk' | 'deny'
 
 ### Operations
 
-**lookup** — `agentguard trust lookup --source <source> --version <version>`
+**lookup** — `ffwd-agent-guard trust lookup --source <source> --version <version>`
 Query the registry for a skill's trust record.
 
-**attest** — `agentguard trust attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
+**attest** — `ffwd-agent-guard trust attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
 Create or update a trust record. Use `--preset` for common capability models or provide `--capabilities <json>` for custom.
 
-**revoke** — `agentguard trust revoke --source <source> --reason <reason>`
+**revoke** — `ffwd-agent-guard trust revoke --source <source> --reason <reason>`
 Revoke trust for a skill. Supports `--source-pattern` for wildcards.
 
-**list** — `agentguard trust list [--trust-level <level>] [--status <status>]`
+**list** — `ffwd-agent-guard trust list [--trust-level <level>] [--status <status>]`
 List all trust records with optional filters.
 
 ### Script Execution
 
-If the agentguard package is installed, execute trust operations via AgentGuard's own bundled script:
+If the @core0-io/ffwd-agent-guard package is installed, execute trust operations via Core0 AgentGuard's own bundled script:
 ```
 node scripts/trust-cli.ts <subcommand> [args]
 ```
@@ -520,7 +520,7 @@ If scripts are not available, help the user inspect `data/registry.json` directl
 
 ## Subcommand: config
 
-Set the GoPlus AgentGuard protection level.
+Set the Core0 AgentGuard protection level.
 
 ### Protection Levels
 
@@ -533,7 +533,7 @@ Set the GoPlus AgentGuard protection level.
 ### How to Set
 
 1. Read `$ARGUMENTS` to get the desired level
-2. Write the config to `~/.agentguard/config.json`:
+2. Write the config to `~/.ffwd-agent-guard/config.json`:
 
 ```json
 {"level": "balanced"}
@@ -549,11 +549,11 @@ If no level is specified, read and display the current config.
 
 ## Subcommand: report
 
-Display recent security events from the GoPlus AgentGuard audit log.
+Display recent security events from the Core0 AgentGuard audit log.
 
 ### Log Location
 
-The audit log is stored at `~/.agentguard/audit.jsonl`. Each line is a JSON object with:
+The audit log is stored at `~/.ffwd-agent-guard/audit.jsonl`. Each line is a JSON object with:
 
 ```json
 {"timestamp":"...","tool_name":"Bash","tool_input_summary":"rm -rf /","decision":"deny","risk_level":"critical","risk_tags":["DANGEROUS_COMMAND"],"initiating_skill":"some-skill"}
@@ -563,7 +563,7 @@ The `initiating_skill` field is present when the action was triggered by a skill
 
 ### How to Display
 
-1. Read `~/.agentguard/audit.jsonl` using the Read tool
+1. Read `~/.ffwd-agent-guard/audit.jsonl` using the Read tool
 2. Parse each line as JSON
 3. Format as a table showing recent events (last 50 by default)
 4. If any events have `initiating_skill`, add a "Skill Activity" section grouping events by skill
@@ -571,7 +571,7 @@ The `initiating_skill` field is present when the action was triggered by a skill
 ### Output Format
 
 ```
-## GoPlus AgentGuard Security Report
+## Core0 AgentGuard Security Report
 
 **Events**: <total count>
 **Blocked**: <deny count>
@@ -592,7 +592,7 @@ If any events were triggered by skills, group them here:
 |-------|--------|---------|-----------|
 | some-skill | 5 | 2 | DANGEROUS_COMMAND, EXFIL_RISK |
 
-For untrusted skills with blocked actions, suggest: `/agentguard trust attest` to register them or `/agentguard trust revoke` to block them.
+For untrusted skills with blocked actions, suggest: `/ffwd-agent-guard trust attest` to register them or `/ffwd-agent-guard trust revoke` to block them.
 
 ### Summary
 <Brief analysis of security posture and any patterns of concern>
@@ -612,7 +612,7 @@ Run a comprehensive agent health checkup across 6 security dimensions. Generates
 
 Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
 
-1. **Discover & scan installed skills**: Glob `~/.claude/skills/*/SKILL.md` and `~/.openclaw/skills/*/SKILL.md`. For each discovered skill, **run `/agentguard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Collect the scan results (risk level, findings count, risk tags) for each skill.
+1. **Discover & scan installed skills**: Glob `~/.claude/skills/*/SKILL.md` and `~/.openclaw/skills/*/SKILL.md`. For each discovered skill, **run `/ffwd-agent-guard scan <skill_path>`** using the scan subcommand logic (24 detection rules). Collect the scan results (risk level, findings count, risk tags) for each skill.
 2. **Credential file permissions**: `stat` on `~/.ssh/`, `~/.gnupg/`, and if OpenClaw: `stat` on `$OC/openclaw.json`, `$OC/devices/paired.json`
 3. **Sensitive credential scan (DLP)**: Use Grep to scan workspace memory/logs directories for leaked secrets:
    - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
@@ -621,7 +621,7 @@ Run these checks in parallel where possible. These are **universal agent securit
 4. **Network exposure**: Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0)
 5. **Scheduled tasks audit**: Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`
 6. **Environment variable exposure**: Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values
-7. **Runtime protection check**: Check if security hooks exist in `~/.claude/settings.json`, check for audit logs at `~/.agentguard/audit.jsonl`
+7. **Runtime protection check**: Check if security hooks exist in `~/.claude/settings.json`, check for audit logs at `~/.ffwd-agent-guard/audit.jsonl`
 
 ### Step 2: Score Calculation
 
@@ -629,7 +629,7 @@ Checklist-based scoring across 6 security dimensions. **Every failed check = 1 f
 
 #### Dimension 1: Skill & Code Safety (weight: 25%)
 
-Uses AgentGuard's 24-rule scan engine (`/agentguard scan`) to audit each installed skill.
+Uses AgentGuard's 24-rule scan engine (`/ffwd-agent-guard scan`) to audit each installed skill.
 
 | Check | Score | If failed → finding |
 |-------|-------|---------------------|
@@ -682,7 +682,7 @@ Only if Web3 usage is detected (env vars like `GOPLUS_API_KEY`, `CHAIN_ID`, `RPC
 |-------|-------|---------------------|
 | No wallet-draining patterns (approve+transferFrom) in skill code | +40 | "Wallet-draining pattern detected in <skill>" (CRITICAL) |
 | No unlimited token approval patterns in skill code | +30 | "Unlimited approval pattern detected in <skill>" (HIGH) |
-| Transaction security API configured (GoPlus or equivalent) | +30 | "No transaction security API — Web3 calls are unverified" (MEDIUM) |
+| Transaction security API configured (Core0 Web3 API or equivalent) | +30 | "No transaction security API — Web3 calls are unverified" (MEDIUM) |
 
 #### Composite Score
 
@@ -739,14 +739,14 @@ Execute (remember to `cd` into the skill directory first — see "Resolving Scri
 cd <skill_directory> && echo '<json>' | node scripts/checkup-report.js
 ```
 
-The script outputs the HTML file path to stdout (e.g. `/tmp/agentguard-checkup-1234567890.html`). Capture this path — you will need it for delivery in Step 6.
+The script outputs the HTML file path to stdout (e.g. `/tmp/ffwd-agent-guard-checkup-1234567890.html`). Capture this path — you will need it for delivery in Step 6.
 
 ### Step 5: Terminal Summary
 
 After the report generates, output a brief summary in the terminal:
 
 ```
-## 🦞 GoPlus AgentGuard Health Checkup
+## 🦞 Core0 AgentGuard Health Checkup
 
 **Overall Health Score**: <score> / 100 (Tier <grade> — <label>)
 **Quote**: "<lobster quote>"
@@ -777,7 +777,7 @@ Output the following line on its **own line** in your response:
 MEDIA:<file_path>
 ```
 
-For example: `MEDIA:/tmp/agentguard-checkup-1234567890.html`
+For example: `MEDIA:/tmp/ffwd-agent-guard-checkup-1234567890.html`
 
 This is how platforms like OpenClaw automatically deliver the file as a Telegram/Discord/WhatsApp attachment via `sendDocument`. The platform strips this line from visible text — the user won't see it. **Always output this regardless of what channel you think you're in.**
 
@@ -785,7 +785,7 @@ This is how platforms like OpenClaw automatically deliver the file as a Telegram
 
 **Claude Code (local desktop)**
 - The browser should already be open from Step 4.
-- Also copy to Desktop: `cp <file_path> ~/Desktop/agentguard-checkup-$(date +%Y-%m-%d).html`
+- Also copy to Desktop: `cp <file_path> ~/Desktop/ffwd-agent-guard-checkup-$(date +%Y-%m-%d).html`
 - Tell the user: "✅ Report saved to your Desktop and opened in browser."
 
 **Claude.ai web**
@@ -798,10 +798,10 @@ This is how platforms like OpenClaw automatically deliver the file as a Telegram
 
 Regardless of channel, always end with:
 ```
-🦞 Stay safe — run /agentguard checkup anytime to get a fresh report.
+🦞 Stay safe — run /ffwd-agent-guard checkup anytime to get a fresh report.
 ```
 
-Append a summary entry to `~/.agentguard/audit.jsonl`:
+Append a summary entry to `~/.ffwd-agent-guard/audit.jsonl`:
 ```json
 {"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>}
 ```
@@ -812,7 +812,7 @@ Append a summary entry to `~/.agentguard/audit.jsonl`:
 
 AgentGuard can optionally scan installed skills at session startup. **This is disabled by default** and must be explicitly enabled:
 
-- **Claude Code**: Set environment variable `AGENTGUARD_AUTO_SCAN=1`
+- **Claude Code**: Set environment variable `FFWD_AGENT_GUARD_AUTO_SCAN=1`
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
 
 When enabled, auto-scan operates in **report-only mode**:
@@ -826,6 +826,6 @@ Auto-scan **does NOT**:
 - Write code snippets or evidence details to disk
 - Execute any code from the scanned skills
 
-The audit log (`~/.agentguard/audit.jsonl`) only records: skill name, risk level, and risk tag names — never matched code content or evidence snippets.
+The audit log (`~/.ffwd-agent-guard/audit.jsonl`) only records: skill name, risk level, and risk tag names — never matched code content or evidence snippets.
 
-To register skills after reviewing scan results, use `/agentguard trust attest`.
+To register skills after reviewing scan results, use `/ffwd-agent-guard trust attest`.

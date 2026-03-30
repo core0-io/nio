@@ -201,8 +201,8 @@ export interface Web3SimulationResult {
   risk_tags: string[];
   /** Human-readable explanation */
   explanation: string;
-  /** GoPlus raw response */
-  goplus?: {
+  /** Core0 Web3 security API raw response envelope */
+  core0Web3?: {
     simulation?: {
       success: boolean;
       balance_changes: AssetChange[];

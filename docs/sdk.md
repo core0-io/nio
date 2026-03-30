@@ -1,17 +1,17 @@
 # SDK Usage
 
-Use GoPlus AgentGuard as a library in your own project.
+Use Core0 AgentGuard as a library in your own project.
 
 ## Installation
 
 ```bash
-npm install @goplus/agentguard
+npm install @core0-io/ffwd-agent-guard
 ```
 
 ## Quick Start
 
 ```typescript
-import { createAgentGuard } from '@goplus/agentguard';
+import { createAgentGuard } from '@core0-io/ffwd-agent-guard';
 
 const { scanner, registry, actionScanner } = createAgentGuard();
 ```
@@ -75,7 +75,7 @@ console.log(result.effective_trust_level); // 'trusted'
 
 ## API Reference
 
-See the TypeScript types exported from `@goplus/agentguard` for full API details:
+See the TypeScript types exported from `@core0-io/ffwd-agent-guard` for full API details:
 
 - `SkillScanner` — Static analysis engine
 - `SkillRegistry` — Trust level management

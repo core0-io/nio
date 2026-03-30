@@ -1,7 +1,7 @@
 {
   "name": "ffwd-agent-guard",
   "version": "1.0.0",
-  "description": "FFWD AgentGuard — AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
+  "description": "Core0 AgentGuard — AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
   "author": {
     "name": "core0-io",
     "url": "https://github.com/core0-io"

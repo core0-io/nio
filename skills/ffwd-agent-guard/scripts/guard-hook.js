@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard PreToolUse / PostToolUse Hook (Claude Code)
+ * Core0 AgentGuard PreToolUse / PostToolUse Hook (Claude Code)
  *
  * Uses the common adapter + engine architecture.
  * Reads Claude Code hook input from stdin, delegates to evaluateHook(),
@@ -31,13 +31,13 @@ try {
   loadConfig = gs.loadConfig;
 } catch {
   try {
-    const gs = await import('@goplus/agentguard');
+    const gs = await import('@core0-io/ffwd-agent-guard');
     createAgentGuard = gs.createAgentGuard || gs.default;
     ClaudeCodeAdapter = gs.ClaudeCodeAdapter;
     evaluateHook = gs.evaluateHook;
     loadConfig = gs.loadConfig;
   } catch {
-    process.stderr.write('GoPlus AgentGuard: unable to load engine, allowing action\n');
+    process.stderr.write('Core0 AgentGuard: unable to load engine, allowing action\n');
     process.exit(0);
   }
 }
@@ -98,9 +98,9 @@ async function main() {
 
   const adapter = new ClaudeCodeAdapter();
   const config = loadConfig();
-  const agentguard = createAgentGuard();
+  const ffwdAgentGuard = createAgentGuard();
 
-  const result = await evaluateHook(adapter, input, { config, agentguard });
+  const result = await evaluateHook(adapter, input, { config, ffwdAgentGuard });
 
   if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked');
   else if (result.decision === 'ask') outputAsk(result.reason || 'Action requires confirmation');

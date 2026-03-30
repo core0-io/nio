@@ -114,7 +114,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
-      agentguardFactory: () => ctx.agentguard as never,
+      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
     assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
@@ -125,7 +125,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
-      agentguardFactory: () => ctx.agentguard as never,
+      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -140,7 +140,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
-      agentguardFactory: () => ctx.agentguard as never,
+      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -158,7 +158,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
-      agentguardFactory: () => ctx.agentguard as never,
+      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -174,7 +174,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
       skipAutoScan: true,
-      agentguardFactory: () => ctx.agentguard as never,
+      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
     await handlers['after_tool_call']({

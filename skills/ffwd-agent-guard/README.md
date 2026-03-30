@@ -1,4 +1,4 @@
-# GoPlus AgentGuard
+# Core0 AgentGuard
 
 AI Agent Security Guard — protect your AI agents from dangerous commands, data leaks, and malicious skills.
 
@@ -14,13 +14,13 @@ AI Agent Security Guard — protect your AI agents from dangerous commands, data
 ## Usage
 
 ```
-/agentguard scan <path>          — Scan code for security risks
-/agentguard action <description> — Evaluate runtime action safety
-/agentguard patrol [run|setup|status] — Daily security patrol
-/agentguard trust <subcommand>   — Manage skill trust levels
-/agentguard report               — View security event audit log
-/agentguard config <level>       — Set protection level (strict/balanced/permissive)
-/agentguard checkup              — Run agent health checkup with visual HTML report
+/ffwd-agent-guard scan <path>          — Scan code for security risks
+/ffwd-agent-guard action <description> — Evaluate runtime action safety
+/ffwd-agent-guard patrol [run|setup|status] — Daily security patrol
+/ffwd-agent-guard trust <subcommand>   — Manage skill trust levels
+/ffwd-agent-guard report               — View security event audit log
+/ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
+/ffwd-agent-guard checkup              — Run agent health checkup with visual HTML report
 ```
 
 ## Agent Health Checkup 🦞
@@ -28,7 +28,7 @@ AI Agent Security Guard — protect your AI agents from dangerous commands, data
 Run a full security health check on your AI agent and get a visual report in the browser:
 
 ```
-/agentguard checkup
+/ffwd-agent-guard checkup
 ```
 
 Evaluates 4 dimensions (5 if Web3 usage is detected):
@@ -39,7 +39,7 @@ Evaluates 4 dimensions (5 if Web3 usage is detected):
 | **Credential & Secrets** | File permissions on `~/.ssh/`, `~/.gnupg/`, leaked keys and API tokens |
 | **Network & System** | Dangerous open ports, suspicious cron jobs, sensitive env vars |
 | **Runtime Protection** | Security hooks, audit log, whether skills have been scanned |
-| **Web3 Safety** | Wallet-draining patterns, unlimited approvals, GoPlus API config (only if Web3 detected) |
+| **Web3 Safety** | Wallet-draining patterns, unlimited approvals, Core0 Web3 API config (only if Web3 detected) |
 
 Scores are combined into a composite 0–100 health score with a tier:
 
@@ -55,7 +55,7 @@ The report opens automatically in your browser. It includes a shareable image yo
 ## Requirements
 
 - Node.js 18+
-- Optional: GoPlus API credentials for enhanced Web3 transaction simulation
+- Optional: Core0 Web3 API credentials for enhanced Web3 transaction simulation
 
 ## Author
 

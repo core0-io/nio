@@ -1,31 +1,31 @@
 # Trust Management
 
-GoPlus AgentGuard includes a trust registry for managing skill permissions.
+Core0 AgentGuard includes a trust registry for managing skill permissions.
 
 ## Commands
 
 ### Attest (Register a Skill)
 
 ```
-/agentguard trust attest --id my-bot --source github.com/org/bot --version v1.0.0 --hash abc --trust-level restricted --preset trading_bot --reviewed-by admin
+/ffwd-agent-guard trust attest --id my-bot --source github.com/org/bot --version v1.0.0 --hash abc --trust-level restricted --preset trading_bot --reviewed-by admin
 ```
 
 ### Lookup
 
 ```
-/agentguard trust lookup --source github.com/org/bot
+/ffwd-agent-guard trust lookup --source github.com/org/bot
 ```
 
 ### Revoke
 
 ```
-/agentguard trust revoke --source github.com/org/bot --reason "security concern"
+/ffwd-agent-guard trust revoke --source github.com/org/bot --reason "security concern"
 ```
 
 ### List
 
 ```
-/agentguard trust list --trust-level trusted
+/ffwd-agent-guard trust list --trust-level trusted
 ```
 
 ## Trust Levels

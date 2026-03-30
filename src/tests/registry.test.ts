@@ -11,7 +11,7 @@ describe('SkillRegistry', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = mkdtempSync(join(tmpdir(), 'agentguard-test-'));
+    tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-test-'));
     registry = new SkillRegistry({
       filePath: join(tempDir, 'registry.json'),
     });

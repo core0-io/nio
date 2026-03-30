@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard — SessionStart Auto-Scan Hook
+ * Core0 AgentGuard — SessionStart Auto-Scan Hook
  *
  * Runs on session startup to discover and scan newly installed skills.
  * For each skill in ~/.claude/skills/:
@@ -10,10 +10,10 @@
  *   3. Run quickScan for new/updated skills
  *   4. Report results to stderr (scan-only, does NOT modify trust registry)
  *
- * OPT-IN: This script only runs when AGENTGUARD_AUTO_SCAN=1.
+ * OPT-IN: This script only runs when FFWD_AGENT_GUARD_AUTO_SCAN=1.
  * Without this env var, the script exits immediately.
  *
- * To register scanned skills, use: /agentguard trust attest
+ * To register scanned skills, use: /ffwd-agent-guard trust attest
  *
  * Exits 0 always (informational only, never blocks session startup).
  */
@@ -26,7 +26,7 @@ import { homedir } from 'node:os';
 // Opt-in gate: only run when explicitly enabled
 // ---------------------------------------------------------------------------
 
-if (process.env.AGENTGUARD_AUTO_SCAN !== '1') {
+if (process.env.FFWD_AGENT_GUARD_AUTO_SCAN !== '1') {
   process.exit(0);
 }
 
@@ -45,7 +45,7 @@ try {
   createAgentGuard = gs.createAgentGuard || gs.default;
 } catch {
   try {
-    const gs = await import('@goplus/agentguard');
+    const gs = await import('@core0-io/ffwd-agent-guard');
     createAgentGuard = gs.createAgentGuard || gs.default;
   } catch {
     // Can't load engine — exit silently
@@ -61,12 +61,12 @@ const SKILLS_DIRS = [
   join(homedir(), '.claude', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
-const AGENTGUARD_DIR = join(homedir(), '.agentguard');
-const AUDIT_PATH = join(AGENTGUARD_DIR, 'audit.jsonl');
+const FFWD_AGENT_GUARD_DIR = join(homedir(), '.ffwd-agent-guard');
+const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir() {
-  if (!existsSync(AGENTGUARD_DIR)) {
-    mkdirSync(AGENTGUARD_DIR, { recursive: true });
+  if (!existsSync(FFWD_AGENT_GUARD_DIR)) {
+    mkdirSync(FFWD_AGENT_GUARD_DIR, { recursive: true });
   }
 }
 
@@ -124,8 +124,8 @@ async function main() {
   const results = [];
 
   for (const skill of skills) {
-    // Skip self (agentguard)
-    if (skill.name === 'agentguard') continue;
+    // Skip self (ffwd-agent-guard)
+    if (skill.name === 'ffwd-agent-guard') continue;
 
     try {
       const result = await scanner.quickScan(skill.path);
@@ -156,8 +156,8 @@ async function main() {
       `  ${r.name}: ${r.risk_level}${r.risk_tags.length ? ` [${r.risk_tags.join(', ')}]` : ''}`
     );
     process.stderr.write(
-      `GoPlus AgentGuard: scanned ${scanned} skill(s)\n${lines.join('\n')}\n` +
-      `Use /agentguard trust attest to register trusted skills.\n`
+      `Core0 AgentGuard: scanned ${scanned} skill(s)\n${lines.join('\n')}\n` +
+      `Use /ffwd-agent-guard trust attest to register trusted skills.\n`
     );
   }
 

@@ -146,9 +146,9 @@ function updateConfig(address _new) public {
 - Hidden iframe/overlay for approval harvesting
 - Approval transactions disguised as other operations
 
-## GoPlus Security Checks (Optional)
+## Core0 Web3 security checks (Optional)
 
-If GoPlus API is available, these additional checks can be performed:
+If Core0 Web3 API is available, these additional checks can be performed:
 
 | Check | API | Description |
 |-------|-----|-------------|

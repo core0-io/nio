@@ -1,5 +1,5 @@
 /**
- * GoPlus AgentGuard - Security guard for AI agents
+ * Core0 AgentGuard — Security guard for AI agents
  *
  * Three-module security framework:
  * - Skill Scanner: Static analysis of skill code
@@ -22,7 +22,7 @@ export {
 } from './registry/index.js';
 export {
   ActionScanner,
-  GoPlusClient,
+  Core0Web3Client,
   type ActionScannerOptions,
 } from './action/index.js';
 

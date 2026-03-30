@@ -30,7 +30,7 @@ Detailed commands, patterns, and thresholds for the 8 patrol checks. This docume
 
 4. Compare hashes. If mismatch, run quick re-scan:
    ```bash
-   # Use Grep + scan rules on the skill directory (same as /agentguard scan)
+   # Use Grep + scan rules on the skill directory (same as /ffwd-agent-guard scan)
    ```
 
 ### Findings
@@ -213,7 +213,7 @@ find /etc/cron.d/ -type f -mtime -1 2>/dev/null
 
 1. **Count and list** all modified files
 2. For files matching scannable extensions (`.js`, `.ts`, `.py`, `.sh`, `.md`, `.json`, `.yaml`):
-   - Run the full scan rule set against each file (same rules as `/agentguard scan`)
+   - Run the full scan rule set against each file (same rules as `/ffwd-agent-guard scan`)
    - Report any findings with the relevant rule IDs
 3. **Permission check** on critical files:
 
@@ -238,7 +238,7 @@ find /etc/cron.d/ -type f -mtime -1 2>/dev/null
 ### Data Source
 
 ```
-~/.agentguard/audit.jsonl
+~/.ffwd-agent-guard/audit.jsonl
 ```
 
 Each line: `{"timestamp":"...","tool_name":"...","decision":"...","risk_level":"...","risk_tags":[...],"initiating_skill":"..."}`
@@ -261,7 +261,7 @@ Each line: `{"timestamp":"...","tool_name":"...","decision":"...","risk_level":"
 | Unrevoked violator | Skill with 5+ denials still not revoked in registry | MEDIUM |
 
 3. **Recommendation generation**:
-   - For skills with high deny rates: suggest `/agentguard trust revoke`
+   - For skills with high deny rates: suggest `/ffwd-agent-guard trust revoke`
    - For critical events: suggest immediate investigation
 
 ---
@@ -281,8 +281,8 @@ env | grep -iE 'API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL' | awk -F= '{pr
 
 | Check | Command | Expected |
 |-------|---------|----------|
-| AgentGuard protection level | Read `~/.agentguard/config.json` | Not `permissive` for production |
-| GoPlus API configured | Check `GOPLUS_API_KEY` exists | Set if Web3 features used |
+| AgentGuard protection level | Read `~/.ffwd-agent-guard/config.json` | Not `permissive` for production |
+| Core0 Web3 API configured | Check `CORE0_WEB3_API_KEY` or `GOPLUS_API_KEY` exists | Set if Web3 features used |
 | Config baseline hash | `sha256sum -c $OC/.config-baseline.sha256` | All OK (if baseline exists) |
 
 ### Severity

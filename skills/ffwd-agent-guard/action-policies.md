@@ -205,9 +205,9 @@ network:
 }
 ```
 
-## GoPlus Integration
+## Core0 Web3 integration
 
-The `action-cli.ts decide` command integrates with the [GoPlus Security API](https://docs.gopluslabs.io/) for enhanced Web3 action evaluation. GoPlus provides three checks:
+The `action-cli.ts decide` command integrates with the [GoPlus Security API](https://docs.gopluslabs.io/) for enhanced Web3 action evaluation. The provider returns three checks:
 
 | Check | Description | Triggers |
 |-------|-------------|----------|
@@ -226,9 +226,9 @@ Phishing site detection and address security checks work without API keys. Trans
 
 ### Degradation Strategy
 
-When GoPlus is unavailable (no API keys, network errors, rate limiting):
+When the Web3 API is unavailable (no API keys, network errors, rate limiting):
 
 1. The `SIMULATION_UNAVAILABLE` or `SIMULATION_FAILED` risk tag is set
 2. Phishing and address checks that fail are silently skipped
 3. The decision falls back to **policy-based rules only** (capability model, webhook detection, secret scanning)
-4. For `web3_tx` and `web3_sign` without GoPlus, the skill should apply prompt-based rules and note the limitation in the output
+4. For `web3_tx` and `web3_sign` without the Web3 API, the skill should apply prompt-based rules and note the limitation in the output

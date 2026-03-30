@@ -91,7 +91,7 @@ function createServer(options?: { registryPath?: string }): Server {
 
   const server = new Server(
     {
-      name: 'agentguard',
+      name: 'ffwd-agent-guard',
       version: '1.0.0',
     },
     {
@@ -265,7 +265,7 @@ function createServer(options?: { registryPath?: string }): Server {
         },
         {
           name: 'action_scanner_simulate_web3',
-          description: 'Simulate a Web3 transaction using GoPlus API. Returns risk analysis.',
+          description: 'Simulate a Web3 transaction using Core0 Web3 API. Returns risk analysis.',
           inputSchema: {
             type: 'object',
             properties: {
@@ -474,7 +474,7 @@ async function main() {
   const program = new Command();
 
   program
-    .name('agentguard')
+    .name('ffwd-agent-guard')
     .description('Security skill MCP server for AI agents')
     .version('1.0.0')
     .option('--registry-path <path>', 'Path to registry file')
@@ -488,7 +488,7 @@ async function main() {
       const transport = new StdioServerTransport();
       await server.connect(transport);
 
-      console.error('GoPlus AgentGuard MCP server started');
+      console.error('Core0 AgentGuard MCP server started');
     });
 
   await program.parseAsync(process.argv);

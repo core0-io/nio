@@ -8,19 +8,22 @@ import type { EngineOptions } from '../../adapters/types.js';
 
 /**
  * Create an isolated test context with temporary registry
- * and injectable config level. No real ~/.agentguard/ pollution.
+ * and injectable config level. No real ~/.ffwd-agent-guard/ pollution.
  */
 export function createTestContext(level: string = 'balanced') {
-  const tempDir = mkdtempSync(join(tmpdir(), 'agentguard-integ-'));
+  const tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-integ-'));
   const registryPath = join(tempDir, 'registry.json');
-  const agentguard = createAgentGuard({ registryPath });
+  const ffwdAgentGuard = createAgentGuard({ registryPath });
 
   const config = { level };
-  const options: EngineOptions = { config, agentguard: agentguard as unknown as EngineOptions['agentguard'] };
+  const options: EngineOptions = {
+    config,
+    ffwdAgentGuard: ffwdAgentGuard as unknown as EngineOptions['ffwdAgentGuard'],
+  };
 
   return {
     tempDir,
-    agentguard,
+    ffwdAgentGuard,
     config,
     options,
     claudeAdapter: new ClaudeCodeAdapter(),

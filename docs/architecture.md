@@ -3,8 +3,8 @@
 ## Project Structure
 
 ```
-agentguard/
-├── skills/agentguard/        # Agent Skills definition
+ffwd-agent-guard/
+├── skills/ffwd-agent-guard/        # Agent Skills definition
 │   ├── SKILL.md               # Skill entry point
 │   ├── scan-rules.md          # Detection rule reference
 │   ├── action-policies.md     # Action policy reference
@@ -13,7 +13,7 @@ agentguard/
 ├── hooks/hooks.json           # Plugin hooks configuration
 ├── src/                       # TypeScript source
 │   ├── scanner/               # 20-rule static analysis engine
-│   ├── action/                # Runtime action evaluator + GoPlus integration
+│   ├── action/                # Runtime action evaluator + Core0 Web3 integration
 │   ├── registry/              # Trust level management
 │   ├── policy/                # Default policies and presets
 │   └── tests/                 # Test suite
@@ -38,10 +38,10 @@ agentguard/
 └──────────────────────────────────────────────────────┘
 ┌──────────────────────────────────────────────────────┐
 │  Layer 2: Deep Scan (skill — on demand)              │
-│  /agentguard scan   — 20-rule static analysis        │
-│  /agentguard action — Runtime action evaluation      │
-│  /agentguard trust  — Skill trust management         │
-│  /agentguard report — Security event log             │
+│  /ffwd-agent-guard scan   — 20-rule static analysis        │
+│  /ffwd-agent-guard action — Runtime action evaluation      │
+│  /ffwd-agent-guard trust  — Skill trust management         │
+│  /ffwd-agent-guard report — Security event log             │
 └──────────────────────────────────────────────────────┘
 ```
 

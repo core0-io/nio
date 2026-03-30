@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard — Checkup Report Generator
+ * Core0 AgentGuard — Checkup Report Generator
  *
  * Reads checkup results as JSON from stdin, generates a self-contained HTML
  * report with lobster mascot and opens it in the default browser.
@@ -22,7 +22,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 let faviconB64 = '';
 const iconPaths = [
-  join(homedir(), 'code/agentguard-server/public/icon-192.png'),
+  join(homedir(), 'code/ffwd-agent-guard-server/public/icon-192.png'),
   join(__dirname, '../../assets/icon-192.png'),
 ];
 for (const p of iconPaths) {
@@ -626,7 +626,7 @@ function pixelLobster(grade, color) {
 function generateReport(data) {
   const { composite_score = 0, dimensions = {}, recommendations = [], skills_scanned = 0, protection_level = 'unknown', timestamp } = data;
   const tier = getTier(composite_score);
-  const ctaUrl = `https://agentguard.gopluslabs.io?utm_source=checkup&utm_medium=cli&utm_campaign=health_report&score=${composite_score}`;
+  const ctaUrl = `https://github.com/core0-io/ffwd-agent-guard?utm_source=checkup&utm_medium=cli&utm_campaign=health_report&score=${composite_score}`;
   const ts = timestamp || new Date().toISOString();
   const totalFindings = Object.values(dimensions).reduce((s, d) => s + (d.findings || []).length, 0);
   const lobsterSvg = pixelLobster(tier.grade, tier.color);
@@ -713,9 +713,9 @@ function generateReport(data) {
   const autoRecs = [];
   const ds = dimensions;
   if (ds.code_safety && !ds.code_safety.na && (ds.code_safety.score ?? 100) < 70)
-    autoRecs.push({ severity: 'HIGH', text: 'Run /agentguard scan on all installed skills and review flagged findings.', zh: '对所有已安装的 Skill 运行 /agentguard scan 并检查标记的问题。' });
+    autoRecs.push({ severity: 'HIGH', text: 'Run /ffwd-agent-guard scan on all installed skills and review flagged findings.', zh: '对所有已安装的 Skill 运行 /ffwd-agent-guard scan 并检查标记的问题。' });
   if (ds.trust_hygiene && !ds.trust_hygiene.na && (ds.trust_hygiene.score ?? 100) < 70)
-    autoRecs.push({ severity: 'HIGH', text: 'Register unattested skills with /agentguard trust attest after security review.', zh: '安全审查后，使用 /agentguard trust attest 注册未认证的 Skill。' });
+    autoRecs.push({ severity: 'HIGH', text: 'Register unattested skills with /ffwd-agent-guard trust attest after security review.', zh: '安全审查后，使用 /ffwd-agent-guard trust attest 注册未认证的 Skill。' });
   if (ds.runtime_defense && !ds.runtime_defense.na && (ds.runtime_defense.score ?? 100) < 50)
     autoRecs.push({ severity: 'MEDIUM', text: 'Enable guard hooks to build a security audit trail and block threats in real-time.', zh: '启用安全钩子以建立安全审计日志并实时拦截威胁。' });
   if (ds.secret_protection && !ds.secret_protection.na && (ds.secret_protection.score ?? 100) < 70)
@@ -723,11 +723,11 @@ function generateReport(data) {
   if (ds.web3_shield && !ds.web3_shield.na && (ds.web3_shield.score ?? 100) < 50)
     autoRecs.push({ severity: 'HIGH', text: 'Configure GOPLUS_API_KEY for enhanced Web3 transaction simulation and phishing detection.', zh: '配置 GOPLUS_API_KEY 以增强 Web3 交易模拟和钓鱼检测。' });
   if (ds.config_posture && !ds.config_posture.na && (ds.config_posture.score ?? 100) < 50)
-    autoRecs.push({ severity: 'MEDIUM', text: 'Switch protection level to balanced or strict: /agentguard config balanced', zh: '将防护等级切换为均衡或严格模式：/agentguard config balanced' });
+    autoRecs.push({ severity: 'MEDIUM', text: 'Switch protection level to balanced or strict: /ffwd-agent-guard config balanced', zh: '将防护等级切换为均衡或严格模式：/ffwd-agent-guard config balanced' });
   if (ds.config_posture && !ds.config_posture.na && (ds.config_posture.score ?? 100) < 70)
-    autoRecs.push({ severity: 'LOW', text: 'Set up daily security patrols for continuous posture monitoring: /agentguard patrol setup', zh: '设置每日安全巡检以持续监控安全态势：/agentguard patrol setup' });
+    autoRecs.push({ severity: 'LOW', text: 'Set up daily security patrols for continuous posture monitoring: /ffwd-agent-guard patrol setup', zh: '设置每日安全巡检以持续监控安全态势：/ffwd-agent-guard patrol setup' });
   if (composite_score < 90)
-    autoRecs.push({ severity: 'LOW', text: 'Enable auto-scan on session start: export AGENTGUARD_AUTO_SCAN=1', zh: '启用会话启动时自动扫描：export AGENTGUARD_AUTO_SCAN=1' });
+    autoRecs.push({ severity: 'LOW', text: 'Enable auto-scan on session start: export FFWD_AGENT_GUARD_AUTO_SCAN=1', zh: '启用会话启动时自动扫描：export FFWD_AGENT_GUARD_AUTO_SCAN=1' });
 
   // Merge: user recs first, then auto recs (dedup by text similarity)
   const allRecs = [...recommendations];
@@ -738,7 +738,7 @@ function generateReport(data) {
   }
   // Always add upgrade CTA as last
   if (!allRecs.some(r => r.text.toLowerCase().includes('upgrade') || r.text.includes('升级'))) {
-    allRecs.push({ severity: 'LOW', text: 'Upgrade to enhanced Skill scanning with GoPlus AgentGuard for 24/7 real-time monitoring and automated alerts.', zh: '升级到更强的 Skill 扫描能力 — GoPlus AgentGuard 提供 7×24 实时监控与自动告警。' });
+    allRecs.push({ severity: 'LOW', text: 'Upgrade to enhanced Skill scanning with Core0 AgentGuard for 24/7 real-time monitoring and automated alerts.', zh: '升级到更强的 Skill 扫描能力 — Core0 AgentGuard 提供 7×24 实时监控与自动告警。' });
   }
 
   const recsHtml = allRecs.length > 0
@@ -1109,7 +1109,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     en:_sharePick(_shareEn[_grade]||_shareEn.B),
   };
   function getShareText(){return shareTexts[curLang]||shareTexts.en;}
-  const shareUrl='https://agentguard.gopluslabs.io';
+  const shareUrl='https://github.com/core0-io/ffwd-agent-guard';
 
   function showToast(msg){
     const t=document.createElement('div');
@@ -1133,7 +1133,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     ctx.strokeStyle='#222d3a';ctx.lineWidth=1;roundRect(ctx,40,40,W-80,H-80,16);ctx.stroke();
 
     // Header
-    ctx.fillStyle='#849588';ctx.font='600 12px Inter,sans-serif';ctx.fillText(curLang==='zh'?'AGENTGUARD 诊断报告':'AGENTGUARD DIAGNOSTIC REPORT',80,85);
+    ctx.fillStyle='#849588';ctx.font='600 12px Inter,sans-serif';ctx.fillText(curLang==='zh'?'Core0 AgentGuard 诊断报告':'CORE0 AGENTGUARD DIAGNOSTIC REPORT',80,85);
 
     // Draw lobster SVG as image
     try{
@@ -1199,8 +1199,8 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
     });
 
     // Footer
-    ctx.fillStyle='#849588';ctx.font='500 11px Inter,sans-serif';ctx.fillText(curLang==='zh'?'由 GoPlus Security 提供支持':'Powered by GoPlus Security',80,H-70);
-    ctx.fillStyle='#3a4a3f';ctx.fillText('agentguard.gopluslabs.io',80,H-55);
+    ctx.fillStyle='#849588';ctx.font='500 11px Inter,sans-serif';ctx.fillText(curLang==='zh'?'由 Core0 提供支持':'Powered by Core0',80,H-70);
+    ctx.fillStyle='#3a4a3f';ctx.fillText('github.com/core0-io/ffwd-agent-guard',80,H-55);
 
     return new Promise(res=>c.toBlob(res,'image/png'));
   }
@@ -1269,7 +1269,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
         const text=encodeURIComponent(getShareText());
         const url=encodeURIComponent(shareUrl);
         if(p==='download'){
-          const a=document.createElement('a');a.href=imgUrl;a.download='agentguard-report.png';a.click();
+          const a=document.createElement('a');a.href=imgUrl;a.download='ffwd-agent-guard-report.png';a.click();
           showToast(curLang==='zh'?'图片已下载！':'Image downloaded!');
           return;
         }
@@ -1332,7 +1332,7 @@ body{background:#0a0e14;color:#dfe2eb;font-family:'Inter',sans-serif}
 <\/script>
 </body></html>`;
 
-  const outPath = join(tmpdir(), `agentguard-checkup-${Date.now()}.html`);
+  const outPath = join(tmpdir(), `ffwd-agent-guard-checkup-${Date.now()}.html`);
   writeFileSync(outPath, html, 'utf8');
   console.log(outPath);
 

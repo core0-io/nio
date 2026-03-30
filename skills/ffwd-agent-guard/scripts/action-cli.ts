@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * GoPlus AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
+ * Core0 AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
  *
  * Usage:
  *   node action-cli.ts decide --type <action_type> [action-specific args]
@@ -28,12 +28,12 @@
  *     --path <filepath>
  */
 
-import { createAgentGuard } from '@goplus/agentguard';
+import { createAgentGuard } from '@core0-io/ffwd-agent-guard';
 import type {
   ActionEnvelope,
   Web3Intent,
   ActionType,
-} from '@goplus/agentguard';
+} from '@core0-io/ffwd-agent-guard';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -53,7 +53,7 @@ function printUsage(): void {
 
 Commands:
   decide    Evaluate an action and return a policy decision
-  simulate  Run GoPlus transaction simulation only
+  simulate  Run Core0 Web3 API transaction simulation only
 
 decide options:
   --type <type>        Action type: web3_tx, web3_sign, exec_command,

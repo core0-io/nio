@@ -30,7 +30,7 @@ export class RegistryStorage {
   constructor(options: StorageOptions = {}) {
     this.filePath =
       options.filePath ||
-      path.join(homedir(), '.agentguard', 'registry.json');
+      path.join(homedir(), '.ffwd-agent-guard', 'registry.json');
   }
 
   /**

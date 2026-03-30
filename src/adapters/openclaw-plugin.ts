@@ -1,5 +1,5 @@
 /**
- * GoPlus AgentGuard — OpenClaw Plugin
+ * Core0 AgentGuard — OpenClaw Plugin
  *
  * Registers before_tool_call, after_tool_call, and session_start hooks
  * with the OpenClaw plugin API to evaluate tool safety at runtime and
@@ -12,11 +12,11 @@
  * - Build toolName → pluginId mapping for initiating skill inference
  *
  * Usage in OpenClaw plugin config:
- *   import agentguard from '@goplus/agentguard/openclaw';
- *   export default agentguard;
+ *   import register from '@core0-io/ffwd-agent-guard/openclaw';
+ *   export default register;
  *
  * Or register manually:
- *   import { registerOpenClawPlugin } from '@goplus/agentguard';
+ *   import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
  *   registerOpenClawPlugin(api);
  */
 
@@ -74,18 +74,18 @@ interface OpenClawPluginApi {
 
 const OPENCLAW_SKILLS_DIR = join(homedir(), '.openclaw', 'skills');
 const CLAUDE_SKILLS_DIR = join(homedir(), '.claude', 'skills');
-const AGENTGUARD_DIR = process.env.AGENTGUARD_HOME || join(homedir(), '.agentguard');
-const AUDIT_PATH = join(AGENTGUARD_DIR, 'audit.jsonl');
+const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
+const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
-function ensureAgentGuardDir(): void {
-  if (!existsSync(AGENTGUARD_DIR)) {
-    mkdirSync(AGENTGUARD_DIR, { recursive: true });
+function ensureFfwdAgentGuardDir(): void {
+  if (!existsSync(FFWD_AGENT_GUARD_DIR)) {
+    mkdirSync(FFWD_AGENT_GUARD_DIR, { recursive: true });
   }
 }
 
 function writeScanAuditLog(entry: Record<string, unknown>): void {
   try {
-    ensureAgentGuardDir();
+    ensureFfwdAgentGuardDir();
     appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
   } catch {
     // Non-critical
@@ -116,7 +116,7 @@ function discoverSkillDirs(skillsDir: string): { name: string; path: string }[] 
 /**
  * Scan skill directories (~/.openclaw/skills/ and ~/.claude/skills/).
  * Scan-only mode: reports results via logger, does NOT modify the trust registry.
- * Users can register skills manually with /agentguard trust attest.
+ * Users can register skills manually with /ffwd-agent-guard trust attest.
  */
 async function autoScanSkillDirs(
   scanner: SkillScanner,
@@ -134,7 +134,7 @@ async function autoScanSkillDirs(
 
   for (const skill of skills) {
     // Skip self
-    if (skill.name === 'agentguard') continue;
+    if (skill.name === 'ffwd-agent-guard') continue;
 
     try {
       const result = await scanner.quickScan(skill.path);
@@ -156,7 +156,7 @@ async function autoScanSkillDirs(
   }
 
   if (scanned > 0) {
-    logger(`[AgentGuard] Scanned ${scanned} skill dir(s). Use /agentguard trust attest to register.`);
+    logger(`[AgentGuard] Scanned ${scanned} skill dir(s). Use /ffwd-agent-guard trust attest to register.`);
   }
 }
 
@@ -173,7 +173,7 @@ export interface OpenClawPluginOptions {
   /** Enable auto-scanning of plugins (default: false — opt-in) */
   skipAutoScan?: boolean;
   /** Custom AgentGuard instance factory */
-  agentguardFactory?: () => AgentGuardInstance;
+  ffwdAgentGuardFactory?: () => AgentGuardInstance;
   /** Custom scanner instance */
   scanner?: SkillScanner;
   /** Custom registry instance */
@@ -221,7 +221,7 @@ function getPluginDir(source: string): string {
 
 /**
  * Scan a plugin and cache its risk level. Scan-only: does NOT modify trust registry.
- * Users can register plugins manually with /agentguard trust attest.
+ * Users can register plugins manually with /ffwd-agent-guard trust attest.
  */
 async function scanAndRegisterPlugin(
   plugin: OpenClawPluginRecord,
@@ -338,8 +338,8 @@ export function registerOpenClawPlugin(
   // Simple logger
   const logger = (msg: string) => console.log(msg);
 
-  // Lazy-initialize agentguard instance
-  let agentguard: AgentGuardInstance | null = null;
+  // Lazy-initialize engine instance
+  let ffwdAgentGuard: AgentGuardInstance | null = null;
 
   // Build default capabilities from workspacePaths so the core session
   // can access its own workspace files without a manual registry entry.
@@ -347,23 +347,23 @@ export function registerOpenClawPlugin(
     ? { ...DEFAULT_CAPABILITY, filesystem_allowlist: options.workspacePaths }
     : undefined;
 
-  function getAgentGuard(): AgentGuardInstance {
-    if (!agentguard) {
-      if (options.agentguardFactory) {
-        agentguard = options.agentguardFactory();
+  function getFfwdAgentGuard(): AgentGuardInstance {
+    if (!ffwdAgentGuard) {
+      if (options.ffwdAgentGuardFactory) {
+        ffwdAgentGuard = options.ffwdAgentGuardFactory();
       } else {
         // Build inline — avoids require() and passes workspace defaults
         const actionScanner = new ActionScanner({
           registry: trustRegistry,
           ...(defaultCapabilities ? { defaultCapabilities } : {}),
         });
-        agentguard = {
+        ffwdAgentGuard = {
           registry: trustRegistry as unknown as AgentGuardInstance['registry'],
           actionScanner,
         };
       }
     }
-    return agentguard!;
+    return ffwdAgentGuard!;
   }
 
   // Auto-scan plugins on registration (async, non-blocking, opt-in)
@@ -402,20 +402,20 @@ export function registerOpenClawPlugin(
         if (scanResult?.riskLevel === 'critical') {
           return {
             block: true,
-            blockReason: `GoPlus AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /agentguard trust attest to manually approve.`,
+            blockReason: `Core0 AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /ffwd-agent-guard trust attest to manually approve.`,
           };
         }
       }
 
       const result = await evaluateHook(adapter, event, {
         config,
-        agentguard: getAgentGuard(),
+        ffwdAgentGuard: getFfwdAgentGuard(),
       });
 
       if (result.decision === 'deny') {
         return {
           block: true,
-          blockReason: result.reason || 'Blocked by GoPlus AgentGuard',
+          blockReason: result.reason || 'Blocked by Core0 AgentGuard',
         };
       }
 
@@ -423,7 +423,7 @@ export function registerOpenClawPlugin(
       if (result.decision === 'ask') {
         return {
           block: true,
-          blockReason: result.reason || 'Requires confirmation (GoPlus AgentGuard)',
+          blockReason: result.reason || 'Requires confirmation (Core0 AgentGuard)',
         };
       }
 
@@ -452,7 +452,7 @@ export function registerOpenClawPlugin(
 /**
  * Default export for OpenClaw plugin registration
  *
- * Usage: export default from '@goplus/agentguard/openclaw'
+ * Usage: export default from '@core0-io/ffwd-agent-guard/openclaw'
  */
 export default function register(api: OpenClawPluginApi): void {
   registerOpenClawPlugin(api);

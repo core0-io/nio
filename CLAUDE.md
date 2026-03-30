@@ -1,39 +1,40 @@
-# GoPlus AgentGuard
+# Core0 AgentGuard
 
 Security framework for AI agents. Provides code scanning, runtime action evaluation, and trust management.
 
 ## Skill
 
-This project provides a unified Claude Code skill: `/agentguard`
+This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ```
-/agentguard scan <path>          — Scan code for security risks (24 detection rules)
-/agentguard action <description> — Evaluate runtime action safety (allow/deny/confirm)
-/agentguard patrol [run|setup|status] — Daily security patrol for OpenClaw environments
-/agentguard trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
-/agentguard report               — View security event audit log
-/agentguard config <level>       — Set protection level (strict/balanced/permissive)
-/agentguard checkup              — Run agent health checkup with visual HTML report
+/ffwd-agent-guard scan <path>          — Scan code for security risks (24 detection rules)
+/ffwd-agent-guard action <description> — Evaluate runtime action safety (allow/deny/confirm)
+/ffwd-agent-guard patrol [run|setup|status] — Daily security patrol for OpenClaw environments
+/ffwd-agent-guard trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
+/ffwd-agent-guard report               — View security event audit log
+/ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
+/ffwd-agent-guard checkup              — Run agent health checkup with visual HTML report
 ```
 
 ## Project Structure
 
-- `skills/agentguard/` — Claude Code skill definition and supporting files
+- `skills/ffwd-agent-guard/` — Claude Code skill definition and supporting files
 - `src/` — TypeScript source (scanner rules, registry, action detectors, MCP server)
 - `data/` — Registry storage (`registry.json`)
 - `dist/` — Compiled JavaScript output
 
 ## Setup for Trust & Action CLI
 
-The `trust` and `action` subcommands use CLI scripts that require the agentguard package:
+The `trust` and `action` subcommands use CLI scripts that require the @core0-io/ffwd-agent-guard package:
 
 ```bash
-cd skills/agentguard/scripts && npm install
+cd skills/ffwd-agent-guard/scripts && npm install
 ```
 
-For GoPlus API (optional Web3 enhancement for action evaluation):
+For Core0 Web3 API (optional Web3 enhancement for action evaluation):
 
 ```bash
-export GOPLUS_API_KEY=your_key
-export GOPLUS_API_SECRET=your_secret
+export CORE0_WEB3_API_KEY=your_key
+export CORE0_WEB3_API_SECRET=your_secret
+# or legacy: GOPLUS_API_KEY / GOPLUS_API_SECRET
 ```

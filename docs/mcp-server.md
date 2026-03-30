@@ -1,6 +1,6 @@
 # MCP Server Setup
 
-GoPlus AgentGuard can run as an MCP (Model Context Protocol) server, providing security tools to any MCP-compatible AI agent.
+Core0 AgentGuard can run as an MCP (Model Context Protocol) server, providing security tools to any MCP-compatible AI agent.
 
 ## Configuration
 
@@ -9,9 +9,9 @@ Add to your MCP configuration:
 ```json
 {
   "mcpServers": {
-    "agentguard": {
+    "ffwd-agent-guard": {
       "command": "npx",
-      "args": ["-y", "@goplus/agentguard"],
+      "args": ["-y", "@core0-io/ffwd-agent-guard"],
       "env": {
         "GOPLUS_API_KEY": "your_key",
         "GOPLUS_API_SECRET": "your_secret"
@@ -21,7 +21,7 @@ Add to your MCP configuration:
 }
 ```
 
-GoPlus API keys are optional — the scanner and registry work without them. They enable enhanced Web3 security features.
+Core0 Web3 API keys are optional — the scanner and registry work without them. They enable enhanced Web3 security features.
 
 ## Available Tools
 

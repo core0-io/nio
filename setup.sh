@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# GoPlus AgentGuard — One-click setup
+# Core0 AgentGuard — One-click setup
 # Supports: Claude Code, OpenClaw, ClawHub
 # Detects the platform and installs to the correct location.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_SRC="$SCRIPT_DIR/skills/agentguard"
-AGENTGUARD_DIR="$HOME/.agentguard"
+SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
+FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
 MIN_NODE_VERSION=18
 
 echo ""
-echo "  GoPlus AgentGuard — AI Agent Security Guard"
+echo "  Core0 AgentGuard — AI Agent Security Guard"
 echo "  ============================================="
 echo ""
 
 # ---- Pre-check: Node.js ----
 if ! command -v node &>/dev/null; then
   echo "  ERROR: Node.js is not installed."
-  echo "  GoPlus AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Core0 AgentGuard requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -26,7 +26,7 @@ fi
 NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
   echo "  ERROR: Node.js v$(node -v) is too old."
-  echo "  GoPlus AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Core0 AgentGuard requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -42,10 +42,10 @@ detect_platform() {
   if [ -d "$HOME/.openclaw" ]; then
     # Prefer workspace skills if workspace exists
     if [ -d "$HOME/.openclaw/workspace" ]; then
-      SKILLS_DIR="$HOME/.openclaw/workspace/skills/agentguard"
+      SKILLS_DIR="$HOME/.openclaw/workspace/skills/ffwd-agent-guard"
       PLATFORM="openclaw-workspace"
     else
-      SKILLS_DIR="$HOME/.openclaw/skills/agentguard"
+      SKILLS_DIR="$HOME/.openclaw/skills/ffwd-agent-guard"
       PLATFORM="openclaw-managed"
     fi
     return
@@ -53,13 +53,13 @@ detect_platform() {
 
   # Check Claude Code
   if [ -d "$HOME/.claude" ]; then
-    SKILLS_DIR="$HOME/.claude/skills/agentguard"
+    SKILLS_DIR="$HOME/.claude/skills/ffwd-agent-guard"
     PLATFORM="claude-code"
     return
   fi
 
   # Fallback: create Claude Code dir (most common)
-  SKILLS_DIR="$HOME/.claude/skills/agentguard"
+  SKILLS_DIR="$HOME/.claude/skills/ffwd-agent-guard"
   PLATFORM="claude-code"
 }
 
@@ -70,28 +70,28 @@ echo ""
 
 # ---- Uninstall mode ----
 if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
-  echo "  Uninstalling GoPlus AgentGuard..."
+  echo "  Uninstalling Core0 AgentGuard..."
   rm -rf "$SKILLS_DIR" 2>/dev/null && echo "  Removed skill from $SKILLS_DIR" || true
   # Also clean up other possible locations
-  rm -rf "$HOME/.claude/skills/agentguard" 2>/dev/null || true
-  rm -rf "$HOME/.openclaw/skills/agentguard" 2>/dev/null || true
-  rm -rf "$HOME/.openclaw/workspace/skills/agentguard" 2>/dev/null || true
-  rm -rf "$AGENTGUARD_DIR" 2>/dev/null && echo "  Removed config from $AGENTGUARD_DIR" || true
+  rm -rf "$HOME/.claude/skills/ffwd-agent-guard" 2>/dev/null || true
+  rm -rf "$HOME/.openclaw/skills/ffwd-agent-guard" 2>/dev/null || true
+  rm -rf "$HOME/.openclaw/workspace/skills/ffwd-agent-guard" 2>/dev/null || true
+  rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config from $FFWD_AGENT_GUARD_DIR" || true
   echo ""
-  echo "  GoPlus AgentGuard has been uninstalled."
+  echo "  Core0 AgentGuard has been uninstalled."
   echo ""
   exit 0
 fi
 
 # ---- Step 1: Build the project ----
-echo "[1/5] Building GoPlus AgentGuard..."
+echo "[1/5] Building Core0 AgentGuard..."
 if [ -f "$SCRIPT_DIR/package.json" ]; then
   cd "$SCRIPT_DIR"
   npm install --ignore-scripts 2>/dev/null
   npm run build 2>/dev/null
   echo "  OK: Build complete"
 else
-  echo "  ERROR: package.json not found. Run this script from the agentguard root."
+  echo "  ERROR: package.json not found. Run this script from the ffwd-agent-guard repo root."
   exit 1
 fi
 
@@ -137,9 +137,9 @@ fi
 
 # ---- Step 5: Create config directory ----
 echo "[5/5] Setting up configuration..."
-mkdir -p "$AGENTGUARD_DIR"
-if [ ! -f "$AGENTGUARD_DIR/config.json" ]; then
-  echo '{"level":"balanced"}' > "$AGENTGUARD_DIR/config.json"
+mkdir -p "$FFWD_AGENT_GUARD_DIR"
+if [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
+  echo '{"level":"balanced"}' > "$FFWD_AGENT_GUARD_DIR/config.json"
   echo "  OK: Config created (protection level: balanced)"
 else
   echo "  OK: Config already exists (keeping current settings)"
@@ -147,7 +147,7 @@ fi
 
 # ---- Done ----
 echo ""
-echo "  ✅ GoPlus AgentGuard is installed!"
+echo "  ✅ Core0 AgentGuard is installed!"
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🦞 NEXT STEP: Run your first security checkup"
@@ -159,7 +159,7 @@ else
   echo "  Send your OpenClaw bot:"
 fi
 echo ""
-echo "    /agentguard checkup"
+echo "    /ffwd-agent-guard checkup"
 echo ""
 echo "  This will:"
 echo "    • Scan all your installed skills for threats"
@@ -173,9 +173,9 @@ echo "  Installed to: $SKILLS_DIR"
 echo "  Platform:     $PLATFORM"
 echo ""
 echo "  Other commands:"
-echo "    /agentguard scan <path>    Scan code for security risks"
-echo "    /agentguard trust list     View trusted skills"
-echo "    /agentguard report         View security event log"
+echo "    /ffwd-agent-guard scan <path>    Scan code for security risks"
+echo "    /ffwd-agent-guard trust list     View trusted skills"
+echo "    /ffwd-agent-guard report         View security event log"
 echo ""
 echo "  To uninstall: ./setup.sh --uninstall"
 echo ""
