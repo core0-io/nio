@@ -1,0 +1,19 @@
+{
+  "name": "ffwd-agent-guard",
+  "owner": {
+    "name": "core0-io",
+    "url": "https://github.com/core0-io"
+  },
+  "metadata": {
+    "description": "FFWD AgentGuard — AI agent security framework",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ffwd-agent-guard",
+      "description": "AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets.",
+      "source": "./",
+      "strict": true
+    }
+  ]
+}

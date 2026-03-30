@@ -1,0 +1,459 @@
+/**
+ * GoPlus AgentGuard — OpenClaw Plugin
+ *
+ * Registers before_tool_call, after_tool_call, and session_start hooks
+ * with the OpenClaw plugin API to evaluate tool safety at runtime and
+ * auto-scan installed skills on session startup.
+ *
+ * Features:
+ * - Auto-scan all loaded plugins on registration
+ * - Auto-scan skill directories (~/.openclaw/skills/, ~/.claude/skills/) on session_start
+ * - Auto-register plugins to AgentGuard trust registry
+ * - Build toolName → pluginId mapping for initiating skill inference
+ *
+ * Usage in OpenClaw plugin config:
+ *   import agentguard from '@goplus/agentguard/openclaw';
+ *   export default agentguard;
+ *
+ * Or register manually:
+ *   import { registerOpenClawPlugin } from '@goplus/agentguard';
+ *   registerOpenClawPlugin(api);
+ */
+
+import { readdirSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import * as path from 'node:path';
+import { OpenClawAdapter } from './openclaw.js';
+import { evaluateHook } from './engine.js';
+import { loadConfig, writeAuditLog } from './common.js';
+import type { AgentGuardInstance } from './types.js';
+import { SkillScanner } from '../scanner/index.js';
+import { SkillRegistry } from '../registry/index.js';
+import { ActionScanner } from '../action/index.js';
+import { DEFAULT_CAPABILITY } from '../types/skill.js';
+
+// ---------------------------------------------------------------------------
+// OpenClaw Types (subset we use)
+// ---------------------------------------------------------------------------
+
+/**
+ * OpenClaw PluginRecord (subset)
+ */
+interface OpenClawPluginRecord {
+  id: string;
+  name: string;
+  version?: string;
+  source: string;
+  status: 'loaded' | 'disabled' | 'error';
+  enabled: boolean;
+  toolNames: string[];
+}
+
+/**
+ * OpenClaw PluginRegistry (subset)
+ */
+interface OpenClawPluginRegistry {
+  plugins: OpenClawPluginRecord[];
+}
+
+/**
+ * OpenClaw plugin API interface (subset we use)
+ */
+interface OpenClawPluginApi {
+  id: string;
+  name: string;
+  source: string;
+  on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
+  on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-scan helpers (skill directories)
+// ---------------------------------------------------------------------------
+
+const OPENCLAW_SKILLS_DIR = join(homedir(), '.openclaw', 'skills');
+const CLAUDE_SKILLS_DIR = join(homedir(), '.claude', 'skills');
+const AGENTGUARD_DIR = process.env.AGENTGUARD_HOME || join(homedir(), '.agentguard');
+const AUDIT_PATH = join(AGENTGUARD_DIR, 'audit.jsonl');
+
+function ensureAgentGuardDir(): void {
+  if (!existsSync(AGENTGUARD_DIR)) {
+    mkdirSync(AGENTGUARD_DIR, { recursive: true });
+  }
+}
+
+function writeScanAuditLog(entry: Record<string, unknown>): void {
+  try {
+    ensureAgentGuardDir();
+    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+  } catch {
+    // Non-critical
+  }
+}
+
+/**
+ * Discover skill directories (containing SKILL.md) under the given path.
+ */
+function discoverSkillDirs(skillsDir: string): { name: string; path: string }[] {
+  if (!existsSync(skillsDir)) return [];
+  const skills: { name: string; path: string }[] = [];
+  try {
+    const entries = readdirSync(skillsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const skillDir = join(skillsDir, entry.name);
+      if (existsSync(join(skillDir, 'SKILL.md'))) {
+        skills.push({ name: entry.name, path: skillDir });
+      }
+    }
+  } catch {
+    // Can't read skills dir
+  }
+  return skills;
+}
+
+/**
+ * Scan skill directories (~/.openclaw/skills/ and ~/.claude/skills/).
+ * Scan-only mode: reports results via logger, does NOT modify the trust registry.
+ * Users can register skills manually with /agentguard trust attest.
+ */
+async function autoScanSkillDirs(
+  scanner: SkillScanner,
+  _registry: SkillRegistry,
+  logger: (msg: string) => void
+): Promise<void> {
+  const skills = [
+    ...discoverSkillDirs(OPENCLAW_SKILLS_DIR),
+    ...discoverSkillDirs(CLAUDE_SKILLS_DIR),
+  ];
+
+  if (skills.length === 0) return;
+
+  let scanned = 0;
+
+  for (const skill of skills) {
+    // Skip self
+    if (skill.name === 'agentguard') continue;
+
+    try {
+      const result = await scanner.quickScan(skill.path);
+      scanned++;
+
+      // Audit log — only record skill name, risk level, and tag names (no code/evidence)
+      writeScanAuditLog({
+        timestamp: new Date().toISOString(),
+        event: 'auto_scan',
+        skill_name: skill.name,
+        risk_level: result.risk_level,
+        risk_tags: result.risk_tags,
+      });
+
+      logger(`[AgentGuard] Skill "${skill.name}": ${result.risk_level} risk [${result.risk_tags.join(', ')}]`);
+    } catch {
+      // Skip skills that fail to scan
+    }
+  }
+
+  if (scanned > 0) {
+    logger(`[AgentGuard] Scanned ${scanned} skill dir(s). Use /agentguard trust attest to register.`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Plugin registration options
+// ---------------------------------------------------------------------------
+
+/**
+ * Plugin registration options
+ */
+export interface OpenClawPluginOptions {
+  /** Protection level (strict/balanced/permissive) */
+  level?: string;
+  /** Enable auto-scanning of plugins (default: false — opt-in) */
+  skipAutoScan?: boolean;
+  /** Custom AgentGuard instance factory */
+  agentguardFactory?: () => AgentGuardInstance;
+  /** Custom scanner instance */
+  scanner?: SkillScanner;
+  /** Custom registry instance */
+  registry?: SkillRegistry;
+  /** Workspace paths the session is allowed to access (e.g., ['~/.openclaw/workspace/**']) */
+  workspacePaths?: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Global State
+// ---------------------------------------------------------------------------
+
+/** Symbol to access OpenClaw's global registry */
+const OPENCLAW_REGISTRY_STATE = Symbol.for('openclaw.pluginRegistryState');
+
+/** Tool name → Plugin ID mapping */
+const toolToPluginMap = new Map<string, string>();
+
+/** Plugin ID → Scan result cache */
+const pluginScanCache = new Map<string, { riskLevel: string; riskTags: string[] }>();
+
+// ---------------------------------------------------------------------------
+// Helper Functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Get OpenClaw's active plugin registry via global symbol
+ */
+function getOpenClawRegistry(): OpenClawPluginRegistry | null {
+  const globalState = globalThis as typeof globalThis & {
+    [key: symbol]: { registry: OpenClawPluginRegistry | null } | undefined;
+  };
+  const state = globalState[OPENCLAW_REGISTRY_STATE];
+  return state?.registry ?? null;
+}
+
+/**
+ * Get plugin directory from source path
+ */
+function getPluginDir(source: string): string {
+  // source is typically the entry file (e.g., /path/to/plugin/index.ts)
+  // We want the directory
+  return path.dirname(source);
+}
+
+/**
+ * Scan a plugin and cache its risk level. Scan-only: does NOT modify trust registry.
+ * Users can register plugins manually with /agentguard trust attest.
+ */
+async function scanAndRegisterPlugin(
+  plugin: OpenClawPluginRecord,
+  scanner: SkillScanner,
+  _registry: SkillRegistry,
+  logger: (msg: string) => void
+): Promise<void> {
+  // Skip if already scanned
+  if (pluginScanCache.has(plugin.id)) {
+    return;
+  }
+
+  const pluginDir = getPluginDir(plugin.source);
+
+  try {
+    // Perform scan
+    const scanResult = await scanner.quickScan(pluginDir);
+
+    // Cache result (for runtime before_tool_call checks)
+    pluginScanCache.set(plugin.id, {
+      riskLevel: scanResult.risk_level,
+      riskTags: scanResult.risk_tags,
+    });
+
+    // Build tool → plugin mapping
+    for (const toolName of plugin.toolNames) {
+      toolToPluginMap.set(toolName, plugin.id);
+    }
+
+    logger(`[AgentGuard] Scanned plugin "${plugin.id}": ${scanResult.risk_level} risk [${scanResult.risk_tags.join(', ')}]`);
+
+  } catch (err) {
+    // If scan fails, cache as unknown
+    pluginScanCache.set(plugin.id, {
+      riskLevel: 'unknown',
+      riskTags: ['SCAN_FAILED'],
+    });
+
+    // Still build tool mapping
+    for (const toolName of plugin.toolNames) {
+      toolToPluginMap.set(toolName, plugin.id);
+    }
+
+    logger(`[AgentGuard] Plugin "${plugin.id}" scan failed: ${String(err)}`);
+  }
+}
+
+/**
+ * Scan all loaded OpenClaw plugins
+ */
+async function scanAllPlugins(
+  scanner: SkillScanner,
+  registry: SkillRegistry,
+  logger: (msg: string) => void,
+  selfPluginId?: string
+): Promise<void> {
+  const openclawRegistry = getOpenClawRegistry();
+
+  if (!openclawRegistry) {
+    logger('[AgentGuard] OpenClaw registry not available, skipping plugin auto-scan');
+    return;
+  }
+
+  const plugins = openclawRegistry.plugins.filter(p =>
+    p.status === 'loaded' &&
+    p.enabled &&
+    p.id !== selfPluginId // Don't scan ourselves
+  );
+
+  logger(`[AgentGuard] Auto-scanning ${plugins.length} loaded plugins...`);
+
+  // Scan plugins in parallel (with concurrency limit)
+  const CONCURRENCY = 3;
+  for (let i = 0; i < plugins.length; i += CONCURRENCY) {
+    const batch = plugins.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      batch.map(plugin => scanAndRegisterPlugin(plugin, scanner, registry, logger))
+    );
+  }
+
+  logger(`[AgentGuard] Plugin auto-scan complete. ${toolToPluginMap.size} tools mapped.`);
+}
+
+/**
+ * Get plugin ID from tool name
+ */
+export function getPluginIdFromTool(toolName: string): string | null {
+  return toolToPluginMap.get(toolName) ?? null;
+}
+
+/**
+ * Get scan result for a plugin
+ */
+export function getPluginScanResult(pluginId: string): { riskLevel: string; riskTags: string[] } | null {
+  return pluginScanCache.get(pluginId) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Main Registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Register AgentGuard hooks with OpenClaw plugin API
+ */
+export function registerOpenClawPlugin(
+  api: OpenClawPluginApi,
+  options: OpenClawPluginOptions = {}
+): void {
+  const adapter = new OpenClawAdapter();
+  const config = options.level ? { level: options.level } : loadConfig();
+  const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false });
+  const trustRegistry = options.registry ?? new SkillRegistry();
+
+  // Simple logger
+  const logger = (msg: string) => console.log(msg);
+
+  // Lazy-initialize agentguard instance
+  let agentguard: AgentGuardInstance | null = null;
+
+  // Build default capabilities from workspacePaths so the core session
+  // can access its own workspace files without a manual registry entry.
+  const defaultCapabilities = options.workspacePaths
+    ? { ...DEFAULT_CAPABILITY, filesystem_allowlist: options.workspacePaths }
+    : undefined;
+
+  function getAgentGuard(): AgentGuardInstance {
+    if (!agentguard) {
+      if (options.agentguardFactory) {
+        agentguard = options.agentguardFactory();
+      } else {
+        // Build inline — avoids require() and passes workspace defaults
+        const actionScanner = new ActionScanner({
+          registry: trustRegistry,
+          ...(defaultCapabilities ? { defaultCapabilities } : {}),
+        });
+        agentguard = {
+          registry: trustRegistry as unknown as AgentGuardInstance['registry'],
+          actionScanner,
+        };
+      }
+    }
+    return agentguard!;
+  }
+
+  // Auto-scan plugins on registration (async, non-blocking, opt-in)
+  if (options.skipAutoScan === false) {
+    // Use setImmediate to allow plugin registration to complete first
+    setImmediate(async () => {
+      try {
+        await scanAllPlugins(scanner, trustRegistry, logger, api.id);
+      } catch (err) {
+        logger(`[AgentGuard] Plugin auto-scan error: ${String(err)}`);
+      }
+    });
+  }
+
+  // session_start → auto-scan skill directories (only when opt-in)
+  if (options.skipAutoScan === false) {
+    api.on('session_start', async () => {
+      try {
+        await autoScanSkillDirs(scanner, trustRegistry, logger);
+      } catch {
+        // Non-critical — never block session startup
+      }
+    });
+  }
+
+  // before_tool_call → evaluate and optionally block
+  api.on('before_tool_call', async (event: unknown) => {
+    try {
+      // Try to infer plugin from tool name
+      const toolEvent = event as { toolName?: string };
+      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+
+      // Check if plugin is untrusted
+      if (pluginId) {
+        const scanResult = getPluginScanResult(pluginId);
+        if (scanResult?.riskLevel === 'critical') {
+          return {
+            block: true,
+            blockReason: `GoPlus AgentGuard: Plugin "${pluginId}" has critical security findings and is blocked. Run /agentguard trust attest to manually approve.`,
+          };
+        }
+      }
+
+      const result = await evaluateHook(adapter, event, {
+        config,
+        agentguard: getAgentGuard(),
+      });
+
+      if (result.decision === 'deny') {
+        return {
+          block: true,
+          blockReason: result.reason || 'Blocked by GoPlus AgentGuard',
+        };
+      }
+
+      // OpenClaw has no 'ask' mode — block with explanation in strict/balanced
+      if (result.decision === 'ask') {
+        return {
+          block: true,
+          blockReason: result.reason || 'Requires confirmation (GoPlus AgentGuard)',
+        };
+      }
+
+      return undefined; // allow
+    } catch {
+      // Fail open
+      return undefined;
+    }
+  });
+
+  // after_tool_call → audit log
+  api.on('after_tool_call', async (event: unknown) => {
+    try {
+      const input = adapter.parseInput(event);
+      const toolEvent = event as { toolName?: string };
+      const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+      writeAuditLog(input, null, pluginId);
+    } catch {
+      // Non-critical
+    }
+  });
+
+  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
+}
+
+/**
+ * Default export for OpenClaw plugin registration
+ *
+ * Usage: export default from '@goplus/agentguard/openclaw'
+ */
+export default function register(api: OpenClawPluginApi): void {
+  registerOpenClawPlugin(api);
+}
