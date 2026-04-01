@@ -13,7 +13,6 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 /ffwd-agent-guard trust <subcommand>   — Manage skill trust levels (lookup/attest/revoke/list)
 /ffwd-agent-guard report               — View security event audit log
 /ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
-/ffwd-agent-guard checkup              — Run agent health checkup with visual HTML report
 ```
 
 ## Project Structure
@@ -23,10 +22,10 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 - `data/` — Registry storage (`registry.json`)
 - `dist/` — Compiled JavaScript output
 
-## Setup for Trust & Action CLI
+## Build
 
-The `trust` and `action` subcommands use CLI scripts that require the @core0-io/ffwd-agent-guard package:
+Scripts in `src/scripts/` compile to `skills/ffwd-agent-guard/scripts/`:
 
 ```bash
-cd skills/ffwd-agent-guard/scripts && npm install
+npm run build
 ```

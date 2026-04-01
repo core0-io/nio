@@ -1,14 +1,14 @@
 ---
 name: ffwd-agent-guard
-description: FFWD AgentGuard — AI agent security guard. Run /ffwd-agent-guard checkup for a full security health check: scans all installed skills, checks credentials, permissions, and network exposure, then delivers an HTML report directly to you. Also use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
+description: FFWD AgentGuard — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
 license: MIT
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
   version: "1.1"
 user-invocable: true
-allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.ts *) Bash(node *action-cli.ts *) Bash(*checkup-report.js) Bash(echo *checkup-report.js) Bash(cat *checkup-report.js) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config|checkup] [args...]"
+allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
+argument-hint: "[scan|action|patrol|trust|report|config] [args...]"
 ---
 
 # FFWD AgentGuard — AI Agent Security Framework
@@ -25,7 +25,7 @@ All commands in this skill reference `scripts/` as a relative path. You **MUST**
 
 Example: if this SKILL.md is at `~/.openclaw/skills/ffwd-agent-guard/SKILL.md`, run:
 ```bash
-cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/checkup-report.js
+cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/trust-cli.js list
 ```
 
 ## Command Routing
@@ -38,7 +38,6 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
 - **`report`** — View recent security events from the audit log
 - **`config <strict|balanced|permissive>`** — Set protection level
-- **`checkup`** — Run a comprehensive agent health checkup and generate a visual HTML report
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
 
@@ -130,10 +129,10 @@ After outputting the scan report, if the scanned target appears to be a skill (c
    - `id`: the directory name of the scanned path
    - `source`: the absolute path to the scanned directory
    - `version`: read the `version` field from `package.json` in the scanned directory using the Read tool (if present), otherwise use `unknown`
-   - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.ts hash --path <scanned_path>` and extracting the `hash` field from the JSON output
+   - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.js hash --path <scanned_path>` and extracting the `hash` field from the JSON output
 3. Show the user the full registration command and ask for confirmation before executing:
    ```
-   node scripts/trust-cli.ts attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by ffwd-agent-guard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
+   node scripts/trust-cli.js attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by ffwd-agent-guard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
    ```
 4. Only execute after user approval. Show the registration result.
 
@@ -171,12 +170,12 @@ Parse the user's action description and apply the appropriate detector:
 | Untrusted domain | CONFIRM |
 | Body contains secret | **DENY** |
 
-### Action CLI (`action-cli.ts`)
+### Action CLI (`action-cli.js`)
 
-For structured decisions, use AgentGuard's bundled `action-cli.ts` (in this skill's `scripts/` directory). It resolves the trust registry and returns JSON.
+For structured decisions, use AgentGuard's bundled `action-cli.js` (in this skill's `scripts/` directory). It resolves the trust registry and returns JSON.
 
 ```
-node scripts/action-cli.ts decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
+node scripts/action-cli.js decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
 ```
 
 Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the returned evidence. Combine with policy-based checks (webhook domains, secret scanning, etc.).
@@ -236,8 +235,8 @@ Detect tampered or unregistered skill packages by comparing file hashes against 
 
 **Steps**:
 1. Discover skill directories under `$OC/skills/` (look for dirs containing `SKILL.md`)
-2. For each skill, compute hash: `node scripts/trust-cli.ts hash --path <skill_dir>`
-3. Look up the attested hash: `node scripts/trust-cli.ts lookup --source <skill_dir>`
+2. For each skill, compute hash: `node scripts/trust-cli.js hash --path <skill_dir>`
+3. Look up the attested hash: `node scripts/trust-cli.js lookup --source <skill_dir>`
 4. If hash differs from attested → **INTEGRITY_DRIFT** (HIGH)
 5. If skill has no trust record → **UNREGISTERED_SKILL** (MEDIUM)
 6. For drifted skills, run the scan rules against the changed files to detect new threats
@@ -317,7 +316,7 @@ Verify security configuration is production-appropriate.
 Check for expired, stale, or over-privileged trust records.
 
 **Steps**:
-1. List all records: `node scripts/trust-cli.ts list`
+1. List all records: `node scripts/trust-cli.js list`
 2. Flag:
    - Expired attestations (`expires_at` in the past)
    - Trusted skills not re-scanned in 30+ days
@@ -467,7 +466,7 @@ List all trust records with optional filters.
 
 If the @core0-io/ffwd-agent-guard package is installed, execute trust operations via FFWD AgentGuard's own bundled script:
 ```
-node scripts/trust-cli.ts <subcommand> [args]
+node scripts/trust-cli.js <subcommand> [args]
 ```
 
 For operations that modify the trust registry (`attest`, `revoke`), always show the user the exact command and ask for explicit confirmation before executing.
@@ -557,200 +556,6 @@ For untrusted skills with blocked actions, suggest: `/ffwd-agent-guard trust att
 ```
 
 If the log file doesn't exist, inform the user that no security events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
-
----
-
-# Health Checkup
-
-## Subcommand: checkup
-
-Run a comprehensive agent health checkup across 5 security dimensions. Generates a visual HTML report with a lobster mascot and opens it in the browser. The lobster's appearance reflects the agent's health: muscular bodybuilder (score 90+), healthy with shield (70–89), tired with coffee (50–69), or sick with bandages (0–49).
-
-### Step 1: Data Collection
-
-Run these checks in parallel where possible. These are **universal agent security checks** — they apply to any Claude Code or OpenClaw environment, regardless of whether AgentGuard is installed.
-
-1. **Discover & scan installed skills**: Glob `~/.claude/skills/*/SKILL.md` and `~/.openclaw/skills/*/SKILL.md`. For each discovered skill, **run `/ffwd-agent-guard scan <skill_path>`** using the scan subcommand logic (16 detection rules). Collect the scan results (risk level, findings count, risk tags) for each skill.
-2. **Credential file permissions**: `stat` on `~/.ssh/`, `~/.gnupg/`, and if OpenClaw: `stat` on `$OC/openclaw.json`, `$OC/devices/paired.json`
-3. **Sensitive credential scan (DLP)**: Use Grep to scan workspace memory/logs directories for leaked secrets:
-   - Private keys: `0x[a-fA-F0-9]{64}`, `-----BEGIN.*PRIVATE KEY-----`
-   - Mnemonics: sequences of 12+ BIP-39 words, `seed_phrase`, `mnemonic`
-   - API keys/tokens: `AKIA[0-9A-Z]{16}`, `gh[pousr]_[A-Za-z0-9_]{36}`, plaintext passwords
-4. **Network exposure**: Run `lsof -i -P -n 2>/dev/null | grep LISTEN` or `ss -tlnp 2>/dev/null` to check for dangerous open ports (Redis 6379, Docker API 2375, MySQL 3306, MongoDB 27017 on 0.0.0.0)
-5. **Scheduled tasks audit**: Check `crontab -l 2>/dev/null` for suspicious entries containing `curl|bash`, `wget|sh`, or accessing `~/.ssh/`
-6. **Environment variable exposure**: Run `env` and check for sensitive variable names (`PRIVATE_KEY`, `MNEMONIC`, `SECRET`, `PASSWORD`) — detect presence only, mask values
-7. **Runtime protection check**: Check if security hooks exist in `~/.claude/settings.json`, check for audit logs at `~/.ffwd-agent-guard/audit.jsonl`
-
-### Step 2: Score Calculation
-
-Checklist-based scoring across 5 security dimensions. **Every failed check = 1 finding with severity and description.**
-
-#### Dimension 1: Skill & Code Safety (weight: 25%)
-
-Uses AgentGuard's 16-rule scan engine (`/ffwd-agent-guard scan`) to audit each installed skill.
-
-| Check | Score | If failed → finding |
-|-------|-------|---------------------|
-| All skills scanned with risk level LOW | +40 | For each skill with findings, add per-finding: "<rule_id> in <skill>:<file>:<line>" with its severity |
-| No CRITICAL scan findings across all skills | +30 | "CRITICAL: <rule_id> detected in <skill>" (CRITICAL) |
-| No HIGH scan findings across all skills | +30 | "HIGH: <rule_id> detected in <skill>" (HIGH) |
-
-Deductions from base 100: each CRITICAL finding −15, HIGH −8, MEDIUM −3. Floor at 0.
-
-If no skills installed: score = 70, add finding: "No third-party skills installed — no code to audit" (LOW).
-
-#### Dimension 2: Credential & Secret Safety (weight: 25%)
-
-Checks for leaked credentials and permission hygiene.
-
-| Check | Score | If failed → finding |
-|-------|-------|---------------------|
-| `~/.ssh/` permissions are 700 or stricter | +25 | "~/.ssh/ permissions too open (<actual>) — should be 700" (HIGH) |
-| `~/.gnupg/` permissions are 700 or stricter | +15 | "~/.gnupg/ permissions too open (<actual>) — should be 700" (MEDIUM) |
-| No private keys (hex 0x..64, PEM) found in skill code or workspace | +25 | "Plaintext private key found in <location>" (CRITICAL) |
-| No mnemonic phrases found in skill code or workspace | +20 | "Plaintext mnemonic found in <location>" (CRITICAL) |
-| No API keys/tokens (AWS AKIA.., GitHub gh*_) found in skill code | +15 | "API key/token found in <location>" (HIGH) |
-
-#### Dimension 3: Network & System Exposure (weight: 20%)
-
-Checks for dangerous network exposure and system-level risks.
-
-| Check | Score | If failed → finding |
-|-------|-------|---------------------|
-| No high-risk ports exposed on 0.0.0.0 (Redis/Docker/MySQL/MongoDB) | +35 | "Dangerous port exposed: <service> on 0.0.0.0:<port>" (HIGH) |
-| No suspicious cron jobs (curl\|bash, wget\|sh, accessing ~/.ssh/) | +30 | "Suspicious cron job: <command>" (HIGH) |
-| No sensitive env vars with dangerous names (PRIVATE_KEY, MNEMONIC) | +20 | "Sensitive env var exposed: <name>" (MEDIUM) |
-| OpenClaw config files have proper permissions (600) if applicable | +15 | "OpenClaw config <file> permissions too open" (MEDIUM) |
-
-#### Dimension 4: Runtime Protection (weight: 15%)
-
-Checks whether the agent has active security monitoring.
-
-| Check | Score | If failed → finding |
-|-------|-------|---------------------|
-| Security hooks/guards installed (AgentGuard, custom hooks, etc.) | +40 | "No security hooks installed — actions are unmonitored" (HIGH) |
-| Security audit log exists with recent events | +30 | "No security audit log — no threat history available" (MEDIUM) |
-| Skills have been security-scanned at least once | +30 | "Installed skills have never been security-scanned" (MEDIUM) |
-
-#### Composite Score
-
-Weighted average of all five dimensions (25% + 25% + 20% + 15% + 15%).
-
-Determine tier:
-- 90–100 → Tier **S** (JACKED)
-- 70–89 → Tier **A** (Healthy)
-- 50–69 → Tier **B** (Tired)
-- 0–49 → Tier **F** (Critical)
-
-### Step 3: Generate Analysis Report
-
-Based on all collected data and findings, write a **comprehensive security analysis report** as a single text block. This is where you use your AI reasoning ability — don't just list facts, **analyze** them:
-
-- Summarize the overall security posture in 2-3 sentences
-- Highlight the most critical risks and explain **why** they matter (e.g. "Your ~/.ssh/ permissions allow any process running as your user to read your private keys, which means a malicious skill could silently exfiltrate them")
-- For each major finding, provide a specific actionable fix (exact command to run)
-- Note what's going well — acknowledge secure areas
-- If applicable, explain attack scenarios that the current configuration is vulnerable to (e.g. "A malicious skill could install a cron job that phones home your credentials every hour")
-- Keep the tone professional but direct, like a security consultant's report
-
-This report goes into the `"analysis"` field of the JSON output.
-
-Also generate a list of actionable recommendations as `{ "severity": "...", "text": "..." }` objects for the structured view.
-
-### Step 4: Generate Report
-
-Assemble the results into a JSON object and pipe it to the report generator:
-
-```json
-{
-  "timestamp": "<ISO 8601>",
-  "composite_score": <0-100>,
-  "tier": "<S|A|B|F>",
-  "dimensions": {
-    "code_safety": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
-    "credential_safety": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
-    "network_exposure": { "score": <n>, "findings": [...], "details": "<one-line summary>" },
-    "runtime_protection": { "score": <n>, "findings": [...], "details": "<one-line summary>" }
-  },
-  "skills_scanned": <count>,
-  "protection_level": "<level>",
-  "analysis": "<the comprehensive AI-written security analysis report>",
-  "recommendations": [
-    { "severity": "HIGH", "text": "..." }
-  ]
-}
-```
-
-Execute (remember to `cd` into the skill directory first — see "Resolving Script Paths" above):
-```bash
-cd <skill_directory> && echo '<json>' | node scripts/checkup-report.js
-```
-
-The script outputs the HTML file path to stdout (e.g. `/tmp/ffwd-agent-guard-checkup-1234567890.html`). Capture this path — you will need it for delivery in Step 6.
-
-### Step 5: Terminal Summary
-
-After the report generates, output a brief summary in the terminal:
-
-```
-## 🦞 FFWD AgentGuard Health Checkup
-
-**Overall Health Score**: <score> / 100 (Tier <grade> — <label>)
-**Quote**: "<lobster quote>"
-
-| Dimension | Score | Status |
-|-----------|-------|--------|
-| 🔍 Code Safety | <n>/100 | <EXCELLENT/GOOD/NEEDS WORK/CRITICAL> |
-| 🤝 Trust Hygiene | <n>/100 | <status> |
-| 🛡️ Runtime Defense | <n>/100 | <status> |
-| 🔐 Secret Protection | <n>/100 | <status> |
-| ⚙️ Config Posture | <n>/100 | <status> |
-
-**Full visual report**: <path> (opened in browser)
-
-💡 Top recommendation: <first recommendation text>
-```
-
-### Step 6: Deliver the Report to the User
-
-After printing the terminal summary, deliver the HTML report file. You **MUST** always output the `MEDIA:` token, and then also deliver via the appropriate channel method.
-
-#### 6a. MEDIA token (required — always do this)
-
-Output the following line on its **own line** in your response:
-
-```
-MEDIA:<file_path>
-```
-
-For example: `MEDIA:/tmp/ffwd-agent-guard-checkup-1234567890.html`
-
-This is how platforms like OpenClaw automatically deliver the file as a Telegram/Discord/WhatsApp attachment via `sendDocument`. The platform strips this line from visible text — the user won't see it. **Always output this regardless of what channel you think you're in.**
-
-#### 6b. Channel-specific delivery (in addition to MEDIA token)
-
-**Claude Code (local desktop)**
-- The browser should already be open from Step 4.
-- Also copy to Desktop: `cp <file_path> ~/Desktop/ffwd-agent-guard-checkup-$(date +%Y-%m-%d).html`
-- Tell the user: "✅ Report saved to your Desktop and opened in browser."
-
-**Claude.ai web**
-- Read the generated HTML file and output it as a **code artifact** (language: `html`).
-- Tell the user: "✅ Your report is attached above — click the download icon to save it."
-
-**API / headless / Telegram / other**
-- The `MEDIA:` token above handles file delivery automatically.
-- Also print the file path for reference.
-
-Regardless of channel, always end with:
-```
-🦞 Stay safe — run /ffwd-agent-guard checkup anytime to get a fresh report.
-```
-
-Append a summary entry to `~/.ffwd-agent-guard/audit.jsonl`:
-```json
-{"timestamp":"...","event":"checkup","composite_score":<n>,"tier":"<grade>","checks":6,"findings":<count>,"skills_scanned":<count>}
-```
 
 ---
 

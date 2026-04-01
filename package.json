@@ -1,7 +1,7 @@
 {
   "name": "@core0-io/ffwd-agent-guard",
   "version": "1.0.12",
-  "description": "FFWD AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets. 16 detection rules, runtime action evaluation, trust registry.",
+  "description": "FFWD AgentGuard \u2014 Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets. 16 detection rules, runtime action evaluation, trust registry.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
@@ -13,9 +13,9 @@
     "ffwd-agent-guard": "./dist/mcp-server.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsc -p tsconfig.scripts.json",
     "start": "node dist/mcp-server.js",
-    "dev": "tsc -w",
+    "dev": "tsc -w & tsc -w -p tsconfig.scripts.json",
     "test": "node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build"
   },
@@ -62,5 +62,6 @@
     "LICENSE",
     "openclaw.plugin.json",
     "skills"
-  ]
+  ],
+  "type": "module"
 }

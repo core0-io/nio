@@ -1,11 +1,11 @@
 import { openSync, readSync, closeSync, fstatSync } from 'node:fs';
-import type { ActionEnvelope } from '../types/action.js';
+import type { ActionEnvelope, ActionData, ActionType, ExecCommandData, FileOperationData, NetworkRequestData } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
  * Tool name → action type mapping for Claude Code
  */
-const TOOL_ACTION_MAP: Record<string, string> = {
+const TOOL_ACTION_MAP: Record<string, ActionType> = {
   Bash: 'exec_command',
   Write: 'write_file',
   Edit: 'write_file',
@@ -40,7 +40,7 @@ export class ClaudeCodeAdapter implements HookAdapter {
   }
 
   buildEnvelope(input: HookInput, initiatingSkill?: string | null): ActionEnvelope | null {
-    const actionType = this.mapToolToActionType(input.toolName);
+    const actionType = this.mapToolToActionType(input.toolName) as ActionType | null;
     if (!actionType) return null;
 
     const actor = {
@@ -60,30 +60,35 @@ export class ClaudeCodeAdapter implements HookAdapter {
       initiating_skill: initiatingSkill || undefined,
     };
 
-    // Build action data based on type
-    let actionData: Record<string, unknown>;
+    let actionData: ActionData;
 
     switch (actionType) {
-      case 'exec_command':
-        actionData = {
+      case 'exec_command': {
+        const data: ExecCommandData = {
           command: (input.toolInput.command as string) || '',
           args: [],
           cwd: input.cwd,
         };
+        actionData = data;
         break;
+      }
 
-      case 'write_file':
-        actionData = {
+      case 'write_file': {
+        const data: FileOperationData = {
           path: (input.toolInput.file_path as string) || '',
         };
+        actionData = data;
         break;
+      }
 
-      case 'network_request':
-        actionData = {
+      case 'network_request': {
+        const data: NetworkRequestData = {
           method: 'GET',
           url: (input.toolInput.url as string) || (input.toolInput.query as string) || '',
         };
+        actionData = data;
         break;
+      }
 
       default:
         return null;
@@ -93,7 +98,7 @@ export class ClaudeCodeAdapter implements HookAdapter {
       actor,
       action: { type: actionType, data: actionData },
       context,
-    } as unknown as ActionEnvelope;
+    };
   }
 
   async inferInitiatingSkill(input: HookInput): Promise<string | null> {

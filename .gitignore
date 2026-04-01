@@ -14,5 +14,5 @@ coverage/
 tmp/
 .npmrc
 .pnpm-store/
-skills/ffwd-agent-guard/scripts/data/
-skills/ffwd-agent-guard/scripts/package-lock.json
+skills/ffwd-agent-guard/scripts/*.js
+skills/ffwd-agent-guard/scripts/*.js.map

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
+export {};
+
 /**
  * FFWD AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
  *
  * Usage:
- *   node action-cli.ts decide --type <action_type> [action-specific args]
+ *   node action-cli.js decide --type <action_type> [action-specific args]
  *
  * Action-specific args for `decide`:
  *
@@ -21,8 +23,64 @@
  *     --path <filepath>
  */
 
-import { createAgentGuard } from '@core0-io/ffwd-agent-guard';
-import type { ActionEnvelope, ActionType } from '@core0-io/ffwd-agent-guard';
+import { join } from 'node:path';
+
+// ---------------------------------------------------------------------------
+// Types (local declarations to avoid cross-project imports)
+// ---------------------------------------------------------------------------
+
+type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access';
+
+interface ActionEnvelope {
+  actor: {
+    skill: {
+      id: string;
+      source: string;
+      version_ref: string;
+      artifact_hash: string;
+    };
+  };
+  action: {
+    type: ActionType;
+    data: Record<string, unknown>;
+  };
+  context: {
+    session_id: string;
+    user_present: boolean;
+    env: string;
+    time: string;
+  };
+}
+
+interface AgentGuardModule {
+  createAgentGuard: (options?: { registryPath?: string }) => {
+    actionScanner: {
+      decide: (envelope: ActionEnvelope) => Promise<unknown>;
+    };
+    [key: string]: unknown;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Load AgentGuard engine
+// ---------------------------------------------------------------------------
+
+const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
+
+let mod: AgentGuardModule;
+try {
+  mod = await import(agentguardPath) as AgentGuardModule;
+} catch {
+  try {
+    mod = // @ts-expect-error fallback to npm package if relative import fails
+    await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
+  } catch {
+    process.stderr.write('FFWD AgentGuard: unable to load engine\n');
+    process.exit(1);
+  }
+}
+
+const { createAgentGuard } = mod!;
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -37,8 +95,8 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 
-function printUsage(): void {
-  console.error(`Usage: action-cli.ts decide [options]
+function printUsage(): never {
+  console.error(`Usage: action-cli.js decide [options]
 
 Commands:
   decide    Evaluate an action and return a policy decision
@@ -72,7 +130,6 @@ function buildEnvelope(): ActionEnvelope {
   if (!type) {
     console.error('Error: --type is required for decide');
     printUsage();
-    process.exit(1);
   }
 
   const userPresent = hasFlag('user-present');
@@ -112,7 +169,6 @@ function buildEnvelope(): ActionEnvelope {
     default:
       console.error(`Error: unknown action type '${type}'`);
       printUsage();
-      process.exit(1);
   }
 
   return {
@@ -126,7 +182,7 @@ function buildEnvelope(): ActionEnvelope {
     },
     action: {
       type,
-      data: data as ActionEnvelope['action']['data'],
+      data,
     },
     context: {
       session_id: `cli-${Date.now()}`,
@@ -137,7 +193,7 @@ function buildEnvelope(): ActionEnvelope {
   };
 }
 
-async function main() {
+async function main(): Promise<void> {
   if (!command || command === '--help' || command === '-h') {
     printUsage();
   }
@@ -155,7 +211,7 @@ async function main() {
   console.log(JSON.stringify(result, null, 2));
 }
 
-main().catch((err) => {
+main().catch((err: Error) => {
   console.error(JSON.stringify({ error: err.message }));
   process.exit(1);
 });

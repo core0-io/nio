@@ -47,6 +47,17 @@
             "statusMessage": "FFWD AgentGuard: checking network request..."
           }
         ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/metrics-hook.js\"",
+            "timeout": 10,
+            "async": true
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -57,6 +68,17 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 5,
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/metrics-hook.js\"",
+            "timeout": 10,
             "async": true
           }
         ]

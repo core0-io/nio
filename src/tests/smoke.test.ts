@@ -2,7 +2,8 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { SkillScanner } from '../scanner/index.js';
 
@@ -10,7 +11,8 @@ import { SkillScanner } from '../scanner/index.js';
 // D: guard-hook.js subprocess E2E
 // ─────────────────────────────────────────────────────────────────────────────
 
-// __dirname points to dist/tests/ after compilation, project root is 2 levels up
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..', '..');
 const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'ffwd-agent-guard', 'scripts', 'guard-hook.js');
 

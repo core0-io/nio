@@ -1,17 +1,69 @@
 #!/usr/bin/env node
 
+export {};
+
 /**
  * FFWD AgentGuard Trust CLI — lightweight wrapper for SkillRegistry operations.
  *
  * Usage:
- *   node trust-cli.ts lookup --id <id> --source <source> --version <version> --hash <hash>
- *   node trust-cli.ts attest  --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> [--preset <preset>] [--capabilities <json>] [--reviewed-by <name>] [--notes <text>] [--expires <iso>] [--force]
- *   node trust-cli.ts revoke  [--source <source>] [--key <record_key>] --reason <reason>
- *   node trust-cli.ts list    [--trust-level <level>] [--status <status>] [--source-pattern <pattern>]
- *   node trust-cli.ts hash    --path <dir>
+ *   node trust-cli.js lookup --id <id> --source <source> --version <version> --hash <hash>
+ *   node trust-cli.js attest  --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> [--preset <preset>] [--capabilities <json>] [--reviewed-by <name>] [--notes <text>] [--expires <iso>] [--force]
+ *   node trust-cli.js revoke  [--source <source>] [--key <record_key>] --reason <reason>
+ *   node trust-cli.js list    [--trust-level <level>] [--status <status>] [--source-pattern <pattern>]
+ *   node trust-cli.js hash    --path <dir>
  */
 
-import { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } from '@core0-io/ffwd-agent-guard';
+import { join } from 'node:path';
+
+const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
+
+interface AgentGuardModule {
+  createAgentGuard: (options?: { registryPath?: string }) => {
+    scanner: unknown;
+    registry: {
+      lookup: (skill: SkillIdentity) => Promise<unknown>;
+      attest: (params: AttestParams) => Promise<unknown>;
+      forceAttest: (params: AttestParams) => Promise<unknown>;
+      revoke: (filter: { source?: string; record_key?: string }, reason: string) => Promise<unknown>;
+      list: (filters: Record<string, string>) => Promise<unknown>;
+    };
+    actionScanner: unknown;
+  };
+  CAPABILITY_PRESETS: Record<string, unknown>;
+  SkillScanner: new (options: { useExternalScanner: boolean }) => {
+    calculateArtifactHash: (path: string) => Promise<string>;
+  };
+}
+
+interface SkillIdentity {
+  id: string;
+  source: string;
+  version_ref: string;
+  artifact_hash: string;
+}
+
+interface AttestParams {
+  skill: SkillIdentity;
+  trust_level: 'untrusted' | 'restricted' | 'trusted';
+  capabilities?: unknown;
+  review: { reviewed_by: string; reviewed_at: string; notes: string };
+  expires_at?: string;
+}
+
+let mod: AgentGuardModule;
+try {
+  mod = await import(agentguardPath) as AgentGuardModule;
+} catch {
+  try {
+    mod = // @ts-expect-error fallback to npm package if relative import fails
+    await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
+  } catch {
+    process.stderr.write('FFWD AgentGuard: unable to load engine\n');
+    process.exit(1);
+  }
+}
+
+const { createAgentGuard, CAPABILITY_PRESETS, SkillScanner } = mod!;
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -26,13 +78,13 @@ function hasFlag(name: string): boolean {
   return args.includes(`--${name}`);
 }
 
-async function main() {
+async function main(): Promise<void> {
   const registryPath = getArg('registry-path');
   const { registry } = createAgentGuard({ registryPath });
 
   switch (command) {
     case 'lookup': {
-      const skill = {
+      const skill: SkillIdentity = {
         id: getArg('id') || '',
         source: getArg('source') || '',
         version_ref: getArg('version') || '',
@@ -44,7 +96,7 @@ async function main() {
     }
 
     case 'attest': {
-      const skill = {
+      const skill: SkillIdentity = {
         id: getArg('id') || '',
         source: getArg('source') || '',
         version_ref: getArg('version') || '',
@@ -55,7 +107,7 @@ async function main() {
         | 'restricted'
         | 'trusted';
 
-      let capabilities;
+      let capabilities: unknown;
       const preset = getArg('preset');
       if (preset && preset in CAPABILITY_PRESETS) {
         capabilities =
@@ -121,14 +173,14 @@ async function main() {
 
     default:
       console.error(
-        'Usage: trust-cli.ts <lookup|attest|revoke|list|hash> [options]'
+        'Usage: trust-cli.js <lookup|attest|revoke|list|hash> [options]'
       );
       console.error('Run with --help for details.');
       process.exit(1);
   }
 }
 
-main().catch((err) => {
+main().catch((err: Error) => {
   console.error(JSON.stringify({ error: err.message }));
   process.exit(1);
 });

@@ -95,16 +95,8 @@ else
   exit 1
 fi
 
-# ---- Step 2: Install CLI dependencies ----
-echo "[2/5] Installing CLI dependencies..."
-if [ -d "$SKILL_SRC/scripts" ]; then
-  cd "$SKILL_SRC/scripts"
-  npm install 2>/dev/null
-  echo "  OK: CLI dependencies installed"
-fi
-
-# ---- Step 3: Copy skill files ----
-echo "[3/5] Installing skill files..."
+# ---- Step 2: Copy skill files ----
+echo "[2/4] Installing skill files..."
 mkdir -p "$SKILLS_DIR"
 for f in SKILL.md README.md scan-rules.md action-policies.md evals.md patrol-checks.md .clawignore; do
   [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
@@ -112,11 +104,11 @@ done
 echo "  OK: Skill files installed"
 
 # ---- Step 4: Copy scripts + node_modules ----
-echo "[4/5] Installing scripts and dependencies..."
+echo "[3/4] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
 
 # Copy script files
-for f in checkup-report.js guard-hook.js auto-scan.js trust-cli.ts action-cli.ts package.json package-lock.json; do
+for f in guard-hook.js auto-scan.js trust-cli.js action-cli.js metrics-hook.js; do
   [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
 done
 
@@ -126,17 +118,10 @@ if [ -d "$SKILL_SRC/scripts/data" ]; then
   cp -r "$SKILL_SRC/scripts/data/"* "$SKILLS_DIR/scripts/data/" 2>/dev/null || true
 fi
 
-# Install node_modules in the target (avoids symlink issues in containers)
-cd "$SKILLS_DIR/scripts"
-if [ -f "package.json" ]; then
-  npm install 2>/dev/null
-  echo "  OK: Scripts and dependencies installed"
-else
-  echo "  WARN: No package.json found in scripts directory"
-fi
+echo "  OK: Scripts installed"
 
 # ---- Step 5: Create config directory ----
-echo "[5/5] Setting up configuration..."
+echo "[4/4] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
 if [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
   echo '{"level":"balanced"}' > "$FFWD_AGENT_GUARD_DIR/config.json"
@@ -159,13 +144,9 @@ else
   echo "  Send your OpenClaw bot:"
 fi
 echo ""
-echo "    /ffwd-agent-guard checkup"
+echo "    /ffwd-agent-guard scan <path>"
 echo ""
-echo "  This will:"
-echo "    • Scan all your installed skills for threats"
-echo "    • Check credentials, permissions & network exposure"
-echo "    • Generate a full HTML security report"
-echo "    • Deliver the report directly to you"
+echo "  This will scan the target for security risks."
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
