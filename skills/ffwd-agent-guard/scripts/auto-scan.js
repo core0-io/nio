@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// ⚠️  AUTO-GENERATED — DO NOT EDIT
+// Source: src/scripts/auto-scan.ts
+// Compile: npm run build
 /**
  * FFWD AgentGuard — SessionStart Auto-Scan Hook
  *

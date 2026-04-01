@@ -13,7 +13,7 @@
     "ffwd-agent-guard": "./dist/mcp-server.js"
   },
   "scripts": {
-    "build": "tsc && tsc -p tsconfig.scripts.json",
+    "build": "tsc && tsc -p tsconfig.scripts.json && node scripts/add-banner.js",
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w & tsc -w -p tsconfig.scripts.json",
     "test": "node --test dist/tests/*.test.js",

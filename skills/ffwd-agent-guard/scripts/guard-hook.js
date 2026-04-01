@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// ⚠️  AUTO-GENERATED — DO NOT EDIT
+// Source: src/scripts/guard-hook.ts
+// Compile: npm run build
 /**
  * FFWD AgentGuard PreToolUse / PostToolUse Hook (Claude Code)
  *
