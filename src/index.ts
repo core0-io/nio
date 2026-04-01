@@ -50,6 +50,7 @@ export {
   evaluateHook,
   registerOpenClawPlugin,
   loadConfig,
+  resetConfig,
   loadMetricsConfig,
   detectPlatform,
   type HookAdapter,

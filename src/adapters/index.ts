@@ -10,6 +10,7 @@ export {
 } from './openclaw-plugin.js';
 export {
   loadConfig,
+  resetConfig,
   loadMetricsConfig,
   detectPlatform,
   isSensitivePath,

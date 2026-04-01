@@ -13,8 +13,10 @@ export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './c
 // Paths
 // ---------------------------------------------------------------------------
 
+const __filename = fileURLToPath(import.meta.url);
 const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
 const CONFIG_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json');
+const CONFIG_DEFAULT_PATH = join(dirname(__filename), '..', '..', 'config.default.json');
 const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
@@ -24,10 +26,8 @@ function ensureDir(): void {
 }
 
 function loadDefaults(): AgentGuardConfig {
-  const __filename = fileURLToPath(import.meta.url);
-  const defaultPath = join(dirname(__filename), '..', '..', 'config.default.json');
-  const raw = JSON.parse(readFileSync(defaultPath, 'utf-8'));
-  return validateConfig(raw, defaultPath);
+  const raw = JSON.parse(readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
+  return validateConfig(raw, CONFIG_DEFAULT_PATH);
 }
 
 const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
@@ -35,6 +35,12 @@ const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
 // ---------------------------------------------------------------------------
 // Config loading
 // ---------------------------------------------------------------------------
+
+export function resetConfig(): AgentGuardConfig {
+  ensureDir();
+  writeFileSync(CONFIG_PATH, readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
+  return { ...CONFIG_DEFAULTS };
+}
 
 export function loadConfig(): AgentGuardConfig {
   if (!existsSync(CONFIG_PATH)) {

@@ -518,15 +518,15 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 | `balanced` | Block dangerous, confirm risky — default level, good for daily use |
 | `permissive` | Only block critical threats — for experienced users who want minimal friction |
 
-### How to Set
+### Routing
 
-1. Read `$ARGUMENTS` to get the desired level (e.g., `config balanced`)
-2. Read current config from `~/.ffwd-agent-guard/config.json`
-3. Update only the `level` field, preserving all other settings
-4. Write the updated config back
-5. Confirm the change to the user
+Parse `$ARGUMENTS` after `config` and run the matching action:
 
-If no level is specified, read and display the current config (all fields).
+| Input | Action |
+|-------|--------|
+| `config` or `config show` | Run `node scripts/config-cli.js show` |
+| `config reset` | Run `node scripts/config-cli.js reset` |
+| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.json`, update only the `level` field (preserve all other settings), write back, confirm to user |
 
 ---
 
