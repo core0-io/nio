@@ -1,9 +1,13 @@
-import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
+import { validateConfig } from './config-schema.js';
+import type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './config-schema.js';
+export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './config-schema.js';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -19,61 +23,43 @@ function ensureDir(): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Config types
-// ---------------------------------------------------------------------------
-
-export interface MetricsConfig {
-  endpoint?: string;
-  api_key?: string;
-  timeout?: number;
-  log?: string;
+function loadDefaults(): AgentGuardConfig {
+  const __filename = fileURLToPath(import.meta.url);
+  const defaultPath = join(dirname(__filename), '..', '..', 'config.default.json');
+  const raw = JSON.parse(readFileSync(defaultPath, 'utf-8'));
+  return validateConfig(raw, defaultPath);
 }
 
-export interface AgentGuardConfig {
-  level: string;
-  auto_scan?: boolean;
-  metrics?: MetricsConfig;
-}
-
-const CONFIG_DEFAULTS: AgentGuardConfig = {
-  level: 'balanced',
-  auto_scan: false,
-};
+const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
 
 // ---------------------------------------------------------------------------
 // Config loading
 // ---------------------------------------------------------------------------
 
 export function loadConfig(): AgentGuardConfig {
-  try {
-    const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
-    return { ...CONFIG_DEFAULTS, ...raw };
-  } catch {
+  if (!existsSync(CONFIG_PATH)) {
+    try {
+      ensureDir();
+      writeFileSync(CONFIG_PATH, JSON.stringify(CONFIG_DEFAULTS, null, 2) + '\n');
+    } catch {
+      // Best-effort: filesystem may be read-only
+    }
     return { ...CONFIG_DEFAULTS };
   }
-}
 
-// ---------------------------------------------------------------------------
-// Resolved metrics config (file values + env-var overrides)
-// ---------------------------------------------------------------------------
-
-export interface ResolvedMetricsConfig {
-  endpoint: string;
-  api_key: string;
-  timeout: number;
-  log: string;
-  enabled: boolean;
+  const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+  const validated = validateConfig(raw, CONFIG_PATH);
+  return { ...CONFIG_DEFAULTS, ...validated };
 }
 
 export function loadMetricsConfig(): ResolvedMetricsConfig {
   const config = loadConfig();
   const m = config.metrics ?? {};
 
-  const endpoint = process.env.FFWD_METRICS_ENDPOINT ?? m.endpoint ?? '';
-  const api_key = process.env.FFWD_METRICS_API_KEY ?? m.api_key ?? '';
-  const timeout = Number(process.env.FFWD_METRICS_TIMEOUT) || m.timeout || 5000;
-  let log = process.env.FFWD_METRICS_LOG ?? m.log ?? '';
+  const endpoint = m.endpoint ?? '';
+  const api_key = m.api_key ?? '';
+  const timeout = m.timeout || 5000;
+  let log = m.log ?? '';
 
   if (log.startsWith('~/')) {
     log = join(homedir(), log.slice(2));
@@ -154,19 +140,36 @@ export function shouldAskAtLevel(
 }
 
 // ---------------------------------------------------------------------------
+// Platform detection
+// ---------------------------------------------------------------------------
+
+export function detectPlatform(): string {
+  if (process.env.CLAUDE_CODE) return 'claude-code';
+  if (process.env.CURSOR_SESSION_ID) return 'cursor';
+  if (process.env.CODEX_SESSION_ID) return 'codex';
+  if (process.env.OPENCLAW_STATE_DIR) return 'openclaw';
+  if (existsSync(join(homedir(), '.cursor'))) return 'cursor';
+  if (existsSync(join(homedir(), '.openclaw'))) return 'openclaw';
+  if (existsSync(join(homedir(), '.claude'))) return 'claude-code';
+  return 'unknown';
+}
+
+// ---------------------------------------------------------------------------
 // Audit logging
 // ---------------------------------------------------------------------------
 
 export function writeAuditLog(
   input: HookInput,
   decision: { decision?: string; risk_level?: string; risk_tags?: string[] } | null,
-  initiatingSkill?: string | null
+  initiatingSkill?: string | null,
+  platform?: string | null
 ): void {
   try {
     ensureDir();
     const rl = decision?.risk_level || 'low';
     const entry: Record<string, unknown> = {
       timestamp: new Date().toISOString(),
+      platform: platform || 'unknown',
       tool_name: input.toolName,
       tool_input_summary: summarizeToolInput(input),
       decision: decision?.decision || 'allow',

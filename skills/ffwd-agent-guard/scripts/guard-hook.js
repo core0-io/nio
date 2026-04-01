@@ -12,11 +12,13 @@
  *
  * PostToolUse: appends audit log entry (async, always exits 0)
  */
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 // ---------------------------------------------------------------------------
 // Load AgentGuard engine + adapters
 // ---------------------------------------------------------------------------
-const agentguardPath = join(import.meta.url.replace('file://', ''), '..', '..', '..', '..', 'dist', 'index.js');
+const __filename = fileURLToPath(import.meta.url);
+const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
 let mod;
 try {
     mod = await import(agentguardPath);

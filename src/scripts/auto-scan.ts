@@ -12,8 +12,8 @@ export {};
  *   3. Run quickScan for new/updated skills
  *   4. Report results to stderr (scan-only, does NOT modify trust registry)
  *
- * OPT-IN: This script only runs when FFWD_AGENT_GUARD_AUTO_SCAN=1.
- * Without this env var, the script exits immediately.
+ * OPT-IN: This script only runs when auto_scan is true in config.json.
+ * Without this setting, the script exits immediately.
  *
  * To register scanned skills, use: /ffwd-agent-guard trust attest
  *
@@ -21,27 +21,20 @@ export {};
  */
 
 import { readdirSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
-// Opt-in gate: only run when explicitly enabled (env var or config file)
+// Opt-in gate: only run when auto_scan is enabled in config
 // ---------------------------------------------------------------------------
-
-// Defer full gate check until after engine is loaded so we can read config.
-// Quick exit if env var is explicitly set to something other than '1' and
-// no config file could possibly enable it — but we need the engine for that,
-// so just skip if the env var says '1' (fast path).
-const envAutoScan = process.env.FFWD_AGENT_GUARD_AUTO_SCAN;
 
 // ---------------------------------------------------------------------------
 // Load AgentGuard engine
 // ---------------------------------------------------------------------------
 
-const agentguardPath = join(
-  import.meta.url.replace('file://', ''),
-  '..', '..', '..', '..', 'dist', 'index.js'
-);
+const __filename = fileURLToPath(import.meta.url);
+const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
 
 interface AgentGuardConfig {
   level: string;
@@ -57,6 +50,7 @@ interface AgentGuardModule {
     actionScanner: unknown;
   };
   loadConfig: () => AgentGuardConfig;
+  detectPlatform: () => string;
 }
 
 let mod: AgentGuardModule;
@@ -71,14 +65,11 @@ try {
   }
 }
 
-const { createAgentGuard, loadConfig } = mod!;
+const { createAgentGuard, loadConfig, detectPlatform } = mod!;
 
-// Check opt-in: env var takes precedence, then config file
-if (envAutoScan !== '1') {
-  const config = loadConfig();
-  if (!config.auto_scan) {
-    process.exit(0);
-  }
+const config = loadConfig();
+if (!config.auto_scan) {
+  process.exit(0);
 }
 
 // ---------------------------------------------------------------------------
@@ -100,6 +91,7 @@ function ensureDir(): void {
 
 interface AuditEntry {
   timestamp: string;
+  platform: string;
   event: string;
   skill_name: string;
   risk_level: string;
@@ -181,6 +173,7 @@ async function main(): Promise<void> {
 
       writeAuditLog({
         timestamp: new Date().toISOString(),
+        platform: detectPlatform(),
         event: 'auto_scan',
         skill_name: skill.name,
         risk_level: result.risk_level,

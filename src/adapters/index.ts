@@ -11,6 +11,7 @@ export {
 export {
   loadConfig,
   loadMetricsConfig,
+  detectPlatform,
   isSensitivePath,
   shouldDenyAtLevel,
   shouldAskAtLevel,
@@ -21,3 +22,8 @@ export {
   type MetricsConfig,
   type ResolvedMetricsConfig,
 } from './common.js';
+export {
+  validateConfig,
+  AgentGuardConfigSchema,
+  MetricsConfigSchema,
+} from './config-schema.js';

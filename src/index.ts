@@ -51,6 +51,7 @@ export {
   registerOpenClawPlugin,
   loadConfig,
   loadMetricsConfig,
+  detectPlatform,
   type HookAdapter,
   type HookInput,
   type HookOutput,
@@ -58,6 +59,9 @@ export {
   type AgentGuardConfig,
   type MetricsConfig,
   type ResolvedMetricsConfig,
+  validateConfig,
+  AgentGuardConfigSchema,
+  MetricsConfigSchema,
 } from './adapters/index.js';
 
 // Convenience factory functions

@@ -440,7 +440,7 @@ export function registerOpenClawPlugin(
       const input = adapter.parseInput(event);
       const toolEvent = event as { toolName?: string };
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
-      writeAuditLog(input, null, pluginId);
+      writeAuditLog(input, null, pluginId, 'openclaw');
     } catch {
       // Non-critical
     }

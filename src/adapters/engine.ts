@@ -42,7 +42,7 @@ export async function evaluateHook(
   // Post-tool events → audit only
   if (input.eventType === 'post') {
     const skill = await adapter.inferInitiatingSkill(input);
-    writeAuditLog(input, null, skill);
+    writeAuditLog(input, null, skill, adapter.name);
     return { decision: 'allow' };
   }
 
@@ -67,7 +67,7 @@ export async function evaluateHook(
         ['SENSITIVE_PATH'],
         'critical'
       );
-      writeAuditLog(input, { decision: 'deny', risk_level: 'critical', risk_tags: ['SENSITIVE_PATH'] }, initiatingSkill);
+      writeAuditLog(input, { decision: 'deny', risk_level: 'critical', risk_tags: ['SENSITIVE_PATH'] }, initiatingSkill, adapter.name);
 
       // In permissive mode, ask for user-initiated writes
       if (options.config.level === 'permissive' && !initiatingSkill) {
@@ -105,7 +105,7 @@ export async function evaluateHook(
           { can_exec: false, can_network: false, can_write: false, can_read: true }
         )) {
           const reason = `FFWD AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} — register it with /ffwd-agent-guard trust attest to allow [score: ${scoreForLevel('high')}]`;
-          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['UNTRUSTED_SKILL', ...(decision.risk_tags || [])] }, initiatingSkill);
+          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['UNTRUSTED_SKILL', ...(decision.risk_tags || [])] }, initiatingSkill, adapter.name);
           return {
             decision: 'ask',
             reason,
@@ -120,7 +120,7 @@ export async function evaluateHook(
       if (policy.isKnown && policy.capabilities) {
         if (!isActionAllowedByCapabilities(envelope.action.type, policy.capabilities)) {
           const reason = `FFWD AgentGuard: skill "${initiatingSkill}" is not allowed to ${envelope.action.type} per its trust policy [score: ${scoreForLevel('high')}]`;
-          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['CAPABILITY_EXCEEDED', ...(decision.risk_tags || [])] }, initiatingSkill);
+          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['CAPABILITY_EXCEEDED', ...(decision.risk_tags || [])] }, initiatingSkill, adapter.name);
           return {
             decision: 'deny',
             reason,
@@ -134,7 +134,7 @@ export async function evaluateHook(
     }
 
     // Write audit log
-    writeAuditLog(input, decision, initiatingSkill);
+    writeAuditLog(input, decision, initiatingSkill, adapter.name);
 
     // Apply protection level thresholds
     const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
@@ -175,7 +175,7 @@ export async function evaluateHook(
     return { decision: 'allow', initiatingSkill };
   } catch {
     // Engine error → fail open
-    writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill);
+    writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill, adapter.name);
     return { decision: 'allow' };
   }
 }

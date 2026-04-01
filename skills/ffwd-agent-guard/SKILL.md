@@ -508,13 +508,7 @@ Full schema:
 | `metrics.timeout` | number | `5000` | Metrics request timeout in ms |
 | `metrics.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
 
-Environment variables override config file values:
-
-- `FFWD_AGENT_GUARD_AUTO_SCAN=1` overrides `auto_scan`
-- `FFWD_METRICS_ENDPOINT` overrides `metrics.endpoint`
-- `FFWD_METRICS_API_KEY` overrides `metrics.api_key`
-- `FFWD_METRICS_TIMEOUT` overrides `metrics.timeout`
-- `FFWD_METRICS_LOG` overrides `metrics.log`
+Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory (default: `~/.ffwd-agent-guard`).
 
 ### Protection Levels
 
@@ -598,7 +592,6 @@ If the log file doesn't exist, inform the user that no security events have been
 AgentGuard can optionally scan installed skills at session startup. **This is disabled by default** and must be explicitly enabled:
 
 - **Config file**: Set `"auto_scan": true` in `~/.ffwd-agent-guard/config.json`
-- **Claude Code**: Set environment variable `FFWD_AGENT_GUARD_AUTO_SCAN=1` (overrides config file)
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
 
 When enabled, auto-scan operates in **report-only mode**:

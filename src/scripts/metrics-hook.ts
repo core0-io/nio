@@ -13,18 +13,13 @@ export {};
  * influences allow/deny decisions. It always exits 0.
  *
  * Configuration is read from ~/.ffwd-agent-guard/config.json (metrics section).
- * Environment variables override file values:
- *   FFWD_METRICS_ENDPOINT  — Backend URL to POST metrics to
- *   FFWD_METRICS_API_KEY   — Bearer token for auth
- *   FFWD_METRICS_TIMEOUT   — Request timeout in ms (default: 5000)
- *   FFWD_METRICS_LOG       — Path to local JSONL log file
- *
- * At least one of endpoint or log must be configured,
+ * At least one of metrics.endpoint or metrics.log must be configured,
  * otherwise the script exits immediately.
  */
 
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +35,7 @@ interface HookStdinPayload {
 
 interface MetricPayload {
   timestamp: string;
+  platform: string;
   event: string;
   tool_name: string;
   session_id: string | null;
@@ -57,26 +53,28 @@ interface ResolvedMetricsConfig {
 
 interface AgentGuardModule {
   loadMetricsConfig: () => ResolvedMetricsConfig;
+  detectPlatform: () => string;
 }
 
 // ---------------------------------------------------------------------------
 // Load config from AgentGuard engine
 // ---------------------------------------------------------------------------
 
-const agentguardPath = join(
-  import.meta.url.replace('file://', ''),
-  '..', '..', '..', '..', 'dist', 'index.js'
-);
+const __filename = fileURLToPath(import.meta.url);
+const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
 
 let metricsConfig: ResolvedMetricsConfig;
+let platform = 'unknown';
 try {
   const mod = await import(agentguardPath) as AgentGuardModule;
   metricsConfig = mod.loadMetricsConfig();
+  platform = mod.detectPlatform();
 } catch {
   try {
     const mod = // @ts-expect-error fallback to npm package if relative import fails
       await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
     metricsConfig = mod.loadMetricsConfig();
+    platform = mod.detectPlatform();
   } catch {
     process.exit(0);
   }
@@ -136,6 +134,7 @@ function buildPayload(input: HookStdinPayload): MetricPayload {
 
   return {
     timestamp: new Date().toISOString(),
+    platform,
     event: input.hook_event_name || '',
     tool_name: toolName,
     session_id: input.session_id || null,
