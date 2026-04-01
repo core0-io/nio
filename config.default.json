@@ -1,0 +1,10 @@
+{
+  "level": "balanced",
+  "auto_scan": false,
+  "metrics": {
+    "endpoint": "",
+    "api_key": "",
+    "timeout": 5000,
+    "log": ""
+  }
+}

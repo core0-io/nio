@@ -477,7 +477,44 @@ If scripts are not available, help the user inspect `data/registry.json` directl
 
 ## Subcommand: config
 
-Set the FFWD AgentGuard protection level.
+View or update the FFWD AgentGuard configuration.
+
+### Config File
+
+All configuration is stored in `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+A template with all options is available at `config.default.json` in the repo root.
+
+Full schema:
+
+```json
+{
+  "level": "balanced",
+  "auto_scan": false,
+  "metrics": {
+    "endpoint": "",
+    "api_key": "",
+    "timeout": 5000,
+    "log": ""
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `auto_scan` | boolean | `false` | Enable skill scanning on session start |
+| `metrics.endpoint` | string | `""` | Backend URL to POST metrics to |
+| `metrics.api_key` | string | `""` | Bearer token for metrics auth |
+| `metrics.timeout` | number | `5000` | Metrics request timeout in ms |
+| `metrics.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
+
+Environment variables override config file values:
+
+- `FFWD_AGENT_GUARD_AUTO_SCAN=1` overrides `auto_scan`
+- `FFWD_METRICS_ENDPOINT` overrides `metrics.endpoint`
+- `FFWD_METRICS_API_KEY` overrides `metrics.api_key`
+- `FFWD_METRICS_TIMEOUT` overrides `metrics.timeout`
+- `FFWD_METRICS_LOG` overrides `metrics.log`
 
 ### Protection Levels
 
@@ -489,16 +526,13 @@ Set the FFWD AgentGuard protection level.
 
 ### How to Set
 
-1. Read `$ARGUMENTS` to get the desired level
-2. Write the config to `~/.ffwd-agent-guard/config.json`:
+1. Read `$ARGUMENTS` to get the desired level (e.g., `config balanced`)
+2. Read current config from `~/.ffwd-agent-guard/config.json`
+3. Update only the `level` field, preserving all other settings
+4. Write the updated config back
+5. Confirm the change to the user
 
-```json
-{"level": "balanced"}
-```
-
-3. Confirm the change to the user
-
-If no level is specified, read and display the current config.
+If no level is specified, read and display the current config (all fields).
 
 ---
 
@@ -563,7 +597,8 @@ If the log file doesn't exist, inform the user that no security events have been
 
 AgentGuard can optionally scan installed skills at session startup. **This is disabled by default** and must be explicitly enabled:
 
-- **Claude Code**: Set environment variable `FFWD_AGENT_GUARD_AUTO_SCAN=1`
+- **Config file**: Set `"auto_scan": true` in `~/.ffwd-agent-guard/config.json`
+- **Claude Code**: Set environment variable `FFWD_AGENT_GUARD_AUTO_SCAN=1` (overrides config file)
 - **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
 
 When enabled, auto-scan operates in **report-only mode**:

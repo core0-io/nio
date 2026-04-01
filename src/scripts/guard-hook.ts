@@ -31,7 +31,7 @@ interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => Record<string, unknown>;
   ClaudeCodeAdapter: new () => unknown;
   evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>) => Promise<HookOutput>;
-  loadConfig: () => { level: string };
+  loadConfig: () => { level: string; auto_scan?: boolean; metrics?: Record<string, unknown> };
 }
 
 // ---------------------------------------------------------------------------

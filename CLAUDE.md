@@ -29,3 +29,30 @@ Scripts in `src/scripts/` compile to `skills/ffwd-agent-guard/scripts/`:
 ```bash
 npm run build
 ```
+
+## Configuration
+
+Runtime config lives at `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+A template with all options is at `config.default.json` in the repo root. Full schema:
+
+```json
+{
+  "level": "balanced",
+  "auto_scan": false,
+  "metrics": {
+    "endpoint": "",
+    "api_key": "",
+    "timeout": 5000,
+    "log": ""
+  }
+}
+```
+
+Environment variables override config file values:
+
+- `FFWD_AGENT_GUARD_HOME` — Config directory (default: `~/.ffwd-agent-guard`)
+- `FFWD_AGENT_GUARD_AUTO_SCAN=1` — Enable auto-scan on session start
+- `FFWD_METRICS_ENDPOINT` — Metrics POST URL
+- `FFWD_METRICS_API_KEY` — Metrics auth token
+- `FFWD_METRICS_TIMEOUT` — Metrics request timeout (ms)
+- `FFWD_METRICS_LOG` — Local metrics JSONL log path

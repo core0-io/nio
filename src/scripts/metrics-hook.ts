@@ -6,16 +6,25 @@ export {};
  * FFWD AgentGuard — Metrics Collection Hook
  *
  * Standalone async hook that captures tool-use telemetry from
- * PreToolUse / PostToolUse events and POSTs it to a backend endpoint.
+ * PreToolUse / PostToolUse events and POSTs it to a backend endpoint
+ * and/or appends it to a local JSONL log file.
  *
  * Completely independent from guard-hook.js — this script never
  * influences allow/deny decisions. It always exits 0.
  *
- * Configuration (environment variables):
- *   FFWD_METRICS_ENDPOINT — Backend URL to POST metrics to (required)
- *   FFWD_METRICS_API_KEY  — Bearer token for auth (optional)
- *   FFWD_METRICS_TIMEOUT  — Request timeout in ms (default: 5000)
+ * Configuration is read from ~/.ffwd-agent-guard/config.json (metrics section).
+ * Environment variables override file values:
+ *   FFWD_METRICS_ENDPOINT  — Backend URL to POST metrics to
+ *   FFWD_METRICS_API_KEY   — Bearer token for auth
+ *   FFWD_METRICS_TIMEOUT   — Request timeout in ms (default: 5000)
+ *   FFWD_METRICS_LOG       — Path to local JSONL log file
+ *
+ * At least one of endpoint or log must be configured,
+ * otherwise the script exits immediately.
  */
+
+import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -38,17 +47,46 @@ interface MetricPayload {
   tool_summary: string;
 }
 
+interface ResolvedMetricsConfig {
+  endpoint: string;
+  api_key: string;
+  timeout: number;
+  log: string;
+  enabled: boolean;
+}
+
+interface AgentGuardModule {
+  loadMetricsConfig: () => ResolvedMetricsConfig;
+}
+
 // ---------------------------------------------------------------------------
-// Config
+// Load config from AgentGuard engine
 // ---------------------------------------------------------------------------
 
-const ENDPOINT = process.env.FFWD_METRICS_ENDPOINT;
-const API_KEY = process.env.FFWD_METRICS_API_KEY;
-const TIMEOUT = Number(process.env.FFWD_METRICS_TIMEOUT) || 5000;
+const agentguardPath = join(
+  import.meta.url.replace('file://', ''),
+  '..', '..', '..', '..', 'dist', 'index.js'
+);
 
-if (!ENDPOINT) {
+let metricsConfig: ResolvedMetricsConfig;
+try {
+  const mod = await import(agentguardPath) as AgentGuardModule;
+  metricsConfig = mod.loadMetricsConfig();
+} catch {
+  try {
+    const mod = // @ts-expect-error fallback to npm package if relative import fails
+      await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
+    metricsConfig = mod.loadMetricsConfig();
+  } catch {
+    process.exit(0);
+  }
+}
+
+if (!metricsConfig!.enabled) {
   process.exit(0);
 }
+
+const { endpoint: ENDPOINT, api_key: API_KEY, timeout: TIMEOUT, log: LOG_PATH } = metricsConfig!;
 
 // ---------------------------------------------------------------------------
 // Read stdin (same protocol as guard-hook.js)
@@ -107,10 +145,25 @@ function buildPayload(input: HookStdinPayload): MetricPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Send metrics
+// Write to local log file
+// ---------------------------------------------------------------------------
+
+function writeToLog(payload: MetricPayload): void {
+  if (!LOG_PATH) return;
+  const dir = dirname(LOG_PATH);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  appendFileSync(LOG_PATH, JSON.stringify(payload) + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// Send metrics to remote endpoint
 // ---------------------------------------------------------------------------
 
 async function sendMetrics(payload: MetricPayload): Promise<void> {
+  if (!ENDPOINT) return;
+
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (API_KEY) {
     headers['Authorization'] = `Bearer ${API_KEY}`;
@@ -120,7 +173,7 @@ async function sendMetrics(payload: MetricPayload): Promise<void> {
   const timer = setTimeout(() => controller.abort(), TIMEOUT);
 
   try {
-    await fetch(ENDPOINT!, {
+    await fetch(ENDPOINT, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -144,9 +197,15 @@ async function main(): Promise<void> {
   const payload = buildPayload(input);
 
   try {
+    writeToLog(payload);
+  } catch {
+    // Best-effort
+  }
+
+  try {
     await sendMetrics(payload);
   } catch {
-    // Metrics are best-effort — never block or fail the hook
+    // Best-effort
   }
 
   process.exit(0);

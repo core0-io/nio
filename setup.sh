@@ -124,8 +124,8 @@ echo "  OK: Scripts installed"
 echo "[4/4] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
 if [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
-  echo '{"level":"balanced"}' > "$FFWD_AGENT_GUARD_DIR/config.json"
-  echo "  OK: Config created (protection level: balanced)"
+  cp "$SCRIPT_DIR/config.default.json" "$FFWD_AGENT_GUARD_DIR/config.json"
+  echo "  OK: Config created from config.default.json (protection level: balanced)"
 else
   echo "  OK: Config already exists (keeping current settings)"
 fi

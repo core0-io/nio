@@ -10,10 +10,14 @@ export {
 } from './openclaw-plugin.js';
 export {
   loadConfig,
+  loadMetricsConfig,
   isSensitivePath,
   shouldDenyAtLevel,
   shouldAskAtLevel,
   writeAuditLog,
   getSkillTrustPolicy,
   isActionAllowedByCapabilities,
+  type AgentGuardConfig,
+  type MetricsConfig,
+  type ResolvedMetricsConfig,
 } from './common.js';

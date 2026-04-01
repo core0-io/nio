@@ -20,15 +20,66 @@ function ensureDir(): void {
 }
 
 // ---------------------------------------------------------------------------
-// Config
+// Config types
 // ---------------------------------------------------------------------------
 
-export function loadConfig(): { level: string } {
+export interface MetricsConfig {
+  endpoint?: string;
+  api_key?: string;
+  timeout?: number;
+  log?: string;
+}
+
+export interface AgentGuardConfig {
+  level: string;
+  auto_scan?: boolean;
+  metrics?: MetricsConfig;
+}
+
+const CONFIG_DEFAULTS: AgentGuardConfig = {
+  level: 'balanced',
+  auto_scan: false,
+};
+
+// ---------------------------------------------------------------------------
+// Config loading
+// ---------------------------------------------------------------------------
+
+export function loadConfig(): AgentGuardConfig {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+    return { ...CONFIG_DEFAULTS, ...raw };
   } catch {
-    return { level: 'balanced' };
+    return { ...CONFIG_DEFAULTS };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Resolved metrics config (file values + env-var overrides)
+// ---------------------------------------------------------------------------
+
+export interface ResolvedMetricsConfig {
+  endpoint: string;
+  api_key: string;
+  timeout: number;
+  log: string;
+  enabled: boolean;
+}
+
+export function loadMetricsConfig(): ResolvedMetricsConfig {
+  const config = loadConfig();
+  const m = config.metrics ?? {};
+
+  const endpoint = process.env.FFWD_METRICS_ENDPOINT ?? m.endpoint ?? '';
+  const api_key = process.env.FFWD_METRICS_API_KEY ?? m.api_key ?? '';
+  const timeout = Number(process.env.FFWD_METRICS_TIMEOUT) || m.timeout || 5000;
+  let log = process.env.FFWD_METRICS_LOG ?? m.log ?? '';
+
+  if (log.startsWith('~/')) {
+    log = join(homedir(), log.slice(2));
+  }
+
+  return { endpoint, api_key, timeout, log, enabled: !!(endpoint || log) };
 }
 
 // ---------------------------------------------------------------------------

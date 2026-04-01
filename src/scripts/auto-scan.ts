@@ -25,12 +25,14 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 // ---------------------------------------------------------------------------
-// Opt-in gate: only run when explicitly enabled
+// Opt-in gate: only run when explicitly enabled (env var or config file)
 // ---------------------------------------------------------------------------
 
-if (process.env.FFWD_AGENT_GUARD_AUTO_SCAN !== '1') {
-  process.exit(0);
-}
+// Defer full gate check until after engine is loaded so we can read config.
+// Quick exit if env var is explicitly set to something other than '1' and
+// no config file could possibly enable it — but we need the engine for that,
+// so just skip if the env var says '1' (fast path).
+const envAutoScan = process.env.FFWD_AGENT_GUARD_AUTO_SCAN;
 
 // ---------------------------------------------------------------------------
 // Load AgentGuard engine
@@ -41,6 +43,11 @@ const agentguardPath = join(
   '..', '..', '..', '..', 'dist', 'index.js'
 );
 
+interface AgentGuardConfig {
+  level: string;
+  auto_scan?: boolean;
+}
+
 interface AgentGuardModule {
   createAgentGuard: (options?: Record<string, unknown>) => {
     scanner: {
@@ -49,6 +56,7 @@ interface AgentGuardModule {
     registry: unknown;
     actionScanner: unknown;
   };
+  loadConfig: () => AgentGuardConfig;
 }
 
 let mod: AgentGuardModule;
@@ -63,7 +71,15 @@ try {
   }
 }
 
-const { createAgentGuard } = mod!;
+const { createAgentGuard, loadConfig } = mod!;
+
+// Check opt-in: env var takes precedence, then config file
+if (envAutoScan !== '1') {
+  const config = loadConfig();
+  if (!config.auto_scan) {
+    process.exit(0);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Config
