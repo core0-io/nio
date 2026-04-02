@@ -52,7 +52,6 @@ export {
   loadConfig,
   resetConfig,
   loadMetricsConfig,
-  detectPlatform,
   type HookAdapter,
   type HookInput,
   type HookOutput,

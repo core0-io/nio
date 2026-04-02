@@ -12,7 +12,6 @@ export {
   loadConfig,
   resetConfig,
   loadMetricsConfig,
-  detectPlatform,
   isSensitivePath,
   shouldDenyAtLevel,
   shouldAskAtLevel,

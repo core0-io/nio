@@ -53,7 +53,6 @@ interface ResolvedMetricsConfig {
 
 interface AgentGuardModule {
   loadMetricsConfig: () => ResolvedMetricsConfig;
-  detectPlatform: () => string;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,18 +62,20 @@ interface AgentGuardModule {
 const __filename = fileURLToPath(import.meta.url);
 const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
 
+const platformIdx = process.argv.indexOf('--platform');
+const platform = platformIdx !== -1 && process.argv[platformIdx + 1]
+  ? process.argv[platformIdx + 1]
+  : 'unknown';
+
 let metricsConfig: ResolvedMetricsConfig;
-let platform = 'unknown';
 try {
   const mod = await import(agentguardPath) as AgentGuardModule;
   metricsConfig = mod.loadMetricsConfig();
-  platform = mod.detectPlatform();
 } catch {
   try {
     const mod = // @ts-expect-error fallback to npm package if relative import fails
       await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
     metricsConfig = mod.loadMetricsConfig();
-    platform = mod.detectPlatform();
   } catch {
     process.exit(0);
   }

@@ -146,17 +146,14 @@ export function shouldAskAtLevel(
 }
 
 // ---------------------------------------------------------------------------
-// Platform detection
+// Platform detection (reads env vars set by the calling agent runtime)
 // ---------------------------------------------------------------------------
 
 export function detectPlatform(): string {
-  if (process.env.CLAUDE_CODE) return 'claude-code';
-  if (process.env.CURSOR_SESSION_ID) return 'cursor';
-  if (process.env.CODEX_SESSION_ID) return 'codex';
   if (process.env.OPENCLAW_STATE_DIR) return 'openclaw';
-  if (existsSync(join(homedir(), '.cursor'))) return 'cursor';
-  if (existsSync(join(homedir(), '.openclaw'))) return 'openclaw';
-  if (existsSync(join(homedir(), '.claude'))) return 'claude-code';
+  if (process.env.CODEX_SESSION_ID) return 'codex';
+  if (process.env.CURSOR_SESSION_ID) return 'cursor';
+  if (process.env.CLAUDE_CODE) return 'claude-code';
   return 'unknown';
 }
 

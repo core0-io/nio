@@ -44,6 +44,7 @@ export class ActionScanner {
     const lookupResult = await this.registry.lookup(actor.skill);
     const capabilities = lookupResult.effective_capabilities;
     const trustLevel = lookupResult.effective_trust_level;
+    const isUserAction = !context.initiating_skill;
 
     // Route to appropriate handler based on action type
     switch (action.type) {
@@ -68,6 +69,9 @@ export class ActionScanner {
 
       case 'read_file':
       case 'write_file':
+        if (isUserAction) {
+          return { decision: 'allow', risk_level: 'low', risk_tags: [], evidence: [] };
+        }
         return this.handleFileOperation(
           action.data as { path: string },
           action.type,

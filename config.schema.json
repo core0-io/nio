@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "FFWD AgentGuard Configuration",
+  "description": "Schema for ~/.ffwd-agent-guard/config.json",
+  "type": "object",
+  "required": [
+    "level"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "level": {
+      "type": "string",
+      "enum": [
+        "strict",
+        "balanced",
+        "permissive"
+      ],
+      "default": "balanced",
+      "description": "Protection level. strict: block all risky actions; balanced: block dangerous, confirm risky; permissive: only block critical threats."
+    },
+    "auto_scan": {
+      "type": "boolean",
+      "default": false,
+      "description": "Scan all installed skills for security vulnerabilities on session start."
+    },
+    "metrics": {
+      "type": "object",
+      "description": "Telemetry/metrics collection settings. Disabled when both endpoint and log are empty.",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "default": "",
+          "description": "Backend URL to POST metric payloads to."
+        },
+        "api_key": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token for metrics endpoint authentication."
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 1,
+          "default": 5000,
+          "description": "HTTP request timeout in milliseconds for metrics POST."
+        },
+        "log": {
+          "type": "string",
+          "default": "",
+          "description": "Path to local JSONL file for metric payloads. Supports ~/ prefix."
+        }
+      }
+    }
+  }
+}

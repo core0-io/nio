@@ -44,7 +44,11 @@ catch {
         process.exit(0);
     }
 }
-const { createAgentGuard, loadConfig, detectPlatform } = mod;
+const { createAgentGuard, loadConfig } = mod;
+const platformIdx = process.argv.indexOf('--platform');
+const platform = platformIdx !== -1 && process.argv[platformIdx + 1]
+    ? process.argv[platformIdx + 1]
+    : 'unknown';
 const config = loadConfig();
 if (!config.auto_scan) {
     process.exit(0);
@@ -116,7 +120,7 @@ async function main() {
             });
             writeAuditLog({
                 timestamp: new Date().toISOString(),
-                platform: detectPlatform(),
+                platform,
                 event: 'auto_scan',
                 skill_name: skill.name,
                 risk_level: result.risk_level,

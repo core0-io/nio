@@ -8,7 +8,7 @@ metadata:
   version: "1.1"
 user-invocable: true
 allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config] [args...]"
+argument-hint: "[scan|action|patrol|trust|report|config|reset] [args...]"
 ---
 
 # FFWD AgentGuard — AI Agent Security Framework
@@ -37,7 +37,8 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
 - **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
 - **`report`** — View recent security events from the audit log
-- **`config <strict|balanced|permissive>`** — Set protection level
+- **`config [show|<level>]`** — View or set protection level
+- **`reset`** — Reset config to defaults
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
 
@@ -479,6 +480,13 @@ If scripts are not available, help the user inspect `data/registry.json` directl
 
 View or update the FFWD AgentGuard configuration.
 
+### Routing
+
+| Input | Action |
+|-------|--------|
+| `config` or `config show` | Run `node scripts/config-cli.js show` |
+| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.json`, update only the `level` field (preserve all other settings), write back, confirm to user |
+
 ### Config File
 
 All configuration is stored in `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
@@ -518,15 +526,16 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 | `balanced` | Block dangerous, confirm risky — default level, good for daily use |
 | `permissive` | Only block critical threats — for experienced users who want minimal friction |
 
-### Routing
+---
 
-Parse `$ARGUMENTS` after `config` and run the matching action:
+## Subcommand: reset
 
-| Input | Action |
-|-------|--------|
-| `config` or `config show` | Run `node scripts/config-cli.js show` |
-| `config reset` | Run `node scripts/config-cli.js reset` |
-| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.json`, update only the `level` field (preserve all other settings), write back, confirm to user |
+Reset `~/.ffwd-agent-guard/config.json` to factory defaults (overwrites with `config.default.json`).
+
+Run:
+```bash
+node scripts/config-cli.js reset
+```
 
 ---
 
