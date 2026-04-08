@@ -9,6 +9,7 @@ export const MetricsConfigSchema = z.object({
   api_key: z.string().optional(),
   timeout: z.number().positive().optional(),
   log: z.string().optional(),
+  protocol: z.enum(['http', 'grpc']).optional(),
 });
 
 export const AgentGuardConfigSchema = z.object({
@@ -29,6 +30,7 @@ export interface ResolvedMetricsConfig {
   api_key: string;
   timeout: number;
   log: string;
+  protocol: 'http' | 'grpc';
   enabled: boolean;
 }
 

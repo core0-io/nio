@@ -2,9 +2,10 @@
   "level": "balanced",
   "auto_scan": false,
   "metrics": {
-    "endpoint": "",
+    "endpoint": "http://localhost:4318/v1/traces",
     "api_key": "",
     "timeout": 5000,
+    "protocol": "http",
     "log": "~/.ffwd-agent-guard/metrics.jsonl"
   }
 }

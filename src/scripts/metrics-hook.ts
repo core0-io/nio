@@ -6,8 +6,13 @@ export {};
  * FFWD AgentGuard — Metrics Collection Hook
  *
  * Standalone async hook that captures tool-use telemetry from
- * PreToolUse / PostToolUse events and exports it as OpenTelemetry
- * spans via OTLP HTTP and/or appends it to a local JSONL log file.
+ * PreToolUse / PostToolUse events and exports it via two OTEL signals:
+ *
+ *   - Traces (spans): per-event detail with full context attributes
+ *   - Metrics (counter): agentguard.tool_use.count aggregated by
+ *     tool_name, event, and platform
+ *
+ * Also appends each event to a local JSONL log file.
  *
  * Spans from the same session share a deterministic trace ID derived
  * from the session_id, so they appear grouped in any OTEL backend.
@@ -24,9 +29,14 @@ import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { trace, context, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
+import { trace, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
+import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
+import { OTLPMetricExporter as OTLPMetricExporterHttp } from '@opentelemetry/exporter-metrics-otlp-http';
+import { OTLPMetricExporter as OTLPMetricExporterGrpc } from '@opentelemetry/exporter-metrics-otlp-grpc';
+import { Metadata } from '@grpc/grpc-js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -55,6 +65,7 @@ interface ResolvedMetricsConfig {
   api_key: string;
   timeout: number;
   log: string;
+  protocol: 'http' | 'grpc';
   enabled: boolean;
 }
 
@@ -92,7 +103,7 @@ if (!metricsConfig!.enabled) {
   process.exit(0);
 }
 
-const { endpoint: ENDPOINT, api_key: API_KEY, timeout: TIMEOUT, log: LOG_PATH } = metricsConfig!;
+const { endpoint: ENDPOINT, api_key: API_KEY, timeout: TIMEOUT, log: LOG_PATH, protocol: PROTOCOL } = metricsConfig!;
 
 // ---------------------------------------------------------------------------
 // Read stdin (same protocol as guard-hook.js)
@@ -168,9 +179,9 @@ function writeToLog(payload: MetricPayload): void {
 // OTEL trace pipeline
 // ---------------------------------------------------------------------------
 
-let otelProvider: NodeTracerProvider | null = null;
+let traceProvider: NodeTracerProvider | null = null;
 
-function initOtelProvider(): NodeTracerProvider | null {
+function initTraceProvider(): NodeTracerProvider | null {
   if (!ENDPOINT) return null;
 
   const headers: Record<string, string> = {};
@@ -178,11 +189,24 @@ function initOtelProvider(): NodeTracerProvider | null {
     headers['Authorization'] = `Bearer ${API_KEY}`;
   }
 
-  const exporter = new OTLPTraceExporter({
-    url: ENDPOINT,
-    headers,
-    timeoutMillis: TIMEOUT,
-  });
+  let exporter;
+  if (PROTOCOL === 'grpc') {
+    const grpcMetadata = new Metadata();
+    for (const [k, v] of Object.entries(headers)) {
+      grpcMetadata.set(k, v);
+    }
+    exporter = new OTLPTraceExporterGrpc({
+      url: ENDPOINT,
+      metadata: grpcMetadata,
+      timeoutMillis: TIMEOUT,
+    });
+  } else {
+    exporter = new OTLPTraceExporterHttp({
+      url: ENDPOINT,
+      headers,
+      timeoutMillis: TIMEOUT,
+    });
+  }
 
   const provider = new NodeTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(exporter)],
@@ -200,8 +224,8 @@ function sessionToTraceId(sessionId: string): string {
   return createHash('md5').update(sessionId).digest('hex');
 }
 
-async function sendMetricsViaOtel(payload: MetricPayload): Promise<void> {
-  if (!otelProvider) return;
+async function exportTrace(payload: MetricPayload): Promise<void> {
+  if (!traceProvider) return;
 
   const tracer = trace.getTracer('agentguard-metrics', '1.0.0');
 
@@ -235,14 +259,81 @@ async function sendMetricsViaOtel(payload: MetricPayload): Promise<void> {
 
   span.end();
 
-  await otelProvider.forceFlush();
+  await traceProvider.forceFlush();
+}
+
+// ---------------------------------------------------------------------------
+// OTEL metrics pipeline
+// ---------------------------------------------------------------------------
+
+let metricProvider: MeterProvider | null = null;
+
+function deriveMetricsEndpoint(tracesEndpoint: string): string {
+  return tracesEndpoint.replace(/\/v1\/traces\/?$/, '/v1/metrics');
+}
+
+function initMetricProvider(): MeterProvider | null {
+  if (!ENDPOINT) return null;
+
+  const headers: Record<string, string> = {};
+  if (API_KEY) {
+    headers['Authorization'] = `Bearer ${API_KEY}`;
+  }
+
+  const metricsUrl = PROTOCOL === 'grpc' ? ENDPOINT : deriveMetricsEndpoint(ENDPOINT);
+
+  let exporter;
+  if (PROTOCOL === 'grpc') {
+    const grpcMetadata = new Metadata();
+    for (const [k, v] of Object.entries(headers)) {
+      grpcMetadata.set(k, v);
+    }
+    exporter = new OTLPMetricExporterGrpc({
+      url: metricsUrl,
+      metadata: grpcMetadata,
+      timeoutMillis: TIMEOUT,
+    });
+  } else {
+    exporter = new OTLPMetricExporterHttp({
+      url: metricsUrl,
+      headers,
+      timeoutMillis: TIMEOUT,
+    });
+  }
+
+  return new MeterProvider({
+    readers: [
+      new PeriodicExportingMetricReader({
+        exporter,
+        exportIntervalMillis: 1000,
+      }),
+    ],
+  });
+}
+
+async function exportMetrics(payload: MetricPayload): Promise<void> {
+  if (!metricProvider) return;
+
+  const meter = metricProvider.getMeter('agentguard-metrics', '1.0.0');
+  const counter = meter.createCounter('agentguard.tool_use.count', {
+    description: 'Number of tool use events captured by AgentGuard',
+  });
+
+  counter.add(1, {
+    'agentguard.tool_name': payload.tool_name,
+    'agentguard.event': payload.event,
+    'agentguard.platform': payload.platform,
+  });
+
+  await metricProvider.forceFlush();
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
-otelProvider = initOtelProvider();
+traceProvider = initTraceProvider();
+metricProvider = initMetricProvider();
 
 async function main(): Promise<void> {
   const input = await readStdin();
@@ -254,14 +345,20 @@ async function main(): Promise<void> {
 
   try {
     writeToLog(payload);
-  } catch {
-    // Best-effort
+  } catch (err) {
+    console.error('[agentguard] Failed to write JSONL log:', err);
   }
 
   try {
-    await sendMetricsViaOtel(payload);
-  } catch {
-    // Best-effort
+    await exportTrace(payload);
+  } catch (err) {
+    console.error('[agentguard] Failed to export trace:', err);
+  }
+
+  try {
+    await exportMetrics(payload);
+  } catch (err) {
+    console.error('[agentguard] Failed to export metrics:', err);
   }
 
   process.exit(0);

@@ -31,18 +31,24 @@
         "endpoint": {
           "type": "string",
           "default": "",
-          "description": "Backend URL to POST metric payloads to."
+          "description": "OTLP endpoint URL for exporting metric spans."
         },
         "api_key": {
           "type": "string",
           "default": "",
-          "description": "Bearer token for metrics endpoint authentication."
+          "description": "Bearer token for OTLP endpoint authentication."
         },
         "timeout": {
           "type": "number",
           "minimum": 1,
           "default": 5000,
-          "description": "HTTP request timeout in milliseconds for metrics POST."
+          "description": "OTLP export timeout in milliseconds."
+        },
+        "protocol": {
+          "type": "string",
+          "enum": ["http", "grpc"],
+          "default": "http",
+          "description": "OTLP transport protocol. 'http' uses HTTP/JSON on port 4318, 'grpc' uses gRPC on port 4317."
         },
         "log": {
           "type": "string",
