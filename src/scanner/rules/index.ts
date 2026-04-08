@@ -23,6 +23,28 @@ export const ALL_RULES: ScanRule[] = [
 ];
 
 /**
+ * Rule modules keyed by config module name
+ */
+export const RULE_MODULES: Record<string, ScanRule[]> = {
+  shell_exec:       SHELL_EXEC_RULES,
+  remote_loader:    REMOTE_LOADER_RULES,
+  secrets:          SECRETS_RULES,
+  obfuscation:      OBFUSCATION_RULES,
+  prompt_injection: PROMPT_INJECTION_RULES,
+  exfiltration:     EXFILTRATION_RULES,
+  trojan:           TROJAN_RULES,
+};
+
+/**
+ * Mapping from RiskTag → module name, for O(1) lookup
+ */
+export const RULE_TO_MODULE: Partial<Record<RiskTag, string>> = Object.fromEntries(
+  Object.entries(RULE_MODULES).flatMap(([moduleKey, rules]) =>
+    rules.map((r) => [r.id, moduleKey])
+  )
+) as Partial<Record<RiskTag, string>>;
+
+/**
  * Get rules by severity
  */
 export function getRulesBySeverity(severity: 'low' | 'medium' | 'high' | 'critical'): ScanRule[] {

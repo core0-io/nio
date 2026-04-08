@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { load as yamlLoad } from 'js-yaml';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { HookInput } from './types.js';
@@ -16,7 +17,7 @@ export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './c
 const __filename = fileURLToPath(import.meta.url);
 const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
 const CONFIG_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json');
-const CONFIG_DEFAULT_PATH = join(dirname(__filename), '..', '..', 'config.default.json');
+const CONFIG_DEFAULT_PATH = join(dirname(__filename), '..', '..', 'config.default.yaml');
 const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
@@ -26,7 +27,7 @@ function ensureDir(): void {
 }
 
 function loadDefaults(): AgentGuardConfig {
-  const raw = JSON.parse(readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
+  const raw = yamlLoad(readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
   return validateConfig(raw, CONFIG_DEFAULT_PATH);
 }
 
@@ -38,7 +39,7 @@ const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
 
 export function resetConfig(): AgentGuardConfig {
   ensureDir();
-  writeFileSync(CONFIG_PATH, readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
+  writeFileSync(CONFIG_PATH, JSON.stringify(CONFIG_DEFAULTS, null, 2) + '\n');
   return { ...CONFIG_DEFAULTS };
 }
 

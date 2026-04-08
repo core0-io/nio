@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';
 import { ActionScanner } from './action/index.js';
+import { loadConfig } from './adapters/index.js';
 import type { SkillIdentity, CapabilityModel } from './types/skill.js';
 import type { ActionEnvelope } from './types/action.js';
 import type { TrustLevel } from './types/registry.js';
@@ -80,7 +81,8 @@ function containsProtoKeys(obj: unknown): boolean {
  * Create and configure the MCP server
  */
 function createServer(options?: { registryPath?: string }): Server {
-  scanner = new SkillScanner();
+  const config = loadConfig();
+  scanner = new SkillScanner({ extraPatterns: config.rules });
   registry = new SkillRegistry({ filePath: options?.registryPath });
   actionScanner = new ActionScanner({ registry });
 

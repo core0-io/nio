@@ -23,6 +23,20 @@
       "default": false,
       "description": "Scan all installed skills for security vulnerabilities on session start."
     },
+    "rules": {
+      "type": "object",
+      "description": "Additional regex patterns to inject into built-in scan rules, keyed by rule module name.",
+      "additionalProperties": false,
+      "properties": {
+        "shell_exec":       { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for SHELL_EXEC and AUTO_UPDATE rules." },
+        "remote_loader":    { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for REMOTE_LOADER rule." },
+        "secrets":          { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for secrets rules (READ_ENV_SECRETS, PRIVATE_KEY_PATTERN, READ_SSH_KEYS, READ_KEYCHAIN)." },
+        "obfuscation":      { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for OBFUSCATION rule." },
+        "prompt_injection": { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for PROMPT_INJECTION rule." },
+        "exfiltration":     { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for NET_EXFIL_UNRESTRICTED and WEBHOOK_EXFIL rules." },
+        "trojan":           { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING rules." }
+      }
+    },
     "collector": {
       "type": "object",
       "description": "Telemetry collection settings (metrics + traces). Disabled when both endpoint and log are empty.",

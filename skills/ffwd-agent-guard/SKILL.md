@@ -486,7 +486,7 @@ View or update the FFWD AgentGuard configuration.
 ### Config File
 
 All configuration is stored in `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
-A template with all options is available at `config.default.json` in the repo root.
+A template with all options is available at `config.default.yaml` in the repo root.
 
 Full schema:
 
@@ -526,7 +526,7 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 
 ## Subcommand: reset
 
-Reset `~/.ffwd-agent-guard/config.json` to factory defaults (overwrites with `config.default.json`).
+Reset `~/.ffwd-agent-guard/config.json` to factory defaults (from `config.default.yaml`).
 
 Run:
 ```bash

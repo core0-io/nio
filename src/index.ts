@@ -67,6 +67,7 @@ export {
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';
+import { loadConfig } from './adapters/index.js';
 import { ActionScanner } from './action/index.js';
 import type { CapabilityModel } from './types/skill.js';
 
@@ -83,8 +84,10 @@ export function createAgentGuard(options?: {
     filePath: options?.registryPath,
   });
 
+  const config = loadConfig();
   const scanner = new SkillScanner({
     useExternalScanner: options?.useExternalScanner ?? true,
+    extraPatterns: config.rules,
   });
 
   const actionScanner = new ActionScanner({

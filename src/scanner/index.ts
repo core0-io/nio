@@ -10,7 +10,7 @@ import type {
 } from '../types/scanner.js';
 import type { SkillIdentity } from '../types/skill.js';
 import { walkDirectory, isDirectory, pathExists } from './file-walker.js';
-import { ALL_RULES, getRulesForExtension } from './rules/index.js';
+import { ALL_RULES, getRulesForExtension, RULE_TO_MODULE } from './rules/index.js';
 
 /**
  * Scanner options
@@ -22,6 +22,8 @@ export interface ScannerOptions {
   deep?: boolean;
   /** Custom rules to add */
   additionalRules?: ScanRule[];
+  /** Extra regex pattern strings injected into existing rule modules from config */
+  extraPatterns?: Partial<Record<string, string[]>>;
 }
 
 /**
@@ -189,6 +191,34 @@ export class SkillScanner {
   }
 
   /**
+   * Inject extra patterns from config into matching rules.
+   * Each rule is looked up by module key via RULE_TO_MODULE.
+   * Invalid regex strings are silently skipped.
+   */
+  private buildEffectiveRules(rules: ScanRule[]): ScanRule[] {
+    const extra = this.options.extraPatterns;
+    if (!extra || Object.keys(extra).length === 0) return rules;
+
+    return rules.map((rule) => {
+      const moduleKey = RULE_TO_MODULE[rule.id];
+      if (!moduleKey) return rule;
+      const strs = extra[moduleKey];
+      if (!strs || strs.length === 0) return rule;
+
+      const compiled: RegExp[] = [];
+      for (const s of strs) {
+        try {
+          compiled.push(new RegExp(s));
+        } catch {
+          // skip invalid pattern
+        }
+      }
+      if (compiled.length === 0) return rule;
+      return { ...rule, patterns: [...rule.patterns, ...compiled] };
+    });
+  }
+
+  /**
    * Extract fenced code blocks from Markdown content.
    * Returns the code block contents joined, preserving line positions for reporting.
    */
@@ -281,7 +311,7 @@ export class SkillScanner {
     const riskTags: Set<RiskTag> = new Set();
 
     for (const file of files) {
-      const rules = getRulesForExtension(file.extension);
+      const rules = this.buildEffectiveRules(getRulesForExtension(file.extension));
 
       // For Markdown files: only scan inside fenced code blocks
       const contentToScan = file.extension === '.md'
@@ -293,7 +323,7 @@ export class SkillScanner {
       // Base64 decode pass: extract encoded payloads and re-scan
       const decodedPayloads = this.extractAndDecodeBase64(file.content);
       if (decodedPayloads.length > 0) {
-        const allRules = [...ALL_RULES, ...(this.options.additionalRules || [])];
+        const allRules = this.buildEffectiveRules([...ALL_RULES, ...(this.options.additionalRules || [])]);
         for (const decoded of decodedPayloads) {
           this.scanContent(decoded, allRules, file.relativePath, riskTags, evidence, 'decoded_from:base64');
         }

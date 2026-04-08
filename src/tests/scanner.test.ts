@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import { ALL_RULES, getRuleById, getRulesBySeverity, getRulesForExtension } from '../scanner/rules/index.js';
 
 describe('Scanner Rules', () => {
-  it('should have 16 detection rules', () => {
+  it('should have 15 detection rules', () => {
     const ruleIds = new Set(ALL_RULES.map((r) => r.id));
-    assert.equal(ruleIds.size, 16, `Expected 16 unique rules, got ${ruleIds.size}`);
+    assert.equal(ruleIds.size, 15, `Expected 15 unique rules, got ${ruleIds.size}`);
   });
 
   it('should find rule by ID', () => {

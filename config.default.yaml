@@ -1,0 +1,51 @@
+# Protection level: strict | balanced | permissive
+#   strict      — block all risky actions (deny + confirm)
+#   balanced    — block dangerous, confirm on risky (default)
+#   permissive  — only block critical threats
+level: balanced
+
+# Scan all installed skills for security vulnerabilities on session start.
+auto_scan: false
+
+# Additional regex patterns injected into built-in scan rules.
+# Keys are rule module names; values are arrays of regex pattern strings.
+# All rules within the named module receive the extra patterns.
+#
+# Modules and the rules they cover:
+#   shell_exec       — SHELL_EXEC, AUTO_UPDATE
+#   remote_loader    — REMOTE_LOADER
+#   secrets          — READ_ENV_SECRETS, PRIVATE_KEY_PATTERN, READ_SSH_KEYS, READ_KEYCHAIN
+#   obfuscation      — OBFUSCATION
+#   prompt_injection — PROMPT_INJECTION
+#   exfiltration     — NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL
+#   trojan           — TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
+#
+# Example:
+#   shell_exec:
+#     - "my_unsafe_exec\\("
+#   prompt_injection:
+#     - "override_all_rules"
+rules:
+  shell_exec: []
+  remote_loader: []
+  secrets: []
+  obfuscation: []
+  prompt_injection: []
+  exfiltration: []
+  trojan: []
+
+# Telemetry collection settings (metrics + traces).
+# Disabled when both endpoint and log are empty.
+collector:
+  # OTLP collector base URL. /v1/traces and /v1/metrics are appended automatically.
+  endpoint: "http://localhost:4318"
+  # Bearer token for OTLP endpoint authentication.
+  api_key: ""
+  # OTLP export timeout in milliseconds.
+  timeout: 5000
+  # OTLP transport protocol: http | grpc
+  #   http — HTTP/JSON on port 4318
+  #   grpc — gRPC on port 4317
+  protocol: http
+  # Path to local JSONL file for metric payloads. Supports ~/ prefix.
+  log: "~/.ffwd-agent-guard/metrics.jsonl"

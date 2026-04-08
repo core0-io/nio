@@ -33,7 +33,7 @@ npm run build
 ## Configuration
 
 Runtime config lives at `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
-A template with all options is at `config.default.json` in the repo root. Full schema:
+A template with all options is at `config.default.yaml` in the repo root. Full schema:
 
 ```json
 {

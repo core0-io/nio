@@ -12,10 +12,23 @@ export const MetricsConfigSchema = z.object({
   protocol: z.enum(['http', 'grpc']).optional(),
 });
 
+const RulesPatternsSchema = z.object({
+  shell_exec:       z.array(z.string()).optional(),
+  remote_loader:    z.array(z.string()).optional(),
+  secrets:          z.array(z.string()).optional(),
+  obfuscation:      z.array(z.string()).optional(),
+  prompt_injection: z.array(z.string()).optional(),
+  exfiltration:     z.array(z.string()).optional(),
+  trojan:           z.array(z.string()).optional(),
+});
+
+export type RulesPatterns = z.infer<typeof RulesPatternsSchema>;
+
 export const AgentGuardConfigSchema = z.object({
   level: z.enum(['strict', 'balanced', 'permissive']),
   auto_scan: z.boolean().optional(),
   collector: MetricsConfigSchema.optional(),
+  rules: RulesPatternsSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

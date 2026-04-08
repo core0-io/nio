@@ -331,8 +331,9 @@ export function registerOpenClawPlugin(
   options: OpenClawPluginOptions = {}
 ): void {
   const adapter = new OpenClawAdapter();
-  const config = options.level ? { level: options.level } : loadConfig();
-  const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false });
+  const config = loadConfig();
+  if (options.level) config.level = options.level as typeof config.level;
+  const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false, extraPatterns: config.rules });
   const trustRegistry = options.registry ?? new SkillRegistry();
 
   // Simple logger
