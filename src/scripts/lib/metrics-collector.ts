@@ -8,11 +8,11 @@ export {};
 export const METRICS_SCHEMA = {
   toolUseCount: {
     name: 'agentguard.tool_use.count',
-    description: 'Number of tool invocations captured by AgentGuard',
+    description: 'Number of tool invocations captured by AgentGuard (includes Task events)',
     unit: '{invocations}',
     labels: {
-      tool_name: 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, etc.)',
-      event: 'Hook event name (PreToolUse, PostToolUse)',
+      tool_name: 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, Task, etc.)',
+      event: 'Hook event name (PreToolUse, PostToolUse, TaskCreated, TaskCompleted)',
       platform: 'Runtime platform identifier passed via --platform argument',
     },
   },

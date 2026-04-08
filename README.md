@@ -378,6 +378,59 @@ const scanResult = getPluginScanResult('my-browser-plugin');
 
 </details>
 
+## Telemetry (OTEL Collector)
+
+AgentGuard captures agent activity as OpenTelemetry metrics and traces via an async collector hook. Configure via `~/.ffwd-agent-guard/config.json`.
+
+### Metrics
+
+| Metric                      | Type    | Labels                        | Description                                                                        |
+|-----------------------------|---------|-------------------------------|------------------------------------------------------------------------------------|
+| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` | Tool invocations captured (PreToolUse / PostToolUse / TaskCreated / TaskCompleted) |
+| `agentguard.turn.count`     | Counter | `platform`                    | Conversation turns completed (Stop / SubagentStop events)                          |
+
+**Metric labels:**
+
+| Label                    | Values                                                      | Description                                          |
+|--------------------------|-------------------------------------------------------------|------------------------------------------------------|
+| `agentguard.tool_name`   | `Bash`, `Write`, `Edit`, `WebFetch`, `WebSearch`, `Task`, … | Name of the tool or `Task` for task events           |
+| `agentguard.event`       | `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted` | Hook event that triggered the record                 |
+| `agentguard.platform`    | e.g. `claude-code`                                          | Runtime platform passed via `--platform`             |
+
+### Traces
+
+One OTEL trace per conversation turn. Spans are emitted as children of the turn root.
+
+| Span name      | Trigger                          | Attributes                                                              |
+|----------------|----------------------------------|-------------------------------------------------------------------------|
+| `turn:<N>`     | `Stop` / `SubagentStop`          | `session_id`, `turn_number`, `platform`, `cwd`                          |
+| `tool:<name>`  | `PreToolUse` → `PostToolUse`     | `tool_name`, `tool_summary`, `session_id`, `turn_number`, `platform`, `cwd` |
+| `task:execute` | `TaskCreated` → `TaskCompleted`  | `task_id`, `task_summary`, `session_id`, `turn_number`, `platform`, `cwd`   |
+
+**Span attributes:**
+
+| Attribute                    | Description                                                        |
+|------------------------------|--------------------------------------------------------------------|
+| `agentguard.session_id`      | Claude Code session identifier                                     |
+| `agentguard.turn_number`     | Monotonically increasing turn counter within the session           |
+| `agentguard.platform`        | Runtime platform                                                   |
+| `agentguard.cwd`             | Working directory at time of event                                 |
+| `agentguard.tool_name`       | Tool name (tool spans only)                                        |
+| `agentguard.tool_summary`    | First 300 chars of tool input (command, file path, URL, etc.)      |
+| `agentguard.task_id`         | Task identifier from `TaskCreated` payload                         |
+| `agentguard.task_summary`    | First 300 chars of task prompt                                     |
+
+### Hook events captured
+
+| Hook event      | Data captured                                                                              |
+|-----------------|--------------------------------------------------------------------------------------------|
+| `PreToolUse`    | `session_id`, `tool_name`, `tool_use_id`, `tool_input`, `cwd`, `transcript_path`          |
+| `PostToolUse`   | `session_id`, `tool_name`, `tool_use_id`, `tool_response` (`output`, `error`, `interrupted`), `cwd` |
+| `TaskCreated`   | `session_id`, `task_id`, `task_input.prompt`, `cwd`, `transcript_path`                    |
+| `TaskCompleted` | `session_id`, `task_id`, `task_output`, `cwd`                                              |
+| `Stop`          | `session_id`, `stop_reason`, `cwd`                                                         |
+| `SubagentStop`  | `session_id`, `stop_reason`, `cwd`                                                         |
+
 ## Documentation
 
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference

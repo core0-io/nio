@@ -34,6 +34,8 @@ import {
   ensureTurn,
   recordPreToolUse,
   recordPostToolUse,
+  recordPreTaskToolUse,
+  recordPostTaskToolUse,
   endTurn,
 } from './lib/traces-collector.js';
 
@@ -42,14 +44,26 @@ import {
 // ---------------------------------------------------------------------------
 
 interface HookStdinPayload {
+  // Common fields (all events)
   hook_event_name?: string;
+  session_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  // PreToolUse / PostToolUse
   tool_name?: string;
   tool_use_id?: string;
   tool_input?: Record<string, unknown>;
-  tool_response?: unknown;
-  session_id?: string;
-  cwd?: string;
+  tool_response?: {
+    output?: string;
+    error?: string;
+    interrupted?: boolean;
+  };
+  // Stop / SubagentStop
   stop_reason?: string;
+  // TaskCreated / TaskCompleted
+  task_id?: string;
+  task_input?: { prompt?: string; [key: string]: unknown };
+  task_output?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,6 +160,7 @@ async function main(): Promise<void> {
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
+  const transcriptPath = input.transcript_path ?? null;
   const toolInput = input.tool_input ?? {};
 
   writeToLog({
@@ -155,6 +170,7 @@ async function main(): Promise<void> {
     tool_name: toolName,
     session_id: sessionId,
     cwd,
+    ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
     tool_summary: toolName ? toolSummary(toolName, toolInput) : undefined,
   });
 
@@ -182,6 +198,51 @@ async function main(): Promise<void> {
 
       if (meterProvider) {
         await recordToolUse(meterProvider, toolName, event, platform);
+      }
+
+    } else if (event === 'TaskCreated') {
+      const taskId = input.task_id ?? spanKey(input);
+      const prompt = input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {});
+      const summary = (prompt as string).slice(0, 300);
+
+      writeToLog({
+        timestamp: new Date().toISOString(),
+        platform,
+        event,
+        task_id: taskId,
+        session_id: sessionId,
+        cwd,
+        task_summary: summary,
+      });
+
+      if (tracerProvider) {
+        const state = ensureTurn(config, sessionId);
+        recordPreTaskToolUse(config, state, taskId, summary);
+      }
+
+      if (meterProvider) {
+        await recordToolUse(meterProvider, 'Task', event, platform);
+      }
+
+    } else if (event === 'TaskCompleted') {
+      const taskId = input.task_id ?? spanKey(input);
+
+      writeToLog({
+        timestamp: new Date().toISOString(),
+        platform,
+        event,
+        task_id: taskId,
+        session_id: sessionId,
+        cwd,
+      });
+
+      if (tracerProvider) {
+        const state = ensureTurn(config, sessionId);
+        await recordPostTaskToolUse(config, tracerProvider, state, taskId, platform, cwd);
+      }
+
+      if (meterProvider) {
+        await recordToolUse(meterProvider, 'Task', event, platform);
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop') {
