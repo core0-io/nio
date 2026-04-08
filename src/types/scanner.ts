@@ -43,7 +43,6 @@ export type RiskTag =
   | 'PROMPT_INJECTION'
   // Hardcoded secrets
   | 'PRIVATE_KEY_PATTERN'
-  | 'MNEMONIC_PATTERN'
   // Trojan distribution
   | 'TROJAN_DISTRIBUTION'
   | 'SUSPICIOUS_PASTE_URL'

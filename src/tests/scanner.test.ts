@@ -36,7 +36,7 @@ describe('Scanner Rules', () => {
 
   it('should have CRITICAL rules for key security threats', () => {
     const criticalIds = ['AUTO_UPDATE', 'REMOTE_LOADER', 'READ_SSH_KEYS', 'READ_KEYCHAIN',
-      'PRIVATE_KEY_PATTERN', 'MNEMONIC_PATTERN', 'PROMPT_INJECTION', 'WEBHOOK_EXFIL'];
+      'PRIVATE_KEY_PATTERN', 'PROMPT_INJECTION', 'WEBHOOK_EXFIL'];
 
     for (const id of criticalIds) {
       const rule = getRuleById(id as any);

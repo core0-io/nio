@@ -2,51 +2,14 @@
  * Sensitive data patterns for detection
  */
 
-// BIP-39 English wordlist (first 100 words for pattern matching)
-const BIP39_WORDS = [
-  'abandon', 'ability', 'able', 'about', 'above', 'absent', 'absorb', 'abstract',
-  'absurd', 'abuse', 'access', 'accident', 'account', 'accuse', 'achieve', 'acid',
-  'acoustic', 'acquire', 'across', 'act', 'action', 'actor', 'actress', 'actual',
-  'adapt', 'add', 'addict', 'address', 'adjust', 'admit', 'adult', 'advance',
-  'advice', 'aerobic', 'affair', 'afford', 'afraid', 'again', 'age', 'agent',
-  'agree', 'ahead', 'aim', 'air', 'airport', 'aisle', 'alarm', 'album',
-  'alcohol', 'alert', 'alien', 'all', 'alley', 'allow', 'almost', 'alone',
-  'alpha', 'already', 'also', 'alter', 'always', 'amateur', 'amazing', 'among',
-  'amount', 'amused', 'analyst', 'anchor', 'ancient', 'anger', 'angle', 'angry',
-  'animal', 'ankle', 'announce', 'annual', 'another', 'answer', 'antenna', 'antique',
-  'anxiety', 'any', 'apart', 'apology', 'appear', 'apple', 'approve', 'april',
-  'arch', 'arctic', 'area', 'arena', 'argue', 'arm', 'armed', 'armor',
-  'army', 'around', 'arrange', 'arrest', 'arrive', 'arrow', 'art', 'artefact',
-  'artist', 'artwork', 'ask', 'aspect', 'assault', 'asset', 'assist', 'assume',
-  'asthma', 'athlete', 'atom', 'attack', 'attend', 'attitude', 'attract', 'auction',
-  'audit', 'august', 'aunt', 'author', 'auto', 'autumn', 'average', 'avocado',
-  'avoid', 'awake', 'aware', 'away', 'awesome', 'awful', 'awkward', 'axis',
-  'baby', 'bachelor', 'bacon', 'badge', 'bag', 'balance', 'balcony', 'ball',
-  'bamboo', 'banana', 'banner', 'bar', 'barely', 'bargain', 'barrel', 'base',
-  'basic', 'basket', 'battle', 'beach', 'bean', 'beauty', 'because', 'become',
-  'beef', 'before', 'begin', 'behave', 'behind', 'believe', 'below', 'belt',
-  'bench', 'benefit', 'best', 'betray', 'better', 'between', 'beyond', 'bicycle',
-  'bid', 'bike', 'bind', 'biology', 'bird', 'birth', 'bitter', 'black',
-  'blade', 'blame', 'blanket', 'blast', 'bleak', 'bless', 'blind', 'blood',
-  'blossom', 'blouse', 'blue', 'blur', 'blush', 'board', 'boat', 'body',
-].join('|');
-
 /**
  * Sensitive data patterns
  */
 export const SENSITIVE_PATTERNS = {
   /**
-   * Ethereum private key (64 hex characters with 0x prefix)
+   * Hex-encoded private key (64 hex characters with 0x prefix)
    */
   PRIVATE_KEY: /0x[a-fA-F0-9]{64}/g,
-
-  /**
-   * Mnemonic/seed phrase (12, 15, 18, 21, or 24 words)
-   */
-  MNEMONIC: new RegExp(
-    `\\b(${BIP39_WORDS})\\b(\\s+\\b(${BIP39_WORDS})\\b){11,23}`,
-    'gi'
-  ),
 
   /**
    * API key/secret patterns

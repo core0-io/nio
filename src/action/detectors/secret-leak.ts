@@ -20,7 +20,6 @@ export interface SecretLeakResult {
  */
 const SECRET_PRIORITY: Record<string, number> = {
   PRIVATE_KEY: 100,
-  MNEMONIC: 100,
   SSH_KEY: 90,
   AWS_SECRET: 80,
   AWS_KEY: 70,
@@ -79,17 +78,15 @@ export function detectSecretLeak(content: string): SecretLeakResult {
 }
 
 /**
- * Check if content contains private keys or mnemonics
+ * Check if content contains critical secrets (private keys, SSH keys)
  * These are always critical and should be blocked
  */
 export function containsCriticalSecrets(content: string): boolean {
   SENSITIVE_PATTERNS.PRIVATE_KEY.lastIndex = 0;
-  SENSITIVE_PATTERNS.MNEMONIC.lastIndex = 0;
   SENSITIVE_PATTERNS.SSH_KEY.lastIndex = 0;
 
   return (
     SENSITIVE_PATTERNS.PRIVATE_KEY.test(content) ||
-    SENSITIVE_PATTERNS.MNEMONIC.test(content) ||
     SENSITIVE_PATTERNS.SSH_KEY.test(content)
   );
 }
@@ -99,8 +96,7 @@ export function containsCriticalSecrets(content: string): boolean {
  */
 export function getSecretTypeDescription(type: string): string {
   const descriptions: Record<string, string> = {
-    PRIVATE_KEY: 'Ethereum private key',
-    MNEMONIC: 'Wallet seed phrase / mnemonic',
+    PRIVATE_KEY: 'Hex-encoded private key',
     SSH_KEY: 'SSH private key',
     AWS_KEY: 'AWS access key ID',
     AWS_SECRET: 'AWS secret access key',

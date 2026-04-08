@@ -183,7 +183,6 @@ export class SkillScanner {
       'obfuscation': 'OBFUSCATION',
       'prompt-injection': 'PROMPT_INJECTION',
       'private-key': 'PRIVATE_KEY_PATTERN',
-      'mnemonic': 'MNEMONIC_PATTERN',
     };
 
     return mapping[externalType?.toLowerCase()] || null;
@@ -353,7 +352,7 @@ export class SkillScanner {
     if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')) {
       parts.push('code execution capabilities');
     }
-    if (tags.has('PRIVATE_KEY_PATTERN') || tags.has('MNEMONIC_PATTERN')) {
+    if (tags.has('PRIVATE_KEY_PATTERN')) {
       parts.push('hardcoded secrets');
     }
     if (tags.has('PROMPT_INJECTION')) {

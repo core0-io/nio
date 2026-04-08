@@ -103,21 +103,11 @@ Detailed Grep patterns for all 16 detection rules. Use this as reference when ex
 
 | Pattern | Description |
 |---------|-------------|
-| `['"\x60]0x[a-fA-F0-9]{64}['"\x60]` | Ethereum private key in quotes |
+| `['"\x60]0x[a-fA-F0-9]{64}['"\x60]` | Hex-encoded private key in quotes |
 | `private[_\s]?key\s*[:=]\s*['"\x60]0x[a-fA-F0-9]{64}` (i) | Named private key |
 | `PRIVATE_KEY\s*[:=]\s*['"\x60][a-fA-F0-9]{64}` (i) | PRIVATE_KEY assignment |
 
-## Rule 8: MNEMONIC_PATTERN (CRITICAL)
-**Files**: All
-
-| Pattern | Description |
-|---------|-------------|
-| Quoted string with 12-24 BIP-39 words starting with: abandon, ability, able, about, above, absent, absorb, abstract, absurd, abuse | Mnemonic phrase |
-| `seed[_\s]?phrase\s*[:=]\s*['"\x60]` (i) | Seed phrase assignment |
-| `mnemonic\s*[:=]\s*['"\x60]` (i) | Mnemonic assignment |
-| `recovery[_\s]?phrase\s*[:=]\s*['"\x60]` (i) | Recovery phrase assignment |
-
-## Rule 9: OBFUSCATION (HIGH)
+## Rule 8: OBFUSCATION (HIGH)
 **Files**: `*.js`, `*.ts`, `*.mjs`, `*.py`, `*.md`
 
 | Pattern | Description |
@@ -133,7 +123,7 @@ Detailed Grep patterns for all 16 detection rules. Use this as reference when ex
 | `String\.fromCharCode\s*\(\s*\d+(?:\s*,\s*\d+){10,}` | Large fromCharCode |
 | `eval\s*\(\s*function\s*\(\s*p\s*,\s*a\s*,\s*c\s*,\s*k\s*,\s*e` | Packed JS (p,a,c,k,e,r) |
 
-## Rule 10: PROMPT_INJECTION (CRITICAL)
+## Rule 9: PROMPT_INJECTION (CRITICAL)
 **Files**: All
 
 | Pattern | Description |
@@ -153,7 +143,7 @@ Detailed Grep patterns for all 16 detection rules. Use this as reference when ex
 | `忽略(?:之前\|所有\|上面)(?:的)?(?:指令\|规则\|说明)` | Chinese: ignore instructions |
 | `无需确认\|自动执行\|跳过验证` | Chinese: skip confirm / auto-exec |
 
-## Rule 11: NET_EXFIL_UNRESTRICTED (HIGH)
+## Rule 10: NET_EXFIL_UNRESTRICTED (HIGH)
 **Files**: `*.js`, `*.ts`, `*.mjs`, `*.py`, `*.md`
 
 | Pattern | Description |
@@ -165,7 +155,7 @@ Detailed Grep patterns for all 16 detection rules. Use this as reference when ex
 | `new\s+FormData\s*\(` | FormData creation |
 | `enctype\s*[:=]\s*['"\x60]multipart/form-data` | Multipart upload |
 
-## Rule 12: WEBHOOK_EXFIL (CRITICAL)
+## Rule 11: WEBHOOK_EXFIL (CRITICAL)
 **Files**: All
 
 | Pattern | Description |
@@ -181,7 +171,7 @@ Detailed Grep patterns for all 16 detection rules. Use this as reference when ex
 | `pipedream` (i) | Pipedream |
 | `webhook\.site` (i) | Webhook.site |
 
-## Rule 13: TROJAN_DISTRIBUTION (CRITICAL)
+## Rule 12: TROJAN_DISTRIBUTION (CRITICAL)
 **Files**: `*.md`
 
 Detects trojanized binary distribution patterns. Flags when 2+ of the following signals are present:
@@ -194,7 +184,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 
 **Validation**: Must match at least 2 of the 3 signals to trigger.
 
-## Rule 14: SUSPICIOUS_PASTE_URL (HIGH)
+## Rule 13: SUSPICIOUS_PASTE_URL (HIGH)
 **Files**: All
 
 | Pattern | Description |
@@ -208,7 +198,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 | `ghostbin\.com/` (i) | Ghostbin |
 | `pastie\.io/` (i) | Pastie |
 
-## Rule 15: SUSPICIOUS_IP (MEDIUM)
+## Rule 14: SUSPICIOUS_IP (MEDIUM)
 **Files**: All
 
 | Pattern | Description |
@@ -220,7 +210,7 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 - Version-like patterns (`x.0.0.0`)
 - Values > 255 in any octet
 
-## Rule 16: SOCIAL_ENGINEERING (MEDIUM)
+## Rule 15: SOCIAL_ENGINEERING (MEDIUM)
 **Files**: `*.md`
 
 | Pattern | Description |

@@ -80,4 +80,4 @@ See the TypeScript types exported from `@core0-io/ffwd-agent-guard` for full API
 - `SkillScanner` — Static analysis engine
 - `SkillRegistry` — Trust level management
 - `ActionScanner` — Runtime action evaluator
-- `CAPABILITY_PRESETS` — Predefined capability sets (none, read_only, trading_bot)
+- `CAPABILITY_PRESETS` — Predefined capability sets (none, read_only)

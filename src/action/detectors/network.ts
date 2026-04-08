@@ -143,17 +143,17 @@ export function analyzeNetworkRequest(
 
   // Check request body for sensitive data
   if (request.body_preview) {
-    // Check for critical secrets (private keys, mnemonics)
+    // Check for critical secrets (private keys, SSH keys)
     if (containsCriticalSecrets(request.body_preview)) {
       riskTags.push('CRITICAL_SECRET_EXFIL');
       evidence.push({
         type: 'critical_secret',
         field: 'body',
-        description: 'Request body contains private key or mnemonic',
+        description: 'Request body contains private key or SSH key',
       });
       riskLevel = 'critical';
       shouldBlock = true;
-      blockReason = 'Attempt to exfiltrate private key or mnemonic';
+      blockReason = 'Attempt to exfiltrate private key or SSH key';
     } else {
       // Check for other sensitive data
       const secretLeak = detectSecretLeak(request.body_preview);

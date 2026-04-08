@@ -134,7 +134,7 @@ The patrol feature provides automated daily security posture assessment for Open
 | # | Check | What It Does |
 |---|-------|-------------|
 | 1 | **Skill/Plugin Integrity** | Compares file hashes against trust registry — detects tampered or unregistered skills |
-| 2 | **Secrets Exposure** | Scans workspace, memory, logs, `.env`, `~/.ssh/`, `~/.gnupg/` for leaked private keys, mnemonics, AWS keys, GitHub tokens |
+| 2 | **Secrets Exposure** | Scans workspace, memory, logs, `.env`, `~/.ssh/`, `~/.gnupg/` for leaked private keys, AWS keys, GitHub tokens |
 | 3 | **Network Exposure** | Detects dangerous ports bound to `0.0.0.0` (Redis, Docker API, MySQL, etc.), checks firewall status, flags suspicious outbound connections |
 | 4 | **Cron & Scheduled Tasks** | Audits cron jobs and systemd timers for `curl\|bash`, `base64 -d\|bash`, and other download-and-execute patterns |
 | 5 | **File System Changes (24h)** | Finds recently modified files, runs 16-rule scan on them, checks permissions on critical files, detects new executables |
@@ -220,7 +220,7 @@ The report is a self-contained HTML file that opens automatically in your browse
 | Category | Rules | Severity |
 |----------|-------|----------|
 | **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
-| **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, MNEMONIC_PATTERN | MEDIUM-CRITICAL |
+| **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN | MEDIUM-CRITICAL |
 | **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
 | **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM-CRITICAL |
@@ -278,7 +278,7 @@ The auto-guard hooks (Layer 1) have the following constraints:
 - [x] `patrol setup` — OpenClaw cron job configuration with timezone and notifications
 - [x] `patrol status` — Last results and schedule overview
 - [x] Skill/plugin integrity verification (hash drift detection)
-- [x] Secrets exposure scanning (private keys, mnemonics, AWS keys, GitHub tokens)
+- [x] Secrets exposure scanning (private keys, AWS keys, GitHub tokens)
 - [x] Network exposure and firewall checks
 - [x] Audit log pattern analysis (repeat denials, exfiltration attempts)
 

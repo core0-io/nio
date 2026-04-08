@@ -7,7 +7,7 @@ FFWD AgentGuard includes a trust registry for managing skill permissions.
 ### Attest (Register a Skill)
 
 ```
-/ffwd-agent-guard trust attest --id my-bot --source github.com/org/bot --version v1.0.0 --hash abc --trust-level restricted --preset trading_bot --reviewed-by admin
+/ffwd-agent-guard trust attest --id my-bot --source github.com/org/bot --version v1.0.0 --hash abc --trust-level restricted --preset read_only --reviewed-by admin
 ```
 
 ### Lookup
@@ -42,7 +42,6 @@ FFWD AgentGuard includes a trust registry for managing skill permissions.
 |--------|---------|------------|------|---------|
 | `none` | No | No | No | No |
 | `read_only` | No | Read `./**` | No | No |
-| `trading_bot` | Binance, Bybit, OKX, Coinbase, Dextools, CoinGecko | `./config/**`, `./logs/**` | No | `*_API_KEY`, `*_API_SECRET` |
 
 ## Auto-Scan on Session Start
 

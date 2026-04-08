@@ -61,7 +61,6 @@ Detailed commands, patterns, and thresholds for the 8 patrol checks. This docume
 | Rule ID | Tag | Pattern Summary |
 |---------|-----|-----------------|
 | Rule 7 | PRIVATE_KEY_PATTERN | `['"\x60]0x[a-fA-F0-9]{64}['"\x60]`, `private[_\s]?key\s*[:=]` |
-| Rule 8 | MNEMONIC_PATTERN | 12/24 BIP-39 words, `seed[_\s]?phrase`, `mnemonic\s*[:=]` |
 | Rule 5 | READ_SSH_KEYS | `\.ssh/id_rsa`, `\.ssh/id_ed25519` in workspace files |
 
 ### Additional Patterns (cross-ref action-policies.md)
@@ -289,7 +288,7 @@ env | grep -iE 'API_KEY|SECRET|PASSWORD|TOKEN|PRIVATE|CREDENTIAL' | awk -F= '{pr
 | Condition | Severity |
 |-----------|----------|
 | Protection level = `permissive` | MEDIUM |
-| Sensitive env var with `PRIVATE_KEY` or `MNEMONIC` in name | HIGH |
+| Sensitive env var with `PRIVATE_KEY` in name | HIGH |
 | Config baseline hash mismatch | HIGH |
 | Config baseline missing | LOW (informational) |
 

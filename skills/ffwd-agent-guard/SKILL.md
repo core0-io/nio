@@ -72,15 +72,14 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 | 5 | READ_SSH_KEYS | CRITICAL | all | SSH key file access |
 | 6 | READ_KEYCHAIN | CRITICAL | all | System keychain / browser profiles |
 | 7 | PRIVATE_KEY_PATTERN | CRITICAL | all | Hardcoded private keys |
-| 8 | MNEMONIC_PATTERN | CRITICAL | all | Hardcoded mnemonic phrases |
-| 9 | OBFUSCATION | HIGH | js,ts,mjs,py,md | Code obfuscation techniques |
-| 10 | PROMPT_INJECTION | CRITICAL | all | Prompt injection attempts |
-| 11 | NET_EXFIL_UNRESTRICTED | HIGH | js,ts,mjs,py,md | Unrestricted POST / upload |
-| 12 | WEBHOOK_EXFIL | CRITICAL | all | Webhook exfiltration domains |
-| 13 | TROJAN_DISTRIBUTION | CRITICAL | md | Trojanized binary download + password + execute |
-| 14 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
-| 15 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
-| 16 | SOCIAL_ENGINEERING | MEDIUM | md | Pressure language + execution instructions |
+| 8 | OBFUSCATION | HIGH | js,ts,mjs,py,md | Code obfuscation techniques |
+| 9 | PROMPT_INJECTION | CRITICAL | all | Prompt injection attempts |
+| 10 | NET_EXFIL_UNRESTRICTED | HIGH | js,ts,mjs,py,md | Unrestricted POST / upload |
+| 11 | WEBHOOK_EXFIL | CRITICAL | all | Webhook exfiltration domains |
+| 12 | TROJAN_DISTRIBUTION | CRITICAL | md | Trojanized binary download + password + execute |
+| 13 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
+| 14 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
+| 15 | SOCIAL_ENGINEERING | MEDIUM | md | Pressure language + execution instructions |
 
 ### Risk Level Calculation
 
@@ -165,7 +164,6 @@ Parse the user's action description and apply the appropriate detector:
 | Scenario | Decision |
 |----------|----------|
 | Private key exfiltration | **DENY** (always) |
-| Mnemonic exfiltration | **DENY** (always) |
 | API secret exfiltration | CONFIRM |
 | Command execution | **DENY** (default) |
 | Untrusted domain | CONFIRM |
@@ -249,7 +247,6 @@ Scan workspace files for leaked secrets using AgentGuard's own detection pattern
 **Steps**:
 1. Use Grep to scan `$OC/workspace/` (especially `memory/` and `logs/`) with patterns from:
    - scan-rules.md Rule 7 (PRIVATE_KEY_PATTERN): `0x[a-fA-F0-9]{64}` in quotes
-   - scan-rules.md Rule 8 (MNEMONIC_PATTERN): BIP-39 word sequences, `seed_phrase`, `mnemonic`
    - scan-rules.md Rule 5 (READ_SSH_KEYS): SSH key file references in workspace
    - action-policies.md secret patterns: AWS keys (`AKIA...`), GitHub tokens (`gh[pousr]_...`), DB connection strings
 2. Scan any `.env*` files under `$OC/` for plaintext credentials
@@ -447,7 +444,6 @@ secrets_allowlist: string[]     — Allowed env var names
 |--------|-------------|
 | `none` | All deny, empty allowlists |
 | `read_only` | Local filesystem read-only |
-| `trading_bot` | Exchange APIs (Binance, Bybit, OKX, Coinbase), config and logs paths |
 
 ### Operations
 

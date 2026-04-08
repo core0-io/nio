@@ -7,7 +7,6 @@ export interface PolicyConfig {
   /** Default action for secret exfiltration */
   secret_exfil: {
     private_key: 'deny' | 'confirm';
-    mnemonic: 'deny' | 'confirm';
     api_secret: 'deny' | 'confirm';
   };
   /** Default action for command execution */
@@ -23,10 +22,9 @@ export interface PolicyConfig {
  * Default policies - most restrictive
  */
 export const DEFAULT_POLICIES: PolicyConfig = {
-  // Private key and mnemonic exfiltration is always blocked
+  // Private key exfiltration is always blocked
   secret_exfil: {
     private_key: 'deny',
-    mnemonic: 'deny',
     api_secret: 'confirm',
   },
 
@@ -73,18 +71,4 @@ export const CAPABILITY_PRESETS = {
     filesystem_allowlist: ['./**'],
   },
 
-  /** Trading bot preset */
-  trading_bot: {
-    network_allowlist: [
-      'api.binance.com',
-      'api.bybit.com',
-      'api.okx.com',
-      'api.coinbase.com',
-      '*.dextools.io',
-      '*.coingecko.com',
-    ],
-    filesystem_allowlist: ['./config/**', './logs/**'],
-    exec: 'deny' as const,
-    secrets_allowlist: ['*_API_KEY', '*_API_SECRET'],
-  },
 };

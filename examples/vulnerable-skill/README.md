@@ -20,7 +20,6 @@ This directory contains intentionally vulnerable code for testing FFWD AgentGuar
 - `READ_SSH_KEYS` — ~/.ssh/id_rsa
 - `READ_KEYCHAIN` — Chrome Login Data
 - `PRIVATE_KEY_PATTERN` — hardcoded 0x + 64 hex
-- `MNEMONIC_PATTERN` — 12-word seed phrase
 - `NET_EXFIL_UNRESTRICTED` — POST to external server
 - `WEBHOOK_EXFIL` — Discord + Telegram webhooks
 - `OBFUSCATION` — atob + eval

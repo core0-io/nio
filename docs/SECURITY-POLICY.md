@@ -160,7 +160,6 @@ Commands matching the safe list are allowed without restriction, **unless** they
 | Secret Type | Priority | Risk Level | Decision |
 |-------------|----------|------------|----------|
 | Private Key (`0x` + 64 hex) | 100 | critical | DENY |
-| Mnemonic (12-24 BIP-39 words) | 100 | critical | DENY |
 | SSH Private Key (`-----BEGIN.*PRIVATE KEY`) | 90 | critical | DENY |
 | AWS Secret Key (40-char near AWS context) | 80 | high | CONFIRM |
 | AWS Access Key (`AKIA[0-9A-Z]{16}`) | 70 | high | CONFIRM |
@@ -174,7 +173,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
 
 1. Invalid URL → **DENY** (high)
 2. Domain in webhook list & not allowlisted → **DENY** (high)
-3. Body contains private key / mnemonic / SSH key → **DENY** (critical)
+3. Body contains private key / SSH key → **DENY** (critical)
 4. Body contains other secrets → risk based on priority
 5. High-risk TLD & not allowlisted → **CONFIRM** (medium)
 6. POST/PUT to untrusted domain → escalate medium → high
@@ -202,7 +201,6 @@ Commands matching the safe list are allowed without restriction, **unless** they
 | Secret Type | Priority | Risk Level |
 |-------------|----------|------------|
 | `PRIVATE_KEY` | 100 | critical |
-| `MNEMONIC` | 100 | critical |
 | `SSH_KEY` | 90 | critical |
 | `AWS_SECRET` | 80 | high |
 | `AWS_KEY` | 70 | high |
@@ -214,7 +212,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
 
 ---
 
-## 5. Static Scan Rules (16 Rules)
+## 5. Static Scan Rules (15 Rules)
 
 ### Critical Severity
 
@@ -225,7 +223,6 @@ Commands matching the safe list are allowed without restriction, **unless** they
 | Read SSH Keys | `READ_SSH_KEYS` | All |
 | Read Keychain/Browser Credentials | `READ_KEYCHAIN` | All |
 | Private Key Pattern | `PRIVATE_KEY_PATTERN` | All |
-| Mnemonic Pattern | `MNEMONIC_PATTERN` | All |
 | Prompt Injection | `PROMPT_INJECTION` | All |
 | Webhook Exfiltration URL | `WEBHOOK_EXFIL` | All |
 | Trojan Distribution | `TROJAN_DISTRIBUTION` | `.md` |
@@ -289,19 +286,6 @@ interface CapabilityModel {
   "filesystem_allowlist": ["./**"],
   "exec": "deny",
   "secrets_allowlist": []
-}
-```
-
-#### `trading_bot`
-```json
-{
-  "network_allowlist": [
-    "api.binance.com", "api.bybit.com", "api.okx.com",
-    "api.coinbase.com", "*.dextools.io", "*.coingecko.com"
-  ],
-  "filesystem_allowlist": ["./config/**", "./logs/**"],
-  "exec": "deny",
-  "secrets_allowlist": ["*_API_KEY", "*_API_SECRET"]
 }
 ```
 
@@ -413,7 +397,7 @@ import {
 | Category | Rules |
 |----------|-------|
 | **Destructive commands** | `rm -rf`, `mkfs`, `dd if=`, fork bomb, `chmod 777`, `curl\|bash` |
-| **Key exfiltration** | Private keys (0x+64 hex), mnemonics (12-24 BIP39), SSH keys |
+| **Key exfiltration** | Private keys (0x+64 hex), SSH keys |
 | **Webhook exfil** | Discord/Telegram/Slack webhooks (unless allowlisted) |
 | **Prompt injection** | `ignore previous instructions`, jailbreak attempts |
 
@@ -452,7 +436,6 @@ import {
 # Secret Exfiltration
 secret_exfil:
   private_key: DENY (always)
-  mnemonic: DENY (always)
   ssh_key: DENY (always)
   api_secret: CONFIRM
 

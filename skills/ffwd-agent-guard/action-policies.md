@@ -31,7 +31,6 @@ Scan request body for sensitive data. Priority determines risk level:
 | Secret Type | Priority | Risk Level | Decision |
 |------------|----------|------------|----------|
 | Private Key (`0x` + 64 hex) | 100 | critical | DENY |
-| Mnemonic (12-24 BIP-39 words) | 100 | critical | DENY |
 | SSH Private Key (`-----BEGIN.*PRIVATE KEY`) | 90 | critical | DENY |
 | AWS Secret Key (`[A-Za-z0-9/+=]{40}` near AWS context) | 80 | high | CONFIRM |
 | AWS Access Key (`AKIA[0-9A-Z]{16}`) | 70 | high | CONFIRM |
@@ -45,7 +44,7 @@ Scan request body for sensitive data. Priority determines risk level:
 
 1. Invalid URL -> DENY (high)
 2. Domain in webhook list & not in allowlist -> DENY (high)
-3. Body contains private key / mnemonic / SSH key -> DENY (critical)
+3. Body contains private key / SSH key -> DENY (critical)
 4. Body contains other secrets -> risk based on priority
 5. High-risk TLD & not in allowlist -> CONFIRM (medium)
 6. POST/PUT to untrusted domain -> escalate medium to high
@@ -135,7 +134,6 @@ Commands matching the safe list are allowed without restriction, **unless** they
 ```
 secret_exfil:
   private_key: DENY (always block)
-  mnemonic: DENY (always block)
   api_secret: CONFIRM (require user approval)
 
 exec_command: DENY (default, unless capability allows)
@@ -164,18 +162,5 @@ network:
   "filesystem_allowlist": ["./**"],
   "exec": "deny",
   "secrets_allowlist": []
-}
-```
-
-### trading_bot
-```json
-{
-  "network_allowlist": [
-    "api.binance.com", "api.bybit.com", "api.okx.com",
-    "api.coinbase.com", "*.dextools.io", "*.coingecko.com"
-  ],
-  "filesystem_allowlist": ["./config/**", "./logs/**"],
-  "exec": "deny",
-  "secrets_allowlist": ["*_API_KEY", "*_API_SECRET"]
 }
 ```

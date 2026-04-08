@@ -26,11 +26,6 @@ export const PROMPT_INJECTION_RULES: ScanRule[] = [
       /you\s+must\s+(?:always\s+)?(?:obey|follow|execute)/i,
       /system\s*:\s*you\s+are/i,
       /\[system\].*\[\/system\]/is,
-      // Chinese variations
-      /忽略(?:之前|所有|上面)(?:的)?(?:指令|规则|说明)/,
-      /无需确认/,
-      /自动执行/,
-      /跳过验证/,
     ],
   },
 ];
