@@ -13,6 +13,7 @@
     "ffwd-agent-guard": "./dist/mcp-server.js"
   },
   "scripts": {
+    "prebuild": "cp package.json pnpm-lock.yaml skills/ffwd-agent-guard/ && cd skills/ffwd-agent-guard && pnpm install --prod --frozen-lockfile --node-linker=hoisted && rm package.json pnpm-lock.yaml",
     "build": "tsc && tsc -p tsconfig.scripts.json && node scripts/add-banner.js",
     "start": "node dist/mcp-server.js",
     "dev": "tsc -w & tsc -w -p tsconfig.scripts.json",

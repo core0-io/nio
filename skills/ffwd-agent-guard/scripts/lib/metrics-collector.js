@@ -32,9 +32,6 @@ import { Metadata } from '@grpc/grpc-js';
 // ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
-function deriveMetricsEndpoint(tracesEndpoint) {
-    return tracesEndpoint.replace(/\/v1\/traces\/?$/, '/v1/metrics');
-}
 export function createMeterProvider(config) {
     if (!config.endpoint)
         return null;
@@ -42,7 +39,8 @@ export function createMeterProvider(config) {
     if (config.api_key) {
         headers['Authorization'] = `Bearer ${config.api_key}`;
     }
-    const metricsUrl = config.protocol === 'grpc' ? config.endpoint : deriveMetricsEndpoint(config.endpoint);
+    const base = config.endpoint.replace(/\/$/, '');
+    const metricsUrl = config.protocol === 'grpc' ? base : `${base}/v1/metrics`;
     let exporter;
     if (config.protocol === 'grpc') {
         const grpcMetadata = new Metadata();

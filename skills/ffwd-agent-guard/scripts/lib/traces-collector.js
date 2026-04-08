@@ -65,6 +65,8 @@ export function createTracerProvider(config) {
     if (config.api_key) {
         headers['Authorization'] = `Bearer ${config.api_key}`;
     }
+    const base = config.endpoint.replace(/\/$/, '');
+    const tracesUrl = config.protocol === 'grpc' ? base : `${base}/v1/traces`;
     let exporter;
     if (config.protocol === 'grpc') {
         const grpcMetadata = new Metadata();
@@ -72,14 +74,14 @@ export function createTracerProvider(config) {
             grpcMetadata.set(k, v);
         }
         exporter = new OTLPTraceExporterGrpc({
-            url: config.endpoint,
+            url: tracesUrl,
             metadata: grpcMetadata,
             timeoutMillis: config.timeout,
         });
     }
     else {
         exporter = new OTLPTraceExporterHttp({
-            url: config.endpoint,
+            url: tracesUrl,
             headers,
             timeoutMillis: config.timeout,
         });

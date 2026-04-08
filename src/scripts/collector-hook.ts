@@ -26,16 +26,9 @@ export {};
 
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
 
-import {
-  createMeterProvider,
-  recordToolUse,
-  recordTurn,
-  type ResolvedMetricsConfig,
-} from './lib/metrics-collector.js';
-
+import { loadCollectorConfig } from './lib/config-loader.js';
+import { createMeterProvider, recordToolUse, recordTurn } from './lib/metrics-collector.js';
 import {
   createTracerProvider,
   ensureTurn,
@@ -59,10 +52,6 @@ interface HookStdinPayload {
   stop_reason?: string;
 }
 
-interface AgentGuardModule {
-  loadMetricsConfig: () => ResolvedMetricsConfig;
-}
-
 // ---------------------------------------------------------------------------
 // Platform arg
 // ---------------------------------------------------------------------------
@@ -77,29 +66,10 @@ const platform =
 // Load config
 // ---------------------------------------------------------------------------
 
-const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
-
-let metricsConfig: ResolvedMetricsConfig;
-try {
-  const mod = (await import(agentguardPath)) as AgentGuardModule;
-  metricsConfig = mod.loadMetricsConfig();
-} catch {
-  try {
-    const mod =
-      // @ts-expect-error fallback to npm package if relative import fails
-      (await import('@core0-io/ffwd-agent-guard')) as AgentGuardModule;
-    metricsConfig = mod.loadMetricsConfig();
-  } catch {
-    process.exit(0);
-  }
-}
-
-if (!metricsConfig!.enabled) {
+const config = loadCollectorConfig();
+if (!config.enabled) {
   process.exit(0);
 }
-
-const config = metricsConfig!;
 
 // ---------------------------------------------------------------------------
 // stdin reader

@@ -60,7 +60,7 @@ export function loadConfig(): AgentGuardConfig {
 
 export function loadMetricsConfig(): ResolvedMetricsConfig {
   const config = loadConfig();
-  const m = config.metrics ?? {};
+  const m = config.collector ?? {};
 
   const endpoint = m.endpoint ?? '';
   const api_key = m.api_key ?? '';

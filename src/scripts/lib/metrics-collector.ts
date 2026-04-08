@@ -34,29 +34,13 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { OTLPMetricExporter as OTLPMetricExporterHttp } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPMetricExporter as OTLPMetricExporterGrpc } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
-
-// ---------------------------------------------------------------------------
-// Types (re-exported for consumers)
-// ---------------------------------------------------------------------------
-
-export interface ResolvedMetricsConfig {
-  endpoint: string;
-  api_key: string;
-  timeout: number;
-  log: string;
-  protocol: 'http' | 'grpc';
-  enabled: boolean;
-}
+import type { CollectorConfig } from './config-loader.js';
 
 // ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
 
-function deriveMetricsEndpoint(tracesEndpoint: string): string {
-  return tracesEndpoint.replace(/\/v1\/traces\/?$/, '/v1/metrics');
-}
-
-export function createMeterProvider(config: ResolvedMetricsConfig): MeterProvider | null {
+export function createMeterProvider(config: CollectorConfig): MeterProvider | null {
   if (!config.endpoint) return null;
 
   const headers: Record<string, string> = {};
@@ -64,8 +48,8 @@ export function createMeterProvider(config: ResolvedMetricsConfig): MeterProvide
     headers['Authorization'] = `Bearer ${config.api_key}`;
   }
 
-  const metricsUrl =
-    config.protocol === 'grpc' ? config.endpoint : deriveMetricsEndpoint(config.endpoint);
+  const base = config.endpoint.replace(/\/$/, '');
+  const metricsUrl = config.protocol === 'grpc' ? base : `${base}/v1/metrics`;
 
   let exporter;
   if (config.protocol === 'grpc') {

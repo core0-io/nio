@@ -1,8 +1,8 @@
 {
   "level": "balanced",
   "auto_scan": false,
-  "metrics": {
-    "endpoint": "http://localhost:4318/v1/traces",
+  "collector": {
+    "endpoint": "http://localhost:4318",
     "api_key": "",
     "timeout": 5000,
     "protocol": "http",

@@ -23,7 +23,7 @@ import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trac
 import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
-import type { ResolvedMetricsConfig } from './metrics-collector.js';
+import type { CollectorConfig } from './config-loader.js';
 
 // ---------------------------------------------------------------------------
 // State types
@@ -48,7 +48,7 @@ export interface CollectorState {
 // State file helpers
 // ---------------------------------------------------------------------------
 
-function stateFilePath(config: ResolvedMetricsConfig): string {
+function stateFilePath(config: CollectorConfig): string {
   // Derive state directory from the log path or use default
   const base = config.log
     ? dirname(config.log)
@@ -89,13 +89,16 @@ function randomSpanId(): string {
 // OTEL provider factory
 // ---------------------------------------------------------------------------
 
-export function createTracerProvider(config: ResolvedMetricsConfig): NodeTracerProvider | null {
+export function createTracerProvider(config: CollectorConfig): NodeTracerProvider | null {
   if (!config.endpoint) return null;
 
   const headers: Record<string, string> = {};
   if (config.api_key) {
     headers['Authorization'] = `Bearer ${config.api_key}`;
   }
+
+  const base = config.endpoint.replace(/\/$/, '');
+  const tracesUrl = config.protocol === 'grpc' ? base : `${base}/v1/traces`;
 
   let exporter;
   if (config.protocol === 'grpc') {
@@ -104,13 +107,13 @@ export function createTracerProvider(config: ResolvedMetricsConfig): NodeTracerP
       grpcMetadata.set(k, v);
     }
     exporter = new OTLPTraceExporterGrpc({
-      url: config.endpoint,
+      url: tracesUrl,
       metadata: grpcMetadata,
       timeoutMillis: config.timeout,
     });
   } else {
     exporter = new OTLPTraceExporterHttp({
-      url: config.endpoint,
+      url: tracesUrl,
       headers,
       timeoutMillis: config.timeout,
     });
@@ -132,7 +135,7 @@ export function createTracerProvider(config: ResolvedMetricsConfig): NodeTracerP
  * session changed), starts a new turn and persists the state.
  */
 export function ensureTurn(
-  config: ResolvedMetricsConfig,
+  config: CollectorConfig,
   sessionId: string,
 ): CollectorState {
   const statePath = stateFilePath(config);
@@ -163,7 +166,7 @@ export function ensureTurn(
  * Called at PreToolUse: records span start time and span_id to state.
  */
 export function recordPreToolUse(
-  config: ResolvedMetricsConfig,
+  config: CollectorConfig,
   state: CollectorState,
   spanKey: string,
   toolName: string,
@@ -185,7 +188,7 @@ export function recordPreToolUse(
  * Returns null if no matching pre-span was found.
  */
 export async function recordPostToolUse(
-  config: ResolvedMetricsConfig,
+  config: CollectorConfig,
   provider: NodeTracerProvider,
   state: CollectorState,
   spanKey: string,
@@ -243,7 +246,7 @@ export async function recordPostToolUse(
  * then resets turn state so the next user message starts a fresh turn.
  */
 export async function endTurn(
-  config: ResolvedMetricsConfig,
+  config: CollectorConfig,
   provider: NodeTracerProvider,
   state: CollectorState,
   platform: string,

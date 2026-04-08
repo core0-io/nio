@@ -31,8 +31,8 @@ if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
   exit 1
 fi
 
-if ! command -v npm &>/dev/null; then
-  echo "  ERROR: npm is not installed."
+if ! command -v pnpm &>/dev/null; then
+  echo "  ERROR: pnpm is not installed."
   exit 1
 fi
 
@@ -87,8 +87,8 @@ fi
 echo "[1/5] Building FFWD AgentGuard..."
 if [ -f "$SCRIPT_DIR/package.json" ]; then
   cd "$SCRIPT_DIR"
-  npm install --ignore-scripts 2>/dev/null
-  npm run build 2>/dev/null
+  pnpm install --frozen-lockfile --ignore-scripts 2>/dev/null
+  pnpm run build 2>/dev/null
   echo "  OK: Build complete"
 else
   echo "  ERROR: package.json not found. Run this script from the ffwd-agent-guard repo root."
@@ -103,32 +103,35 @@ for f in SKILL.md README.md scan-rules.md action-policies.md evals.md patrol-che
 done
 echo "  OK: Skill files installed"
 
-# ---- Step 4: Copy scripts + node_modules ----
+# ---- Step 3: Copy scripts ----
 echo "[3/4] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
-
-# Copy script files
-for f in guard-hook.js auto-scan.js trust-cli.js action-cli.js metrics-hook.js; do
-  [ -f "$SKILL_SRC/scripts/$f" ] && cp "$SKILL_SRC/scripts/$f" "$SKILLS_DIR/scripts/" 2>/dev/null || true
-done
-
-# Copy data directory
-if [ -d "$SKILL_SRC/scripts/data" ]; then
-  mkdir -p "$SKILLS_DIR/scripts/data"
-  cp -r "$SKILL_SRC/scripts/data/"* "$SKILLS_DIR/scripts/data/" 2>/dev/null || true
-fi
-
+cp -r "$SKILL_SRC/scripts/"* "$SKILLS_DIR/scripts/"
 echo "  OK: Scripts installed"
+
+# (dependencies are installed into skills/ffwd-agent-guard/node_modules by prebuild)
+
+# ---- Sync plugin cache (if installed via Claude Code plugin manager) ----
+PLUGIN_CACHE_BASE="$HOME/.claude/plugins/cache/ffwd-agent-guard/ffwd-agent-guard"
+if [ -d "$PLUGIN_CACHE_BASE" ]; then
+  for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
+    [ -d "$CACHE_VERSION_DIR" ] || continue
+    echo "  Syncing plugin cache: $CACHE_VERSION_DIR"
+    mkdir -p "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
+    cp -r "$SKILL_SRC/scripts/"* "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts/"
+    cp "$SCRIPT_DIR/hooks/hooks.json" "$CACHE_VERSION_DIR/hooks/hooks.json" 2>/dev/null || true
+if [ -d "$SKILL_SRC/node_modules" ]; then
+      rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/node_modules"
+      cp -r "$SKILL_SRC/node_modules" "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/node_modules"
+    fi
+  done
+fi
 
 # ---- Step 5: Create config directory ----
 echo "[4/4] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
-if [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
-  cp "$SCRIPT_DIR/config.default.json" "$FFWD_AGENT_GUARD_DIR/config.json"
-  echo "  OK: Config created from config.default.json (protection level: balanced)"
-else
-  echo "  OK: Config already exists (keeping current settings)"
-fi
+cp "$SCRIPT_DIR/config.default.json" "$FFWD_AGENT_GUARD_DIR/config.json"
+echo "  OK: Config updated from config.default.json"
 
 # ---- Done ----
 echo ""

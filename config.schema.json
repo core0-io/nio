@@ -23,15 +23,15 @@
       "default": false,
       "description": "Scan all installed skills for security vulnerabilities on session start."
     },
-    "metrics": {
+    "collector": {
       "type": "object",
-      "description": "Telemetry/metrics collection settings. Disabled when both endpoint and log are empty.",
+      "description": "Telemetry collection settings (metrics + traces). Disabled when both endpoint and log are empty.",
       "additionalProperties": false,
       "properties": {
         "endpoint": {
           "type": "string",
           "default": "",
-          "description": "OTLP endpoint URL for exporting metric spans."
+          "description": "OTLP collector base URL (e.g. http://localhost:4318). /v1/traces and /v1/metrics are appended automatically."
         },
         "api_key": {
           "type": "string",

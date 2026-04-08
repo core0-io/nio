@@ -15,7 +15,7 @@ export const MetricsConfigSchema = z.object({
 export const AgentGuardConfigSchema = z.object({
   level: z.enum(['strict', 'balanced', 'permissive']),
   auto_scan: z.boolean().optional(),
-  metrics: MetricsConfigSchema.optional(),
+  collector: MetricsConfigSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------
