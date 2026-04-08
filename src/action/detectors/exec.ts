@@ -1,4 +1,5 @@
 import type { ExecCommandData, ActionEvidence } from '../../types/action.js';
+import { isSensitivePath } from '../../adapters/common.js';
 
 /**
  * Command execution analysis result
@@ -137,6 +138,30 @@ const NETWORK_COMMANDS = [
 ];
 
 /**
+ * File-mutating commands where at least one argument is a destination path.
+ * For these, the last non-flag argument is typically the target.
+ */
+const FILE_MUTATING_COMMANDS = ['mv', 'cp', 'rsync', 'scp', 'install', 'ln'];
+
+function extractCommandTargetPaths(command: string): string[] {
+  const tokens = command.trim().split(/\s+/);
+  if (tokens.length < 2) return [];
+  const base = tokens[0].toLowerCase();
+
+  if (FILE_MUTATING_COMMANDS.includes(base)) {
+    const args = tokens.slice(1).filter(t => !t.startsWith('-'));
+    // Return all non-flag args — both source and destination may be sensitive
+    return args;
+  }
+
+  if (base === 'tee') {
+    return tokens.slice(1).filter(t => !t.startsWith('-'));
+  }
+
+  return [];
+}
+
+/**
  * Analyze a command for security risks
  */
 export function analyzeExecCommand(
@@ -195,6 +220,24 @@ export function analyzeExecCommand(
   // Safe command check: if not dangerous, no shell metacharacters, and no sensitive paths, allow
   if (riskLevel !== 'critical' && !SHELL_METACHAR_PATTERN.test(fullCommand)) {
     const hasSensitivePath = SENSITIVE_COMMANDS.some(s => lowerCommand.includes(s.toLowerCase()));
+
+    // Check if any argument targets a sensitive file path (e.g. mv file ~/.ssh/)
+    const sensitiveTarget = extractCommandTargetPaths(fullCommand).find(p => isSensitivePath(p));
+    if (sensitiveTarget) {
+      return {
+        risk_level: 'critical',
+        risk_tags: ['SENSITIVE_PATH'],
+        evidence: [{
+          type: 'sensitive_path',
+          field: 'command',
+          match: sensitiveTarget,
+          description: `Command targets sensitive path: "${sensitiveTarget}"`,
+        }],
+        should_block: true,
+        block_reason: `Command targets sensitive path: "${sensitiveTarget}"`,
+      };
+    }
+
     if (!hasSensitivePath) {
       const isSafe = SAFE_COMMAND_PREFIXES.some(prefix =>
         lowerCommand === prefix || lowerCommand.startsWith(prefix + ' ')

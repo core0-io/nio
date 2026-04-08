@@ -89,7 +89,11 @@ const SENSITIVE_PATHS = [
 
 export function isSensitivePath(filePath: string): boolean {
   if (!filePath) return false;
-  const normalized = filePath.replace(/\\/g, '/');
+  // Normalize backslashes and expand leading ~ so ~/.ssh matches /.ssh
+  let normalized = filePath.replace(/\\/g, '/');
+  if (normalized.startsWith('~/')) {
+    normalized = '/HOME' + normalized.slice(1);
+  }
   return SENSITIVE_PATHS.some(
     (p) => normalized.includes(`/${p}`) || normalized.endsWith(p)
   );

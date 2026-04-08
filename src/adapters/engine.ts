@@ -54,7 +54,7 @@ export async function evaluateHook(
     return { decision: 'allow' };
   }
 
-  // Fast check: sensitive file paths (Write/Edit)
+  // Fast check: sensitive file paths (Write/Edit and shell commands targeting sensitive paths)
   const actionType = adapter.mapToolToActionType(input.toolName);
   if (actionType === 'write_file') {
     const filePath = (input.toolInput.file_path as string) ||

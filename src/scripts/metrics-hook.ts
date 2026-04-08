@@ -6,8 +6,11 @@ export {};
  * FFWD AgentGuard — Metrics Collection Hook
  *
  * Standalone async hook that captures tool-use telemetry from
- * PreToolUse / PostToolUse events and POSTs it to a backend endpoint
- * and/or appends it to a local JSONL log file.
+ * PreToolUse / PostToolUse events and exports it as OpenTelemetry
+ * spans via OTLP HTTP and/or appends it to a local JSONL log file.
+ *
+ * Spans from the same session share a deterministic trace ID derived
+ * from the session_id, so they appear grouped in any OTEL backend.
  *
  * Completely independent from guard-hook.js — this script never
  * influences allow/deny decisions. It always exits 0.
@@ -20,6 +23,10 @@ export {};
 import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
+import { trace, context, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
+import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -158,35 +165,84 @@ function writeToLog(payload: MetricPayload): void {
 }
 
 // ---------------------------------------------------------------------------
-// Send metrics to remote endpoint
+// OTEL trace pipeline
 // ---------------------------------------------------------------------------
 
-async function sendMetrics(payload: MetricPayload): Promise<void> {
-  if (!ENDPOINT) return;
+let otelProvider: NodeTracerProvider | null = null;
 
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+function initOtelProvider(): NodeTracerProvider | null {
+  if (!ENDPOINT) return null;
+
+  const headers: Record<string, string> = {};
   if (API_KEY) {
     headers['Authorization'] = `Bearer ${API_KEY}`;
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT);
+  const exporter = new OTLPTraceExporter({
+    url: ENDPOINT,
+    headers,
+    timeoutMillis: TIMEOUT,
+  });
 
-  try {
-    await fetch(ENDPOINT, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
+  const provider = new NodeTracerProvider({
+    spanProcessors: [new SimpleSpanProcessor(exporter)],
+  });
+
+  provider.register();
+  return provider;
+}
+
+/**
+ * Derive a deterministic 16-byte trace ID from session_id so that all
+ * spans within the same session are grouped under one trace.
+ */
+function sessionToTraceId(sessionId: string): string {
+  return createHash('md5').update(sessionId).digest('hex');
+}
+
+async function sendMetricsViaOtel(payload: MetricPayload): Promise<void> {
+  if (!otelProvider) return;
+
+  const tracer = trace.getTracer('agentguard-metrics', '1.0.0');
+
+  let parentCtx = ROOT_CONTEXT;
+
+  if (payload.session_id) {
+    const traceId = sessionToTraceId(payload.session_id);
+    const spanContext = {
+      traceId,
+      spanId: traceId.slice(0, 16),
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: true,
+    };
+    parentCtx = trace.setSpanContext(ROOT_CONTEXT, spanContext);
   }
+
+  const span = tracer.startSpan(
+    `agentguard.metric.${payload.event || 'unknown'}`,
+    {
+      attributes: {
+        'agentguard.event': payload.event,
+        'agentguard.tool_name': payload.tool_name,
+        'agentguard.platform': payload.platform,
+        'agentguard.tool_summary': payload.tool_summary,
+        ...(payload.session_id && { 'agentguard.session_id': payload.session_id }),
+        ...(payload.cwd && { 'agentguard.cwd': payload.cwd }),
+      },
+    },
+    parentCtx,
+  );
+
+  span.end();
+
+  await otelProvider.forceFlush();
 }
 
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
+
+otelProvider = initOtelProvider();
 
 async function main(): Promise<void> {
   const input = await readStdin();
@@ -203,7 +259,7 @@ async function main(): Promise<void> {
   }
 
   try {
-    await sendMetrics(payload);
+    await sendMetricsViaOtel(payload);
   } catch {
     // Best-effort
   }

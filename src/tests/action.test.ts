@@ -110,6 +110,31 @@ describe('Exec Command Detector', () => {
     assert.ok(result.should_block, 'Unknown command should be blocked when exec not allowed');
     assert.notEqual(result.risk_level, 'critical', 'Unknown command is not critical');
   });
+
+  it('should block mv to .ssh directory', () => {
+    const result = analyzeExecCommand({ command: 'mv /tmp/file.txt /Users/ab/.ssh/file.txt' }, true);
+    assert.ok(result.should_block, 'mv to .ssh should be blocked');
+    assert.equal(result.risk_level, 'critical');
+    assert.ok(result.risk_tags.includes('SENSITIVE_PATH'));
+  });
+
+  it('should block cp to .ssh directory', () => {
+    const result = analyzeExecCommand({ command: 'cp payload.sh /home/user/.ssh/authorized_keys' }, true);
+    assert.ok(result.should_block, 'cp to .ssh should be blocked');
+    assert.ok(result.risk_tags.includes('SENSITIVE_PATH'));
+  });
+
+  it('should block mv to .env', () => {
+    const result = analyzeExecCommand({ command: 'mv backup.env /app/.env' }, true);
+    assert.ok(result.should_block, 'mv to .env should be blocked');
+    assert.ok(result.risk_tags.includes('SENSITIVE_PATH'));
+  });
+
+  it('should allow mv to normal directory', () => {
+    const result = analyzeExecCommand({ command: 'mv file.txt /tmp/file.txt' }, true);
+    assert.ok(!result.should_block, 'mv to normal path should be allowed');
+    assert.equal(result.risk_level, 'low');
+  });
 });
 
 describe('Network Request Detector', () => {
