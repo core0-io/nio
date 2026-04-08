@@ -4,6 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "lib": ["ES2022"],
+    "types": ["node"],
     "outDir": "./skills/ffwd-agent-guard/scripts",
     "rootDir": "./src/scripts",
     "strict": true,

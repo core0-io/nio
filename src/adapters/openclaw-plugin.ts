@@ -12,8 +12,7 @@
  * - Build toolName → pluginId mapping for initiating skill inference
  *
  * Usage in OpenClaw plugin config:
- *   import register from '@core0-io/ffwd-agent-guard/openclaw';
- *   export default register;
+ *   export { default } from '@core0-io/ffwd-agent-guard/openclaw';
  *
  * Or register manually:
  *   import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
@@ -58,14 +57,25 @@ interface OpenClawPluginRegistry {
 }
 
 /**
- * OpenClaw plugin API interface (subset we use)
+ * OpenClaw plugin register API interface (subset we use).
+ * Matches the `api` object passed to `register(api)` by OpenClaw's plugin loader.
  */
-interface OpenClawPluginApi {
+interface OpenClawRegisterApi {
+  registerHook(
+    hookName: string,
+    handler: (event: unknown, ctx?: unknown) => Promise<unknown> | unknown,
+    opts?: { name?: string; description?: string }
+  ): void;
+}
+
+/**
+ * OpenClaw plugin entry object shape.
+ * Matches the object returned by `definePluginEntry` from openclaw/plugin-sdk/plugin-entry.
+ */
+interface OpenClawPluginEntry {
   id: string;
   name: string;
-  source: string;
-  on(event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
-  on(event: string, options: Record<string, unknown>, handler: (event: unknown, ctx?: unknown) => Promise<unknown>): void;
+  register(api: OpenClawRegisterApi): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +337,7 @@ export function getPluginScanResult(pluginId: string): { riskLevel: string; risk
  * Register AgentGuard hooks with OpenClaw plugin API
  */
 export function registerOpenClawPlugin(
-  api: OpenClawPluginApi,
+  api: OpenClawRegisterApi,
   options: OpenClawPluginOptions = {}
 ): void {
   const adapter = new OpenClawAdapter();
@@ -372,7 +382,7 @@ export function registerOpenClawPlugin(
     // Use setImmediate to allow plugin registration to complete first
     setImmediate(async () => {
       try {
-        await scanAllPlugins(scanner, trustRegistry, logger, api.id);
+        await scanAllPlugins(scanner, trustRegistry, logger);
       } catch (err) {
         logger(`[AgentGuard] Plugin auto-scan error: ${String(err)}`);
       }
@@ -381,7 +391,7 @@ export function registerOpenClawPlugin(
 
   // session_start → auto-scan skill directories (only when opt-in)
   if (options.skipAutoScan === false) {
-    api.on('session_start', async () => {
+    api.registerHook('session_start', async () => {
       try {
         await autoScanSkillDirs(scanner, trustRegistry, logger);
       } catch {
@@ -391,7 +401,7 @@ export function registerOpenClawPlugin(
   }
 
   // before_tool_call → evaluate and optionally block
-  api.on('before_tool_call', async (event: unknown) => {
+  api.registerHook('before_tool_call', async (event: unknown) => {
     try {
       // Try to infer plugin from tool name
       const toolEvent = event as { toolName?: string };
@@ -435,8 +445,10 @@ export function registerOpenClawPlugin(
     }
   });
 
-  // after_tool_call → audit log
-  api.on('after_tool_call', async (event: unknown) => {
+  // after_tool_call → audit log + collector (fire-and-forget)
+  // Mirrors CC: PostToolUse → guard-hook (audit) + collector-hook (OTEL post-tool span)
+  // TODO: wire OTEL recordPostToolUse once collector lib is moved out of src/scripts
+  api.registerHook('after_tool_call', async (event: unknown) => {
     try {
       const input = adapter.parseInput(event);
       const toolEvent = event as { toolName?: string };
@@ -447,14 +459,72 @@ export function registerOpenClawPlugin(
     }
   });
 
+  // subagent_spawning → collector pre-task span
+  // Mirrors CC: TaskCreated → collector-hook (recordPreTaskToolUse)
+  // TODO: wire OTEL recordPreTaskToolUse once collector lib is moved out of src/scripts
+  api.registerHook('subagent_spawning', async (event: unknown) => {
+    try {
+      const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
+      writeAuditLog(
+        { toolName: 'subagent_spawning', toolInput: e as Record<string, unknown>, eventType: 'pre', raw: e },
+        { decision: 'allow', risk_level: 'low', risk_tags: [] },
+        null,
+        'openclaw'
+      );
+    } catch {
+      // Non-critical
+    }
+  });
+
+  // subagent_ended → collector post-task span + end-turn flush
+  // Mirrors CC: TaskCompleted → collector-hook (recordPostTaskToolUse)
+  //         and SubagentStop → collector-hook (endTurn / recordTurn)
+  // TODO: wire OTEL recordPostTaskToolUse + endTurn once collector lib is moved out of src/scripts
+  api.registerHook('subagent_ended', async (event: unknown) => {
+    try {
+      const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
+      writeAuditLog(
+        { toolName: 'subagent_ended', toolInput: e as Record<string, unknown>, eventType: 'post', raw: e },
+        { decision: 'allow', risk_level: 'low', risk_tags: [] },
+        null,
+        'openclaw'
+      );
+    } catch {
+      // Non-critical
+    }
+  });
+
+  // agent_end → collector end-turn span flush
+  // Mirrors CC: Stop → collector-hook (endTurn / recordTurn)
+  // TODO: wire OTEL endTurn + recordTurn once collector lib is moved out of src/scripts
+  api.registerHook('agent_end', async (event: unknown) => {
+    try {
+      const e = event as { sessionKey?: string; runId?: string };
+      writeAuditLog(
+        { toolName: 'agent_end', toolInput: e as Record<string, unknown>, eventType: 'post', raw: e },
+        { decision: 'allow', risk_level: 'low', risk_tags: [] },
+        null,
+        'openclaw'
+      );
+    } catch {
+      // Non-critical
+    }
+  });
+
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
 }
 
 /**
- * Default export for OpenClaw plugin registration
+ * Default export — OpenClaw plugin entry object.
  *
- * Usage: export default from '@core0-io/ffwd-agent-guard/openclaw'
+ * Usage: export { default } from '@core0-io/ffwd-agent-guard/openclaw'
  */
-export default function register(api: OpenClawPluginApi): void {
-  registerOpenClawPlugin(api);
-}
+const pluginEntry: OpenClawPluginEntry = {
+  id: 'ffwd-agent-guard',
+  name: 'FFWD AgentGuard',
+  register(api: OpenClawRegisterApi): void {
+    registerOpenClawPlugin(api);
+  },
+};
+
+export default pluginEntry;

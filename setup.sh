@@ -95,8 +95,20 @@ else
   exit 1
 fi
 
-# ---- Step 2: Copy skill files ----
-echo "[2/4] Installing skill files..."
+# ---- Step 2 (OpenClaw only): Register runtime plugin ----
+if [[ "$PLATFORM" == openclaw* ]]; then
+  echo "[2/5] Registering OpenClaw plugin (guard + collector hooks)..."
+  if command -v openclaw &>/dev/null; then
+    openclaw plugins install -l "$SCRIPT_DIR"
+    echo "  OK: Plugin registered (ffwd-agent-guard)"
+  else
+    echo "  WARN: openclaw CLI not found, skipping plugin install"
+    echo "        Run manually: openclaw plugins install -l $SCRIPT_DIR"
+  fi
+fi
+
+# ---- Step 3: Copy skill files ----
+echo "[3/5] Installing skill files..."
 mkdir -p "$SKILLS_DIR"
 for f in SKILL.md README.md scan-rules.md action-policies.md evals.md patrol-checks.md .clawignore; do
   [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
@@ -104,7 +116,7 @@ done
 echo "  OK: Skill files installed"
 
 # ---- Step 3: Copy scripts ----
-echo "[3/4] Installing scripts..."
+echo "[4/5] Installing scripts..."
 mkdir -p "$SKILLS_DIR/scripts"
 cp -r "$SKILL_SRC/scripts/"* "$SKILLS_DIR/scripts/"
 echo "  OK: Scripts installed"
@@ -128,7 +140,7 @@ if [ -d "$SKILL_SRC/node_modules" ]; then
 fi
 
 # ---- Step 5: Create config directory ----
-echo "[4/4] Setting up configuration..."
+echo "[5/5] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
 cp "$SCRIPT_DIR/config.default.json" "$FFWD_AGENT_GUARD_DIR/config.json"
 echo "  OK: Config updated from config.default.json"
