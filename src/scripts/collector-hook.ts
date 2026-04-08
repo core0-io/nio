@@ -1,0 +1,237 @@
+#!/usr/bin/env node
+
+export {};
+
+/**
+ * FFWD AgentGuard — Collector Hook
+ *
+ * Async hook that captures telemetry from Claude Code hook events and exports
+ * it via two separate pipelines:
+ *
+ *   Metrics  →  metrics-collector.ts  (counters + histograms)
+ *   Traces   →  traces-collector.ts   (turn-scoped OTEL spans)
+ *
+ * Trace model:
+ *   - One OTEL trace per conversation turn (user prompt → Stop event)
+ *   - One span per tool call, covering PreToolUse → PostToolUse
+ *   - One span per Task execution (same pre/post pattern)
+ *
+ * Completely independent from guard-hook.js — never influences allow/deny
+ * decisions. Always exits 0.
+ *
+ * Configuration: ~/.ffwd-agent-guard/config.json (metrics section).
+ * At least one of metrics.endpoint or metrics.log must be set, otherwise
+ * the hook exits immediately without doing anything.
+ */
+
+import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+
+import {
+  createMeterProvider,
+  recordToolUse,
+  recordTurn,
+  type ResolvedMetricsConfig,
+} from './lib/metrics-collector.js';
+
+import {
+  createTracerProvider,
+  ensureTurn,
+  recordPreToolUse,
+  recordPostToolUse,
+  endTurn,
+} from './lib/traces-collector.js';
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+interface HookStdinPayload {
+  hook_event_name?: string;
+  tool_name?: string;
+  tool_use_id?: string;
+  tool_input?: Record<string, unknown>;
+  tool_response?: unknown;
+  session_id?: string;
+  cwd?: string;
+  stop_reason?: string;
+}
+
+interface AgentGuardModule {
+  loadMetricsConfig: () => ResolvedMetricsConfig;
+}
+
+// ---------------------------------------------------------------------------
+// Platform arg
+// ---------------------------------------------------------------------------
+
+const platformIdx = process.argv.indexOf('--platform');
+const platform =
+  platformIdx !== -1 && process.argv[platformIdx + 1]
+    ? process.argv[platformIdx + 1]
+    : 'unknown';
+
+// ---------------------------------------------------------------------------
+// Load config
+// ---------------------------------------------------------------------------
+
+const __filename = fileURLToPath(import.meta.url);
+const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
+
+let metricsConfig: ResolvedMetricsConfig;
+try {
+  const mod = (await import(agentguardPath)) as AgentGuardModule;
+  metricsConfig = mod.loadMetricsConfig();
+} catch {
+  try {
+    const mod =
+      // @ts-expect-error fallback to npm package if relative import fails
+      (await import('@core0-io/ffwd-agent-guard')) as AgentGuardModule;
+    metricsConfig = mod.loadMetricsConfig();
+  } catch {
+    process.exit(0);
+  }
+}
+
+if (!metricsConfig!.enabled) {
+  process.exit(0);
+}
+
+const config = metricsConfig!;
+
+// ---------------------------------------------------------------------------
+// stdin reader
+// ---------------------------------------------------------------------------
+
+function readStdin(): Promise<HookStdinPayload | null> {
+  return new Promise((resolve) => {
+    let data = '';
+    process.stdin.setEncoding('utf-8');
+    process.stdin.on('data', (chunk: string) => (data += chunk));
+    process.stdin.on('end', () => {
+      try {
+        resolve(JSON.parse(data) as HookStdinPayload);
+      } catch {
+        resolve(null);
+      }
+    });
+    setTimeout(() => resolve(null), 5000);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tool summary extractor
+// ---------------------------------------------------------------------------
+
+function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
+  switch (toolName) {
+    case 'Bash':
+      return ((toolInput['command'] as string) || '').slice(0, 300);
+    case 'Write':
+    case 'Edit':
+      return (toolInput['file_path'] as string) || (toolInput['path'] as string) || '';
+    case 'WebFetch':
+    case 'WebSearch':
+      return (toolInput['url'] as string) || (toolInput['query'] as string) || '';
+    default:
+      return JSON.stringify(toolInput).slice(0, 300);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Local JSONL log
+// ---------------------------------------------------------------------------
+
+function writeToLog(record: Record<string, unknown>): void {
+  if (!config.log) return;
+  const dir = dirname(config.log);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  appendFileSync(config.log, JSON.stringify(record) + '\n');
+}
+
+// ---------------------------------------------------------------------------
+// Span key: prefer tool_use_id, fall back to tool_name+timestamp
+// ---------------------------------------------------------------------------
+
+function spanKey(input: HookStdinPayload): string {
+  return input.tool_use_id || `${input.tool_name ?? 'unknown'}:${Date.now()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+const meterProvider = createMeterProvider(config);
+const tracerProvider = createTracerProvider(config);
+
+async function main(): Promise<void> {
+  const input = await readStdin();
+  if (!input) process.exit(0);
+
+  const event = input.hook_event_name ?? '';
+  const toolName = input.tool_name ?? '';
+  const sessionId = input.session_id ?? 'unknown';
+  const cwd = input.cwd ?? null;
+  const toolInput = input.tool_input ?? {};
+
+  writeToLog({
+    timestamp: new Date().toISOString(),
+    platform,
+    event,
+    tool_name: toolName,
+    session_id: sessionId,
+    cwd,
+    tool_summary: toolName ? toolSummary(toolName, toolInput) : undefined,
+  });
+
+  try {
+    if (event === 'PreToolUse') {
+      const summary = toolSummary(toolName, toolInput);
+      const key = spanKey(input);
+
+      if (tracerProvider) {
+        const state = ensureTurn(config, sessionId);
+        recordPreToolUse(config, state, key, toolName, summary);
+      }
+
+      if (meterProvider) {
+        await recordToolUse(meterProvider, toolName, event, platform);
+      }
+
+    } else if (event === 'PostToolUse') {
+      const key = spanKey(input);
+
+      if (tracerProvider) {
+        const state = ensureTurn(config, sessionId);
+        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd);
+      }
+
+      if (meterProvider) {
+        await recordToolUse(meterProvider, toolName, event, platform);
+      }
+
+    } else if (event === 'Stop' || event === 'SubagentStop') {
+      if (tracerProvider) {
+        const state = ensureTurn(config, sessionId);
+        // Only emit turn span if there was actually an active turn
+        if (state.turn_trace_id) {
+          await endTurn(config, tracerProvider, state, platform, cwd);
+        }
+      }
+
+      if (meterProvider) {
+        await recordTurn(meterProvider, platform);
+      }
+    }
+  } catch (err) {
+    console.error('[agentguard] collector-hook error:', err);
+  }
+
+  process.exit(0);
+}
+
+main();

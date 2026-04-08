@@ -1,0 +1,212 @@
+/**
+ * Traces Collector
+ *
+ * Manages turn-scoped OTEL traces and tool-call spans across stateless hook
+ * invocations. State is persisted to a JSON file between hook calls so that
+ * PreToolUse and PostToolUse (which run in separate processes) can share
+ * span start times and trace context.
+ *
+ * Trace hierarchy:
+ *
+ *   Trace: "turn:<N>" — one trace per conversation turn
+ *     └─ Span: "tool:<name>" — one span per tool call (pre→post)
+ *     └─ Span: "task:execute" — one span per Task tool invocation
+ */
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { dirname } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { trace, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
+import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
+import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
+import { Metadata } from '@grpc/grpc-js';
+// ---------------------------------------------------------------------------
+// State file helpers
+// ---------------------------------------------------------------------------
+function stateFilePath(config) {
+    // Derive state directory from the log path or use default
+    const base = config.log
+        ? dirname(config.log)
+        : `${process.env['HOME'] ?? '~'}/.ffwd-agent-guard`;
+    return `${base}/collector-state.json`;
+}
+function loadState(statePath) {
+    try {
+        const raw = readFileSync(statePath, 'utf-8');
+        return JSON.parse(raw);
+    }
+    catch {
+        return null;
+    }
+}
+function saveState(statePath, state) {
+    const dir = dirname(statePath);
+    if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+    }
+    writeFileSync(statePath, JSON.stringify(state, null, 2), 'utf-8');
+}
+// ---------------------------------------------------------------------------
+// Trace ID derivation
+// ---------------------------------------------------------------------------
+function turnToTraceId(sessionId, turnNumber) {
+    return createHash('md5').update(`${sessionId}:${turnNumber}`).digest('hex');
+}
+function randomSpanId() {
+    return randomBytes(8).toString('hex');
+}
+// ---------------------------------------------------------------------------
+// OTEL provider factory
+// ---------------------------------------------------------------------------
+export function createTracerProvider(config) {
+    if (!config.endpoint)
+        return null;
+    const headers = {};
+    if (config.api_key) {
+        headers['Authorization'] = `Bearer ${config.api_key}`;
+    }
+    let exporter;
+    if (config.protocol === 'grpc') {
+        const grpcMetadata = new Metadata();
+        for (const [k, v] of Object.entries(headers)) {
+            grpcMetadata.set(k, v);
+        }
+        exporter = new OTLPTraceExporterGrpc({
+            url: config.endpoint,
+            metadata: grpcMetadata,
+            timeoutMillis: config.timeout,
+        });
+    }
+    else {
+        exporter = new OTLPTraceExporterHttp({
+            url: config.endpoint,
+            headers,
+            timeoutMillis: config.timeout,
+        });
+    }
+    const provider = new NodeTracerProvider({
+        spanProcessors: [new SimpleSpanProcessor(exporter)],
+    });
+    provider.register();
+    return provider;
+}
+// ---------------------------------------------------------------------------
+// Turn management
+// ---------------------------------------------------------------------------
+/**
+ * Ensures an active turn exists for the given session. If none exists (or the
+ * session changed), starts a new turn and persists the state.
+ */
+export function ensureTurn(config, sessionId) {
+    const statePath = stateFilePath(config);
+    const existing = loadState(statePath);
+    if (existing && existing.session_id === sessionId && existing.turn_trace_id) {
+        return existing;
+    }
+    // New session or no active turn
+    const turnNumber = (existing?.session_id === sessionId ? existing.turn_number : 0) + 1;
+    const state = {
+        session_id: sessionId,
+        turn_number: turnNumber,
+        turn_trace_id: turnToTraceId(sessionId, turnNumber),
+        turn_start_ms: Date.now(),
+        pending_spans: {},
+    };
+    saveState(statePath, state);
+    return state;
+}
+// ---------------------------------------------------------------------------
+// Span lifecycle
+// ---------------------------------------------------------------------------
+/**
+ * Called at PreToolUse: records span start time and span_id to state.
+ */
+export function recordPreToolUse(config, state, spanKey, toolName, toolSummary) {
+    const statePath = stateFilePath(config);
+    state.pending_spans[spanKey] = {
+        tool_name: toolName,
+        tool_summary: toolSummary,
+        start_ms: Date.now(),
+        span_id: randomSpanId(),
+    };
+    saveState(statePath, state);
+}
+/**
+ * Called at PostToolUse: retrieves the pending span, emits it with correct
+ * start/end times, removes it from state, and returns the duration in ms.
+ * Returns null if no matching pre-span was found.
+ */
+export async function recordPostToolUse(config, provider, state, spanKey, platform, cwd) {
+    const pending = state.pending_spans[spanKey];
+    if (!pending)
+        return null;
+    const endMs = Date.now();
+    const startMs = pending.start_ms;
+    const traceId = state.turn_trace_id;
+    const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
+        traceId,
+        spanId: traceId.slice(0, 16), // synthetic parent span representing the turn
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
+    });
+    const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+    const span = tracer.startSpan(`tool:${pending.tool_name}`, {
+        startTime: startMs,
+        attributes: {
+            'agentguard.tool_name': pending.tool_name,
+            'agentguard.tool_summary': pending.tool_summary,
+            'agentguard.platform': platform,
+            'agentguard.session_id': state.session_id,
+            'agentguard.turn_number': state.turn_number,
+            ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        },
+    }, parentCtx);
+    span.end(endMs);
+    await provider.forceFlush();
+    // Remove from state
+    const statePath = stateFilePath(config);
+    delete state.pending_spans[spanKey];
+    saveState(statePath, state);
+    return endMs - startMs;
+}
+// ---------------------------------------------------------------------------
+// Turn end
+// ---------------------------------------------------------------------------
+/**
+ * Called on Stop / SubagentStop: emits a root span for the full turn duration,
+ * then resets turn state so the next user message starts a fresh turn.
+ */
+export async function endTurn(config, provider, state, platform, cwd) {
+    const endMs = Date.now();
+    const traceId = state.turn_trace_id;
+    // Build a remote parent context with the turn's trace ID so the root span
+    // sits at the top of the trace.
+    const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
+        traceId,
+        spanId: traceId.slice(0, 16),
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
+    });
+    const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+    const span = tracer.startSpan(`turn:${state.turn_number}`, {
+        startTime: state.turn_start_ms,
+        attributes: {
+            'agentguard.session_id': state.session_id,
+            'agentguard.turn_number': state.turn_number,
+            'agentguard.platform': platform,
+            ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        },
+    }, rootCtx);
+    span.end(endMs);
+    await provider.forceFlush();
+    // Clear the turn so the next PreToolUse starts fresh
+    const statePath = stateFilePath(config);
+    const next = {
+        session_id: state.session_id,
+        turn_number: state.turn_number,
+        turn_trace_id: '', // cleared — will be re-derived on next PreToolUse
+        turn_start_ms: 0,
+        pending_spans: {},
+    };
+    saveState(statePath, next);
+}

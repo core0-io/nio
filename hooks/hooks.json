@@ -49,11 +49,11 @@
         ]
       },
       {
-        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/metrics-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",
             "timeout": 10,
             "async": true
           }
@@ -73,11 +73,35 @@
         ]
       },
       {
-        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/metrics-hook.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",
             "timeout": 10,
             "async": true
           }
