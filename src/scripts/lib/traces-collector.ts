@@ -18,7 +18,7 @@ export {};
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
-import { trace, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
+import { trace, TraceFlags, ROOT_CONTEXT, SpanStatusCode } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
@@ -36,6 +36,36 @@ interface PendingToolSpan {
   tool_summary: string;
   start_ms: number;
   span_id: string;  // 8-byte random hex, stable across pre/post
+  attributes?: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Redaction + truncation for span attribute payloads
+// ---------------------------------------------------------------------------
+
+const MAX_ATTR_BYTES = 2048;
+const SECRET_KEY_RE = /(api[_-]?key|secret|token|password|passwd|authorization|bearer|private[_-]?key|mnemonic|seed|credential)/i;
+
+export function redactAndTruncate(value: unknown, maxBytes: number = MAX_ATTR_BYTES): string {
+  const redact = (v: unknown): unknown => {
+    if (v === null || v === undefined) return v;
+    if (typeof v === 'string') return v;
+    if (typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(redact);
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      out[k] = SECRET_KEY_RE.test(k) ? '[REDACTED]' : redact(val);
+    }
+    return out;
+  };
+  let s: string;
+  try {
+    s = typeof value === 'string' ? value : JSON.stringify(redact(value));
+  } catch {
+    s = String(value);
+  }
+  if (s && s.length > maxBytes) s = s.slice(0, maxBytes) + '…[truncated]';
+  return s ?? '';
 }
 
 interface PendingTaskSpan {
@@ -51,6 +81,20 @@ export interface CollectorState {
   turn_start_ms: number;
   pending_spans: Record<string, PendingToolSpan>;  // keyed by tool_use_id or fallback
   pending_task_spans: Record<string, PendingTaskSpan>;  // keyed by task_id
+  turn_attributes?: Record<string, unknown>;
+}
+
+/**
+ * Merge attributes onto the current turn; persisted so endTurn can emit them
+ * on the root span. Safe to call from any hook.
+ */
+export function setTurnAttributes(
+  config: CollectorConfig,
+  state: CollectorState,
+  attributes: Record<string, unknown>,
+): void {
+  state.turn_attributes = { ...(state.turn_attributes ?? {}), ...attributes };
+  saveState(stateFilePath(config), state);
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +208,7 @@ export function ensureTurn(
     turn_start_ms: Date.now(),
     pending_spans: {},
     pending_task_spans: {},
+    turn_attributes: {},
   };
   saveState(statePath, state);
   return state;
@@ -182,6 +227,7 @@ export function recordPreToolUse(
   spanKey: string,
   toolName: string,
   toolSummary: string,
+  attributes?: Record<string, unknown>,
 ): void {
   const statePath = stateFilePath(config);
   state.pending_spans[spanKey] = {
@@ -189,6 +235,7 @@ export function recordPreToolUse(
     tool_summary: toolSummary,
     start_ms: Date.now(),
     span_id: randomSpanId(),
+    ...(attributes ? { attributes } : {}),
   };
   saveState(statePath, state);
 }
@@ -277,6 +324,8 @@ export async function recordPostToolUse(
   spanKey: string,
   platform: string,
   cwd: string | null,
+  postAttributes?: Record<string, unknown>,
+  error?: string | null,
 ): Promise<number | null> {
   const pending = state.pending_spans[spanKey];
   if (!pending) return null;
@@ -304,10 +353,16 @@ export async function recordPostToolUse(
         'agentguard.session_id': state.session_id,
         'agentguard.turn_number': state.turn_number,
         ...(cwd ? { 'agentguard.cwd': cwd } : {}),
-      },
+        ...(pending.attributes ?? {}),
+        ...(postAttributes ?? {}),
+      } as Record<string, string | number | boolean>,
     },
     parentCtx,
   );
+  if (error) {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: error });
+    span.recordException(error);
+  }
   span.end(endMs);
 
   await provider.forceFlush();
@@ -331,10 +386,15 @@ export async function recordPostToolUse(
 export async function endTurn(
   config: CollectorConfig,
   provider: NodeTracerProvider,
-  state: CollectorState,
+  _state: CollectorState,
   platform: string,
   cwd: string | null,
 ): Promise<void> {
+  // Reload state from disk to serialize against concurrent endTurn calls —
+  // if turn_trace_id has already been cleared by a sibling handler, bail.
+  const statePath = stateFilePath(config);
+  const state = loadState(statePath);
+  if (!state || !state.turn_trace_id) return;
   const endMs = Date.now();
   const traceId = state.turn_trace_id;
 
@@ -357,16 +417,23 @@ export async function endTurn(
         'agentguard.turn_number': state.turn_number,
         'agentguard.platform': platform,
         ...(cwd ? { 'agentguard.cwd': cwd } : {}),
-      },
+        ...(state.turn_attributes ?? {}),
+      } as Record<string, string | number | boolean>,
     },
     rootCtx,
   );
+  // Force the turn span's own spanId to match the synthetic parent spanId that
+  // child tool/task spans use (traceId.slice(0,16)). This makes the turn span
+  // the actual parent of its children in the trace tree instead of a sibling
+  // under a missing span. Also clear parentSpanId so the turn is a true root.
+  const sc = span.spanContext() as { traceId: string; spanId: string };
+  sc.spanId = traceId.slice(0, 16);
+  (span as unknown as { parentSpanId?: string }).parentSpanId = undefined;
   span.end(endMs);
 
   await provider.forceFlush();
 
   // Clear the turn so the next PreToolUse starts fresh
-  const statePath = stateFilePath(config);
   const next: CollectorState = {
     session_id: state.session_id,
     turn_number: state.turn_number,
@@ -374,6 +441,7 @@ export async function endTurn(
     turn_start_ms: 0,
     pending_spans: {},
     pending_task_spans: {},
+    turn_attributes: {},
   };
   saveState(statePath, next);
 }

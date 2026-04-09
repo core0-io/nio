@@ -32,8 +32,64 @@ import { SkillRegistry } from '../registry/index.js';
 import { ActionScanner } from '../action/index.js';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
-import { createTracerProvider, ensureTurn, recordPreToolUse, recordPostToolUse, recordPreTaskToolUse, recordPostTaskToolUse, endTurn } from '../scripts/lib/traces-collector.js';
+import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider, recordToolUse, recordTurn } from '../scripts/lib/metrics-collector.js';
+import { trace, ROOT_CONTEXT, SpanStatusCode, type Span, type Context } from '@opentelemetry/api';
+
+// ---------------------------------------------------------------------------
+// In-memory turn / span tracking (same-process, standard OTEL context).
+// OpenClaw runs hooks in the gateway process, so we don't need the file-based
+// state machine that Claude Code's cross-process hooks require.
+// ---------------------------------------------------------------------------
+
+interface ActiveTurn {
+  span: Span;
+  ctx: Context;
+  turnNumber: number;
+}
+
+const turnCounters = new Map<string, number>();
+const activeTurns = new Map<string, ActiveTurn>();
+const activeToolSpans = new Map<string, Span>();  // key: `${sessionId}:${spanKey}`
+const activeTaskSpans = new Map<string, Span>();  // key: `${sessionId}:${taskId}`
+
+function getOrStartTurn(sessionId: string, platform = 'openclaw', cwd: string | null = null): ActiveTurn {
+  let t = activeTurns.get(sessionId);
+  if (t) return t;
+  const n = (turnCounters.get(sessionId) ?? 0) + 1;
+  turnCounters.set(sessionId, n);
+  const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+  const span = tracer.startSpan(
+    `turn:${n}`,
+    {
+      attributes: {
+        'agentguard.session_id': sessionId,
+        'agentguard.turn_number': n,
+        'agentguard.platform': platform,
+        ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+      },
+    },
+    ROOT_CONTEXT,
+  );
+  const ctx = trace.setSpan(ROOT_CONTEXT, span);
+  t = { span, ctx, turnNumber: n };
+  activeTurns.set(sessionId, t);
+  return t;
+}
+
+function finishTurn(sessionId: string): void {
+  const t = activeTurns.get(sessionId);
+  if (!t) return;
+  // End any still-pending tool/task spans defensively.
+  for (const [k, s] of activeToolSpans) {
+    if (k.startsWith(`${sessionId}:`)) { s.end(); activeToolSpans.delete(k); }
+  }
+  for (const [k, s] of activeTaskSpans) {
+    if (k.startsWith(`${sessionId}:`)) { s.end(); activeTaskSpans.delete(k); }
+  }
+  t.span.end();
+  activeTurns.delete(sessionId);
+}
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -413,20 +469,41 @@ export function registerOpenClawPlugin(
   }
 
   // before_tool_call → evaluate and optionally block
-  api.on('before_tool_call', async (event: unknown) => {
+  api.on('before_tool_call', async (event: unknown, ctx: unknown) => {
     try {
       // Try to infer plugin from tool name
-      const toolEvent = event as { toolName?: string; sessionKey?: string; runId?: string };
+      const toolEvent = event as {
+        toolName?: string;
+        params?: Record<string, unknown>;
+        runId?: string;
+        toolCallId?: string;
+      };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
 
       // OTEL pre-tool span + metric
       const toolName = toolEvent.toolName || 'unknown';
-      const sessionId = toolEvent.sessionKey || toolEvent.runId || 'openclaw';
-      const spanKey = toolName;
+      const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';
+      const spanKey = toolEvent.toolCallId || toolName;
       if (tracerProvider) {
         try {
-          const state = ensureTurn(collectorConfig, sessionId);
-          recordPreToolUse(collectorConfig, state, spanKey, toolName, toolName);
+          const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
+          const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+          const span = tracer.startSpan(
+            `tool:${toolName}`,
+            {
+              attributes: {
+                'agentguard.tool_name': toolName,
+                'agentguard.platform': 'openclaw',
+                'agentguard.session_id': sessionId,
+                'agentguard.tool.input': redactAndTruncate(toolEvent.params ?? {}),
+                ...(toolEvent.toolCallId ? { 'agentguard.tool.call_id': toolEvent.toolCallId } : {}),
+                ...(toolEvent.runId ? { 'agentguard.tool.run_id': toolEvent.runId } : {}),
+              },
+            },
+            turn.ctx,
+          );
+          activeToolSpans.set(`${sessionId}:${spanKey}`, span);
         } catch { /* non-critical */ }
       }
       if (meterProvider) {
@@ -472,18 +549,38 @@ export function registerOpenClawPlugin(
   });
 
   // after_tool_call → audit log + collector (fire-and-forget)
-  api.on('after_tool_call', async (event: unknown) => {
+  api.on('after_tool_call', async (event: unknown, ctx: unknown) => {
     try {
       const input = adapter.parseInput(event);
-      const toolEvent = event as { toolName?: string; sessionKey?: string; runId?: string };
+      const toolEvent = event as {
+        toolName?: string;
+        params?: Record<string, unknown>;
+        runId?: string;
+        toolCallId?: string;
+        result?: unknown;
+        error?: string;
+        durationMs?: number;
+      };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
       writeAuditLog(input, null, pluginId, 'openclaw');
 
       const toolName = toolEvent.toolName || 'unknown';
-      const sessionId = toolEvent.sessionKey || toolEvent.runId || 'openclaw';
+      const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';
+      const spanKey = toolEvent.toolCallId || toolName;
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        await recordPostToolUse(collectorConfig, tracerProvider, state, toolName, 'openclaw', process.cwd());
+        const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+        if (span) {
+          if (toolEvent.result !== undefined) span.setAttribute('agentguard.tool.output', redactAndTruncate(toolEvent.result));
+          if (toolEvent.error) span.setAttribute('agentguard.tool.error', redactAndTruncate(toolEvent.error));
+          if (typeof toolEvent.durationMs === 'number') span.setAttribute('agentguard.tool.duration_ms', toolEvent.durationMs);
+          if (toolEvent.error) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: toolEvent.error });
+            span.recordException(toolEvent.error);
+          }
+          span.end();
+          activeToolSpans.delete(`${sessionId}:${spanKey}`);
+        }
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, toolName, 'PostToolUse', 'openclaw');
@@ -494,9 +591,10 @@ export function registerOpenClawPlugin(
   });
 
   // subagent_spawning → collector pre-task span
-  api.on('subagent_spawning', async (event: unknown) => {
+  api.on('subagent_spawning', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
+      const e = event as { subagentId?: string; runId?: string };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       writeAuditLog(
         { toolName: 'subagent_spawning', toolInput: e as Record<string, unknown>, eventType: 'pre', raw: e },
         { decision: 'allow', risk_level: 'low', risk_tags: [] },
@@ -504,10 +602,22 @@ export function registerOpenClawPlugin(
         'openclaw'
       );
       const taskId = e.subagentId || e.runId || 'unknown';
-      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        recordPreTaskToolUse(collectorConfig, state, taskId, taskId);
+        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
+        const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+        const span = tracer.startSpan(
+          'task:execute',
+          {
+            attributes: {
+              'agentguard.task_id': taskId,
+              'agentguard.platform': 'openclaw',
+              'agentguard.session_id': sessionId,
+            },
+          },
+          turn.ctx,
+        );
+        activeTaskSpans.set(`${sessionId}:${taskId}`, span);
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, 'Task', 'TaskCreated', 'openclaw');
@@ -518,9 +628,10 @@ export function registerOpenClawPlugin(
   });
 
   // subagent_ended → collector post-task span
-  api.on('subagent_ended', async (event: unknown) => {
+  api.on('subagent_ended', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
+      const e = event as { subagentId?: string; runId?: string };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       writeAuditLog(
         { toolName: 'subagent_ended', toolInput: e as Record<string, unknown>, eventType: 'post', raw: e },
         { decision: 'allow', risk_level: 'low', risk_tags: [] },
@@ -528,10 +639,13 @@ export function registerOpenClawPlugin(
         'openclaw'
       );
       const taskId = e.subagentId || e.runId || 'unknown';
-      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        await recordPostTaskToolUse(collectorConfig, tracerProvider, state, taskId, 'openclaw', process.cwd());
+        const span = activeTaskSpans.get(`${sessionId}:${taskId}`);
+        if (span) {
+          span.end();
+          activeTaskSpans.delete(`${sessionId}:${taskId}`);
+        }
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, 'Task', 'TaskCompleted', 'openclaw');
@@ -541,22 +655,48 @@ export function registerOpenClawPlugin(
     }
   });
 
-  // agent_end → end-turn span flush
-  api.on('agent_end', async (event: unknown) => {
+  // before_agent_reply → capture user prompt onto turn root span.
+  // cleanedBody is the final user message heading to the LLM.
+  api.on('before_agent_reply', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { sessionKey?: string; runId?: string };
+      const e = event as { cleanedBody?: string };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      if (tracerProvider && e.cleanedBody) {
+        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
+        turn.span.setAttribute('agentguard.turn.user_prompt', redactAndTruncate(e.cleanedBody));
+      }
+    } catch { /* non-critical */ }
+  });
+
+  // llm_output → capture assistant reply onto turn root span
+  api.on('llm_output', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as { assistantTexts?: string[] };
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      if (tracerProvider && e.assistantTexts?.length) {
+        const turn = activeTurns.get(sessionId);
+        if (turn) turn.span.setAttribute('agentguard.turn.assistant_reply', redactAndTruncate(e.assistantTexts.join('\n')));
+      }
+    } catch { /* non-critical */ }
+  });
+
+  // agent_end → end-turn span flush
+  api.on('agent_end', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as Record<string, unknown>;
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       writeAuditLog(
-        { toolName: 'agent_end', toolInput: e as Record<string, unknown>, eventType: 'post', raw: e },
+        { toolName: 'agent_end', toolInput: e, eventType: 'post', raw: e },
         { decision: 'allow', risk_level: 'low', risk_tags: [] },
         null,
         'openclaw'
       );
-      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        if (state.turn_trace_id) {
-          await endTurn(collectorConfig, tracerProvider, state, 'openclaw', process.cwd());
-        }
+        finishTurn(sessionId);
+        await tracerProvider.forceFlush();
       }
       if (meterProvider) {
         await recordTurn(meterProvider, 'openclaw');

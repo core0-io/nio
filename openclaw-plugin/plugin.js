@@ -62005,30 +62005,31 @@ var require_src13 = __commonJS({
 import { readFileSync as readFileSync4, writeFileSync as writeFileSync2, mkdirSync as mkdirSync2, existsSync as existsSync2 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
 import { createHash as createHash2, randomBytes } from "node:crypto";
-function stateFilePath(config) {
-  const base = config.log ? dirname2(config.log) : `${process.env["HOME"] ?? "~"}/.ffwd-agent-guard`;
-  return `${base}/collector-state.json`;
-}
-function loadState(statePath) {
+function redactAndTruncate(value, maxBytes = MAX_ATTR_BYTES) {
+  const redact = (v) => {
+    if (v === null || v === void 0)
+      return v;
+    if (typeof v === "string")
+      return v;
+    if (typeof v !== "object")
+      return v;
+    if (Array.isArray(v))
+      return v.map(redact);
+    const out = {};
+    for (const [k, val] of Object.entries(v)) {
+      out[k] = SECRET_KEY_RE.test(k) ? "[REDACTED]" : redact(val);
+    }
+    return out;
+  };
+  let s;
   try {
-    const raw = readFileSync4(statePath, "utf-8");
-    return JSON.parse(raw);
+    s = typeof value === "string" ? value : JSON.stringify(redact(value));
   } catch {
-    return null;
+    s = String(value);
   }
-}
-function saveState(statePath, state) {
-  const dir = dirname2(statePath);
-  if (!existsSync2(dir)) {
-    mkdirSync2(dir, { recursive: true });
-  }
-  writeFileSync2(statePath, JSON.stringify(state, null, 2), "utf-8");
-}
-function turnToTraceId(sessionId, turnNumber) {
-  return createHash2("md5").update(`${sessionId}:${turnNumber}`).digest("hex");
-}
-function randomSpanId() {
-  return randomBytes(8).toString("hex");
+  if (s && s.length > maxBytes)
+    s = s.slice(0, maxBytes) + "\u2026[truncated]";
+  return s ?? "";
 }
 function createTracerProvider(config) {
   if (!config.endpoint)
@@ -62064,154 +62065,18 @@ function createTracerProvider(config) {
   provider.register();
   return provider;
 }
-function ensureTurn(config, sessionId) {
-  const statePath = stateFilePath(config);
-  const existing = loadState(statePath);
-  if (existing && existing.session_id === sessionId && existing.turn_trace_id) {
-    return existing;
-  }
-  const turnNumber = (existing?.session_id === sessionId ? existing.turn_number : 0) + 1;
-  const state = {
-    session_id: sessionId,
-    turn_number: turnNumber,
-    turn_trace_id: turnToTraceId(sessionId, turnNumber),
-    turn_start_ms: Date.now(),
-    pending_spans: {},
-    pending_task_spans: {}
-  };
-  saveState(statePath, state);
-  return state;
-}
-function recordPreToolUse(config, state, spanKey, toolName, toolSummary) {
-  const statePath = stateFilePath(config);
-  state.pending_spans[spanKey] = {
-    tool_name: toolName,
-    tool_summary: toolSummary,
-    start_ms: Date.now(),
-    span_id: randomSpanId()
-  };
-  saveState(statePath, state);
-}
-function recordPreTaskToolUse(config, state, taskId, taskSummary) {
-  const statePath = stateFilePath(config);
-  if (!state.pending_task_spans)
-    state.pending_task_spans = {};
-  state.pending_task_spans[taskId] = {
-    task_summary: taskSummary,
-    start_ms: Date.now(),
-    span_id: randomSpanId()
-  };
-  saveState(statePath, state);
-}
-async function recordPostTaskToolUse(config, provider, state, taskId, platform, cwd) {
-  const pending = state.pending_task_spans?.[taskId];
-  if (!pending)
-    return null;
-  const endMs = Date.now();
-  const startMs = pending.start_ms;
-  const traceId = state.turn_trace_id;
-  const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
-    traceId,
-    spanId: traceId.slice(0, 16),
-    traceFlags: TraceFlags.SAMPLED,
-    isRemote: true
-  });
-  const tracer = trace.getTracer("agentguard-collector", "1.0.0");
-  const span = tracer.startSpan("task:execute", {
-    startTime: startMs,
-    attributes: {
-      "agentguard.task_id": taskId,
-      "agentguard.task_summary": pending.task_summary,
-      "agentguard.platform": platform,
-      "agentguard.session_id": state.session_id,
-      "agentguard.turn_number": state.turn_number,
-      ...cwd ? { "agentguard.cwd": cwd } : {}
-    }
-  }, parentCtx);
-  span.end(endMs);
-  await provider.forceFlush();
-  const statePath = stateFilePath(config);
-  delete state.pending_task_spans[taskId];
-  saveState(statePath, state);
-  return endMs - startMs;
-}
-async function recordPostToolUse(config, provider, state, spanKey, platform, cwd) {
-  const pending = state.pending_spans[spanKey];
-  if (!pending)
-    return null;
-  const endMs = Date.now();
-  const startMs = pending.start_ms;
-  const traceId = state.turn_trace_id;
-  const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
-    traceId,
-    spanId: traceId.slice(0, 16),
-    // synthetic parent span representing the turn
-    traceFlags: TraceFlags.SAMPLED,
-    isRemote: true
-  });
-  const tracer = trace.getTracer("agentguard-collector", "1.0.0");
-  const span = tracer.startSpan(`tool:${pending.tool_name}`, {
-    startTime: startMs,
-    attributes: {
-      "agentguard.tool_name": pending.tool_name,
-      "agentguard.tool_summary": pending.tool_summary,
-      "agentguard.platform": platform,
-      "agentguard.session_id": state.session_id,
-      "agentguard.turn_number": state.turn_number,
-      ...cwd ? { "agentguard.cwd": cwd } : {}
-    }
-  }, parentCtx);
-  span.end(endMs);
-  await provider.forceFlush();
-  const statePath = stateFilePath(config);
-  delete state.pending_spans[spanKey];
-  saveState(statePath, state);
-  return endMs - startMs;
-}
-async function endTurn(config, provider, state, platform, cwd) {
-  const endMs = Date.now();
-  const traceId = state.turn_trace_id;
-  const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
-    traceId,
-    spanId: traceId.slice(0, 16),
-    traceFlags: TraceFlags.SAMPLED,
-    isRemote: true
-  });
-  const tracer = trace.getTracer("agentguard-collector", "1.0.0");
-  const span = tracer.startSpan(`turn:${state.turn_number}`, {
-    startTime: state.turn_start_ms,
-    attributes: {
-      "agentguard.session_id": state.session_id,
-      "agentguard.turn_number": state.turn_number,
-      "agentguard.platform": platform,
-      ...cwd ? { "agentguard.cwd": cwd } : {}
-    }
-  }, rootCtx);
-  span.end(endMs);
-  await provider.forceFlush();
-  const statePath = stateFilePath(config);
-  const next = {
-    session_id: state.session_id,
-    turn_number: state.turn_number,
-    turn_trace_id: "",
-    // cleared — will be re-derived on next PreToolUse
-    turn_start_ms: 0,
-    pending_spans: {},
-    pending_task_spans: {}
-  };
-  saveState(statePath, next);
-}
-var import_sdk_trace_node, import_resources, import_exporter_trace_otlp_http, import_exporter_trace_otlp_grpc, import_grpc_js;
+var import_sdk_trace_node, import_resources, import_exporter_trace_otlp_http, import_exporter_trace_otlp_grpc, import_grpc_js, MAX_ATTR_BYTES, SECRET_KEY_RE;
 var init_traces_collector = __esm({
   "dist/scripts/lib/traces-collector.js"() {
     "use strict";
-    init_esm6();
     import_sdk_trace_node = __toESM(require_src5(), 1);
     import_resources = __toESM(require_src3(), 1);
     init_esm7();
     import_exporter_trace_otlp_http = __toESM(require_src8(), 1);
     import_exporter_trace_otlp_grpc = __toESM(require_src13(), 1);
     import_grpc_js = __toESM(require_src11(), 1);
+    MAX_ATTR_BYTES = 2048;
+    SECRET_KEY_RE = /(api[_-]?key|secret|token|password|passwd|authorization|bearer|private[_-]?key|mnemonic|seed|credential)/i;
   }
 });
 
@@ -62532,6 +62397,45 @@ import { readdirSync as readdirSync2, existsSync as existsSync3, appendFileSync 
 import { join as join4 } from "node:path";
 import { homedir as homedir4 } from "node:os";
 import * as path5 from "node:path";
+function getOrStartTurn(sessionId, platform = "openclaw", cwd = null) {
+  let t = activeTurns.get(sessionId);
+  if (t)
+    return t;
+  const n = (turnCounters.get(sessionId) ?? 0) + 1;
+  turnCounters.set(sessionId, n);
+  const tracer = trace.getTracer("agentguard-collector", "1.0.0");
+  const span = tracer.startSpan(`turn:${n}`, {
+    attributes: {
+      "agentguard.session_id": sessionId,
+      "agentguard.turn_number": n,
+      "agentguard.platform": platform,
+      ...cwd ? { "agentguard.cwd": cwd } : {}
+    }
+  }, ROOT_CONTEXT);
+  const ctx = trace.setSpan(ROOT_CONTEXT, span);
+  t = { span, ctx, turnNumber: n };
+  activeTurns.set(sessionId, t);
+  return t;
+}
+function finishTurn(sessionId) {
+  const t = activeTurns.get(sessionId);
+  if (!t)
+    return;
+  for (const [k, s] of activeToolSpans) {
+    if (k.startsWith(`${sessionId}:`)) {
+      s.end();
+      activeToolSpans.delete(k);
+    }
+  }
+  for (const [k, s] of activeTaskSpans) {
+    if (k.startsWith(`${sessionId}:`)) {
+      s.end();
+      activeTaskSpans.delete(k);
+    }
+  }
+  t.span.end();
+  activeTurns.delete(sessionId);
+}
 function ensureFfwdAgentGuardDir() {
   if (!existsSync3(FFWD_AGENT_GUARD_DIR2)) {
     mkdirSync3(FFWD_AGENT_GUARD_DIR2, { recursive: true });
@@ -62696,17 +62600,29 @@ function registerOpenClawPlugin(api, options = {}) {
       }
     });
   }
-  api.on("before_tool_call", async (event) => {
+  api.on("before_tool_call", async (event, ctx) => {
     try {
       const toolEvent = event;
+      const c = ctx ?? {};
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
       const toolName = toolEvent.toolName || "unknown";
-      const sessionId = toolEvent.sessionKey || toolEvent.runId || "openclaw";
-      const spanKey = toolName;
+      const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || "openclaw";
+      const spanKey = toolEvent.toolCallId || toolName;
       if (tracerProvider) {
         try {
-          const state = ensureTurn(collectorConfig, sessionId);
-          recordPreToolUse(collectorConfig, state, spanKey, toolName, toolName);
+          const turn = getOrStartTurn(sessionId, "openclaw", process.cwd());
+          const tracer = trace.getTracer("agentguard-collector", "1.0.0");
+          const span = tracer.startSpan(`tool:${toolName}`, {
+            attributes: {
+              "agentguard.tool_name": toolName,
+              "agentguard.platform": "openclaw",
+              "agentguard.session_id": sessionId,
+              "agentguard.tool.input": redactAndTruncate(toolEvent.params ?? {}),
+              ...toolEvent.toolCallId ? { "agentguard.tool.call_id": toolEvent.toolCallId } : {},
+              ...toolEvent.runId ? { "agentguard.tool.run_id": toolEvent.runId } : {}
+            }
+          }, turn.ctx);
+          activeToolSpans.set(`${sessionId}:${spanKey}`, span);
         } catch {
         }
       }
@@ -62744,17 +62660,32 @@ function registerOpenClawPlugin(api, options = {}) {
       return void 0;
     }
   });
-  api.on("after_tool_call", async (event) => {
+  api.on("after_tool_call", async (event, ctx) => {
     try {
       const input = adapter.parseInput(event);
       const toolEvent = event;
+      const c = ctx ?? {};
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
       writeAuditLog(input, null, pluginId, "openclaw");
       const toolName = toolEvent.toolName || "unknown";
-      const sessionId = toolEvent.sessionKey || toolEvent.runId || "openclaw";
+      const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || "openclaw";
+      const spanKey = toolEvent.toolCallId || toolName;
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        await recordPostToolUse(collectorConfig, tracerProvider, state, toolName, "openclaw", process.cwd());
+        const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+        if (span) {
+          if (toolEvent.result !== void 0)
+            span.setAttribute("agentguard.tool.output", redactAndTruncate(toolEvent.result));
+          if (toolEvent.error)
+            span.setAttribute("agentguard.tool.error", redactAndTruncate(toolEvent.error));
+          if (typeof toolEvent.durationMs === "number")
+            span.setAttribute("agentguard.tool.duration_ms", toolEvent.durationMs);
+          if (toolEvent.error) {
+            span.setStatus({ code: SpanStatusCode.ERROR, message: toolEvent.error });
+            span.recordException(toolEvent.error);
+          }
+          span.end();
+          activeToolSpans.delete(`${sessionId}:${spanKey}`);
+        }
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, toolName, "PostToolUse", "openclaw");
@@ -62762,15 +62693,24 @@ function registerOpenClawPlugin(api, options = {}) {
     } catch {
     }
   });
-  api.on("subagent_spawning", async (event) => {
+  api.on("subagent_spawning", async (event, ctx) => {
     try {
       const e = event;
+      const c = ctx ?? {};
       writeAuditLog({ toolName: "subagent_spawning", toolInput: e, eventType: "pre", raw: e }, { decision: "allow", risk_level: "low", risk_tags: [] }, null, "openclaw");
       const taskId = e.subagentId || e.runId || "unknown";
-      const sessionId = e.sessionKey || e.runId || "openclaw";
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || "openclaw";
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        recordPreTaskToolUse(collectorConfig, state, taskId, taskId);
+        const turn = getOrStartTurn(sessionId, "openclaw", process.cwd());
+        const tracer = trace.getTracer("agentguard-collector", "1.0.0");
+        const span = tracer.startSpan("task:execute", {
+          attributes: {
+            "agentguard.task_id": taskId,
+            "agentguard.platform": "openclaw",
+            "agentguard.session_id": sessionId
+          }
+        }, turn.ctx);
+        activeTaskSpans.set(`${sessionId}:${taskId}`, span);
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, "Task", "TaskCreated", "openclaw");
@@ -62778,15 +62718,19 @@ function registerOpenClawPlugin(api, options = {}) {
     } catch {
     }
   });
-  api.on("subagent_ended", async (event) => {
+  api.on("subagent_ended", async (event, ctx) => {
     try {
       const e = event;
+      const c = ctx ?? {};
       writeAuditLog({ toolName: "subagent_ended", toolInput: e, eventType: "post", raw: e }, { decision: "allow", risk_level: "low", risk_tags: [] }, null, "openclaw");
       const taskId = e.subagentId || e.runId || "unknown";
-      const sessionId = e.sessionKey || e.runId || "openclaw";
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || "openclaw";
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        await recordPostTaskToolUse(collectorConfig, tracerProvider, state, taskId, "openclaw", process.cwd());
+        const span = activeTaskSpans.get(`${sessionId}:${taskId}`);
+        if (span) {
+          span.end();
+          activeTaskSpans.delete(`${sessionId}:${taskId}`);
+        }
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, "Task", "TaskCompleted", "openclaw");
@@ -62794,16 +62738,40 @@ function registerOpenClawPlugin(api, options = {}) {
     } catch {
     }
   });
-  api.on("agent_end", async (event) => {
+  api.on("before_agent_reply", async (event, ctx) => {
     try {
       const e = event;
+      const c = ctx ?? {};
+      const sessionId = c.sessionKey || c.sessionId || c.runId || "openclaw";
+      if (tracerProvider && e.cleanedBody) {
+        const turn = getOrStartTurn(sessionId, "openclaw", process.cwd());
+        turn.span.setAttribute("agentguard.turn.user_prompt", redactAndTruncate(e.cleanedBody));
+      }
+    } catch {
+    }
+  });
+  api.on("llm_output", async (event, ctx) => {
+    try {
+      const e = event;
+      const c = ctx ?? {};
+      const sessionId = c.sessionKey || c.sessionId || c.runId || "openclaw";
+      if (tracerProvider && e.assistantTexts?.length) {
+        const turn = activeTurns.get(sessionId);
+        if (turn)
+          turn.span.setAttribute("agentguard.turn.assistant_reply", redactAndTruncate(e.assistantTexts.join("\n")));
+      }
+    } catch {
+    }
+  });
+  api.on("agent_end", async (event, ctx) => {
+    try {
+      const e = event;
+      const c = ctx ?? {};
       writeAuditLog({ toolName: "agent_end", toolInput: e, eventType: "post", raw: e }, { decision: "allow", risk_level: "low", risk_tags: [] }, null, "openclaw");
-      const sessionId = e.sessionKey || e.runId || "openclaw";
+      const sessionId = c.sessionKey || c.sessionId || c.runId || "openclaw";
       if (tracerProvider) {
-        const state = ensureTurn(collectorConfig, sessionId);
-        if (state.turn_trace_id) {
-          await endTurn(collectorConfig, tracerProvider, state, "openclaw", process.cwd());
-        }
+        finishTurn(sessionId);
+        await tracerProvider.forceFlush();
       }
       if (meterProvider) {
         await recordTurn(meterProvider, "openclaw");
@@ -62813,7 +62781,7 @@ function registerOpenClawPlugin(api, options = {}) {
   });
   logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || "balanced"})`);
 }
-var OPENCLAW_SKILLS_DIR, CLAUDE_SKILLS_DIR, FFWD_AGENT_GUARD_DIR2, AUDIT_PATH2, OPENCLAW_REGISTRY_STATE, toolToPluginMap, pluginScanCache, pluginEntry, openclaw_plugin_default;
+var turnCounters, activeTurns, activeToolSpans, activeTaskSpans, OPENCLAW_SKILLS_DIR, CLAUDE_SKILLS_DIR, FFWD_AGENT_GUARD_DIR2, AUDIT_PATH2, OPENCLAW_REGISTRY_STATE, toolToPluginMap, pluginScanCache, pluginEntry, openclaw_plugin_default;
 var init_openclaw_plugin = __esm({
   "dist/adapters/openclaw-plugin.js"() {
     init_openclaw();
@@ -62826,6 +62794,11 @@ var init_openclaw_plugin = __esm({
     init_config_loader();
     init_traces_collector();
     init_metrics_collector();
+    init_esm6();
+    turnCounters = /* @__PURE__ */ new Map();
+    activeTurns = /* @__PURE__ */ new Map();
+    activeToolSpans = /* @__PURE__ */ new Map();
+    activeTaskSpans = /* @__PURE__ */ new Map();
     OPENCLAW_SKILLS_DIR = join4(homedir4(), ".openclaw", "skills");
     CLAUDE_SKILLS_DIR = join4(homedir4(), ".claude", "skills");
     FFWD_AGENT_GUARD_DIR2 = process.env.FFWD_AGENT_GUARD_HOME || join4(homedir4(), ".ffwd-agent-guard");

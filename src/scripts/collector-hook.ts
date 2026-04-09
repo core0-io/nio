@@ -37,6 +37,8 @@ import {
   recordPreTaskToolUse,
   recordPostTaskToolUse,
   endTurn,
+  redactAndTruncate,
+  setTurnAttributes,
 } from './lib/traces-collector.js';
 
 // ---------------------------------------------------------------------------
@@ -49,6 +51,8 @@ interface HookStdinPayload {
   session_id?: string;
   transcript_path?: string;
   cwd?: string;
+  // UserPromptSubmit
+  prompt?: string;
   // PreToolUse / PostToolUse
   tool_name?: string;
   tool_use_id?: string;
@@ -167,13 +171,25 @@ async function main(): Promise<void> {
   });
 
   try {
-    if (event === 'PreToolUse') {
+    if (event === 'UserPromptSubmit') {
+      if (tracerProvider && input.prompt) {
+        const state = ensureTurn(config, sessionId);
+        setTurnAttributes(config, state, {
+          'agentguard.turn.user_prompt': redactAndTruncate(input.prompt),
+        });
+      }
+
+    } else if (event === 'PreToolUse') {
       const summary = toolSummary(toolName, toolInput);
       const key = spanKey(input);
 
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
-        recordPreToolUse(config, state, key, toolName, summary);
+        const preAttrs: Record<string, unknown> = {
+          'agentguard.tool.input': redactAndTruncate(toolInput),
+        };
+        if (input.tool_use_id) preAttrs['agentguard.tool.call_id'] = input.tool_use_id;
+        recordPreToolUse(config, state, key, toolName, summary, preAttrs);
       }
 
       if (meterProvider) {
@@ -185,7 +201,11 @@ async function main(): Promise<void> {
 
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
-        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd);
+        const resp = input.tool_response ?? {};
+        const postAttrs: Record<string, unknown> = {};
+        if (resp.output !== undefined) postAttrs['agentguard.tool.output'] = redactAndTruncate(resp.output);
+        if (resp.error) postAttrs['agentguard.tool.error'] = redactAndTruncate(resp.error);
+        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd, postAttrs, resp.error ?? null);
       }
 
       if (meterProvider) {
