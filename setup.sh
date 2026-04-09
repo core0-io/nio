@@ -99,8 +99,24 @@ fi
 if [[ "$PLATFORM" == openclaw* ]]; then
   echo "[2/5] Registering OpenClaw plugin (guard + collector hooks)..."
   if command -v openclaw &>/dev/null; then
-    openclaw plugins install -l "$SCRIPT_DIR"
+    openclaw plugins install -l "$SCRIPT_DIR/openclaw-plugin"
     echo "  OK: Plugin registered (ffwd-agent-guard)"
+
+    # Restart gateway so it picks up the new plugin
+    GW_PID=$(pgrep -x openclaw-gateway 2>/dev/null || true)
+    if [ -n "$GW_PID" ]; then
+      echo "  Restarting OpenClaw gateway (pid $GW_PID)..."
+      if launchctl bootout "gui/$UID/ai.openclaw.gateway" 2>/dev/null; then
+        sleep 1
+        launchctl bootstrap "gui/$UID" "$HOME/Library/LaunchAgents/ai.openclaw.gateway.plist" 2>/dev/null \
+          || openclaw gateway &>/dev/null &
+      else
+        kill "$GW_PID" 2>/dev/null || true
+        sleep 1
+        openclaw gateway &>/dev/null &
+      fi
+      echo "  OK: Gateway restarted"
+    fi
   else
     echo "  WARN: openclaw CLI not found, skipping plugin install"
     echo "        Run manually: openclaw plugins install -l $SCRIPT_DIR"
@@ -142,12 +158,23 @@ fi
 # ---- Step 5: Create config directory ----
 echo "[5/5] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
-cp "$SCRIPT_DIR/config.default.json" "$FFWD_AGENT_GUARD_DIR/config.json"
-echo "  OK: Config updated from config.default.json"
+if [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
+  node -e "
+    const yaml = require('js-yaml');
+    const fs = require('fs');
+    const cfg = yaml.load(fs.readFileSync('$SCRIPT_DIR/config.default.yaml', 'utf8'));
+    fs.writeFileSync('$FFWD_AGENT_GUARD_DIR/config.json', JSON.stringify(cfg, null, 2));
+  " 2>/dev/null || cp "$SCRIPT_DIR/config.default.yaml" "$FFWD_AGENT_GUARD_DIR/config.yaml"
+  echo "  OK: Default config written"
+else
+  echo "  OK: Existing config kept"
+fi
 
 # ---- Done ----
 echo ""
 echo "  ✅ FFWD AgentGuard is installed!"
+echo ""
+echo "  ⚠️  Hooks take effect on the next session (Claude Code restart, or next OpenClaw task)."
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  🦞 NEXT STEP: Run your first security checkup"

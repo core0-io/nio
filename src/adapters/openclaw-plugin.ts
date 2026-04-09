@@ -31,6 +31,9 @@ import { SkillScanner } from '../scanner/index.js';
 import { SkillRegistry } from '../registry/index.js';
 import { ActionScanner } from '../action/index.js';
 import { DEFAULT_CAPABILITY } from '../types/skill.js';
+import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { createTracerProvider, ensureTurn, recordPreToolUse, recordPostToolUse, recordPreTaskToolUse, recordPostTaskToolUse, endTurn } from '../scripts/lib/traces-collector.js';
+import { createMeterProvider, recordToolUse, recordTurn } from '../scripts/lib/metrics-collector.js';
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -59,12 +62,17 @@ interface OpenClawPluginRegistry {
 /**
  * OpenClaw plugin register API interface (subset we use).
  * Matches the `api` object passed to `register(api)` by OpenClaw's plugin loader.
+ *
+ * Use `api.on(...)` — it writes to `registry.typedHooks`, which is the list
+ * the runtime hook dispatcher actually reads. The legacy `api.registerHook(...)`
+ * only populates `registry.hooks` (metadata shown by `openclaw plugins inspect`)
+ * and is never emitted by the hook runner.
  */
 interface OpenClawRegisterApi {
-  registerHook(
+  on(
     hookName: string,
     handler: (event: unknown, ctx?: unknown) => Promise<unknown> | unknown,
-    opts?: { name?: string; description?: string }
+    opts?: { priority?: number }
   ): void;
 }
 
@@ -346,6 +354,10 @@ export function registerOpenClawPlugin(
   const scanner = options.scanner ?? new SkillScanner({ useExternalScanner: false, extraPatterns: config.rules });
   const trustRegistry = options.registry ?? new SkillRegistry();
 
+  const collectorConfig = loadCollectorConfig();
+  const tracerProvider = createTracerProvider(collectorConfig);
+  const meterProvider = createMeterProvider(collectorConfig);
+
   // Simple logger
   const logger = (msg: string) => console.log(msg);
 
@@ -391,7 +403,7 @@ export function registerOpenClawPlugin(
 
   // session_start → auto-scan skill directories (only when opt-in)
   if (options.skipAutoScan === false) {
-    api.registerHook('session_start', async () => {
+    api.on('session_start', async () => {
       try {
         await autoScanSkillDirs(scanner, trustRegistry, logger);
       } catch {
@@ -401,11 +413,25 @@ export function registerOpenClawPlugin(
   }
 
   // before_tool_call → evaluate and optionally block
-  api.registerHook('before_tool_call', async (event: unknown) => {
+  api.on('before_tool_call', async (event: unknown) => {
     try {
       // Try to infer plugin from tool name
-      const toolEvent = event as { toolName?: string };
+      const toolEvent = event as { toolName?: string; sessionKey?: string; runId?: string };
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
+
+      // OTEL pre-tool span + metric
+      const toolName = toolEvent.toolName || 'unknown';
+      const sessionId = toolEvent.sessionKey || toolEvent.runId || 'openclaw';
+      const spanKey = toolName;
+      if (tracerProvider) {
+        try {
+          const state = ensureTurn(collectorConfig, sessionId);
+          recordPreToolUse(collectorConfig, state, spanKey, toolName, toolName);
+        } catch { /* non-critical */ }
+      }
+      if (meterProvider) {
+        recordToolUse(meterProvider, toolName, 'PreToolUse', 'openclaw').catch(() => {});
+      }
 
       // Check if plugin is untrusted
       if (pluginId) {
@@ -446,23 +472,29 @@ export function registerOpenClawPlugin(
   });
 
   // after_tool_call → audit log + collector (fire-and-forget)
-  // Mirrors CC: PostToolUse → guard-hook (audit) + collector-hook (OTEL post-tool span)
-  // TODO: wire OTEL recordPostToolUse once collector lib is moved out of src/scripts
-  api.registerHook('after_tool_call', async (event: unknown) => {
+  api.on('after_tool_call', async (event: unknown) => {
     try {
       const input = adapter.parseInput(event);
-      const toolEvent = event as { toolName?: string };
+      const toolEvent = event as { toolName?: string; sessionKey?: string; runId?: string };
       const pluginId = toolEvent.toolName ? getPluginIdFromTool(toolEvent.toolName) : null;
       writeAuditLog(input, null, pluginId, 'openclaw');
+
+      const toolName = toolEvent.toolName || 'unknown';
+      const sessionId = toolEvent.sessionKey || toolEvent.runId || 'openclaw';
+      if (tracerProvider) {
+        const state = ensureTurn(collectorConfig, sessionId);
+        await recordPostToolUse(collectorConfig, tracerProvider, state, toolName, 'openclaw', process.cwd());
+      }
+      if (meterProvider) {
+        await recordToolUse(meterProvider, toolName, 'PostToolUse', 'openclaw');
+      }
     } catch {
       // Non-critical
     }
   });
 
   // subagent_spawning → collector pre-task span
-  // Mirrors CC: TaskCreated → collector-hook (recordPreTaskToolUse)
-  // TODO: wire OTEL recordPreTaskToolUse once collector lib is moved out of src/scripts
-  api.registerHook('subagent_spawning', async (event: unknown) => {
+  api.on('subagent_spawning', async (event: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
       writeAuditLog(
@@ -471,16 +503,22 @@ export function registerOpenClawPlugin(
         null,
         'openclaw'
       );
+      const taskId = e.subagentId || e.runId || 'unknown';
+      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      if (tracerProvider) {
+        const state = ensureTurn(collectorConfig, sessionId);
+        recordPreTaskToolUse(collectorConfig, state, taskId, taskId);
+      }
+      if (meterProvider) {
+        await recordToolUse(meterProvider, 'Task', 'TaskCreated', 'openclaw');
+      }
     } catch {
       // Non-critical
     }
   });
 
-  // subagent_ended → collector post-task span + end-turn flush
-  // Mirrors CC: TaskCompleted → collector-hook (recordPostTaskToolUse)
-  //         and SubagentStop → collector-hook (endTurn / recordTurn)
-  // TODO: wire OTEL recordPostTaskToolUse + endTurn once collector lib is moved out of src/scripts
-  api.registerHook('subagent_ended', async (event: unknown) => {
+  // subagent_ended → collector post-task span
+  api.on('subagent_ended', async (event: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string; sessionKey?: string };
       writeAuditLog(
@@ -489,15 +527,22 @@ export function registerOpenClawPlugin(
         null,
         'openclaw'
       );
+      const taskId = e.subagentId || e.runId || 'unknown';
+      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      if (tracerProvider) {
+        const state = ensureTurn(collectorConfig, sessionId);
+        await recordPostTaskToolUse(collectorConfig, tracerProvider, state, taskId, 'openclaw', process.cwd());
+      }
+      if (meterProvider) {
+        await recordToolUse(meterProvider, 'Task', 'TaskCompleted', 'openclaw');
+      }
     } catch {
       // Non-critical
     }
   });
 
-  // agent_end → collector end-turn span flush
-  // Mirrors CC: Stop → collector-hook (endTurn / recordTurn)
-  // TODO: wire OTEL endTurn + recordTurn once collector lib is moved out of src/scripts
-  api.registerHook('agent_end', async (event: unknown) => {
+  // agent_end → end-turn span flush
+  api.on('agent_end', async (event: unknown) => {
     try {
       const e = event as { sessionKey?: string; runId?: string };
       writeAuditLog(
@@ -506,6 +551,16 @@ export function registerOpenClawPlugin(
         null,
         'openclaw'
       );
+      const sessionId = e.sessionKey || e.runId || 'openclaw';
+      if (tracerProvider) {
+        const state = ensureTurn(collectorConfig, sessionId);
+        if (state.turn_trace_id) {
+          await endTurn(collectorConfig, tracerProvider, state, 'openclaw', process.cwd());
+        }
+      }
+      if (meterProvider) {
+        await recordTurn(meterProvider, 'openclaw');
+      }
     } catch {
       // Non-critical
     }

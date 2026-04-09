@@ -20,6 +20,8 @@ import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { trace, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
@@ -127,6 +129,7 @@ export function createTracerProvider(config: CollectorConfig): NodeTracerProvide
   }
 
   const provider = new NodeTracerProvider({
+    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'agentguard' }),
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
   provider.register();

@@ -1,0 +1,18 @@
+# Exclude intentionally vulnerable example code
+examples/
+
+# Exclude test files
+src/tests/
+dist/tests/
+
+# Exclude compiled output (source of truth is src/)
+dist/
+
+# Exclude dependencies
+node_modules/
+skills/ffwd-agent-guard/node_modules/
+
+# Exclude data and logs
+data/
+*.log
+.DS_Store

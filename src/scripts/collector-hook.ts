@@ -66,15 +66,7 @@ interface HookStdinPayload {
   task_output?: unknown;
 }
 
-// ---------------------------------------------------------------------------
-// Platform arg
-// ---------------------------------------------------------------------------
-
-const platformIdx = process.argv.indexOf('--platform');
-const platform =
-  platformIdx !== -1 && process.argv[platformIdx + 1]
-    ? process.argv[platformIdx + 1]
-    : 'unknown';
+const platform = 'claude-code';
 
 // ---------------------------------------------------------------------------
 // Load config

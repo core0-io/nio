@@ -1,8 +1,7 @@
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { load as yamlLoad } from 'js-yaml';
+import { join } from 'node:path';
+import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { homedir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
@@ -14,10 +13,9 @@ export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './c
 // Paths
 // ---------------------------------------------------------------------------
 
-const __filename = fileURLToPath(import.meta.url);
 const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
-const CONFIG_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json');
-const CONFIG_DEFAULT_PATH = join(dirname(__filename), '..', '..', 'config.default.yaml');
+const CONFIG_YAML_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.yaml');
+const CONFIG_JSON_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json'); // legacy
 const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
@@ -26,12 +24,9 @@ function ensureDir(): void {
   }
 }
 
-function loadDefaults(): AgentGuardConfig {
-  const raw = yamlLoad(readFileSync(CONFIG_DEFAULT_PATH, 'utf-8'));
-  return validateConfig(raw, CONFIG_DEFAULT_PATH);
-}
-
-const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
+// Inline built-in defaults. Does NOT read any file, so the plugin can be
+// safely bundled and loaded from any cwd.
+const CONFIG_DEFAULTS: AgentGuardConfig = validateConfig({ level: 'balanced' }, 'inline-defaults');
 
 // ---------------------------------------------------------------------------
 // Config loading
@@ -39,24 +34,41 @@ const CONFIG_DEFAULTS: AgentGuardConfig = loadDefaults();
 
 export function resetConfig(): AgentGuardConfig {
   ensureDir();
-  writeFileSync(CONFIG_PATH, JSON.stringify(CONFIG_DEFAULTS, null, 2) + '\n');
+  writeFileSync(CONFIG_YAML_PATH, yamlDump(CONFIG_DEFAULTS));
   return { ...CONFIG_DEFAULTS };
 }
 
 export function loadConfig(): AgentGuardConfig {
-  if (!existsSync(CONFIG_PATH)) {
+  // Prefer user config.yaml at ~/.ffwd-agent-guard/config.yaml
+  if (existsSync(CONFIG_YAML_PATH)) {
     try {
-      ensureDir();
-      writeFileSync(CONFIG_PATH, JSON.stringify(CONFIG_DEFAULTS, null, 2) + '\n');
+      const raw = yamlLoad(readFileSync(CONFIG_YAML_PATH, 'utf-8'));
+      const validated = validateConfig(raw, CONFIG_YAML_PATH);
+      return { ...CONFIG_DEFAULTS, ...validated };
     } catch {
-      // Best-effort: filesystem may be read-only
+      return { ...CONFIG_DEFAULTS };
     }
-    return { ...CONFIG_DEFAULTS };
   }
 
-  const raw = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
-  const validated = validateConfig(raw, CONFIG_PATH);
-  return { ...CONFIG_DEFAULTS, ...validated };
+  // Legacy fallback: ~/.ffwd-agent-guard/config.json
+  if (existsSync(CONFIG_JSON_PATH)) {
+    try {
+      const raw = JSON.parse(readFileSync(CONFIG_JSON_PATH, 'utf-8'));
+      const validated = validateConfig(raw, CONFIG_JSON_PATH);
+      return { ...CONFIG_DEFAULTS, ...validated };
+    } catch {
+      return { ...CONFIG_DEFAULTS };
+    }
+  }
+
+  // No user config — use inline defaults, try to persist a starter file
+  try {
+    ensureDir();
+    writeFileSync(CONFIG_YAML_PATH, yamlDump(CONFIG_DEFAULTS));
+  } catch {
+    // Best-effort: filesystem may be read-only
+  }
+  return { ...CONFIG_DEFAULTS };
 }
 
 export function loadMetricsConfig(): ResolvedMetricsConfig {
@@ -149,18 +161,6 @@ export function shouldAskAtLevel(
   }
 
   return decision.decision === 'confirm';
-}
-
-// ---------------------------------------------------------------------------
-// Platform detection (reads env vars set by the calling agent runtime)
-// ---------------------------------------------------------------------------
-
-export function detectPlatform(): string {
-  if (process.env.OPENCLAW_STATE_DIR) return 'openclaw';
-  if (process.env.CODEX_SESSION_ID) return 'codex';
-  if (process.env.CURSOR_SESSION_ID) return 'cursor';
-  if (process.env.CLAUDE_CODE) return 'claude-code';
-  return 'unknown';
 }
 
 // ---------------------------------------------------------------------------

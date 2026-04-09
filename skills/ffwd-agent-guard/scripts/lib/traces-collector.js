@@ -17,6 +17,8 @@ import { dirname } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { trace, TraceFlags, ROOT_CONTEXT } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { resourceFromAttributes } from '@opentelemetry/resources';
+import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
@@ -87,6 +89,7 @@ export function createTracerProvider(config) {
         });
     }
     const provider = new NodeTracerProvider({
+        resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'agentguard' }),
         spanProcessors: [new SimpleSpanProcessor(exporter)],
     });
     provider.register();
@@ -113,6 +116,7 @@ export function ensureTurn(config, sessionId) {
         turn_trace_id: turnToTraceId(sessionId, turnNumber),
         turn_start_ms: Date.now(),
         pending_spans: {},
+        pending_task_spans: {},
     };
     saveState(statePath, state);
     return state;
@@ -132,6 +136,56 @@ export function recordPreToolUse(config, state, spanKey, toolName, toolSummary) 
         span_id: randomSpanId(),
     };
     saveState(statePath, state);
+}
+/**
+ * Called at PreTaskToolUse: records task span start time to state.
+ */
+export function recordPreTaskToolUse(config, state, taskId, taskSummary) {
+    const statePath = stateFilePath(config);
+    if (!state.pending_task_spans)
+        state.pending_task_spans = {};
+    state.pending_task_spans[taskId] = {
+        task_summary: taskSummary,
+        start_ms: Date.now(),
+        span_id: randomSpanId(),
+    };
+    saveState(statePath, state);
+}
+/**
+ * Called at PostTaskToolUse: emits a task span as a child of the current turn,
+ * removes it from state, and returns the duration in ms.
+ */
+export async function recordPostTaskToolUse(config, provider, state, taskId, platform, cwd) {
+    const pending = state.pending_task_spans?.[taskId];
+    if (!pending)
+        return null;
+    const endMs = Date.now();
+    const startMs = pending.start_ms;
+    const traceId = state.turn_trace_id;
+    const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
+        traceId,
+        spanId: traceId.slice(0, 16),
+        traceFlags: TraceFlags.SAMPLED,
+        isRemote: true,
+    });
+    const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+    const span = tracer.startSpan('task:execute', {
+        startTime: startMs,
+        attributes: {
+            'agentguard.task_id': taskId,
+            'agentguard.task_summary': pending.task_summary,
+            'agentguard.platform': platform,
+            'agentguard.session_id': state.session_id,
+            'agentguard.turn_number': state.turn_number,
+            ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        },
+    }, parentCtx);
+    span.end(endMs);
+    await provider.forceFlush();
+    const statePath = stateFilePath(config);
+    delete state.pending_task_spans[taskId];
+    saveState(statePath, state);
+    return endMs - startMs;
 }
 /**
  * Called at PostToolUse: retrieves the pending span, emits it with correct
@@ -209,6 +263,7 @@ export async function endTurn(config, provider, state, platform, cwd) {
         turn_trace_id: '', // cleared — will be re-derived on next PreToolUse
         turn_start_ms: 0,
         pending_spans: {},
+        pending_task_spans: {},
     };
     saveState(statePath, next);
 }
