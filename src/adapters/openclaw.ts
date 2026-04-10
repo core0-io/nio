@@ -115,14 +115,7 @@ export class OpenClawAdapter implements HookAdapter {
     } as unknown as ActionEnvelope;
   }
 
-  async inferInitiatingSkill(input: HookInput): Promise<string | null> {
-    // Try to get plugin ID from tool → plugin mapping
-    try {
-      const { getPluginIdFromTool } = await import('./openclaw-plugin.js');
-      return getPluginIdFromTool(input.toolName);
-    } catch {
-      // Mapping not available (plugin not loaded)
-      return null;
-    }
+  async inferInitiatingSkill(_input: HookInput): Promise<string | null> {
+    return null;
   }
 }

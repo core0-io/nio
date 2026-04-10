@@ -126,7 +126,7 @@ fi
 # ---- Step 3: Copy skill files ----
 echo "[3/5] Installing skill files..."
 mkdir -p "$SKILLS_DIR"
-for f in SKILL.md README.md scan-rules.md action-policies.md evals.md patrol-checks.md .clawignore; do
+for f in SKILL.md README.md scan-rules.md action-policies.md .clawignore; do
   [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
 done
 echo "  OK: Skill files installed"
@@ -177,7 +177,7 @@ echo ""
 echo "  ⚠️  Hooks take effect on the next session (Claude Code restart, or next OpenClaw task)."
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "  🦞 NEXT STEP: Run your first security checkup"
+echo "  NEXT STEP: Run your first security scan"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 if [ "$PLATFORM" = "claude-code" ]; then
@@ -197,7 +197,7 @@ echo "  Platform:     $PLATFORM"
 echo ""
 echo "  Other commands:"
 echo "    /ffwd-agent-guard scan <path>    Scan code for security risks"
-echo "    /ffwd-agent-guard trust list     View trusted skills"
+echo "    /ffwd-agent-guard action <desc>  Evaluate action safety"
 echo "    /ffwd-agent-guard report         View security event log"
 echo ""
 echo "  To uninstall: ./setup.sh --uninstall"

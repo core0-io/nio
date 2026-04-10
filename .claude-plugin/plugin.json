@@ -1,7 +1,7 @@
 {
   "name": "ffwd-agent-guard",
   "version": "1.0.0",
-  "description": "FFWD AgentGuard — AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets. 20 detection rules, runtime action evaluation, trust registry.",
+  "description": "FFWD AgentGuard — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
   "author": {
     "name": "core0-io",
     "url": "https://github.com/core0-io"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/core0-io/ffwd-agent-guard",
   "repository": "https://github.com/core0-io/ffwd-agent-guard",
   "license": "MIT",
-  "keywords": ["security", "agent-protection", "claude-code", "scanner", "trust-registry"]
+  "keywords": ["security", "agent-protection", "claude-code", "scanner", "otel"]
 }

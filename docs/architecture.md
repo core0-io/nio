@@ -444,7 +444,7 @@ Controls scan analysis behavior. Three presets:
 
 File-backed cache (`~/.ffwd-agent-guard/scan-cache.json`) with 24h TTL.
 Written by `ScanOrchestrator` after scans. Entries track skill ID, risk level,
-and finding counts for use as trust context by the guard pipeline.
+and finding counts for use as context by the guard pipeline.
 
 ### ExternalAnalyzer
 

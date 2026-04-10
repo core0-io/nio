@@ -8,18 +8,17 @@ Unified security policy reference for all platforms (Claude Code, OpenClaw, and 
 
 ### Design Principles
 
-1. **Defense in Depth**: Multiple layers of protection (static scan, runtime evaluation, trust registry)
+1. **Defense in Depth**: Multiple layers of protection (static scan, runtime evaluation, OTEL observability)
 2. **Fail-Secure**: Unknown or ambiguous actions default to denial/confirmation
-3. **Least Privilege**: Skills receive minimal capabilities by default
+3. **Least Privilege**: Dangerous actions are blocked or require confirmation by default
 4. **User Sovereignty**: Users always retain final approval authority
 
-### Three-Module Architecture
+### Two-Pipeline Architecture
 
-| Module | Purpose | When Invoked |
-|--------|---------|--------------|
-| **Static Scanner** | Detect malicious patterns in code/prompts | Before execution (`/ffwd-agent-guard scan`) |
-| **Action Evaluator** | Runtime policy decisions on agent actions | On tool calls (hooks) |
-| **Trust Registry** | Skill identity and capability attestation | Skill invocation & lookup |
+| Pipeline | Purpose | When Invoked |
+|----------|---------|--------------|
+| **Static Scan** | Detect malicious patterns in code/prompts | On-demand (`/ffwd-agent-guard scan`) |
+| **Dynamic Guard** | Runtime policy decisions on agent actions | On every tool call (hooks) |
 
 ---
 
@@ -246,63 +245,9 @@ Commands matching the safe list are allowed without restriction, **unless** they
 
 ---
 
-## 6. Trust Registry & Capability Model
+## 6. Platform Integration
 
-### Trust Levels
-
-| Level | Priority | Description |
-|-------|----------|-------------|
-| `untrusted` | 0 | Unknown skill — read-only access only |
-| `restricted` | 1 | Limited capabilities — per attestation |
-| `trusted` | 2 | Full capabilities within attestation |
-
-### Capability Model Structure
-
-```typescript
-interface CapabilityModel {
-  network_allowlist: string[];      // Allowed domains (glob patterns)
-  filesystem_allowlist: string[];   // Allowed paths (glob patterns)
-  exec: 'allow' | 'deny';           // Command execution
-  secrets_allowlist: string[];      // Allowed secret patterns
-}
-```
-
-### Capability Presets
-
-#### `none` — Most Restrictive
-```json
-{
-  "network_allowlist": [],
-  "filesystem_allowlist": [],
-  "exec": "deny",
-  "secrets_allowlist": []
-}
-```
-
-#### `read_only`
-```json
-{
-  "network_allowlist": [],
-  "filesystem_allowlist": ["./**"],
-  "exec": "deny",
-  "secrets_allowlist": []
-}
-```
-
-### Capability Enforcement
-
-| Action Type | Capability Check |
-|-------------|------------------|
-| `exec_command` | `can_exec !== false` |
-| `network_request` | `can_network !== false` |
-| `write_file` | `can_write !== false` |
-| `read_file` | `can_read !== false` |
-
----
-
-## 7. Platform Integration
-
-### 7.1 Claude Code
+### 6.1 Claude Code
 
 **Hook Events**: `PreToolUse`, `PostToolUse`
 
@@ -331,7 +276,7 @@ interface CapabilityModel {
 }
 ```
 
-### 7.2 OpenClaw
+### 6.2 OpenClaw
 
 **Hook Events**: `before_tool_call`, `after_tool_call`
 
@@ -345,52 +290,23 @@ interface CapabilityModel {
 | `web_fetch` | `network_request` |
 | `browser` | `network_request` |
 
-**Auto-Scan & Registration**:
-
-When AgentGuard registers as an OpenClaw plugin, it automatically:
-
-1. **Scans all loaded plugins** - Static analysis of each plugin's source code
-2. **Determines trust level** - Based on scan results (critical findings → untrusted)
-3. **Infers capabilities** - Based on registered tools and scan risk level
-4. **Registers to trust registry** - Auto-attests each plugin
-5. **Builds tool mapping** - Maps `toolName → pluginId` for initiating skill inference
-
-**Trust Level Assignment**:
-
-| Scan Result | Trust Level | Capabilities |
-|-------------|-------------|--------------|
-| critical / dangerous patterns | `untrusted` | read-only |
-| high risk | `restricted` | limited per scan |
-| medium risk | `restricted` | limited per scan |
-| low risk | `trusted` | full per tool type |
-
 **Configuration** (Plugin registration):
 
 ```typescript
 import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
 
-// Basic registration (auto-scan enabled)
+// Basic registration
 registerOpenClawPlugin(api);
 
 // With options
 registerOpenClawPlugin(api, {
   level: 'balanced',        // Protection level
-  skipAutoScan: false,      // Set true to disable auto-scanning
 });
-```
-
-**Exported Utilities**:
-
-```typescript
-import {
-  getPluginIdFromTool,    // Get plugin ID from tool name
-  getPluginScanResult,    // Get cached scan result for plugin
-} from '@core0-io/ffwd-agent-guard';
 ```
 
 ---
 
-## 8. Quick Reference Tables
+## 7. Quick Reference Tables
 
 ### Always Block (Critical — DENY)
 
@@ -408,8 +324,6 @@ import {
 | **Sensitive data access** | `cat /etc/passwd`, `cat ~/.ssh`, `env`, `printenv` |
 | **API key leakage** | AWS/GitHub/Bearer tokens in request body |
 | **Untrusted domains** | POST/PUT to non-allowlisted domains |
-| **Untrusted skills** | Skills not in trust registry |
-
 ### Audit but Allow (Medium — ALLOW with logging)
 
 | Category | Rules |
@@ -430,7 +344,7 @@ import {
 
 ---
 
-## 9. Default Policy Summary
+## 8. Default Policy Summary
 
 ```yaml
 # Secret Exfiltration
@@ -459,7 +373,7 @@ file:
 
 ---
 
-## 10. Changelog
+## 9. Changelog
 
 | Date | Version | Changes |
 |------|---------|---------|

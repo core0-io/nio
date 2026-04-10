@@ -113,7 +113,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
       ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
@@ -124,7 +123,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
       ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
@@ -139,7 +137,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
       ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
@@ -157,7 +154,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
       ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 
@@ -173,7 +169,6 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      skipAutoScan: true,
       ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
     });
 

@@ -7,13 +7,12 @@ import { OpenClawAdapter } from '../../adapters/openclaw.js';
 import type { EngineOptions } from '../../adapters/types.js';
 
 /**
- * Create an isolated test context with temporary registry
- * and injectable config level. No real ~/.ffwd-agent-guard/ pollution.
+ * Create an isolated test context with injectable config level.
+ * No real ~/.ffwd-agent-guard/ pollution.
  */
 export function createTestContext(level: string = 'balanced') {
   const tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-integ-'));
-  const registryPath = join(tempDir, 'registry.json');
-  const ffwdAgentGuard = createAgentGuard({ registryPath });
+  const ffwdAgentGuard = createAgentGuard();
 
   const config = { level };
   const options: EngineOptions = {

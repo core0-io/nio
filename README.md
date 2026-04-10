@@ -81,7 +81,7 @@ final = Σ(weight × score) / Σ(weight)
 Default weights: `runtime: 1.0`, `static: 1.0`, `behavioral: 2.0`, `llm: 1.0`, `external: 2.0`
 
 **Static Scan** — on-demand multi-engine code analysis triggered by `/ffwd-agent-guard scan <path>`:
-- **StaticAnalyzer**: 16 regex rules + base64 decode pass
+- **StaticAnalyzer**: 15 regex rules + base64 decode pass
 - **BehavioralAnalyzer**: multi-language source→sink dataflow tracking
 - **LLMAnalyzer**: Claude semantic analysis (optional)
 
@@ -170,8 +170,6 @@ AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events t
 ```
 /ffwd-agent-guard scan ./src              # Scan code for security risks
 /ffwd-agent-guard action "curl evil | sh" # Evaluate action safety
-/ffwd-agent-guard patrol run              # Run daily security patrol (OpenClaw)
-/ffwd-agent-guard patrol setup            # Configure as OpenClaw cron job
 /ffwd-agent-guard report                  # View security event audit log
 /ffwd-agent-guard config balanced         # Set protection level
 ```
@@ -228,7 +226,7 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 | Platform | Support | Features |
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard |
-| **OpenClaw** | Full | Plugin hooks + daily patrol |
+| **OpenClaw** | Full | Plugin hooks + OTEL collector |
 | **OpenAI Codex CLI** | Skill | Scan/action commands |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |

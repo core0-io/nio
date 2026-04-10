@@ -14,14 +14,6 @@ export * from './core/index.js';
 
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
-export {
-  SkillRegistry,
-  RegistryStorage,
-  type RegistryOptions,
-  type StorageOptions,
-  type LookupResult,
-  type AttestResult,
-} from './registry/index.js';
 
 // Export RuntimeAnalyzer (guard pipeline)
 export { RuntimeAnalyzer, type RuntimeDecision, type RuntimeAnalyzerOptions } from './core/analyzers/runtime/index.js';
@@ -70,7 +62,6 @@ export {
 
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
-import { SkillRegistry } from './registry/index.js';
 import { loadConfig } from './adapters/index.js';
 import { RuntimeAnalyzer } from './core/analyzers/runtime/index.js';
 import type { ProtectionLevel } from './core/analyzers/runtime/decision.js';
@@ -79,13 +70,8 @@ import type { ProtectionLevel } from './core/analyzers/runtime/decision.js';
  * Create a complete AgentGuard instance with all modules
  */
 export function createAgentGuard(options?: {
-  registryPath?: string;
   useExternalScanner?: boolean;
 }) {
-  const registry = new SkillRegistry({
-    filePath: options?.registryPath,
-  });
-
   const config = loadConfig();
   const scanner = new SkillScanner({
     useExternalScanner: options?.useExternalScanner ?? true,
@@ -105,7 +91,6 @@ export function createAgentGuard(options?: {
 
   return {
     scanner,
-    registry,
     runtimeAnalyzer,
   };
 }

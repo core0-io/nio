@@ -6,7 +6,6 @@ import {
   isSensitivePath,
   shouldDenyAtLevel,
   shouldAskAtLevel,
-  isActionAllowedByCapabilities,
 } from '../adapters/common.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -433,29 +432,4 @@ describe('Adapter Common Utilities', () => {
     });
   });
 
-  describe('isActionAllowedByCapabilities', () => {
-    it('should block exec when can_exec is false', () => {
-      assert.ok(!isActionAllowedByCapabilities('exec_command', { can_exec: false }));
-    });
-
-    it('should allow exec when can_exec is true', () => {
-      assert.ok(isActionAllowedByCapabilities('exec_command', { can_exec: true }));
-    });
-
-    it('should block network when can_network is false', () => {
-      assert.ok(!isActionAllowedByCapabilities('network_request', { can_network: false }));
-    });
-
-    it('should block write when can_write is false', () => {
-      assert.ok(!isActionAllowedByCapabilities('write_file', { can_write: false }));
-    });
-
-    it('should block read when can_read is false', () => {
-      assert.ok(!isActionAllowedByCapabilities('read_file', { can_read: false }));
-    });
-
-    it('should allow unknown action types by default', () => {
-      assert.ok(isActionAllowedByCapabilities('unknown_action', {}));
-    });
-  });
 });

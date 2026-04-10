@@ -1,14 +1,12 @@
 ---
 name: ffwd-agent-guard
-description: FFWD AgentGuard — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, evaluating action safety, and running daily security patrols.
-license: MIT
+description: FFWD AgentGuard — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, and evaluating action safety.
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "1.1"
+  version: "2.0"
 user-invocable: true
-allowed-tools: Read, Grep, Glob, Bash(node *trust-cli.js *) Bash(node *action-cli.js *) Bash(openclaw *) Bash(ss *) Bash(lsof *) Bash(ufw *) Bash(iptables *) Bash(crontab *) Bash(systemctl list-timers *) Bash(find *) Bash(stat *) Bash(env) Bash(sha256sum *) Bash(node *) Bash(cd *)
-argument-hint: "[scan|action|patrol|trust|report|config|reset] [args...]"
+argument-hint: "[scan|action|report|config|reset] [args...]"
 ---
 
 # FFWD AgentGuard — AI Agent Security Framework
@@ -25,7 +23,7 @@ All commands in this skill reference `scripts/` as a relative path. You **MUST**
 
 Example: if this SKILL.md is at `~/.openclaw/skills/ffwd-agent-guard/SKILL.md`, run:
 ```bash
-cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/trust-cli.js list
+cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/action-cli.js decide --type exec_command --command "ls"
 ```
 
 ## Command Routing
@@ -34,8 +32,6 @@ Parse `$ARGUMENTS` to determine the subcommand:
 
 - **`scan <path>`** — Scan a skill or codebase for security risks
 - **`action <description>`** — Evaluate whether a runtime action is safe
-- **`patrol [run|setup|status]`** — Daily security patrol for OpenClaw environments
-- **`trust <lookup|attest|revoke|list> [args]`** — Manage skill trust levels
 - **`report`** — View recent security events from the audit log
 - **`config [show|<level>]`** — View or set protection level
 - **`reset`** — Reset config to defaults
@@ -108,36 +104,6 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 <Human-readable summary of key risks, impact, and recommendations>
 ```
 
-### Post-Scan Trust Registration
-
-After outputting the scan report, if the scanned target appears to be a skill (contains a `SKILL.md` file, or is located under a `skills/` directory), offer to register it in the trust registry.
-
-**Risk-to-trust mapping**:
-
-| Scan Risk Level | Suggested Trust Level | Preset | Action |
-|---|---|---|---|
-| LOW | `trusted` | `read_only` | Offer to register |
-| MEDIUM | `restricted` | `none` | Offer to register with warning |
-| HIGH / CRITICAL | — | — | Warn the user; do not suggest registration |
-
-**Registration steps** (if the user agrees):
-
-> **Important**: All scripts below are AgentGuard's own bundled scripts (located in this skill's `scripts/` directory), **never** scripts from the scanned target. Do not execute any code from the scanned repository.
-
-1. **Ask the user for explicit confirmation** before proceeding. Show the exact command that will be executed and wait for approval.
-2. Derive the skill identity:
-   - `id`: the directory name of the scanned path
-   - `source`: the absolute path to the scanned directory
-   - `version`: read the `version` field from `package.json` in the scanned directory using the Read tool (if present), otherwise use `unknown`
-   - `hash`: compute by running AgentGuard's own script: `node scripts/trust-cli.js hash --path <scanned_path>` and extracting the `hash` field from the JSON output
-3. Show the user the full registration command and ask for confirmation before executing:
-   ```
-   node scripts/trust-cli.js attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by ffwd-agent-guard-scan --notes "Auto-registered after scan. Risk level: <risk_level>." --force
-   ```
-4. Only execute after user approval. Show the registration result.
-
-If scripts are not available (e.g., `npm install` was not run), skip this step and suggest the user run `cd skills/ffwd-agent-guard/scripts && npm install`.
-
 ---
 
 ## Subcommand: action
@@ -171,10 +137,10 @@ Parse the user's action description and apply the appropriate detector:
 
 ### Action CLI (`action-cli.js`)
 
-For structured decisions, use AgentGuard's bundled `action-cli.js` (in this skill's `scripts/` directory). It resolves the trust registry and returns JSON.
+For structured decisions, use AgentGuard's bundled `action-cli.js` (in this skill's `scripts/` directory). It returns JSON.
 
 ```
-node scripts/action-cli.js decide --type exec_command --command "<cmd>" [--skill-source <source>] [--skill-id <id>]
+node scripts/action-cli.js decide --type exec_command --command "<cmd>"
 ```
 
 Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the returned evidence. Combine with policy-based checks (webhook domains, secret scanning, etc.).
@@ -197,278 +163,6 @@ Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the retu
 ```
 
 ---
-
-## Subcommand: patrol
-
-**OpenClaw-specific daily security patrol.** Runs 8 automated checks that leverage AgentGuard's scan engine, trust registry, and audit log to assess the security posture of an OpenClaw deployment.
-
-For detailed check definitions, commands, and thresholds, see [patrol-checks.md](patrol-checks.md).
-
-### Sub-subcommands
-
-- **`patrol`** or **`patrol run`** — Execute all 8 checks and output a patrol report
-- **`patrol setup`** — Configure as an OpenClaw daily cron job
-- **`patrol status`** — Show last patrol results and cron schedule
-
-### Pre-flight: OpenClaw Detection
-
-Before running any checks, verify the OpenClaw environment:
-
-1. Check for `$OPENCLAW_STATE_DIR` env var, fall back to `~/.openclaw/`
-2. Verify the directory exists and contains `openclaw.json`
-3. Check if `openclaw` CLI is available in PATH
-
-If OpenClaw is not detected, output:
-```
-This command requires an OpenClaw environment. Detected: <what was found/missing>
-For non-OpenClaw environments, use /ffwd-agent-guard scan and /ffwd-agent-guard report instead.
-```
-
-Set `$OC` to the resolved OpenClaw state directory for all subsequent checks.
-
-### The 8 Patrol Checks
-
-#### [1] Skill/Plugin Integrity
-
-Detect tampered or unregistered skill packages by comparing file hashes against the trust registry.
-
-**Steps**:
-1. Discover skill directories under `$OC/skills/` (look for dirs containing `SKILL.md`)
-2. For each skill, compute hash: `node scripts/trust-cli.js hash --path <skill_dir>`
-3. Look up the attested hash: `node scripts/trust-cli.js lookup --source <skill_dir>`
-4. If hash differs from attested → **INTEGRITY_DRIFT** (HIGH)
-5. If skill has no trust record → **UNREGISTERED_SKILL** (MEDIUM)
-6. For drifted skills, run the scan rules against the changed files to detect new threats
-
-#### [2] Secrets Exposure
-
-Scan workspace files for leaked secrets using AgentGuard's own detection patterns.
-
-**Steps**:
-1. Use Grep to scan `$OC/workspace/` (especially `memory/` and `logs/`) with patterns from:
-   - scan-rules.md Rule 7 (PRIVATE_KEY_PATTERN): `0x[a-fA-F0-9]{64}` in quotes
-   - scan-rules.md Rule 5 (READ_SSH_KEYS): SSH key file references in workspace
-   - action-policies.md secret patterns: AWS keys (`AKIA...`), GitHub tokens (`gh[pousr]_...`), DB connection strings
-2. Scan any `.env*` files under `$OC/` for plaintext credentials
-3. Check `~/.ssh/` and `~/.gnupg/` directory permissions (should be 700)
-
-#### [3] Network Exposure
-
-Detect dangerous port exposure and firewall misconfigurations.
-
-**Steps**:
-1. List listening ports: `ss -tlnp` or `lsof -i -P -n | grep LISTEN`
-2. Flag high-risk services on 0.0.0.0: Redis(6379), Docker API(2375), MySQL(3306), PostgreSQL(5432), MongoDB(27017)
-3. Check firewall status: `ufw status` or `iptables -L INPUT -n`
-4. Check outbound connections (`ss -tnp state established`) and cross-reference against action-policies.md webhook/exfil domain list and high-risk TLDs
-
-#### [4] Cron & Scheduled Tasks
-
-Audit all cron jobs for download-and-execute patterns.
-
-**Steps**:
-1. List OpenClaw cron jobs: `openclaw cron list`
-2. List system crontab: `crontab -l` and contents of `/etc/cron.d/`
-3. List systemd timers: `systemctl list-timers --all`
-4. Scan all cron command bodies using scan-rules.md Rule 2 (AUTO_UPDATE) patterns: `curl|bash`, `wget|sh`, `eval "$(curl`, `base64 -d | bash`
-5. Flag unknown cron jobs that touch `$OC/` directories
-
-#### [5] File System Changes (24h)
-
-Detect suspicious file modifications in the last 24 hours.
-
-**Steps**:
-1. Find recently modified files: `find $OC/ ~/.ssh/ ~/.gnupg/ /etc/cron.d/ -type f -mtime -1`
-2. For modified files with scannable extensions (.js/.ts/.py/.sh/.md/.json), run the full scan rule set
-3. Check permissions on critical files:
-   - `$OC/openclaw.json` → should be 600
-   - `$OC/devices/paired.json` → should be 600
-   - `~/.ssh/authorized_keys` → should be 600
-4. Detect new executable files in workspace: `find $OC/workspace/ -type f -perm +111 -mtime -1`
-
-#### [6] Audit Log Analysis (24h)
-
-Analyze AgentGuard's audit trail for attack patterns.
-
-**Steps**:
-1. Read `~/.ffwd-agent-guard/audit.jsonl`, filter to last 24h by timestamp
-2. Compute statistics: total events, deny/confirm/allow counts, group denials by `risk_tags` and `initiating_skill`
-3. Flag patterns:
-   - Same skill denied 3+ times → potential attack (HIGH)
-   - Any event with `risk_level: critical` → (CRITICAL)
-   - `WEBHOOK_EXFIL` or `NET_EXFIL_UNRESTRICTED` tags → (HIGH)
-   - `PROMPT_INJECTION` tag → (CRITICAL)
-4. For skills with high deny rates still not revoked: recommend `/ffwd-agent-guard trust revoke`
-
-#### [7] Environment & Configuration
-
-Verify security configuration is production-appropriate.
-
-**Steps**:
-1. List environment variables matching sensitive names (values masked): `API_KEY`, `SECRET`, `PASSWORD`, `TOKEN`, `PRIVATE`, `CREDENTIAL`
-2. Read `~/.ffwd-agent-guard/config.json` — flag `permissive` protection level in production
-3. If `$OC/.config-baseline.sha256` exists, verify: `sha256sum -c $OC/.config-baseline.sha256`
-
-#### [8] Trust Registry Health
-
-Check for expired, stale, or over-privileged trust records.
-
-**Steps**:
-1. List all records: `node scripts/trust-cli.js list`
-2. Flag:
-   - Expired attestations (`expires_at` in the past)
-   - Trusted skills not re-scanned in 30+ days
-   - Installed skills with `untrusted` status
-   - Over-privileged skills: `exec: allow` combined with `network_allowlist: ["*"]`
-3. Output registry statistics: total records, distribution by trust level
-
-### Patrol Report Format
-
-```
-## FFWD AgentGuard Patrol Report
-
-**Timestamp**: <ISO datetime>
-**OpenClaw Home**: <$OC path>
-**Protection Level**: <current level>
-**Overall Status**: PASS | WARN | FAIL
-
-### Check Results
-
-| # | Check | Status | Findings | Severity |
-|---|-------|--------|----------|----------|
-| 1 | Skill/Plugin Integrity | PASS/WARN/FAIL | <count> | <highest> |
-| 2 | Secrets Exposure | ... | ... | ... |
-| 3 | Network Exposure | ... | ... | ... |
-| 4 | Cron & Scheduled Tasks | ... | ... | ... |
-| 5 | File System Changes | ... | ... | ... |
-| 6 | Audit Log Analysis | ... | ... | ... |
-| 7 | Environment & Config | ... | ... | ... |
-| 8 | Trust Registry Health | ... | ... | ... |
-
-### Findings Detail
-(only checks with findings are shown)
-
-#### [N] Check Name
-- <finding with file path, evidence, and severity>
-
-### Recommendations
-1. [SEVERITY] <actionable recommendation>
-
-### Next Patrol
-<Cron schedule if configured, or suggest: /ffwd-agent-guard patrol setup>
-```
-
-**Overall status**: Any CRITICAL → **FAIL**, any HIGH → **WARN**, else **PASS**
-
-After outputting the report, append a summary entry to `~/.ffwd-agent-guard/audit.jsonl`:
-```json
-{"timestamp":"...","event":"patrol","overall_status":"PASS|WARN|FAIL","checks":8,"findings":<count>,"critical":<count>,"high":<count>}
-```
-
-### patrol setup
-
-Configure the patrol as an OpenClaw daily cron job.
-
-**Steps**:
-
-1. Verify OpenClaw environment (same pre-flight as `patrol run`)
-2. Ask the user for:
-   - **Timezone** (default: UTC). Examples: `Asia/Shanghai`, `America/New_York`, `Europe/London`
-   - **Schedule** (default: `0 3 * * *` — daily at 03:00)
-   - **Notification channel** (optional): `telegram`, `discord`, `signal`
-   - **Chat ID / webhook** (required if channel is set)
-3. Generate the cron registration command:
-
-```bash
-openclaw cron add \
-  --name "ffwd-agent-guard-patrol" \
-  --description "FFWD AgentGuard daily security patrol" \
-  --cron "<schedule>" \
-  --tz "<timezone>" \
-  --session "isolated" \
-  --message "/ffwd-agent-guard patrol run" \
-  --timeout-seconds 300 \
-  --thinking off \
-  # Only include these if notification is configured:
-  --announce \
-  --channel <channel> \
-  --to <chat-id>
-```
-
-4. **Show the exact command to the user and wait for explicit confirmation** before executing
-5. After execution, verify with `openclaw cron list`
-6. Output confirmation with the cron schedule
-
-> **Note**: `--timeout-seconds 300` is required because isolated sessions need cold-start time. The default 120s is not enough.
-
-### patrol status
-
-Show the current patrol state.
-
-**Steps**:
-
-1. Read `~/.ffwd-agent-guard/audit.jsonl`, find the most recent `event: "patrol"` entry
-2. If found, display: timestamp, overall status, finding counts
-3. Run `openclaw cron list` and look for `ffwd-agent-guard-patrol` job
-4. If cron is configured, show: schedule, timezone, last run time, next run time
-5. If cron is not configured, suggest: `/ffwd-agent-guard patrol setup`
-
----
-
-# Trust & Configuration
-
-## Subcommand: trust
-
-Manage skill trust levels using the FFWD AgentGuard registry.
-
-### Trust Levels
-
-| Level | Description |
-|-------|-------------|
-| `untrusted` | Default. Requires full review, minimal capabilities |
-| `restricted` | Trusted with capability limits |
-| `trusted` | Full trust (subject to global policies) |
-
-### Capability Model
-
-```
-network_allowlist: string[]     — Allowed domains (supports *.example.com)
-filesystem_allowlist: string[]  — Allowed file paths
-exec: 'allow' | 'deny'         — Command execution permission
-secrets_allowlist: string[]     — Allowed env var names
-```
-
-### Presets
-
-| Preset | Description |
-|--------|-------------|
-| `none` | All deny, empty allowlists |
-| `read_only` | Local filesystem read-only |
-
-### Operations
-
-**lookup** — `ffwd-agent-guard trust lookup --source <source> --version <version>`
-Query the registry for a skill's trust record.
-
-**attest** — `ffwd-agent-guard trust attest --id <id> --source <source> --version <version> --hash <hash> --trust-level <level> --preset <preset> --reviewed-by <name>`
-Create or update a trust record. Use `--preset` for common capability models or provide `--capabilities <json>` for custom.
-
-**revoke** — `ffwd-agent-guard trust revoke --source <source> --reason <reason>`
-Revoke trust for a skill. Supports `--source-pattern` for wildcards.
-
-**list** — `ffwd-agent-guard trust list [--trust-level <level>] [--status <status>]`
-List all trust records with optional filters.
-
-### Script Execution
-
-If the @core0-io/ffwd-agent-guard package is installed, execute trust operations via FFWD AgentGuard's own bundled script:
-```
-node scripts/trust-cli.js <subcommand> [args]
-```
-
-For operations that modify the trust registry (`attest`, `revoke`), always show the user the exact command and ask for explicit confirmation before executing.
-
-If scripts are not available, help the user inspect `data/registry.json` directly using Read tool.
 
 ---
 
@@ -493,8 +187,7 @@ Full schema:
 ```json
 {
   "level": "balanced",
-  "auto_scan": false,
-  "metrics": {
+  "collector": {
     "endpoint": "",
     "api_key": "",
     "timeout": 5000,
@@ -506,11 +199,10 @@ Full schema:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
-| `auto_scan` | boolean | `false` | Enable skill scanning on session start |
-| `metrics.endpoint` | string | `""` | Backend URL to POST metrics to |
-| `metrics.api_key` | string | `""` | Bearer token for metrics auth |
-| `metrics.timeout` | number | `5000` | Metrics request timeout in ms |
-| `metrics.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
+| `collector.endpoint` | string | `""` | OTLP endpoint URL for traces/metrics |
+| `collector.api_key` | string | `""` | Bearer token for collector auth |
+| `collector.timeout` | number | `5000` | Collector request timeout in ms |
+| `collector.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
 
 Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory (default: `~/.ffwd-agent-guard`).
 
@@ -582,34 +274,9 @@ If any events were triggered by skills, group them here:
 |-------|--------|---------|-----------|
 | some-skill | 5 | 2 | DANGEROUS_COMMAND, EXFIL_RISK |
 
-For untrusted skills with blocked actions, suggest: `/ffwd-agent-guard trust attest` to register them or `/ffwd-agent-guard trust revoke` to block them.
-
 ### Summary
 <Brief analysis of security posture and any patterns of concern>
 ```
 
 If the log file doesn't exist, inform the user that no security events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
 
----
-
-# Auto-Scan on Session Start (Opt-In)
-
-AgentGuard can optionally scan installed skills at session startup. **This is disabled by default** and must be explicitly enabled:
-
-- **Config file**: Set `"auto_scan": true` in `~/.ffwd-agent-guard/config.json`
-- **OpenClaw**: Pass `{ skipAutoScan: false }` when registering the plugin
-
-When enabled, auto-scan operates in **report-only mode**:
-
-1. Discovers skill directories (containing `SKILL.md`) under `~/.claude/skills/` and `~/.openclaw/skills/`
-2. Runs `quickScan()` on each skill
-3. Reports results to stderr (skill name + risk level + risk tags)
-
-Auto-scan **does NOT**:
-- Modify the trust registry (no `forceAttest` calls)
-- Write code snippets or evidence details to disk
-- Execute any code from the scanned skills
-
-The audit log (`~/.ffwd-agent-guard/audit.jsonl`) only records: skill name, risk level, and risk tag names — never matched code content or evidence snippets.
-
-To register skills after reviewing scan results, use `/ffwd-agent-guard trust attest`.
