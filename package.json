@@ -9,21 +9,16 @@
       "./dist/adapters/openclaw-plugin.js"
     ]
   },
-  "bin": {
-    "ffwd-agent-guard": "./dist/mcp-server.js"
-  },
   "scripts": {
     "prebuild": "cp package.json pnpm-lock.yaml skills/ffwd-agent-guard/ && cd skills/ffwd-agent-guard && pnpm install --prod --frozen-lockfile --node-linker=hoisted && rm package.json pnpm-lock.yaml",
-    "build": "rm -rf dist && tsc && tsc -p tsconfig.scripts.json && node scripts/add-banner.js && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=openclaw-plugin/plugin.js --external:node:*",
-    "start": "node dist/mcp-server.js",
-    "dev": "tsc -w & tsc -w -p tsconfig.scripts.json",
+    "build": "rm -rf dist && tsc -p tsconfig.lib.json && tsc -p tsconfig.scripts.json && node scripts/add-banner.js && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=openclaw-plugin/plugin.js --external:node:*",
+    "dev": "tsc -w -p tsconfig.lib.json & tsc -w -p tsconfig.scripts.json",
     "test": "node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build"
   },
   "keywords": [
     "claude-code-skill",
     "agent-skills",
-    "mcp",
     "security",
     "ai-agent",
     "ffwd-agent-guard",
@@ -34,7 +29,6 @@
     "hooks"
   ],
   "author": "core0-io",
-  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/core0-io/ffwd-agent-guard.git"
@@ -48,7 +42,6 @@
     "@babel/traverse": "^7.29.0",
     "@babel/types": "^7.29.0",
     "@grpc/grpc-js": "^1.14.3",
-    "@modelcontextprotocol/sdk": "^1.0.0",
     "@opentelemetry/api": "^1.9.1",
     "@opentelemetry/exporter-metrics-otlp-grpc": "^0.214.0",
     "@opentelemetry/exporter-metrics-otlp-http": "^0.214.0",
@@ -59,7 +52,6 @@
     "@opentelemetry/sdk-trace-node": "^2.6.1",
     "@opentelemetry/semantic-conventions": "^1.40.0",
     "axios": "^1.6.7",
-    "commander": "^12.0.0",
     "glob": "^10.3.10",
     "js-yaml": "^4.1.1",
     "zod": "^3.25.32"
@@ -78,7 +70,6 @@
   "files": [
     "dist",
     "README.md",
-    "LICENSE",
     "openclaw.plugin.json",
     "skills"
   ],

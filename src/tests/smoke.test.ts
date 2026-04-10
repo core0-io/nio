@@ -95,7 +95,7 @@ describe('Smoke: guard-hook.js E2E', () => {
 describe('Smoke: SkillScanner on vulnerable-skill', () => {
   it('should detect multiple violations in examples/vulnerable-skill', async () => {
     const scanner = new SkillScanner({ useExternalScanner: false });
-    const vulnPath = join(projectRoot, 'examples', 'vulnerable-skill');
+    const vulnPath = join(projectRoot, 'src', 'tests', 'fixtures', 'vulnerable-skill');
     const result = await scanner.quickScan(vulnPath);
 
     assert.equal(result.risk_level, 'critical', 'Vulnerable skill should be critical');

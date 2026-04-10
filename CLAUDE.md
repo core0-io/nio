@@ -18,8 +18,7 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 ## Project Structure
 
 - `skills/ffwd-agent-guard/` — Claude Code skill definition and supporting files
-- `src/` — TypeScript source (scanner rules, registry, action detectors, MCP server)
-- `data/` — Registry storage (`registry.json`)
+- `src/` — TypeScript source (scanner, analyzers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output
 
 ## Build

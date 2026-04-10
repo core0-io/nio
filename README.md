@@ -434,14 +434,7 @@ One OTEL trace per conversation turn. Spans are emitted as children of the turn 
 ## Documentation
 
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
-- [MCP Server Setup](docs/mcp-server.md) — Run as a Model Context Protocol server
-- [SDK Usage](docs/sdk.md) — Use as a TypeScript/JavaScript library
-- [Trust Management](docs/trust-cli.md) — Manage skill trust levels and capability presets
-- [Architecture](docs/architecture.md) — Project structure and testing
-
-## License
-
-[MIT](LICENSE)
+- [Architecture](docs/architecture.md) — Project structure, pipelines, and testing
 
 ## Contributing
 
