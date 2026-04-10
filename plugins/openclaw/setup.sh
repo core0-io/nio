@@ -60,6 +60,8 @@ echo ""
 # ---- Step 1: Register OpenClaw plugin ----
 echo "[1/2] Registering OpenClaw plugin..."
 if command -v openclaw &>/dev/null; then
+  # Remove stale registration from old path (pre-restructure)
+  echo y | openclaw plugins uninstall ffwd-agent-guard 2>/dev/null || true
   openclaw plugins install -l "$SCRIPT_DIR"
   echo "  OK: Plugin registered (ffwd-agent-guard)"
 
