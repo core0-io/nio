@@ -23,13 +23,31 @@ import { BaseAnalyzer, type AnalysisContext } from '../base.js';
 import type { Finding, AnalyzerName, ThreatCategory, Severity } from '../../models.js';
 import { findingId } from '../../models.js';
 import type { ScanPolicy } from '../../scan-policy.js';
-import { parseAndExtract, type ASTExtraction } from './ast-parser.js';
+import type { LanguageExtractor } from './types.js';
+import { jsExtractor } from './ast-parser.js';
+import { pyExtractor } from './py-extractor.js';
+import { shExtractor } from './sh-extractor.js';
+import { rbExtractor } from './rb-extractor.js';
+import { phpExtractor } from './php-extractor.js';
+import { goExtractor } from './go-extractor.js';
 import { analyzeDataflows, type DataflowPath } from './dataflow.js';
 import { aggregateContext, type FileAnalysis, type SecurityProfile } from './context.js';
 
-// ── BehavioralAnalyzer ───────────────────────────────────────────────────
+// ── Language dispatch ───────────────────────────────────────────────────
 
-const JS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+const EXTRACTORS: LanguageExtractor[] = [
+  jsExtractor, pyExtractor, shExtractor, rbExtractor, phpExtractor, goExtractor,
+];
+
+/** Map extension → extractor for fast lookup. */
+const EXT_TO_EXTRACTOR = new Map<string, LanguageExtractor>();
+for (const ext of EXTRACTORS) {
+  for (const e of ext.extensions) {
+    EXT_TO_EXTRACTOR.set(e, ext);
+  }
+}
+
+// ── BehavioralAnalyzer ───────────────────────────────────────────────────
 
 export class BehavioralAnalyzer extends BaseAnalyzer {
   readonly name: AnalyzerName = 'behavioral';
@@ -40,17 +58,18 @@ export class BehavioralAnalyzer extends BaseAnalyzer {
   }
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
-    const jsFiles = ctx.files.filter((f) => JS_EXTENSIONS.has(f.extension));
-    if (jsFiles.length === 0) return [];
+    const supportedFiles = ctx.files.filter((f) => EXT_TO_EXTRACTOR.has(f.extension));
+    if (supportedFiles.length === 0) return [];
 
-    // Step 1: Parse all JS/TS files and extract security info
+    // Step 1: Parse all supported files and extract security info
     const fileAnalyses: FileAnalysis[] = [];
-    for (const file of jsFiles) {
-      const extraction = parseAndExtract(file.content, file.relativePath);
+    for (const file of supportedFiles) {
+      const extractor = EXT_TO_EXTRACTOR.get(file.extension)!;
+      const extraction = extractor.extract(file.content, file.relativePath);
       if (!extraction) continue;
 
       // Step 2: Run dataflow analysis per file
-      const flows = analyzeDataflows(extraction, file.content);
+      const flows = analyzeDataflows(extraction, file.content, extractor.language);
 
       fileAnalyses.push({
         file: file.relativePath,

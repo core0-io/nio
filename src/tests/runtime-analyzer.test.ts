@@ -5,12 +5,12 @@ import {
   aggregateScores,
   DEFAULT_WEIGHTS,
   type PhaseScores,
-} from '../core/analyzers/runtime/scoring.js';
+} from '../core/scoring.js';
 import {
   scoreToDecision,
   shouldShortCircuit,
 } from '../core/analyzers/runtime/decision.js';
-import { ExternalScorer } from '../core/analyzers/runtime/external-scorer.js';
+import { ExternalAnalyzer } from '../core/analyzers/external/index.js';
 import { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
 import type { Finding } from '../core/models.js';
 import type { ActionEnvelope, ActionContext } from '../types/action.js';
@@ -93,34 +93,34 @@ describe('Scoring: aggregateScores', () => {
   });
 
   it('should return the score when only one phase ran', () => {
-    const scores: PhaseScores = { a: 0.6 };
+    const scores: PhaseScores = { runtime: 0.6 };
     assert.equal(aggregateScores(scores), 0.6);
   });
 
   it('should compute weighted average of multiple phases', () => {
-    // a=0.8 (runtime, w=1.0), c=0.4 (behavioral, w=2.0)
-    const scores: PhaseScores = { a: 0.8, c: 0.4 };
+    // runtime=0.8 (w=1.0), behavioral=0.4 (w=2.0)
+    const scores: PhaseScores = { runtime: 0.8, behavioral: 0.4 };
     // (1.0*0.8 + 2.0*0.4) / (1.0 + 2.0) = (0.8 + 0.8) / 3.0 ≈ 0.5333
     const result = aggregateScores(scores);
     assert.ok(Math.abs(result - 0.5333) < 0.01, `Expected ~0.533, got ${result}`);
   });
 
   it('should handle all five phases', () => {
-    const scores: PhaseScores = { a: 0.5, b: 0.5, c: 0.5, d: 0.5, e: 0.5 };
+    const scores: PhaseScores = { runtime: 0.5, static: 0.5, behavioral: 0.5, llm: 0.5, external: 0.5 };
     // All scores equal → weighted average = 0.5 regardless of weights
     assert.equal(aggregateScores(scores), 0.5);
   });
 
   it('should respect custom weights', () => {
-    const scores: PhaseScores = { a: 1.0, e: 0.0 };
+    const scores: PhaseScores = { runtime: 1.0, external: 0.0 };
     const weights = { ...DEFAULT_WEIGHTS, runtime: 1.0, external: 1.0 };
     // (1.0*1.0 + 1.0*0.0) / (1.0 + 1.0) = 0.5
     assert.equal(aggregateScores(scores, weights), 0.5);
   });
 
   it('should give higher weight to behavioral and external', () => {
-    // a=1.0 (w=1), c=0.0 (w=2) → (1*1 + 2*0) / (1+2) = 0.333
-    const scores: PhaseScores = { a: 1.0, c: 0.0 };
+    // runtime=1.0 (w=1), behavioral=0.0 (w=2) → (1*1 + 2*0) / (1+2) = 0.333
+    const scores: PhaseScores = { runtime: 1.0, behavioral: 0.0 };
     const result = aggregateScores(scores);
     assert.ok(Math.abs(result - 0.333) < 0.01, `Expected ~0.333, got ${result}`);
   });
@@ -195,12 +195,12 @@ describe('Decision: shouldShortCircuit', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExternalScorer
+// ExternalAnalyzer
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('ExternalScorer', () => {
+describe('ExternalAnalyzer', () => {
   it('should construct with endpoint and optional settings', () => {
-    const scorer = new ExternalScorer({
+    const scorer = new ExternalAnalyzer({
       endpoint: 'https://example.com/score',
       apiKey: 'test-key',
       timeout: 5000,
@@ -209,22 +209,21 @@ describe('ExternalScorer', () => {
   });
 
   it('should return null on network error (unreachable endpoint)', async () => {
-    const scorer = new ExternalScorer({
+    const scorer = new ExternalAnalyzer({
       endpoint: 'http://127.0.0.1:1/score', // unreachable
       timeout: 500,
     });
 
-    const envelope = makeEnvelope('exec_command', { command: 'ls' });
-    const result = await scorer.score(envelope, {}, []);
+    const result = await scorer.scoreAction('exec_command', { command: 'ls' }, {}, []);
     assert.equal(result, null, 'Should return null on network error');
   });
 
   it('should clamp score to [0, 1] range', async () => {
     // We can't easily mock fetch in node:test without a library,
     // but we test the clamping logic indirectly through the class.
-    // The ExternalScorer.score method clamps: Math.max(0, Math.min(1, data.score ?? 0))
+    // The ExternalAnalyzer.score method clamps: Math.max(0, Math.min(1, data.score ?? 0))
     // This is verified by the integration test above (returns null on error).
-    assert.ok(true, 'Clamping logic exists in external-scorer.ts:101');
+    assert.ok(true, 'Clamping logic exists in ExternalAnalyzer.call()');
   });
 });
 
@@ -249,8 +248,8 @@ describe('RuntimeAnalyzer: Phase 5/6 options', () => {
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
     const result = await analyzer.evaluate(envelope);
-    // Phase 5 should not have run — score d should be absent
-    assert.equal(result.scores.d, undefined, 'Phase 5 score should be undefined when no API key');
+    // Phase 5 should not have run — llm score should be absent
+    assert.equal(result.scores.llm, undefined, 'Phase 5 score should be undefined when no API key');
   });
 
   it('should skip Phase 6 when no scoringEndpoint', async () => {
@@ -258,6 +257,6 @@ describe('RuntimeAnalyzer: Phase 5/6 options', () => {
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
     const result = await analyzer.evaluate(envelope);
-    assert.equal(result.scores.e, undefined, 'Phase 6 score should be undefined when no endpoint');
+    assert.equal(result.scores.external, undefined, 'Phase 6 score should be undefined when no endpoint');
   });
 });

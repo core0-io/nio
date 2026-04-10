@@ -1,5 +1,5 @@
 /**
- * AST Parser — extracts security-relevant information from TypeScript/JavaScript.
+ * JS/TS Extractor — extracts security-relevant information from TypeScript/JavaScript.
  *
  * Uses @babel/parser to build the AST and @babel/traverse to walk it.
  * Extracts:
@@ -7,10 +7,16 @@
  *   - Function declarations with their bodies
  *   - Call expressions that match security-relevant sinks
  *   - String literals that look like URLs, IPs, or paths
+ *
+ * Implements LanguageExtractor so the BehavioralAnalyzer can dispatch by extension.
  */
 
 import { parse, type ParserPlugin } from '@babel/parser';
 import type { Node, CallExpression, MemberExpression } from '@babel/types';
+import type { LanguageExtractor, ASTExtraction, TaintSource, TaintSink } from './types.js';
+
+// Re-export shared types for backward compatibility
+export type { TaintSource, TaintSink, ImportInfo, FunctionInfo, ASTExtraction } from './types.js';
 
 // @babel/traverse ships as CJS with a default export.
 // We use createRequire for reliable interop in ESM.
@@ -18,68 +24,6 @@ import { createRequire } from 'module';
 const _require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const traverse = _require('@babel/traverse').default as any;
-
-// ── Types ────────────────────────────────────────────────────────────────
-
-/** A security-relevant source (data origin). */
-export interface TaintSource {
-  /** What kind of source this is. */
-  kind: 'env' | 'fs_read' | 'credential_file' | 'user_input' | 'network_response';
-  /** Variable or expression name that holds the tainted value. */
-  name: string;
-  /** Line number in source. */
-  line: number;
-  /** Column number. */
-  column: number;
-  /** Raw source snippet. */
-  snippet?: string;
-}
-
-/** A security-relevant sink (where data is consumed). */
-export interface TaintSink {
-  /** What kind of sink. */
-  kind: 'exec' | 'eval' | 'fetch' | 'network_send' | 'file_write' | 'spawn';
-  /** Function/method name. */
-  name: string;
-  /** Line number. */
-  line: number;
-  /** Column number. */
-  column: number;
-  /** Raw source snippet. */
-  snippet?: string;
-}
-
-/** An import/require extracted from the file. */
-export interface ImportInfo {
-  /** Module specifier (e.g. "child_process", "fs"). */
-  source: string;
-  /** What was imported (e.g. "exec", "readFileSync", or "*"). */
-  imported: string[];
-  /** Line number. */
-  line: number;
-}
-
-/** A function definition extracted from the file. */
-export interface FunctionInfo {
-  /** Function name (anonymous functions get "<anonymous>"). */
-  name: string;
-  /** Parameter names. */
-  params: string[];
-  /** Start line. */
-  line: number;
-  /** Whether this function is exported. */
-  exported: boolean;
-}
-
-/** Complete extraction result for a single file. */
-export interface ASTExtraction {
-  imports: ImportInfo[];
-  functions: FunctionInfo[];
-  sources: TaintSource[];
-  sinks: TaintSink[];
-  /** Suspicious string literals (URLs, IPs). */
-  suspiciousStrings: Array<{ value: string; line: number }>;
-}
 
 // ── Security patterns ────────────────────────────────────────────────────
 
@@ -349,3 +293,13 @@ function paramName(node: Node): string {
   }
   return '<destructured>';
 }
+
+// ── JSExtractor (LanguageExtractor implementation) ──────────────────────
+
+const JS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+
+export const jsExtractor: LanguageExtractor = {
+  language: 'javascript',
+  extensions: JS_EXTENSIONS,
+  extract: parseAndExtract,
+};

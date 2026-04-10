@@ -6,17 +6,17 @@
  * across all phases that ran.
  */
 
-import type { Finding, Severity } from '../../models.js';
-import { SEVERITY_WEIGHT } from '../../models.js';
+import type { Finding, Severity } from './models.js';
+import { SEVERITY_WEIGHT } from './models.js';
 
 // ── Phase Weights ───────────────────────────────────────────────────────
 
 export interface PhaseWeights {
-  runtime: number;     // Phase 2 (a)
-  static: number;      // Phase 3 (b)
-  behavioral: number;  // Phase 4 (c)
-  llm: number;         // Phase 5 (d)
-  external: number;    // Phase 6 (e)
+  runtime: number;     // Phase 2
+  static: number;      // Phase 3
+  behavioral: number;  // Phase 4
+  llm: number;         // Phase 5
+  external: number;    // Phase 6
 }
 
 export const DEFAULT_WEIGHTS: PhaseWeights = {
@@ -29,15 +29,7 @@ export const DEFAULT_WEIGHTS: PhaseWeights = {
 
 // ── Score Labels ────────────────────────────────────────────────────────
 
-export type ScoreLabel = 'a' | 'b' | 'c' | 'd' | 'e';
-
-export const SCORE_TO_WEIGHT_KEY: Record<ScoreLabel, keyof PhaseWeights> = {
-  a: 'runtime',
-  b: 'static',
-  c: 'behavioral',
-  d: 'llm',
-  e: 'external',
-};
+export type ScoreLabel = keyof PhaseWeights;
 
 // ── Score Conversion ────────────────────────────────────────────────────
 
@@ -67,11 +59,11 @@ export function findingsToScore(findings: Finding[]): number {
 // ── Weighted Aggregation ────────────────────────────────────────────────
 
 export interface PhaseScores {
-  a?: number;
-  b?: number;
-  c?: number;
-  d?: number;
-  e?: number;
+  runtime?: number;
+  static?: number;
+  behavioral?: number;
+  llm?: number;
+  external?: number;
 }
 
 /**
@@ -88,10 +80,10 @@ export function aggregateScores(
   let numerator = 0;
   let denominator = 0;
 
-  for (const [label, weightKey] of Object.entries(SCORE_TO_WEIGHT_KEY)) {
-    const score = scores[label as ScoreLabel];
+  for (const key of Object.keys(weights) as ScoreLabel[]) {
+    const score = scores[key];
     if (score != null) {
-      const w = weights[weightKey];
+      const w = weights[key];
       numerator += w * score;
       denominator += w;
     }

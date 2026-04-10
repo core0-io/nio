@@ -14,7 +14,7 @@
  *   - require("child_process").exec(userInput)
  */
 
-import type { TaintSource, TaintSink, ASTExtraction } from './ast-parser.js';
+import type { TaintSource, TaintSink, ASTExtraction, Language } from './types.js';
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -43,6 +43,7 @@ export interface DataflowPath {
 export function analyzeDataflows(
   extraction: ASTExtraction,
   fileContent: string,
+  language: Language = 'javascript',
 ): DataflowPath[] {
   const flows: DataflowPath[] = [];
   const lines = fileContent.split('\n');
@@ -53,7 +54,7 @@ export function analyzeDataflows(
   for (const source of extraction.sources) {
     // Extract the variable name from the source line
     const line = lines[source.line - 1] ?? '';
-    const varNames = extractAssignmentTargets(line);
+    const varNames = extractAssignmentTargets(line, language);
 
     for (const v of varNames) {
       taintedVars.set(v, source);
@@ -70,7 +71,7 @@ export function analyzeDataflows(
   // Simple one-pass propagation — catches direct assignments
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const targets = extractAssignmentTargets(line);
+    const targets = extractAssignmentTargets(line, language);
 
     for (const target of targets) {
       // Check if any tainted variable appears in the RHS
@@ -109,22 +110,65 @@ export function analyzeDataflows(
 
 /**
  * Extract variable names on the LHS of assignments in a line.
- * Handles: const x =, let x =, var x =, x =, and destructuring basics.
+ * Language-aware: JS uses const/let/var declarations, Python uses bare assignment.
  */
-function extractAssignmentTargets(line: string): string[] {
+function extractAssignmentTargets(line: string, language: Language): string[] {
   const targets: string[] = [];
   const trimmed = line.trim();
 
-  // const/let/var x = ...
-  const declMatch = trimmed.match(/(?:const|let|var)\s+(\w+)\s*=/);
-  if (declMatch) {
-    targets.push(declMatch[1]);
-  }
-
-  // x = ... (bare assignment, not == or ===)
-  const assignMatch = trimmed.match(/^(\w+)\s*=[^=]/);
-  if (assignMatch && !['const', 'let', 'var', 'if', 'while', 'for', 'return'].includes(assignMatch[1])) {
-    targets.push(assignMatch[1]);
+  switch (language) {
+    case 'python': {
+      // x = ..., x: type = ... (not ==, not <=, not >=, not !=)
+      const m = trimmed.match(/^(\w+)\s*(?::\s*\w[^=]*)?\s*=[^=]/);
+      if (m && !['if', 'while', 'for', 'return', 'elif', 'else', 'def', 'class', 'import', 'from'].includes(m[1])) {
+        targets.push(m[1]);
+      }
+      break;
+    }
+    case 'shell': {
+      // VAR=value, VAR=$(cmd), export VAR=value, local VAR=value
+      const m = trimmed.match(/^(?:export\s+|local\s+|declare\s+(?:-\w\s+)*)?(\w+)=/);
+      if (m) targets.push(m[1]);
+      break;
+    }
+    case 'ruby': {
+      // x = ..., @x = ..., @@x = ..., $x = ...
+      const m = trimmed.match(/^(?:[$@]{0,2})(\w+)\s*=[^=]/);
+      if (m && !['if', 'unless', 'while', 'until', 'for', 'return', 'def', 'class', 'module'].includes(m[1])) {
+        targets.push(m[1]);
+      }
+      break;
+    }
+    case 'php': {
+      // $var = ...
+      const m = trimmed.match(/\$(\w+)\s*=[^=]/);
+      if (m) targets.push(m[1]);
+      break;
+    }
+    case 'go': {
+      // x := ..., x = ..., x, err := ...
+      const shortDecl = trimmed.match(/^(\w+)(?:\s*,\s*\w+)*\s*:=/);
+      if (shortDecl) targets.push(shortDecl[1]);
+      const assign = trimmed.match(/^(\w+)\s*=[^=]/);
+      if (assign && !['if', 'for', 'return', 'switch', 'case', 'func', 'type', 'var'].includes(assign[1])) {
+        targets.push(assign[1]);
+      }
+      // var x = ...
+      const varDecl = trimmed.match(/\bvar\s+(\w+)\s*(?:\w+\s*)?=/);
+      if (varDecl) targets.push(varDecl[1]);
+      break;
+    }
+    default: {
+      // JS/TS: const x =, let x =, var x =
+      const declMatch = trimmed.match(/(?:const|let|var)\s+(\w+)\s*=/);
+      if (declMatch) targets.push(declMatch[1]);
+      // x = ... (bare assignment, not == or ===)
+      const assignMatch = trimmed.match(/^(\w+)\s*=[^=]/);
+      if (assignMatch && !['const', 'let', 'var', 'if', 'while', 'for', 'return'].includes(assignMatch[1])) {
+        targets.push(assignMatch[1]);
+      }
+      break;
+    }
   }
 
   return targets;

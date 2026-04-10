@@ -1,5 +1,19 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/scanner-hook.js\"",
+            "timeout": 30,
+            "async": true,
+            "statusMessage": "FFWD AgentGuard: scanning installed skills..."
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",

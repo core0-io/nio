@@ -29746,7 +29746,7 @@ function paramName(node) {
   }
   return "<destructured>";
 }
-var import_parser, _require, traverse, SOURCE_PATTERNS, SINK_PATTERNS, SUSPICIOUS_STRING_RE, CREDENTIAL_PATH_RE;
+var import_parser, _require, traverse, SOURCE_PATTERNS, SINK_PATTERNS, SUSPICIOUS_STRING_RE, CREDENTIAL_PATH_RE, JS_EXTENSIONS, jsExtractor;
 var init_ast_parser = __esm({
   "dist/core/analyzers/behavioral/ast-parser.js"() {
     "use strict";
@@ -29784,17 +29784,738 @@ var init_ast_parser = __esm({
     };
     SUSPICIOUS_STRING_RE = /^https?:\/\/(?!localhost|127\.0\.0\.1)/;
     CREDENTIAL_PATH_RE = /\.(ssh|aws|gnupg|kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    JS_EXTENSIONS = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+    jsExtractor = {
+      language: "javascript",
+      extensions: JS_EXTENSIONS,
+      extract: parseAndExtract
+    };
+  }
+});
+
+// dist/core/analyzers/behavioral/py-extractor.js
+function extractPython(source, filePath) {
+  if (!source || source.length === 0)
+    return null;
+  const lines = source.split("\n");
+  const result = {
+    imports: [],
+    functions: [],
+    sources: [],
+    sinks: [],
+    suspiciousStrings: []
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed === "")
+      continue;
+    extractImports(trimmed, lineNum, result.imports);
+    extractFunction(trimmed, lineNum, result.functions);
+    for (const pat of SOURCE_PATTERNS2) {
+      if (pat.re.test(line)) {
+        result.sources.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    for (const pat of SINK_PATTERNS2) {
+      if (pat.re.test(line)) {
+        result.sinks.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    extractStrings(line, lineNum, result.suspiciousStrings);
+  }
+  return result;
+}
+function extractImports(trimmed, lineNum, imports) {
+  const importMatch = trimmed.match(/^import\s+([\w.]+)(?:\s+as\s+\w+)?$/);
+  if (importMatch) {
+    imports.push({
+      source: importMatch[1],
+      imported: ["*"],
+      line: lineNum
+    });
+    return;
+  }
+  const fromMatch = trimmed.match(/^from\s+([\w.]+)\s+import\s+(.+)$/);
+  if (fromMatch) {
+    const mod2 = fromMatch[1];
+    const names = fromMatch[2].split(",").map((s) => {
+      const asMatch = s.trim().match(/^(\w+)(?:\s+as\s+\w+)?$/);
+      return asMatch ? asMatch[1] : s.trim();
+    }).filter((s) => s && s !== "(");
+    imports.push({
+      source: mod2,
+      imported: names.includes("*") ? ["*"] : names,
+      line: lineNum
+    });
+  }
+}
+function extractFunction(trimmed, lineNum, functions) {
+  const funcMatch = trimmed.match(/^(async\s+)?def\s+(\w+)\s*\(([^)]*)\)/);
+  if (!funcMatch)
+    return;
+  const name = funcMatch[2];
+  const paramsStr = funcMatch[3];
+  const params = paramsStr ? paramsStr.split(",").map((p) => p.trim().split(":")[0].split("=")[0].trim()).filter(Boolean) : [];
+  const exported = !trimmed.startsWith(" ") && !name.startsWith("_");
+  functions.push({ name, params, line: lineNum, exported });
+}
+function extractStrings(line, lineNum, suspicious) {
+  const stringRe = /(?:f?r?b?)(["'])(?:(?!\1).)*\1/g;
+  let match2;
+  while ((match2 = stringRe.exec(line)) !== null) {
+    const val = match2[0].slice(1, -1);
+    if (SUSPICIOUS_STRING_RE2.test(val) || CREDENTIAL_PATH_RE2.test(val)) {
+      suspicious.push({ value: val, line: lineNum });
+    }
+  }
+}
+var SOURCE_PATTERNS2, SINK_PATTERNS2, SUSPICIOUS_STRING_RE2, CREDENTIAL_PATH_RE2, PY_EXTENSIONS, pyExtractor;
+var init_py_extractor = __esm({
+  "dist/core/analyzers/behavioral/py-extractor.js"() {
+    "use strict";
+    SOURCE_PATTERNS2 = [
+      // os.environ["KEY"], os.environ.get("KEY"), os.environ["KEY"]
+      { re: /\bos\.environ\b/, kind: "env", name: "os.environ" },
+      { re: /\bos\.getenv\s*\(/, kind: "env", name: "os.getenv" },
+      // dotenv: os.environ after load_dotenv(), or dotenv_values()
+      { re: /\bdotenv_values\s*\(/, kind: "env", name: "dotenv_values" },
+      // File reads
+      { re: /\bopen\s*\([^)]*\)\.read/, kind: "fs_read", name: "open().read" },
+      { re: /\bPath\s*\([^)]*\)\.read_text\s*\(/, kind: "fs_read", name: "Path.read_text" },
+      { re: /\bpathlib\.Path\s*\([^)]*\)\.read_text\s*\(/, kind: "fs_read", name: "pathlib.Path.read_text" },
+      // Credential file paths
+      { re: /\bopen\s*\(\s*['"][^'"]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem)/, kind: "credential_file", name: "credential file read" },
+      // Network responses
+      { re: /\brequests\.get\s*\(/, kind: "network_response", name: "requests.get" },
+      { re: /\burllib\.request\.urlopen\s*\(/, kind: "network_response", name: "urllib.request.urlopen" },
+      { re: /\bhttpx\.get\s*\(/, kind: "network_response", name: "httpx.get" },
+      // User input
+      { re: /\binput\s*\(/, kind: "user_input", name: "input()" },
+      { re: /\bsys\.argv\b/, kind: "user_input", name: "sys.argv" },
+      { re: /\bargparse\b/, kind: "user_input", name: "argparse" }
+    ];
+    SINK_PATTERNS2 = [
+      // Command execution
+      { re: /\bsubprocess\.(?:run|call|check_call|check_output|Popen)\s*\(/, kind: "exec", name: "subprocess" },
+      { re: /\bos\.system\s*\(/, kind: "exec", name: "os.system" },
+      { re: /\bos\.popen\s*\(/, kind: "exec", name: "os.popen" },
+      { re: /\bos\.exec[lv]p?e?\s*\(/, kind: "spawn", name: "os.exec*" },
+      // Code evaluation
+      { re: /\beval\s*\(/, kind: "eval", name: "eval" },
+      { re: /\bexec\s*\(/, kind: "eval", name: "exec" },
+      { re: /\bcompile\s*\([^)]*,\s*[^)]*,\s*['"]exec['"]/, kind: "eval", name: 'compile(..., "exec")' },
+      { re: /\b__import__\s*\(/, kind: "eval", name: "__import__" },
+      // Network send
+      { re: /\brequests\.(?:post|put|patch|delete)\s*\(/, kind: "network_send", name: "requests.post" },
+      { re: /\bhttpx\.(?:post|put|patch|delete)\s*\(/, kind: "network_send", name: "httpx.post" },
+      { re: /\burllib\.request\.(?:urlopen|Request)\s*\(/, kind: "network_send", name: "urllib.request" },
+      { re: /\bsocket\b.*\.(?:send|sendall|sendto)\s*\(/, kind: "network_send", name: "socket.send" },
+      // Fetch (GET with potential data in URL)
+      { re: /\brequests\.get\s*\(/, kind: "fetch", name: "requests.get" },
+      { re: /\bhttpx\.get\s*\(/, kind: "fetch", name: "httpx.get" },
+      // File write
+      { re: /\bopen\s*\([^)]*,\s*['"][wWaA]/, kind: "file_write", name: "open(w)" },
+      { re: /\bPath\s*\([^)]*\)\.write_text\s*\(/, kind: "file_write", name: "Path.write_text" },
+      { re: /\bshutil\.copy/, kind: "file_write", name: "shutil.copy" }
+    ];
+    SUSPICIOUS_STRING_RE2 = /https?:\/\/(?!localhost|127\.0\.0\.1)/;
+    CREDENTIAL_PATH_RE2 = /(?:\.ssh|\.aws|\.gnupg|\.kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    PY_EXTENSIONS = /* @__PURE__ */ new Set([".py", ".pyw"]);
+    pyExtractor = {
+      language: "python",
+      extensions: PY_EXTENSIONS,
+      extract: extractPython
+    };
+  }
+});
+
+// dist/core/analyzers/behavioral/sh-extractor.js
+function extractShell(source, _filePath) {
+  if (!source || source.length === 0)
+    return null;
+  const lines = source.split("\n");
+  const result = {
+    imports: [],
+    functions: [],
+    sources: [],
+    sinks: [],
+    suspiciousStrings: []
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed === "")
+      continue;
+    const sourceMatch = trimmed.match(/^(?:source|\.) +["']?([^\s"']+)/);
+    if (sourceMatch) {
+      result.imports.push({
+        source: sourceMatch[1],
+        imported: ["*"],
+        line: lineNum
+      });
+    }
+    const funcMatch = trimmed.match(/^(?:function\s+)?(\w+)\s*\(\s*\)\s*\{?/);
+    if (funcMatch && !["if", "while", "for", "until", "case", "elif"].includes(funcMatch[1])) {
+      result.functions.push({
+        name: funcMatch[1],
+        params: [],
+        line: lineNum,
+        exported: false
+      });
+    }
+    for (const pat of SOURCE_PATTERNS3) {
+      if (pat.re.test(line)) {
+        result.sources.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    for (const pat of SINK_PATTERNS3) {
+      if (pat.re.test(line)) {
+        result.sinks.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    const stringRe = /(["'])(?:(?!\1).)*\1/g;
+    let match2;
+    while ((match2 = stringRe.exec(line)) !== null) {
+      const val = match2[0].slice(1, -1);
+      if (SUSPICIOUS_STRING_RE3.test(val) || CREDENTIAL_PATH_RE3.test(val)) {
+        result.suspiciousStrings.push({ value: val, line: lineNum });
+      }
+    }
+  }
+  return result;
+}
+var SOURCE_PATTERNS3, SINK_PATTERNS3, SUSPICIOUS_STRING_RE3, CREDENTIAL_PATH_RE3, SH_EXTENSIONS, shExtractor;
+var init_sh_extractor = __esm({
+  "dist/core/analyzers/behavioral/sh-extractor.js"() {
+    "use strict";
+    SOURCE_PATTERNS3 = [
+      // Environment variables
+      { re: /\$\{?\w+\}?/, kind: "env", name: "env variable" },
+      { re: /\bprintenv\b/, kind: "env", name: "printenv" },
+      // File reads
+      { re: /\$\(cat\s+/, kind: "fs_read", name: "$(cat)" },
+      { re: /\bcat\s+[^|;]+/, kind: "fs_read", name: "cat" },
+      { re: /\bsource\s+/, kind: "fs_read", name: "source" },
+      { re: /\.\s+[\/~]/, kind: "fs_read", name: ". (source)" },
+      // Credential file reads
+      { re: /\bcat\s+[^|;]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem|\.gnupg)/, kind: "credential_file", name: "credential file read" },
+      { re: /\$\(cat\s+[^)]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem)/, kind: "credential_file", name: "$(cat credential)" },
+      // User input
+      { re: /\bread\s+(?:-[a-z]\s+)*\w+/, kind: "user_input", name: "read" },
+      { re: /\$[1-9@*]/, kind: "user_input", name: "positional arg" },
+      // Network responses
+      { re: /\$\(curl\s+/, kind: "network_response", name: "$(curl)" },
+      { re: /\$\(wget\s+/, kind: "network_response", name: "$(wget)" },
+      { re: /curl\s+[^|;]+\|\s*/, kind: "network_response", name: "curl pipe" }
+    ];
+    SINK_PATTERNS3 = [
+      // Command execution
+      { re: /\beval\s+/, kind: "eval", name: "eval" },
+      { re: /\bexec\s+/, kind: "exec", name: "exec" },
+      { re: /\bbase64\s+(?:-d|--decode)\s*\|/, kind: "eval", name: "base64 -d | ..." },
+      { re: /\|\s*(?:bash|sh|zsh|dash)\b/, kind: "eval", name: "pipe to shell" },
+      { re: /\bxargs\s+/, kind: "exec", name: "xargs" },
+      { re: /\bsudo\s+/, kind: "exec", name: "sudo" },
+      // Network send
+      { re: /\bcurl\s+.*(?:-X\s*POST|-d\s|--data)/, kind: "network_send", name: "curl POST" },
+      { re: /\bcurl\s+/, kind: "fetch", name: "curl" },
+      { re: /\bwget\s+/, kind: "fetch", name: "wget" },
+      { re: /\bnc\s+/, kind: "network_send", name: "nc (netcat)" },
+      { re: /\bssh\s+/, kind: "network_send", name: "ssh" },
+      { re: /\bscp\s+/, kind: "network_send", name: "scp" },
+      // File write
+      { re: />\s*[\/~]/, kind: "file_write", name: "redirect write" },
+      { re: /\btee\s+/, kind: "file_write", name: "tee" },
+      { re: /\bdd\s+.*of=/, kind: "file_write", name: "dd" },
+      // Process spawn
+      { re: /\bnohup\s+/, kind: "spawn", name: "nohup" },
+      { re: /&\s*$/, kind: "spawn", name: "background process" }
+    ];
+    SUSPICIOUS_STRING_RE3 = /https?:\/\/(?!localhost|127\.0\.0\.1)/;
+    CREDENTIAL_PATH_RE3 = /(?:\.ssh|\.aws|\.gnupg|\.kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    SH_EXTENSIONS = /* @__PURE__ */ new Set([".sh", ".bash", ".zsh", ".fish", ".ksh"]);
+    shExtractor = {
+      language: "shell",
+      extensions: SH_EXTENSIONS,
+      extract: extractShell
+    };
+  }
+});
+
+// dist/core/analyzers/behavioral/rb-extractor.js
+function extractRuby(source, _filePath) {
+  if (!source || source.length === 0)
+    return null;
+  const lines = source.split("\n");
+  const result = {
+    imports: [],
+    functions: [],
+    sources: [],
+    sinks: [],
+    suspiciousStrings: []
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("#") || trimmed === "")
+      continue;
+    const reqMatch = trimmed.match(/^(?:require|require_relative|gem)\s+['"]([^'"]+)['"]/);
+    if (reqMatch) {
+      result.imports.push({
+        source: reqMatch[1],
+        imported: ["*"],
+        line: lineNum
+      });
+    }
+    const funcMatch = trimmed.match(/^def\s+(self\.)?(\w+[!?]?)(?:\s*\(([^)]*)\))?/);
+    if (funcMatch) {
+      const name = (funcMatch[1] || "") + funcMatch[2];
+      const params = funcMatch[3] ? funcMatch[3].split(",").map((p) => p.trim().replace(/^[*&]/, "").split("=")[0].split(":")[0].trim()).filter(Boolean) : [];
+      result.functions.push({
+        name,
+        params,
+        line: lineNum,
+        exported: !name.startsWith("_")
+      });
+    }
+    for (const pat of SOURCE_PATTERNS4) {
+      if (pat.re.test(line)) {
+        result.sources.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    for (const pat of SINK_PATTERNS4) {
+      if (pat.re.test(line)) {
+        result.sinks.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    const stringRe = /(["'])(?:(?!\1).)*\1/g;
+    let match2;
+    while ((match2 = stringRe.exec(line)) !== null) {
+      const val = match2[0].slice(1, -1);
+      if (SUSPICIOUS_STRING_RE4.test(val) || CREDENTIAL_PATH_RE4.test(val)) {
+        result.suspiciousStrings.push({ value: val, line: lineNum });
+      }
+    }
+  }
+  return result;
+}
+var SOURCE_PATTERNS4, SINK_PATTERNS4, SUSPICIOUS_STRING_RE4, CREDENTIAL_PATH_RE4, RB_EXTENSIONS, rbExtractor;
+var init_rb_extractor = __esm({
+  "dist/core/analyzers/behavioral/rb-extractor.js"() {
+    "use strict";
+    SOURCE_PATTERNS4 = [
+      // Environment
+      { re: /\bENV\s*\[/, kind: "env", name: "ENV[]" },
+      { re: /\bENV\.fetch\s*\(/, kind: "env", name: "ENV.fetch" },
+      // File reads
+      { re: /\bFile\.read\s*\(/, kind: "fs_read", name: "File.read" },
+      { re: /\bFile\.open\s*\(/, kind: "fs_read", name: "File.open" },
+      { re: /\bIO\.read\s*\(/, kind: "fs_read", name: "IO.read" },
+      { re: /\bFile\.readlines\s*\(/, kind: "fs_read", name: "File.readlines" },
+      // Credential files
+      { re: /\bFile\.(?:read|open)\s*\(\s*['"][^'"]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem)/, kind: "credential_file", name: "credential file read" },
+      // User input
+      { re: /\bgets\b/, kind: "user_input", name: "gets" },
+      { re: /\bARGV\b/, kind: "user_input", name: "ARGV" },
+      { re: /\bSTDIN\./, kind: "user_input", name: "STDIN" },
+      { re: /\breadline\b/, kind: "user_input", name: "readline" },
+      // Network responses
+      { re: /\bNet::HTTP\.get\b/, kind: "network_response", name: "Net::HTTP.get" },
+      { re: /\bHTTParty\.get\s*\(/, kind: "network_response", name: "HTTParty.get" },
+      { re: /\bFaraday\.\w+\s*\(/, kind: "network_response", name: "Faraday" },
+      { re: /\bopen-uri\b/, kind: "network_response", name: "open-uri" }
+    ];
+    SINK_PATTERNS4 = [
+      // Command execution
+      { re: /\bsystem\s*\(/, kind: "exec", name: "system" },
+      { re: /\bexec\s*\(/, kind: "exec", name: "exec" },
+      { re: /\b%x\{/, kind: "exec", name: "%x{}" },
+      { re: /\b%x\[/, kind: "exec", name: "%x[]" },
+      { re: /`[^`]+`/, kind: "exec", name: "backtick" },
+      { re: /\bIO\.popen\s*\(/, kind: "spawn", name: "IO.popen" },
+      { re: /\bOpen3\./, kind: "spawn", name: "Open3" },
+      { re: /\bKernel\.system\s*\(/, kind: "exec", name: "Kernel.system" },
+      { re: /\bProcess\.spawn\s*\(/, kind: "spawn", name: "Process.spawn" },
+      // Code evaluation
+      { re: /\beval\s*\(/, kind: "eval", name: "eval" },
+      { re: /\binstance_eval\b/, kind: "eval", name: "instance_eval" },
+      { re: /\bclass_eval\b/, kind: "eval", name: "class_eval" },
+      { re: /\bmodule_eval\b/, kind: "eval", name: "module_eval" },
+      { re: /\bsend\s*\(/, kind: "eval", name: "send" },
+      // Network send
+      { re: /\bNet::HTTP\.post\b/, kind: "network_send", name: "Net::HTTP.post" },
+      { re: /\bHTTParty\.post\s*\(/, kind: "network_send", name: "HTTParty.post" },
+      { re: /\bFaraday\.post\s*\(/, kind: "network_send", name: "Faraday.post" },
+      { re: /\bRestClient\.post\s*\(/, kind: "network_send", name: "RestClient.post" },
+      // Fetch
+      { re: /\bNet::HTTP\.get\b/, kind: "fetch", name: "Net::HTTP.get" },
+      { re: /\bHTTParty\.get\s*\(/, kind: "fetch", name: "HTTParty.get" },
+      { re: /\bopen\s*\(\s*['"]https?:/, kind: "fetch", name: "open(url)" },
+      // File write
+      { re: /\bFile\.write\s*\(/, kind: "file_write", name: "File.write" },
+      { re: /\bFile\.open\s*\([^)]*,\s*['"]w/, kind: "file_write", name: "File.open(w)" },
+      { re: /\bIO\.write\s*\(/, kind: "file_write", name: "IO.write" },
+      { re: /\bFileUtils\./, kind: "file_write", name: "FileUtils" }
+    ];
+    SUSPICIOUS_STRING_RE4 = /https?:\/\/(?!localhost|127\.0\.0\.1)/;
+    CREDENTIAL_PATH_RE4 = /(?:\.ssh|\.aws|\.gnupg|\.kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    RB_EXTENSIONS = /* @__PURE__ */ new Set([".rb", ".rake", ".gemspec"]);
+    rbExtractor = {
+      language: "ruby",
+      extensions: RB_EXTENSIONS,
+      extract: extractRuby
+    };
+  }
+});
+
+// dist/core/analyzers/behavioral/php-extractor.js
+function extractPHP(source, _filePath) {
+  if (!source || source.length === 0)
+    return null;
+  const lines = source.split("\n");
+  const result = {
+    imports: [],
+    functions: [],
+    sources: [],
+    sinks: [],
+    suspiciousStrings: []
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//") || trimmed.startsWith("#") || trimmed.startsWith("*"))
+      continue;
+    if (trimmed === "")
+      continue;
+    const useMatch = trimmed.match(/^use\s+([\w\\]+)(?:\s+as\s+(\w+))?/);
+    if (useMatch) {
+      result.imports.push({
+        source: useMatch[1],
+        imported: [useMatch[2] || useMatch[1].split("\\").pop() || "*"],
+        line: lineNum
+      });
+    }
+    const reqMatch = trimmed.match(/^(?:require_once|require|include_once|include)\s*\(?\s*['"]([^'"]+)['"]/);
+    if (reqMatch) {
+      result.imports.push({
+        source: reqMatch[1],
+        imported: ["*"],
+        line: lineNum
+      });
+    }
+    const funcMatch = trimmed.match(/^(?:public|private|protected|static|\s)*function\s+(\w+)\s*\(([^)]*)\)/);
+    if (funcMatch) {
+      const params = funcMatch[2] ? funcMatch[2].split(",").map((p) => p.trim().replace(/^[?&]?\s*\w+\s+/, "").split("=")[0].replace("$", "").trim()).filter(Boolean) : [];
+      result.functions.push({
+        name: funcMatch[1],
+        params,
+        line: lineNum,
+        exported: trimmed.includes("public") || !trimmed.includes("private") && !trimmed.includes("protected")
+      });
+    }
+    for (const pat of SOURCE_PATTERNS5) {
+      if (pat.re.test(line)) {
+        result.sources.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    for (const pat of SINK_PATTERNS5) {
+      if (pat.re.test(line)) {
+        result.sinks.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    const stringRe = /(["'])(?:(?!\1).)*\1/g;
+    let match2;
+    while ((match2 = stringRe.exec(line)) !== null) {
+      const val = match2[0].slice(1, -1);
+      if (SUSPICIOUS_STRING_RE5.test(val) || CREDENTIAL_PATH_RE5.test(val)) {
+        result.suspiciousStrings.push({ value: val, line: lineNum });
+      }
+    }
+  }
+  return result;
+}
+var SOURCE_PATTERNS5, SINK_PATTERNS5, SUSPICIOUS_STRING_RE5, CREDENTIAL_PATH_RE5, PHP_EXTENSIONS, phpExtractor;
+var init_php_extractor = __esm({
+  "dist/core/analyzers/behavioral/php-extractor.js"() {
+    "use strict";
+    SOURCE_PATTERNS5 = [
+      // Superglobals
+      { re: /\$_ENV\b/, kind: "env", name: "$_ENV" },
+      { re: /\bgetenv\s*\(/, kind: "env", name: "getenv()" },
+      { re: /\$_SERVER\b/, kind: "env", name: "$_SERVER" },
+      // User input
+      { re: /\$_GET\b/, kind: "user_input", name: "$_GET" },
+      { re: /\$_POST\b/, kind: "user_input", name: "$_POST" },
+      { re: /\$_REQUEST\b/, kind: "user_input", name: "$_REQUEST" },
+      { re: /\$_COOKIE\b/, kind: "user_input", name: "$_COOKIE" },
+      { re: /\$_FILES\b/, kind: "user_input", name: "$_FILES" },
+      { re: /\bphp:\/\/input\b/, kind: "user_input", name: "php://input" },
+      { re: /\$argv\b/, kind: "user_input", name: "$argv" },
+      // File reads
+      { re: /\bfile_get_contents\s*\(/, kind: "fs_read", name: "file_get_contents" },
+      { re: /\bfread\s*\(/, kind: "fs_read", name: "fread" },
+      { re: /\bfile\s*\(/, kind: "fs_read", name: "file()" },
+      { re: /\breadfile\s*\(/, kind: "fs_read", name: "readfile" },
+      // Credential files
+      { re: /\bfile_get_contents\s*\(\s*['"][^'"]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem)/, kind: "credential_file", name: "credential file read" },
+      // Network responses
+      { re: /\bcurl_exec\s*\(/, kind: "network_response", name: "curl_exec" },
+      { re: /\bfile_get_contents\s*\(\s*['"]https?:/, kind: "network_response", name: "file_get_contents(url)" }
+    ];
+    SINK_PATTERNS5 = [
+      // Command execution
+      { re: /\bexec\s*\(/, kind: "exec", name: "exec" },
+      { re: /\bsystem\s*\(/, kind: "exec", name: "system" },
+      { re: /\bshell_exec\s*\(/, kind: "exec", name: "shell_exec" },
+      { re: /\bpassthru\s*\(/, kind: "exec", name: "passthru" },
+      { re: /\bpopen\s*\(/, kind: "spawn", name: "popen" },
+      { re: /\bproc_open\s*\(/, kind: "spawn", name: "proc_open" },
+      { re: /`[^`]+`/, kind: "exec", name: "backtick" },
+      { re: /\bpcntl_exec\s*\(/, kind: "exec", name: "pcntl_exec" },
+      // Code evaluation
+      { re: /\beval\s*\(/, kind: "eval", name: "eval" },
+      { re: /\bassert\s*\(/, kind: "eval", name: "assert" },
+      { re: /\bpreg_replace\s*\(\s*['"]\/[^'"]*\/e/, kind: "eval", name: "preg_replace /e" },
+      { re: /\bcreate_function\s*\(/, kind: "eval", name: "create_function" },
+      { re: /\bcall_user_func\s*\(/, kind: "eval", name: "call_user_func" },
+      // Network send
+      { re: /\bcurl_exec\s*\(/, kind: "network_send", name: "curl_exec" },
+      { re: /\bfile_get_contents\s*\(\s*['"]https?:/, kind: "fetch", name: "file_get_contents(url)" },
+      { re: /\bfsockopen\s*\(/, kind: "network_send", name: "fsockopen" },
+      { re: /\bstream_socket_client\s*\(/, kind: "network_send", name: "stream_socket_client" },
+      // File write
+      { re: /\bfile_put_contents\s*\(/, kind: "file_write", name: "file_put_contents" },
+      { re: /\bfwrite\s*\(/, kind: "file_write", name: "fwrite" },
+      { re: /\bmove_uploaded_file\s*\(/, kind: "file_write", name: "move_uploaded_file" },
+      { re: /\bcopy\s*\(/, kind: "file_write", name: "copy" },
+      // Include (acts as eval for PHP)
+      { re: /\binclude\s*\(?\s*\$/, kind: "eval", name: "include($var)" },
+      { re: /\brequire\s*\(?\s*\$/, kind: "eval", name: "require($var)" }
+    ];
+    SUSPICIOUS_STRING_RE5 = /https?:\/\/(?!localhost|127\.0\.0\.1)/;
+    CREDENTIAL_PATH_RE5 = /(?:\.ssh|\.aws|\.gnupg|\.kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    PHP_EXTENSIONS = /* @__PURE__ */ new Set([".php", ".phtml"]);
+    phpExtractor = {
+      language: "php",
+      extensions: PHP_EXTENSIONS,
+      extract: extractPHP
+    };
+  }
+});
+
+// dist/core/analyzers/behavioral/go-extractor.js
+function extractGo(source, _filePath) {
+  if (!source || source.length === 0)
+    return null;
+  const lines = source.split("\n");
+  const result = {
+    imports: [],
+    functions: [],
+    sources: [],
+    sinks: [],
+    suspiciousStrings: []
+  };
+  let inImportBlock = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineNum = i + 1;
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//") || trimmed === "")
+      continue;
+    const singleImport = trimmed.match(/^import\s+"([^"]+)"/);
+    if (singleImport) {
+      result.imports.push({
+        source: singleImport[1],
+        imported: [singleImport[1].split("/").pop() || "*"],
+        line: lineNum
+      });
+    }
+    if (trimmed === "import (") {
+      inImportBlock = true;
+      continue;
+    }
+    if (inImportBlock) {
+      if (trimmed === ")") {
+        inImportBlock = false;
+        continue;
+      }
+      const pkgMatch = trimmed.match(/^\s*(?:\w+\s+)?"([^"]+)"/);
+      if (pkgMatch) {
+        result.imports.push({
+          source: pkgMatch[1],
+          imported: [pkgMatch[1].split("/").pop() || "*"],
+          line: lineNum
+        });
+      }
+      continue;
+    }
+    const funcMatch = trimmed.match(/^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(([^)]*)\)/);
+    if (funcMatch) {
+      const name = funcMatch[1];
+      const params = funcMatch[2] ? funcMatch[2].split(",").map((p) => p.trim().split(/\s+/)[0]).filter(Boolean) : [];
+      result.functions.push({
+        name,
+        params,
+        line: lineNum,
+        exported: /^[A-Z]/.test(name)
+        // Go exports start with uppercase
+      });
+    }
+    for (const pat of SOURCE_PATTERNS6) {
+      if (pat.re.test(line)) {
+        result.sources.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    for (const pat of SINK_PATTERNS6) {
+      if (pat.re.test(line)) {
+        result.sinks.push({
+          kind: pat.kind,
+          name: pat.name,
+          line: lineNum,
+          column: 0,
+          snippet: trimmed.slice(0, 120)
+        });
+      }
+    }
+    const stringRe = /"(?:[^"\\]|\\.)*"/g;
+    let match2;
+    while ((match2 = stringRe.exec(line)) !== null) {
+      const val = match2[0].slice(1, -1);
+      if (SUSPICIOUS_STRING_RE6.test(val) || CREDENTIAL_PATH_RE6.test(val)) {
+        result.suspiciousStrings.push({ value: val, line: lineNum });
+      }
+    }
+  }
+  return result;
+}
+var SOURCE_PATTERNS6, SINK_PATTERNS6, SUSPICIOUS_STRING_RE6, CREDENTIAL_PATH_RE6, GO_EXTENSIONS, goExtractor;
+var init_go_extractor = __esm({
+  "dist/core/analyzers/behavioral/go-extractor.js"() {
+    "use strict";
+    SOURCE_PATTERNS6 = [
+      // Environment
+      { re: /\bos\.Getenv\s*\(/, kind: "env", name: "os.Getenv" },
+      { re: /\bos\.LookupEnv\s*\(/, kind: "env", name: "os.LookupEnv" },
+      { re: /\bos\.Environ\s*\(/, kind: "env", name: "os.Environ" },
+      // File reads
+      { re: /\bos\.ReadFile\s*\(/, kind: "fs_read", name: "os.ReadFile" },
+      { re: /\bioutil\.ReadFile\s*\(/, kind: "fs_read", name: "ioutil.ReadFile" },
+      { re: /\bio\.ReadAll\s*\(/, kind: "fs_read", name: "io.ReadAll" },
+      { re: /\bbufio\.NewReader\s*\(/, kind: "fs_read", name: "bufio.NewReader" },
+      { re: /\bos\.Open\s*\(/, kind: "fs_read", name: "os.Open" },
+      // Credential files
+      { re: /\bos\.(?:ReadFile|Open)\s*\(\s*"[^"]*(?:\.ssh|\.aws|\.env|credentials|id_rsa|\.pem)/, kind: "credential_file", name: "credential file read" },
+      // User input
+      { re: /\bos\.Args\b/, kind: "user_input", name: "os.Args" },
+      { re: /\bflag\.\w+\s*\(/, kind: "user_input", name: "flag" },
+      { re: /\bbufio\.NewScanner\s*\(os\.Stdin\)/, kind: "user_input", name: "stdin scanner" },
+      { re: /\bfmt\.Scan/, kind: "user_input", name: "fmt.Scan" },
+      // Network responses
+      { re: /\bhttp\.Get\s*\(/, kind: "network_response", name: "http.Get" },
+      { re: /\bhttp\.DefaultClient\.Get\s*\(/, kind: "network_response", name: "http.DefaultClient.Get" }
+    ];
+    SINK_PATTERNS6 = [
+      // Command execution
+      { re: /\bexec\.Command\s*\(/, kind: "exec", name: "exec.Command" },
+      { re: /\bexec\.CommandContext\s*\(/, kind: "exec", name: "exec.CommandContext" },
+      { re: /\bsyscall\.Exec\s*\(/, kind: "exec", name: "syscall.Exec" },
+      // Network send
+      { re: /\bhttp\.Post\s*\(/, kind: "network_send", name: "http.Post" },
+      { re: /\bhttp\.PostForm\s*\(/, kind: "network_send", name: "http.PostForm" },
+      { re: /\bhttp\.NewRequest\s*\(\s*"(?:POST|PUT|PATCH|DELETE)"/, kind: "network_send", name: "http.NewRequest(POST)" },
+      { re: /\bnet\.Dial\s*\(/, kind: "network_send", name: "net.Dial" },
+      // Fetch
+      { re: /\bhttp\.Get\s*\(/, kind: "fetch", name: "http.Get" },
+      { re: /\bhttp\.NewRequest\s*\(\s*"GET"/, kind: "fetch", name: "http.NewRequest(GET)" },
+      // File write
+      { re: /\bos\.WriteFile\s*\(/, kind: "file_write", name: "os.WriteFile" },
+      { re: /\bioutil\.WriteFile\s*\(/, kind: "file_write", name: "ioutil.WriteFile" },
+      { re: /\bos\.Create\s*\(/, kind: "file_write", name: "os.Create" },
+      { re: /\bos\.OpenFile\s*\(/, kind: "file_write", name: "os.OpenFile" },
+      // Process spawn
+      { re: /\b\.Start\s*\(\s*\)/, kind: "spawn", name: "cmd.Start()" },
+      // Code evaluation (Go has limited eval, but unsafe + reflect count)
+      { re: /\breflect\.ValueOf\s*\(.*\)\.Call\s*\(/, kind: "eval", name: "reflect.Call" },
+      { re: /\bunsafe\.Pointer\s*\(/, kind: "eval", name: "unsafe.Pointer" }
+    ];
+    SUSPICIOUS_STRING_RE6 = /https?:\/\/(?!localhost|127\.0\.0\.1)/;
+    CREDENTIAL_PATH_RE6 = /(?:\.ssh|\.aws|\.gnupg|\.kube)\b|\.env\b|credentials|id_rsa|\.pem$/;
+    GO_EXTENSIONS = /* @__PURE__ */ new Set([".go"]);
+    goExtractor = {
+      language: "go",
+      extensions: GO_EXTENSIONS,
+      extract: extractGo
+    };
   }
 });
 
 // dist/core/analyzers/behavioral/dataflow.js
-function analyzeDataflows(extraction, fileContent) {
+function analyzeDataflows(extraction, fileContent, language = "javascript") {
   const flows = [];
   const lines = fileContent.split("\n");
   const taintedVars = /* @__PURE__ */ new Map();
   for (const source of extraction.sources) {
     const line = lines[source.line - 1] ?? "";
-    const varNames = extractAssignmentTargets(line);
+    const varNames = extractAssignmentTargets(line, language);
     for (const v of varNames) {
       taintedVars.set(v, source);
     }
@@ -29805,7 +30526,7 @@ function analyzeDataflows(extraction, fileContent) {
   }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    const targets = extractAssignmentTargets(line);
+    const targets = extractAssignmentTargets(line, language);
     for (const target of targets) {
       for (const [tainted, source] of taintedVars) {
         if (target !== tainted && lineContainsVariable(line, tainted)) {
@@ -29830,16 +30551,59 @@ function analyzeDataflows(extraction, fileContent) {
   flows.push(...detectDirectFlows(extraction, lines));
   return deduplicateFlows(flows);
 }
-function extractAssignmentTargets(line) {
+function extractAssignmentTargets(line, language) {
   const targets = [];
   const trimmed = line.trim();
-  const declMatch = trimmed.match(/(?:const|let|var)\s+(\w+)\s*=/);
-  if (declMatch) {
-    targets.push(declMatch[1]);
-  }
-  const assignMatch = trimmed.match(/^(\w+)\s*=[^=]/);
-  if (assignMatch && !["const", "let", "var", "if", "while", "for", "return"].includes(assignMatch[1])) {
-    targets.push(assignMatch[1]);
+  switch (language) {
+    case "python": {
+      const m = trimmed.match(/^(\w+)\s*(?::\s*\w[^=]*)?\s*=[^=]/);
+      if (m && !["if", "while", "for", "return", "elif", "else", "def", "class", "import", "from"].includes(m[1])) {
+        targets.push(m[1]);
+      }
+      break;
+    }
+    case "shell": {
+      const m = trimmed.match(/^(?:export\s+|local\s+|declare\s+(?:-\w\s+)*)?(\w+)=/);
+      if (m)
+        targets.push(m[1]);
+      break;
+    }
+    case "ruby": {
+      const m = trimmed.match(/^(?:[$@]{0,2})(\w+)\s*=[^=]/);
+      if (m && !["if", "unless", "while", "until", "for", "return", "def", "class", "module"].includes(m[1])) {
+        targets.push(m[1]);
+      }
+      break;
+    }
+    case "php": {
+      const m = trimmed.match(/\$(\w+)\s*=[^=]/);
+      if (m)
+        targets.push(m[1]);
+      break;
+    }
+    case "go": {
+      const shortDecl = trimmed.match(/^(\w+)(?:\s*,\s*\w+)*\s*:=/);
+      if (shortDecl)
+        targets.push(shortDecl[1]);
+      const assign = trimmed.match(/^(\w+)\s*=[^=]/);
+      if (assign && !["if", "for", "return", "switch", "case", "func", "type", "var"].includes(assign[1])) {
+        targets.push(assign[1]);
+      }
+      const varDecl = trimmed.match(/\bvar\s+(\w+)\s*(?:\w+\s*)?=/);
+      if (varDecl)
+        targets.push(varDecl[1]);
+      break;
+    }
+    default: {
+      const declMatch = trimmed.match(/(?:const|let|var)\s+(\w+)\s*=/);
+      if (declMatch)
+        targets.push(declMatch[1]);
+      const assignMatch = trimmed.match(/^(\w+)\s*=[^=]/);
+      if (assignMatch && !["const", "let", "var", "if", "while", "for", "return"].includes(assignMatch[1])) {
+        targets.push(assignMatch[1]);
+      }
+      break;
+    }
   }
   return targets;
 }
@@ -30180,16 +30944,34 @@ function capabilityFindings(profile, fileAnalyses) {
   }
   return findings;
 }
-var JS_EXTENSIONS, BehavioralAnalyzer;
+var EXTRACTORS, EXT_TO_EXTRACTOR, BehavioralAnalyzer;
 var init_behavioral = __esm({
   "dist/core/analyzers/behavioral/index.js"() {
     "use strict";
     init_base();
     init_models();
     init_ast_parser();
+    init_py_extractor();
+    init_sh_extractor();
+    init_rb_extractor();
+    init_php_extractor();
+    init_go_extractor();
     init_dataflow();
     init_context();
-    JS_EXTENSIONS = /* @__PURE__ */ new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
+    EXTRACTORS = [
+      jsExtractor,
+      pyExtractor,
+      shExtractor,
+      rbExtractor,
+      phpExtractor,
+      goExtractor
+    ];
+    EXT_TO_EXTRACTOR = /* @__PURE__ */ new Map();
+    for (const ext2 of EXTRACTORS) {
+      for (const e of ext2.extensions) {
+        EXT_TO_EXTRACTOR.set(e, ext2);
+      }
+    }
     BehavioralAnalyzer = class extends BaseAnalyzer {
       name = "behavioral";
       phase = 1;
@@ -30197,15 +30979,16 @@ var init_behavioral = __esm({
         return policy.analyzers.behavioral;
       }
       async analyze(ctx) {
-        const jsFiles = ctx.files.filter((f) => JS_EXTENSIONS.has(f.extension));
-        if (jsFiles.length === 0)
+        const supportedFiles = ctx.files.filter((f) => EXT_TO_EXTRACTOR.has(f.extension));
+        if (supportedFiles.length === 0)
           return [];
         const fileAnalyses = [];
-        for (const file of jsFiles) {
-          const extraction = parseAndExtract(file.content, file.relativePath);
+        for (const file of supportedFiles) {
+          const extractor = EXT_TO_EXTRACTOR.get(file.extension);
+          const extraction = extractor.extract(file.content, file.relativePath);
           if (!extraction)
             continue;
-          const flows = analyzeDataflows(extraction, file.content);
+          const flows = analyzeDataflows(extraction, file.content, extractor.language);
           fileAnalyses.push({
             file: file.relativePath,
             extraction,
@@ -38303,7 +39086,7 @@ var init_denylist = __esm({
   }
 });
 
-// dist/core/analyzers/runtime/scoring.js
+// dist/core/scoring.js
 function findingsToScore(findings) {
   if (findings.length === 0)
     return 0;
@@ -38319,10 +39102,10 @@ function findingsToScore(findings) {
 function aggregateScores(scores, weights = DEFAULT_WEIGHTS) {
   let numerator = 0;
   let denominator = 0;
-  for (const [label, weightKey] of Object.entries(SCORE_TO_WEIGHT_KEY)) {
-    const score = scores[label];
+  for (const key of Object.keys(weights)) {
+    const score = scores[key];
     if (score != null) {
-      const w = weights[weightKey];
+      const w = weights[key];
       numerator += w * score;
       denominator += w;
     }
@@ -38331,9 +39114,9 @@ function aggregateScores(scores, weights = DEFAULT_WEIGHTS) {
     return 0;
   return numerator / denominator;
 }
-var DEFAULT_WEIGHTS, SCORE_TO_WEIGHT_KEY, MAX_SEVERITY;
+var DEFAULT_WEIGHTS, MAX_SEVERITY;
 var init_scoring = __esm({
-  "dist/core/analyzers/runtime/scoring.js"() {
+  "dist/core/scoring.js"() {
     "use strict";
     init_models();
     DEFAULT_WEIGHTS = {
@@ -38342,13 +39125,6 @@ var init_scoring = __esm({
       behavioral: 2,
       llm: 1,
       external: 2
-    };
-    SCORE_TO_WEIGHT_KEY = {
-      a: "runtime",
-      b: "static",
-      c: "behavioral",
-      d: "llm",
-      e: "external"
     };
     MAX_SEVERITY = SEVERITY_WEIGHT["critical"];
   }
@@ -38379,12 +39155,12 @@ var init_decision = __esm({
   }
 });
 
-// dist/core/analyzers/runtime/external-scorer.js
-var ExternalScorer;
-var init_external_scorer = __esm({
-  "dist/core/analyzers/runtime/external-scorer.js"() {
+// dist/core/analyzers/external/index.js
+var ExternalAnalyzer;
+var init_external2 = __esm({
+  "dist/core/analyzers/external/index.js"() {
     "use strict";
-    ExternalScorer = class {
+    ExternalAnalyzer = class {
       endpoint;
       apiKey;
       timeout;
@@ -38394,22 +39170,33 @@ var init_external_scorer = __esm({
         this.timeout = opts.timeout ?? 3e3;
       }
       /**
-       * Call the external scoring endpoint.
-       * Returns a 0-1 score, or null if the call fails.
+       * Score an action (guard pipeline — RuntimeAnalyzer Phase 6).
        */
-      async score(envelope, priorScores, priorFindings) {
-        const body = {
-          tool_name: envelope.action.type,
-          tool_input: envelope.action.data,
+      async scoreAction(toolName, toolInput, priorScores, priorFindings, initiatingSkill) {
+        return this.call({
+          mode: "action",
+          tool_name: toolName,
+          tool_input: toolInput,
           prior_scores: priorScores,
-          prior_findings: priorFindings.map((f) => ({
-            rule_id: f.rule_id,
-            severity: f.severity,
-            title: f.title,
-            file: f.location.file
-          })),
-          initiating_skill: envelope.context.initiating_skill
-        };
+          prior_findings: this.compactFindings(priorFindings),
+          initiating_skill: initiatingSkill
+        });
+      }
+      /**
+       * Score a scan result (scan pipeline — ScanOrchestrator post-phase).
+       */
+      async scoreScan(skillId, files, priorFindings) {
+        return this.call({
+          mode: "scan",
+          skill_id: skillId,
+          files,
+          prior_findings: this.compactFindings(priorFindings)
+        });
+      }
+      /**
+       * Low-level call — send any ExternalScoreRequest and get a score back.
+       */
+      async call(body) {
         try {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), this.timeout);
@@ -38427,7 +39214,7 @@ var init_external_scorer = __esm({
           });
           clearTimeout(timeoutId);
           if (!response.ok) {
-            console.warn(`[ExternalScorer] HTTP ${response.status}: ${response.statusText}`);
+            console.warn(`[ExternalAnalyzer] HTTP ${response.status}: ${response.statusText}`);
             return null;
           }
           const data = await response.json();
@@ -38436,12 +39223,20 @@ var init_external_scorer = __esm({
         } catch (err) {
           const error = err;
           if (error.name === "AbortError") {
-            console.warn(`[ExternalScorer] Request timed out after ${this.timeout}ms`);
+            console.warn(`[ExternalAnalyzer] Request timed out after ${this.timeout}ms`);
           } else {
-            console.warn(`[ExternalScorer] Request failed: ${error.message}`);
+            console.warn(`[ExternalAnalyzer] Request failed: ${error.message}`);
           }
           return null;
         }
+      }
+      compactFindings(findings) {
+        return findings.map((f) => ({
+          rule_id: f.rule_id,
+          severity: f.severity,
+          title: f.title,
+          file: f.location.file
+        }));
       }
     };
   }
@@ -38457,7 +39252,7 @@ var init_runtime = __esm({
     init_denylist();
     init_scoring();
     init_decision();
-    init_external_scorer();
+    init_external2();
     RuntimeAnalyzer = class {
       weights;
       level;
@@ -38472,7 +39267,7 @@ var init_runtime = __esm({
         this.llmApiKey = opts?.llmApiKey;
         this.llmModel = opts?.llmModel;
         if (opts?.scoringEndpoint) {
-          this.externalScorer = new ExternalScorer({
+          this.externalScorer = new ExternalAnalyzer({
             endpoint: opts.scoringEndpoint,
             apiKey: opts.scoringApiKey,
             timeout: opts.scoringTimeout
@@ -38502,7 +39297,7 @@ var init_runtime = __esm({
         const phase2Findings = analyzeAction(envelope);
         allFindings.push(...phase2Findings);
         const scoreA = findingsToScore(phase2Findings);
-        scores.a = scoreA;
+        scores.runtime = scoreA;
         if (shouldShortCircuit(scoreA, level)) {
           return this.buildResult(allFindings, scores, 2, level);
         }
@@ -38512,7 +39307,7 @@ var init_runtime = __esm({
             const phase3Findings = await this.runStaticOnContent(data.content_preview, data.path || "unknown");
             allFindings.push(...phase3Findings);
             const scoreB = findingsToScore(phase3Findings);
-            scores.b = scoreB;
+            scores.static = scoreB;
             if (shouldShortCircuit(scoreB, level)) {
               return this.buildResult(allFindings, scores, 3, level);
             }
@@ -38521,12 +39316,12 @@ var init_runtime = __esm({
         if (envelope.action.type === "write_file") {
           const data = envelope.action.data;
           const path7 = data.path || "";
-          const isJSTS = /\.(js|ts|mjs|mts|jsx|tsx)$/.test(path7);
-          if (isJSTS && data.content_preview) {
+          const isBehavioralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path7);
+          if (isBehavioralTarget && data.content_preview) {
             const phase4Findings = await this.runBehavioralOnContent(data.content_preview, path7);
             allFindings.push(...phase4Findings);
             const scoreC = findingsToScore(phase4Findings);
-            scores.c = scoreC;
+            scores.behavioral = scoreC;
             if (shouldShortCircuit(scoreC, level)) {
               return this.buildResult(allFindings, scores, 4, level);
             }
@@ -38536,15 +39331,15 @@ var init_runtime = __esm({
           const phase5Findings = await this.runLLMOnAction(envelope);
           allFindings.push(...phase5Findings);
           const scoreD = findingsToScore(phase5Findings);
-          scores.d = scoreD;
+          scores.llm = scoreD;
           if (shouldShortCircuit(scoreD, level)) {
             return this.buildResult(allFindings, scores, 5, level);
           }
         }
         if (this.externalScorer) {
-          const result = await this.externalScorer.score(envelope, scores, allFindings);
+          const result = await this.externalScorer.scoreAction(envelope.action.type, envelope.action.data, scores, allFindings, envelope.context.initiating_skill);
           if (result) {
-            scores.e = result.score;
+            scores.external = result.score;
             if (shouldShortCircuit(result.score, level)) {
               allFindings.push({
                 id: `EXTERNAL_SCORE:${envelope.action.type}:0`,

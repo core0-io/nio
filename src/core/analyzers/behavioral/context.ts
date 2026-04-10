@@ -10,7 +10,7 @@
  * a holistic threat picture.
  */
 
-import type { ASTExtraction, ImportInfo } from './ast-parser.js';
+import type { ASTExtraction, ImportInfo } from './types.js';
 import type { DataflowPath } from './dataflow.js';
 
 // ── Types ────────────────────────────────────────────────────────────────

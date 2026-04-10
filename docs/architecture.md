@@ -23,39 +23,145 @@ AgentGuard is a two-pipeline security framework for AI agents:
 └─────────────────────────────────────────────────────────┘
 ```
 
+---
+
 ## Dynamic Guard: 6-Phase Pipeline
 
 Every `PreToolUse` hook event flows through the RuntimeAnalyzer's 6-phase
 pipeline. Each phase produces a 0–1 score and can short-circuit if the score
 exceeds the deny threshold for the active protection level.
 
+### High-Level Flow
+
 ```
-hook event → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → decision
-             allow?     score a   score b   score c   score d   score e
-             (exit)     critical? critical? critical? critical? aggregate
-                        (exit)    (exit)    (exit)    (exit)    → decision
+                         ┌──────────────┐
+                         │  Hook Event  │
+                         │ (PreToolUse) │
+                         └──────┬───────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 1: Allowlist Gate (<1ms)                                      │
+│                                                                     │
+│   action ──► match safe prefix? ──YES──► ALLOW (exit)              │
+│                    │ NO                                              │
+│                    ▼                                                 │
+│              has shell metachar? ──YES──► skip allowlist, continue  │
+│                    │ NO                                              │
+│                    ▼                                                 │
+│              match extra_allowlist? ──YES──► ALLOW (exit)           │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not matched
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 2: Pattern Analysis (<5ms) → `runtime` score                  │
+│                                                                     │
+│   ┌─ Bash ──────────────────────────────────────────────┐           │
+│   │  dangerous cmds · fork bombs · metachar injection   │           │
+│   │  base64 decode · sensitive path targets             │           │
+│   └─────────────────────────────────────────────────────┘           │
+│   ┌─ Network ───────────────────────────────────────────┐           │
+│   │  webhook exfil domains · high-risk TLDs             │           │
+│   │  secret leak in HTTP body                           │           │
+│   └─────────────────────────────────────────────────────┘           │
+│   ┌─ File ops ──────────────────────────────────────────┐           │
+│   │  path traversal · sensitive path detection          │           │
+│   └─────────────────────────────────────────────────────┘           │
+│                                                                     │
+│   Finding[] → runtime score ──► critical? ──YES──► DENY (exit)     │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not critical
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 3: Static Analysis (<50ms) → `static` score                   │
+│ [Write/Edit only — skip for Bash/WebFetch]                          │
+│                                                                     │
+│   file content ──► 16 regex rules ──► base64 decode pass           │
+│   (SHELL_EXEC, REMOTE_LOADER, OBFUSCATION, WEBHOOK_EXFIL, ...)    │
+│                                                                     │
+│   Finding[] → static score ──► critical? ──YES──► DENY (exit)      │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not critical
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 4: Behavioral Analysis (<200ms) → `behavioral` score          │
+│ [Write/Edit only — JS/TS/Python/Shell/Ruby/PHP/Go]                  │
+│                                                                     │
+│   file content ──► LanguageExtractor ──► ASTExtraction              │
+│                         │                                           │
+│        ┌────────────────┼────────────────┐                          │
+│        ▼                ▼                ▼                           │
+│   ┌─────────┐    ┌───────────┐    ┌──────────┐                     │
+│   │ JS/TS   │    │  Python   │    │ Shell/   │                     │
+│   │ (Babel  │    │  (regex)  │    │ Ruby/    │                     │
+│   │  AST)   │    │           │    │ PHP/Go   │                     │
+│   └────┬────┘    └─────┬─────┘    └────┬─────┘                     │
+│        └───────────────┼───────────────┘                            │
+│                        ▼                                            │
+│              Dataflow Tracker (language-aware)                       │
+│              source → sink taint propagation                        │
+│                        │                                            │
+│                        ▼                                            │
+│              Cross-file Context Aggregation                         │
+│              capability detection (C2, eval)                        │
+│                                                                     │
+│   Finding[] → behavioral score ──► critical? ──YES──► DENY (exit)  │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not critical
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 5: LLM Analysis (2–10s) → `llm` score                        │
+│ [Optional — gated on llm.api_key config]                            │
+│                                                                     │
+│   action context ──► Claude semantic analysis                       │
+│   (Write: file content, Bash: shell script, Network: request JSON) │
+│                                                                     │
+│   Finding[] → llm score ──► critical? ──YES──► DENY (exit)         │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not critical
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 6: External Scoring API → `external` score                    │
+│ [Optional — gated on guard.scoring_endpoint config]                 │
+│                                                                     │
+│   POST { tool_name, tool_input, prior_scores, prior_findings }     │
+│   → external HTTP endpoint                                          │
+│   ← { score: 0.0–1.0, reason?: string }                            │
+│                                                                     │
+│   external score ──► critical? ──YES──► DENY (exit)                │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ not critical
+                     ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Final: Weighted Score Aggregation                                   │
+│                                                                     │
+│   final = Σ(weight[phase] × score[phase]) / Σ(weight[phase])      │
+│           (only over phases that ran)                               │
+│                                                                     │
+│   final score ──► protection level thresholds ──► ALLOW/CONFIRM/DENY│
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Which phases run per action type
 
 | Phase | Bash | Write/Edit | WebFetch |
 |-------|------|------------|----------|
-| 1 Allowlist | ✅ | ✅ | ✅ |
-| 2 RuntimeAnalyzer | ✅ | ✅ | ✅ |
-| 3 StaticAnalyzer | ❌ skip | ✅ file content | ❌ skip |
-| 4 BehavioralAnalyzer | ❌ skip | ✅ .ts/.js only | ❌ skip |
-| 5 LLM (optional) | ✅ | ✅ | ✅ |
-| 6 External API (optional) | ✅ | ✅ | ✅ |
+| 1 Allowlist | yes | yes | yes |
+| 2 Pattern Analysis | yes | yes | yes |
+| 3 Static Analysis | skip | yes (file content) | skip |
+| 4 Behavioral Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip |
+| 5 LLM (optional) | yes | yes | yes |
+| 6 External API (optional) | yes | yes | yes |
 
 ### Phase 1: Allowlist Gate (<1ms)
 
-Check if the action matches a known-safe pattern. If yes → **allow**, stop.
+Check if the action matches a known-safe pattern. If yes, **allow** and stop.
 
 - 200+ safe command prefixes: `git status`, `ls`, `npm test`, etc.
 - Only applied when command has no shell metacharacters (`;`, `|`, `$()`, etc.)
 - User can inject additional patterns via `config.yaml` → `guard.extra_allowlist`
 
-### Phase 2: Pattern Analysis (<5ms) → score `a`
+### Phase 2: Pattern Analysis (<5ms) → `runtime`
 
 Produces `Finding[]` from action data pattern matching:
 
@@ -63,27 +169,54 @@ Produces `Finding[]` from action data pattern matching:
 - **Network**: webhook exfil domains, high-risk TLDs, secret leak in body
 - **File ops**: path traversal, sensitive path detection (`.env`, `.ssh/`, `.aws/`)
 
-### Phase 3: Static Analysis (<50ms) → score `b`
+### Phase 3: Static Analysis (<50ms) → `static`
 
 **Only runs for Write/Edit actions** (file content exists to scan).
 Runs the scan engine's 16 static rules + base64 decode pass against the file
 content being written.
 
-### Phase 4: Behavioral Analysis (<200ms) → score `c`
+### Phase 4: Behavioral Analysis (<200ms) → `behavioral`
 
-**Only runs for Write/Edit actions** where content is JS/TS (parseable AST).
-Runs dataflow analysis: source→sink tracking, dangerous capability combinations.
+**Only runs for Write/Edit actions** where content is a supported language.
+Uses a pluggable `LanguageExtractor` interface to extract sources, sinks, imports,
+and functions, then runs language-aware dataflow tracking.
 
-### Phase 5: LLM Analysis (2–10s, optional) → score `d`
+**Supported languages:**
+
+| Language | Extractor | Parser |
+|----------|-----------|--------|
+| JavaScript/TypeScript | `jsExtractor` | Babel AST (`@babel/parser`) |
+| Python | `pyExtractor` | Regex-based |
+| Shell (sh/bash/zsh) | `shExtractor` | Regex-based |
+| Ruby | `rbExtractor` | Regex-based |
+| PHP | `phpExtractor` | Regex-based |
+| Go | `goExtractor` | Regex-based |
+
+**Source → Sink patterns per language:**
+
+| Pattern | JS/TS | Python | Shell | Ruby | PHP | Go |
+|---------|-------|--------|-------|------|-----|-----|
+| Env access | `process.env` | `os.environ` | `$VAR` | `ENV[]` | `$_ENV` | `os.Getenv()` |
+| File read | `fs.readFileSync` | `open().read()` | `$(cat)` | `File.read` | `file_get_contents` | `os.ReadFile` |
+| Command exec | `exec()` | `subprocess.run` | `eval` | `system()` | `exec()` | `exec.Command` |
+| Code eval | `eval()` | `eval/exec` | `eval` | `eval()` | `eval()` | `reflect.Call` |
+| Network send | `fetch()` | `requests.post` | `curl -d` | `Net::HTTP.post` | `curl_exec` | `http.Post` |
+
+### Phase 5: LLM Analysis (2–10s, optional) → `llm`
 
 **Gated on `llm.api_key` in config.** Sends action context to Claude for
 semantic analysis. For Write/Edit, analyzes the file content. For Bash, wraps
 the command as a shell script. Reuses the existing `LLMAnalyzer` from the scan pipeline.
 
-### Phase 6: External Scoring API (optional) → score `e`
+### Phase 6: External Scoring API (optional) → `external`
 
 **Gated on `guard.scoring_endpoint` in config.** Sends action context + prior
 scores/findings to a user-configured HTTP endpoint. Returns a 0–1 score.
+
+The `ExternalAnalyzer` is a standalone module (`src/core/analyzers/external/`)
+usable by both pipelines:
+- `scoreAction()` — guard pipeline (RuntimeAnalyzer Phase 6)
+- `scoreScan()` — scan pipeline (ScanOrchestrator post-phase)
 
 ```yaml
 guard:
@@ -95,7 +228,7 @@ guard:
 ### Score Aggregation
 
 Each phase produces a 0–1 score via `findingsToScore()`:
-`score = max(severity_weight / 4 × confidence)` across all findings.
+`score = max(severity_weight / 4 * confidence)` across all findings.
 
 Final score is a weighted average of all phases that ran:
 
@@ -107,11 +240,11 @@ Default weights:
 
 | Phase | Weight | Rationale |
 |-------|--------|-----------|
-| Runtime (a) | 1.0 | Pattern matching — fast but coarse |
-| Static (b) | 1.0 | Regex rules on file content |
-| Behavioral (c) | 2.0 | AST dataflow — more reliable |
-| LLM (d) | 1.0 | Semantic analysis — broad but slow |
-| External (e) | 2.0 | External API — authoritative |
+| `runtime` | 1.0 | Pattern matching — fast but coarse |
+| `static` | 1.0 | Regex rules on file content |
+| `behavioral` | 2.0 | AST/regex dataflow — more reliable |
+| `llm` | 1.0 | Semantic analysis — broad but slow |
+| `external` | 2.0 | External API — authoritative |
 
 ### Protection Level → Decision Mapping
 
@@ -124,6 +257,8 @@ Default weights:
 - **strict**: binary allow/deny, no user confirmation — anything suspicious is blocked
 - **balanced**: three-zone with confirm buffer — the default mode
 - **permissive**: binary allow/deny with high tolerance — only blocks near-certain threats
+
+---
 
 ## Static Scan: Multi-Engine Pipeline
 
@@ -139,7 +274,7 @@ The scanner uses a **two-phase, multi-engine pipeline**:
                                      ├─ merge ──► ┌──────────────────────┐
            ┌──────────────────────┐  │            │    LLM Analyzer      │
            │ Behavioral Analyzer  │──┘            │  (Claude semantic)   │
-           │  (AST + dataflow)    │               └──────────┬───────────┘
+           │ (multi-lang dataflow)│               └──────────┬───────────┘
            └──────────────────────┘                          │
                                                              ▼
                                                  ┌──────────────────────┐
@@ -169,16 +304,22 @@ SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
 
 ### Behavioral Analyzer (Phase 1)
 
-AST-based analysis for TypeScript/JavaScript using `@babel/parser`:
+Multi-language dataflow analysis with pluggable extractors:
 
 ```
-TypeScript/JavaScript Source
+Source File (.ts/.py/.sh/.rb/.php/.go)
     ↓
-AST Parser (@babel/parser)
+LanguageExtractor (dispatch by extension)
+    ├── jsExtractor  → Babel AST (@babel/parser)
+    ├── pyExtractor  → regex-based
+    ├── shExtractor  → regex-based
+    ├── rbExtractor  → regex-based
+    ├── phpExtractor → regex-based
+    └── goExtractor  → regex-based
     ↓
-Function Extraction + Security Indicators
+ASTExtraction { imports, functions, sources, sinks, suspiciousStrings }
     ↓
-Forward Dataflow Tracker
+Dataflow Tracker (language-aware assignment extraction)
     ↓
 Source → Sink Analysis
     ↓
@@ -187,10 +328,11 @@ Cross-file Context Aggregation
 Finding Generation
 ```
 
-**Sources** (data origins): `process.env`, `fs.readFileSync`, credential files
-**Sinks** (dangerous destinations): `exec`, `eval`, `fetch`, `spawn`, `writeFile`
+**Sources** (data origins): env vars, file reads, credential files, user input, network responses
+**Sinks** (dangerous destinations): command exec, code eval, network send, file write, process spawn
 
 **Behavioral rules:**
+
 | Rule | Severity | Detection |
 |------|----------|-----------|
 | `DATAFLOW_EXFIL` | critical | Secret/credential flows to network |
@@ -217,6 +359,8 @@ Uses Claude for semantic threat analysis, enriched by Phase 1 findings.
 3. **Sorting** — Critical first, then by file + line
 4. **Projection** — `Finding[]` → legacy `ScanEvidence[]` + `RiskTag[]`
 5. **Cache write** — Optional: persist to scan-cache when `skillId` provided
+
+---
 
 ## Key Abstractions
 
@@ -248,10 +392,31 @@ interface RuntimeDecision {
   decision: 'allow' | 'deny' | 'confirm';
   risk_level: RiskLevel;
   findings: Finding[];
-  scores: { a?: number; b?: number; c?: number; d?: number; e?: number; final?: number };
+  scores: {
+    runtime?: number;
+    static?: number;
+    behavioral?: number;
+    llm?: number;
+    external?: number;
+    final?: number;
+  };
   phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
   explanation?: string;
 }
+```
+
+### LanguageExtractor
+
+Pluggable interface for multi-language behavioral analysis:
+
+```typescript
+interface LanguageExtractor {
+  readonly language: Language;
+  readonly extensions: ReadonlySet<string>;
+  extract(source: string, filePath: string): ASTExtraction | null;
+}
+
+type Language = 'javascript' | 'python' | 'shell' | 'ruby' | 'php' | 'go';
 ```
 
 ### BaseAnalyzer
@@ -281,6 +446,19 @@ File-backed cache (`~/.ffwd-agent-guard/scan-cache.json`) with 24h TTL.
 Written by `ScanOrchestrator` after scans. Entries track skill ID, risk level,
 and finding counts for use as trust context by the guard pipeline.
 
+### ExternalAnalyzer
+
+Standalone HTTP scorer usable by both pipelines:
+
+```typescript
+class ExternalAnalyzer {
+  scoreAction(toolName, toolInput, priorScores, priorFindings): Promise<{score, reason?} | null>;
+  scoreScan(skillId, files, priorFindings): Promise<{score, reason?} | null>;
+}
+```
+
+---
+
 ## Shared Infrastructure
 
 ### Detection Data (`src/core/shared/detection-data.ts`)
@@ -294,12 +472,20 @@ Single source of truth for constants used by both scan and guard pipelines:
 Pure functions extracted from StaticAnalyzer, reusable by both scan and guard:
 `runRules()`, `runBase64Pass()`, `extractAndDecodeBase64()`.
 
+### Scoring (`src/core/scoring.ts`)
+
+Shared scoring infrastructure for both pipelines:
+`findingsToScore()`, `aggregateScores()`, `PhaseWeights`, `PhaseScores`.
+
+---
+
 ## Project Structure
 
 ```
 src/
 ├── core/                              # Analysis engine
 │   ├── models.ts                      # Finding, ThreatCategory, Severity
+│   ├── scoring.ts                     # Score conversion + weighted aggregation
 │   ├── scanner.ts                     # ScanOrchestrator (static scan)
 │   ├── scan-cache.ts                  # ScanCache (file-backed)
 │   ├── detection-engine.ts            # Shared rule engine (pure functions)
@@ -313,27 +499,32 @@ src/
 │   └── analyzers/
 │       ├── base.ts                    # BaseAnalyzer abstract class
 │       ├── static/index.ts           # StaticAnalyzer (regex)
-│       ├── behavioral/               # BehavioralAnalyzer (AST)
-│       │   ├── index.ts
-│       │   ├── ast-parser.ts         # Babel AST extraction
+│       ├── behavioral/               # BehavioralAnalyzer (multi-language)
+│       │   ├── index.ts              # Orchestration + language dispatch
+│       │   ├── types.ts              # LanguageExtractor interface
+│       │   ├── ast-parser.ts         # JS/TS: Babel AST extraction
+│       │   ├── py-extractor.ts       # Python: regex extraction
+│       │   ├── sh-extractor.ts       # Shell: regex extraction
+│       │   ├── rb-extractor.ts       # Ruby: regex extraction
+│       │   ├── php-extractor.ts      # PHP: regex extraction
+│       │   ├── go-extractor.ts       # Go: regex extraction
 │       │   ├── dataflow.ts           # Source→sink taint tracking
 │       │   └── context.ts            # Cross-file aggregation
 │       ├── llm/                       # LLMAnalyzer (Claude)
 │       │   ├── index.ts
 │       │   ├── prompts.ts            # Injection-protected prompts
 │       │   └── taxonomy.ts           # Threat category mapping
+│       ├── external/                  # ExternalAnalyzer (HTTP scorer)
+│       │   └── index.ts              # Dual-pipeline: scoreAction + scoreScan
 │       └── runtime/                   # RuntimeAnalyzer (guard pipeline)
 │           ├── index.ts              # 6-phase orchestration
 │           ├── allowlist.ts          # Phase 1: safe command prefixes
 │           ├── denylist.ts           # Phase 2: dangerous patterns
-│           ├── scoring.ts            # Score conversion + weighted aggregation
-│           ├── decision.ts           # Score → decision (per protection level)
-│           └── external-scorer.ts    # Phase 6: HTTP client
+│           └── decision.ts           # Score → decision (per protection level)
 ├── scanner/                           # SkillScanner public API
 │   ├── index.ts                       # Scan entry point
 │   ├── file-walker.ts                # Directory traversal
 │   └── rules/                        # 16 detection rules
-├── registry/                          # Trust management (SkillRegistry)
 ├── adapters/                          # Platform integration
 │   ├── engine.ts                     # evaluateHook() — guard entry point
 │   ├── claude-code.ts                # Claude Code adapter
@@ -347,6 +538,7 @@ src/
 ├── utils/                             # Utility functions
 └── scripts/                           # CLI entry points
     ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
+    ├── scanner-hook.ts                # SessionStart: scan installed skills
     ├── action-cli.ts                  # CLI for RuntimeAnalyzer
     ├── config-cli.ts                  # Protection level CLI
     └── collector-hook.ts              # Telemetry collector hook

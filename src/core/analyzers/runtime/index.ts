@@ -24,14 +24,14 @@ import {
   DEFAULT_WEIGHTS,
   type PhaseWeights,
   type PhaseScores,
-} from './scoring.js';
+} from '../../scoring.js';
 import {
   scoreToDecision,
   shouldShortCircuit,
   type ProtectionLevel,
   type GuardDecision,
 } from './decision.js';
-import { ExternalScorer } from './external-scorer.js';
+import { ExternalAnalyzer } from '../external/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -64,7 +64,7 @@ export class RuntimeAnalyzer {
   private extraAllowlist: string[];
   private llmApiKey?: string;
   private llmModel?: string;
-  private externalScorer?: ExternalScorer;
+  private externalScorer?: ExternalAnalyzer;
 
   constructor(opts?: RuntimeAnalyzerOptions) {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.weights };
@@ -74,7 +74,7 @@ export class RuntimeAnalyzer {
     this.llmModel = opts?.llmModel;
 
     if (opts?.scoringEndpoint) {
-      this.externalScorer = new ExternalScorer({
+      this.externalScorer = new ExternalAnalyzer({
         endpoint: opts.scoringEndpoint,
         apiKey: opts.scoringApiKey,
         timeout: opts.scoringTimeout,
@@ -111,7 +111,7 @@ export class RuntimeAnalyzer {
     const phase2Findings = analyzeAction(envelope);
     allFindings.push(...phase2Findings);
     const scoreA = findingsToScore(phase2Findings);
-    scores.a = scoreA;
+    scores.runtime = scoreA;
 
     if (shouldShortCircuit(scoreA, level)) {
       return this.buildResult(allFindings, scores, 2, level);
@@ -127,7 +127,7 @@ export class RuntimeAnalyzer {
         );
         allFindings.push(...phase3Findings);
         const scoreB = findingsToScore(phase3Findings);
-        scores.b = scoreB;
+        scores.static = scoreB;
 
         if (shouldShortCircuit(scoreB, level)) {
           return this.buildResult(allFindings, scores, 3, level);
@@ -135,20 +135,20 @@ export class RuntimeAnalyzer {
       }
     }
 
-    // ── Phase 4: BehavioralAnalyzer (Write/Edit .ts/.js only) ────────
+    // ── Phase 4: BehavioralAnalyzer (Write/Edit .ts/.js/.py only) ─────
     if (envelope.action.type === 'write_file') {
       const data = envelope.action.data as { content_preview?: string; path?: string };
       const path = data.path || '';
-      const isJSTS = /\.(js|ts|mjs|mts|jsx|tsx)$/.test(path);
+      const isBehavioralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path);
 
-      if (isJSTS && data.content_preview) {
+      if (isBehavioralTarget && data.content_preview) {
         const phase4Findings = await this.runBehavioralOnContent(
           data.content_preview,
           path,
         );
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
-        scores.c = scoreC;
+        scores.behavioral = scoreC;
 
         if (shouldShortCircuit(scoreC, level)) {
           return this.buildResult(allFindings, scores, 4, level);
@@ -161,7 +161,7 @@ export class RuntimeAnalyzer {
       const phase5Findings = await this.runLLMOnAction(envelope);
       allFindings.push(...phase5Findings);
       const scoreD = findingsToScore(phase5Findings);
-      scores.d = scoreD;
+      scores.llm = scoreD;
 
       if (shouldShortCircuit(scoreD, level)) {
         return this.buildResult(allFindings, scores, 5, level);
@@ -170,9 +170,15 @@ export class RuntimeAnalyzer {
 
     // ── Phase 6: External API (optional, gated on endpoint) ─────────
     if (this.externalScorer) {
-      const result = await this.externalScorer.score(envelope, scores, allFindings);
+      const result = await this.externalScorer.scoreAction(
+          envelope.action.type,
+          envelope.action.data as unknown as Record<string, unknown>,
+          scores as Record<string, number | undefined>,
+          allFindings,
+          envelope.context.initiating_skill,
+        );
       if (result) {
-        scores.e = result.score;
+        scores.external = result.score;
 
         if (shouldShortCircuit(result.score, level)) {
           // Add a synthetic finding for the external score

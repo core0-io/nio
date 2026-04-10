@@ -26,6 +26,9 @@ export {
 // Export RuntimeAnalyzer (guard pipeline)
 export { RuntimeAnalyzer, type RuntimeDecision, type RuntimeAnalyzerOptions } from './core/analyzers/runtime/index.js';
 
+// Export ExternalAnalyzer (pluggable HTTP scorer for both pipelines)
+export { ExternalAnalyzer, type ExternalAnalyzerOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analyzers/external/index.js';
+
 // Export policy presets
 export {
   DEFAULT_POLICIES,
