@@ -165,6 +165,7 @@ async function main(): Promise<void> {
     event,
     tool_name: toolName,
     session_id: sessionId,
+    tool_use_id: input.tool_use_id,
     cwd,
     ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
     tool_summary: toolName ? toolSummary(toolName, toolInput) : undefined,
@@ -201,11 +202,16 @@ async function main(): Promise<void> {
 
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
-        const resp = input.tool_response ?? {};
-        const postAttrs: Record<string, unknown> = {};
-        if (resp.output !== undefined) postAttrs['agentguard.tool.output'] = redactAndTruncate(resp.output);
-        if (resp.error) postAttrs['agentguard.tool.error'] = redactAndTruncate(resp.error);
-        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd, postAttrs, resp.error ?? null);
+        // tool_response shape varies by tool (Bash: {stdout,stderr,…},
+        // Read: {file,numLines}, …). Serialize the whole thing so we always
+        // capture something; extract error for span status when present.
+        const resp = (input.tool_response ?? {}) as Record<string, unknown>;
+        const postAttrs: Record<string, unknown> = {
+          'agentguard.tool.output': redactAndTruncate(resp),
+        };
+        const err = (resp.error ?? resp.stderr) as string | undefined;
+        if (err) postAttrs['agentguard.tool.error'] = redactAndTruncate(err);
+        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd, postAttrs, err ?? null);
       }
 
       if (meterProvider) {

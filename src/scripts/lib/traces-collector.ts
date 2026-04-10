@@ -428,6 +428,9 @@ export async function endTurn(
   // under a missing span. Also clear parentSpanId so the turn is a true root.
   const sc = span.spanContext() as { traceId: string; spanId: string };
   sc.spanId = traceId.slice(0, 16);
+  // Newer OTEL SDKs expose the parent reference as `parentSpanContext`, older
+  // ones as `parentSpanId`. Clear both so the turn span becomes a true root.
+  (span as unknown as { parentSpanContext?: unknown }).parentSpanContext = undefined;
   (span as unknown as { parentSpanId?: string }).parentSpanId = undefined;
   span.end(endMs);
 

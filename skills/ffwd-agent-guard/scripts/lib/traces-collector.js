@@ -314,6 +314,9 @@ export async function endTurn(config, provider, _state, platform, cwd) {
     // under a missing span. Also clear parentSpanId so the turn is a true root.
     const sc = span.spanContext();
     sc.spanId = traceId.slice(0, 16);
+    // Newer OTEL SDKs expose the parent reference as `parentSpanContext`, older
+    // ones as `parentSpanId`. Clear both so the turn span becomes a true root.
+    span.parentSpanContext = undefined;
     span.parentSpanId = undefined;
     span.end(endMs);
     await provider.forceFlush();
