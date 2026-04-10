@@ -4,40 +4,64 @@
 
 <h1 align="center">FFWD AgentGuard</h1>
 
-<p align="center"><b>Security framework for AI agents.</b></p>
+<p align="center"><b>Security and observability for AI coding agents.</b></p>
 
-<p align="center">Your AI agent has full access to your terminal, files, and secrets — but zero security awareness.<br/>A malicious skill or prompt injection can steal your keys or wipe your disk.<br/><b>AgentGuard stops all of that.</b></p>
+<p align="center">Real-time guard that blocks dangerous commands, prevents data leaks, and protects secrets.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and any agent that supports hooks.</p>
 
-[![npm](https://img.shields.io/npm/v/@core0-io/ffwd-agent-guard.svg)](https://www.npmjs.com/package/@core0-io/ffwd-agent-guard)
-[![GitHub Stars](https://img.shields.io/github/stars/core0-io/ffwd-agent-guard)](https://github.com/core0-io/ffwd-agent-guard)
-[![CI](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
 ## Architecture
 
-AgentGuard is a **two-pipeline** security framework:
-
-1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioral + LLM)
-2. **Dynamic Guard** — Real-time 6-phase RuntimeAnalyzer pipeline on every hook event
+AgentGuard is a Claude Code / OpenClaw plugin with two core systems:
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│ Static Scan (on-demand)                                  │
-│   /ffwd-agent-guard scan <path>                          │
-│   → ScanOrchestrator → Static + Behavioral + LLM        │
-│   → Finding[] → ScanResult                               │
-└──────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────┐
-│ Dynamic Guard (real-time, every PreToolUse hook)         │
-│   guard-hook → evaluateHook() → RuntimeAnalyzer          │
-│   → 6-phase pipeline → allow / deny / confirm            │
-└──────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        FFWD AgentGuard                              │
+│                                                                     │
+│  ┌──────────────────────────┐    ┌───────────────────────────────┐  │
+│  │       Collector          │    │            Guard              │  │
+│  │                          │    │                               │  │
+│  │  Hook events             │    │  ┌─────────────────────────┐  │  │
+│  │  → metrics + traces      │    │  │    Dynamic Guard        │  │  │
+│  │  → OTLP export           │    │  │    (real-time hooks)    │  │  │
+│  │                          │    │  │    6-phase pipeline     │  │  │
+│  │  PreToolUse              │    │  │    → allow/deny/confirm │  │  │
+│  │  PostToolUse             │    │  └─────────────────────────┘  │  │
+│  │  TaskCreated             │    │                               │  │
+│  │  TaskCompleted           │    │  ┌─────────────────────────┐  │  │
+│  │  Stop / SubagentStop     │    │  │    Static Scan          │  │  │
+│  │                          │    │  │    (on-demand)          │  │  │
+│  └──────────────────────────┘    │  │    Static + Behavioral  │  │  │
+│                                  │  │    + LLM engines        │  │  │
+│                                  │  └─────────────────────────┘  │  │
+│                                  └───────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Dynamic Guard: 6-Phase Pipeline
+### Collector
 
-Every `PreToolUse` hook event flows through the RuntimeAnalyzer. Each phase produces a 0–1 score and can short-circuit on critical findings.
+Captures agent activity as **OpenTelemetry** metrics and traces via an async collector hook. Every hook event (`PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`) is recorded and exported over OTLP (gRPC or HTTP).
+
+**Metrics:**
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
+| `agentguard.turn.count` | Counter | `platform` |
+
+**Traces** — one trace per conversation turn:
+
+| Span | Trigger | Key Attributes |
+|------|---------|----------------|
+| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd` |
+| `tool:<name>` | `PreToolUse` → `PostToolUse` | `tool_name`, `tool_summary` |
+| `task:execute` | `TaskCreated` → `TaskCompleted` | `task_id`, `task_summary` |
+
+### Guard
+
+Security evaluation with two modes:
+
+**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a 6-phase RuntimeAnalyzer pipeline:
 
 | Phase | Name | Latency | Applies To |
 |-------|------|---------|------------|
@@ -48,9 +72,7 @@ Every `PreToolUse` hook event flows through the RuntimeAnalyzer. Each phase prod
 | 5 | **LLM Analysis** | 2–10s | All (optional, needs `llm.api_key`) |
 | 6 | **External Scoring API** | configurable | All (optional, needs `guard.scoring_endpoint`) |
 
-Phases 3–4 only run when file content is available (Write/Edit actions). Phases 5–6 are opt-in via config.
-
-After all phases run, scores are combined via **weighted average**:
+Each phase produces a 0–1 score and can short-circuit on critical findings. Final score is a **weighted average** across all phases that ran:
 
 ```
 final = Σ(weight × score) / Σ(weight)
@@ -58,9 +80,14 @@ final = Σ(weight × score) / Σ(weight)
 
 Default weights: `runtime: 1.0`, `static: 1.0`, `behavioral: 2.0`, `llm: 1.0`, `external: 2.0`
 
+**Static Scan** — on-demand multi-engine code analysis triggered by `/ffwd-agent-guard scan <path>`:
+- **StaticAnalyzer**: 16 regex rules + base64 decode pass
+- **BehavioralAnalyzer**: multi-language source→sink dataflow tracking
+- **LLMAnalyzer**: Claude semantic analysis (optional)
+
 ### Multi-Language Behavioral Analysis
 
-Phase 4 uses pluggable `LanguageExtractor` modules for source→sink dataflow tracking:
+Both pipelines share the BehavioralAnalyzer, which uses pluggable `LanguageExtractor` modules for dataflow tracking:
 
 | Language | Parser | Extensions |
 |----------|--------|------------|
@@ -160,15 +187,19 @@ AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events t
 - Base64-encoded payloads decoded and re-scanned
 
 **Layer 3 — Static + Behavioral Analysis** (Write/Edit only):
-- 16 regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
-- Source→sink dataflow tracking across 6 languages
+- 15 static regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
+- 7 behavioral rules via source→sink dataflow tracking across 6 languages
 - Detects env→network exfiltration, network→eval RCE, capability combinations (C2)
 
 **Layer 4 — LLM + External** (optional):
 - Claude semantic analysis catches sophisticated attacks missed by regex/AST
 - External HTTP scoring API for custom enterprise policies
 
-## Detection Rules (16)
+## Detection Rules
+
+### Static Rules (15)
+
+Pattern-based detection via regex matching on file content.
 
 | Category | Rules | Severity |
 |----------|-------|----------|
@@ -178,26 +209,19 @@ AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events t
 | **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH–CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM–CRITICAL |
 
-## Telemetry (OTEL Collector)
+### Behavioral Rules (7)
 
-AgentGuard captures agent activity as OpenTelemetry metrics and traces via an async collector hook. Configure via `~/.ffwd-agent-guard/config.json`.
+Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ruby/PHP/Go).
 
-### Metrics
-
-| Metric | Type | Labels |
-|--------|------|--------|
-| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `agentguard.turn.count` | Counter | `platform` |
-
-### Traces
-
-One OTEL trace per conversation turn:
-
-| Span | Trigger | Attributes |
-|------|---------|------------|
-| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd` |
-| `tool:<name>` | `PreToolUse` → `PostToolUse` | `tool_name`, `tool_summary`, `session_id` |
-| `task:execute` | `TaskCreated` → `TaskCompleted` | `task_id`, `task_summary`, `session_id` |
+| Rule | Severity | Detection |
+|------|----------|-----------|
+| DATAFLOW_EXFIL | CRITICAL | Secret or credential flows to network sink |
+| DATAFLOW_RCE | CRITICAL | Network response flows to eval/exec |
+| DATAFLOW_CMD_INJECT | HIGH | User input flows to command execution |
+| DATAFLOW_EVAL | HIGH | Data flows to eval/Function |
+| CAPABILITY_C2 | HIGH | Skill has both exec + network capabilities |
+| CAPABILITY_EVAL | HIGH | Skill uses dynamic code evaluation |
+| CROSS_FILE_FLOW | MEDIUM | Data crosses file boundaries |
 
 ## Compatibility
 
@@ -219,9 +243,9 @@ One OTEL trace per conversation turn:
 ## Development
 
 ```bash
-npm install
-npm run build
-npm test          # 370 tests
+pnpm install
+pnpm run build
+pnpm test          # 370 tests
 ```
 
 Maintained by [core0-io](https://github.com/core0-io).
