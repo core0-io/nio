@@ -24,11 +24,23 @@ const RulesPatternsSchema = z.object({
 
 export type RulesPatterns = z.infer<typeof RulesPatternsSchema>;
 
+export const LLMConfigSchema = z.object({
+  /** Anthropic API key for the LLM analyzer. */
+  api_key: z.string().optional(),
+  /** Model identifier (e.g. "claude-sonnet-4-20250514"). */
+  model: z.string().optional(),
+  /** Maximum input token budget for LLM analysis. */
+  max_input_tokens: z.number().positive().optional(),
+});
+
+export type LLMConfig = z.infer<typeof LLMConfigSchema>;
+
 export const AgentGuardConfigSchema = z.object({
   level: z.enum(['strict', 'balanced', 'permissive']),
   auto_scan: z.boolean().optional(),
   collector: MetricsConfigSchema.optional(),
   rules: RulesPatternsSchema.optional(),
+  llm: LLMConfigSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

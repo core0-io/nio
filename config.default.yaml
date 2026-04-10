@@ -49,3 +49,13 @@ collector:
   protocol: http
   # Path to local JSONL file for metric payloads. Supports ~/ prefix.
   log: "~/.ffwd-agent-guard/metrics.jsonl"
+
+# LLM analyzer settings (Phase 2 semantic analysis using Claude).
+# Disabled when api_key is empty.
+llm:
+  # Anthropic API key for LLM-based security analysis.
+  api_key: ""
+  # Model identifier for LLM analysis.
+  model: "claude-sonnet-4-20250514"
+  # Maximum input token budget sent to the LLM per scan.
+  max_input_tokens: 50000

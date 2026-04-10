@@ -10,6 +10,9 @@
 // Export types
 export * from './types/index.js';
 
+// Export core analysis engine
+export * from './core/index.js';
+
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
 export {

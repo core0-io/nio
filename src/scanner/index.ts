@@ -10,7 +10,13 @@ import type {
 } from '../types/scanner.js';
 import type { SkillIdentity } from '../types/skill.js';
 import { walkDirectory, isDirectory, pathExists } from './file-walker.js';
-import { ALL_RULES, getRulesForExtension, RULE_TO_MODULE } from './rules/index.js';
+import { ALL_RULES } from './rules/index.js';
+
+// Core engine imports
+import { ScanOrchestrator } from '../core/scanner.js';
+import { RuleRegistry } from '../core/rule-registry.js';
+import { defaultPolicy, mergePolicy } from '../core/scan-policy.js';
+import { loadConfig } from '../adapters/common.js';
 
 /**
  * Scanner options
@@ -34,12 +40,49 @@ export class SkillScanner {
   private options: ScannerOptions;
   private externalScannerAvailable: boolean | null = null;
 
+  // Core engine components
+  private orchestrator: ScanOrchestrator;
+  private registry: RuleRegistry;
+
   constructor(options: ScannerOptions = {}) {
     this.options = {
       useExternalScanner: true,
       deep: false,
       ...options,
     };
+
+    // Set up the core analysis engine
+    this.registry = new RuleRegistry();
+
+    // Register additional rules if provided
+    if (this.options.additionalRules) {
+      for (const rule of this.options.additionalRules) {
+        this.registry.register(rule);
+      }
+    }
+
+    // Build scan policy from options
+    const policy = mergePolicy(defaultPolicy(), {
+      extra_patterns: this.options.extraPatterns ?? {},
+      // Enable behavioral analysis when deep mode is on
+      analyzers: {
+        static: true,
+        behavioral: !!this.options.deep,
+        llm: false, // LLM gated on API key, handled by LLMAnalyzer.isEnabled()
+      },
+    });
+
+    // Load LLM config from config.yaml
+    const config = loadConfig();
+    const llmCfg = config.llm;
+
+    this.orchestrator = new ScanOrchestrator({
+      policy,
+      registry: this.registry,
+      llmApiKey: llmCfg?.api_key || undefined,
+      llmModel: llmCfg?.model || undefined,
+      llmMaxInputTokens: llmCfg?.max_input_tokens || undefined,
+    });
   }
 
   /**
@@ -191,162 +234,7 @@ export class SkillScanner {
   }
 
   /**
-   * Inject extra patterns from config into matching rules.
-   * Each rule is looked up by module key via RULE_TO_MODULE.
-   * Invalid regex strings are silently skipped.
-   */
-  private buildEffectiveRules(rules: ScanRule[]): ScanRule[] {
-    const extra = this.options.extraPatterns;
-    if (!extra || Object.keys(extra).length === 0) return rules;
-
-    return rules.map((rule) => {
-      const moduleKey = RULE_TO_MODULE[rule.id];
-      if (!moduleKey) return rule;
-      const strs = extra[moduleKey];
-      if (!strs || strs.length === 0) return rule;
-
-      const compiled: RegExp[] = [];
-      for (const s of strs) {
-        try {
-          compiled.push(new RegExp(s));
-        } catch {
-          // skip invalid pattern
-        }
-      }
-      if (compiled.length === 0) return rule;
-      return { ...rule, patterns: [...rule.patterns, ...compiled] };
-    });
-  }
-
-  /**
-   * Extract fenced code blocks from Markdown content.
-   * Returns the code block contents joined, preserving line positions for reporting.
-   */
-  private extractMarkdownCodeBlocks(content: string): string {
-    const lines = content.split('\n');
-    const result: string[] = [];
-    let inBlock = false;
-
-    for (const line of lines) {
-      if (/^```/.test(line)) {
-        inBlock = !inBlock;
-        result.push(''); // keep line count aligned
-      } else if (inBlock) {
-        result.push(line);
-      } else {
-        result.push(''); // outside code block: blank line to preserve numbering
-      }
-    }
-    return result.join('\n');
-  }
-
-  /**
-   * Extract and decode base64 strings from content.
-   * Returns decoded strings for re-scanning.
-   */
-  private extractAndDecodeBase64(content: string): string[] {
-    const decoded: string[] = [];
-    // Match base64 strings (min 20 chars, typical encoding length)
-    const b64Regex = /(?:['"`]|base64[,\s]+)([A-Za-z0-9+/]{20,}={0,2})(?:['"`]|\s|$)/g;
-    let m: RegExpExecArray | null;
-    while ((m = b64Regex.exec(content)) !== null) {
-      try {
-        const text = Buffer.from(m[1], 'base64').toString('utf-8');
-        // Only keep if the decoded result looks like text (not binary)
-        if (/^[\x20-\x7e\t\r\n]+$/.test(text) && text.length > 5) {
-          decoded.push(text);
-        }
-      } catch {
-        // invalid base64 — skip
-      }
-    }
-    return decoded;
-  }
-
-  /**
-   * Scan content against rules and collect evidence
-   */
-  private scanContent(
-    content: string,
-    rules: ScanRule[],
-    filePath: string,
-    riskTags: Set<RiskTag>,
-    evidence: ScanEvidence[],
-    context?: string,
-  ): void {
-    for (const rule of rules) {
-      for (const pattern of rule.patterns) {
-        const lines = content.split('\n');
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const match = line.match(pattern);
-          if (match) {
-            if (rule.validator && !rule.validator(content, match)) {
-              continue;
-            }
-            riskTags.add(rule.id);
-            const ev: ScanEvidence = {
-              tag: rule.id,
-              file: filePath,
-              line: i + 1,
-              match: match[0].slice(0, 100),
-            };
-            if (context) {
-              ev.context = context;
-            }
-            evidence.push(ev);
-          }
-        }
-      }
-    }
-  }
-
-  /**
-   * Run built-in scanner
-   */
-  private async runBuiltinScanner(dirPath: string): Promise<ScanResult> {
-    const startTime = Date.now();
-    const files = await walkDirectory(dirPath);
-    const evidence: ScanEvidence[] = [];
-    const riskTags: Set<RiskTag> = new Set();
-
-    for (const file of files) {
-      const rules = this.buildEffectiveRules(getRulesForExtension(file.extension));
-
-      // For Markdown files: only scan inside fenced code blocks
-      const contentToScan = file.extension === '.md'
-        ? this.extractMarkdownCodeBlocks(file.content)
-        : file.content;
-
-      this.scanContent(contentToScan, rules, file.relativePath, riskTags, evidence);
-
-      // Base64 decode pass: extract encoded payloads and re-scan
-      const decodedPayloads = this.extractAndDecodeBase64(file.content);
-      if (decodedPayloads.length > 0) {
-        const allRules = this.buildEffectiveRules([...ALL_RULES, ...(this.options.additionalRules || [])]);
-        for (const decoded of decodedPayloads) {
-          this.scanContent(decoded, allRules, file.relativePath, riskTags, evidence, 'decoded_from:base64');
-        }
-      }
-    }
-
-    const riskLevel = this.calculateRiskLevel(Array.from(riskTags));
-
-    return {
-      risk_level: riskLevel,
-      risk_tags: Array.from(riskTags),
-      evidence,
-      summary: this.generateSummary(riskTags, evidence),
-      metadata: {
-        files_scanned: files.length,
-        scan_duration_ms: Date.now() - startTime,
-        scan_time: new Date().toISOString(),
-      },
-    };
-  }
-
-  /**
-   * Calculate risk level from tags
+   * Calculate risk level from tags (legacy helper — delegates to core model)
    */
   private calculateRiskLevel(tags: RiskTag[]): RiskLevel {
     const allRules = [...ALL_RULES, ...(this.options.additionalRules || [])];
@@ -370,29 +258,24 @@ export class SkillScanner {
   }
 
   /**
-   * Generate human-readable summary
+   * Run built-in scanner — delegates to ScanOrchestrator
    */
-  private generateSummary(tags: Set<RiskTag>, evidence: ScanEvidence[]): string {
-    if (tags.size === 0) {
-      return 'No security issues detected';
-    }
+  private async runBuiltinScanner(dirPath: string): Promise<ScanResult> {
+    const files = await walkDirectory(dirPath);
+    const result = await this.orchestrator.run(dirPath, files);
 
-    const parts: string[] = [];
-
-    if (tags.has('SHELL_EXEC') || tags.has('REMOTE_LOADER')) {
-      parts.push('code execution capabilities');
-    }
-    if (tags.has('PRIVATE_KEY_PATTERN')) {
-      parts.push('hardcoded secrets');
-    }
-    if (tags.has('PROMPT_INJECTION')) {
-      parts.push('prompt injection attempts');
-    }
-    if (tags.has('WEBHOOK_EXFIL') || tags.has('NET_EXFIL_UNRESTRICTED')) {
-      parts.push('data exfiltration risks');
-    }
-
-    return `Found ${evidence.length} findings: ${parts.join(', ') || 'various security concerns'}`;
+    // Return as base ScanResult for backward compatibility
+    return {
+      risk_level: result.risk_level,
+      risk_tags: result.risk_tags,
+      evidence: result.evidence,
+      summary: result.summary,
+      metadata: {
+        files_scanned: result.metadata.files_scanned,
+        scan_duration_ms: result.metadata.scan_duration_ms,
+        scan_time: result.metadata.scan_time,
+      },
+    };
   }
 
   /**
