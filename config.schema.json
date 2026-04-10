@@ -18,11 +18,6 @@
       "default": "balanced",
       "description": "Protection level. strict: block all risky actions; balanced: block dangerous, confirm risky; permissive: only block critical threats."
     },
-    "auto_scan": {
-      "type": "boolean",
-      "default": false,
-      "description": "Scan all installed skills for security vulnerabilities on session start."
-    },
     "rules": {
       "type": "object",
       "description": "Additional regex patterns to inject into built-in scan rules, keyed by rule module name.",

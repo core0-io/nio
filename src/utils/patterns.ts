@@ -1,52 +1,16 @@
 /**
- * Sensitive data patterns for detection
+ * Sensitive data patterns for detection.
+ *
+ * Pattern definitions now live in `src/core/shared/detection-data.ts` (single
+ * source of truth).  This module re-exports them and provides the utility
+ * functions used by action detectors and other consumers.
  */
 
-/**
- * Sensitive data patterns
- */
-export const SENSITIVE_PATTERNS = {
-  /**
-   * Hex-encoded private key (64 hex characters with 0x prefix)
-   */
-  PRIVATE_KEY: /0x[a-fA-F0-9]{64}/g,
+import { SECRET_PATTERNS } from '../core/shared/detection-data.js';
 
-  /**
-   * API key/secret patterns
-   */
-  API_SECRET: /(api[_\-]?secret|secret[_\-]?key|api[_\-]?key)\s*[:=]\s*['"]?[A-Za-z0-9\-_]{20,}['"]?/gi,
-
-  /**
-   * SSH private key
-   */
-  SSH_KEY: /-----BEGIN (OPENSSH|RSA|DSA|EC|PGP) PRIVATE KEY-----/g,
-
-  /**
-   * JWT/Bearer token
-   */
-  BEARER_TOKEN: /Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/g,
-
-  /**
-   * AWS credentials
-   */
-  AWS_KEY: /(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g,
-  AWS_SECRET: /aws[_\-]?secret[_\-]?access[_\-]?key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi,
-
-  /**
-   * GitHub token
-   */
-  GITHUB_TOKEN: /gh[pousr]_[A-Za-z0-9_]{36,}/g,
-
-  /**
-   * Generic password in config
-   */
-  PASSWORD_CONFIG: /(password|passwd|pwd)\s*[:=]\s*['"][^'"]{8,}['"]/gi,
-
-  /**
-   * Database connection string
-   */
-  DB_CONNECTION: /(mongodb|postgres|mysql|redis):\/\/[^\s'"]+/gi,
-};
+// Re-export under both names for backward compatibility
+export { SECRET_PATTERNS } from '../core/shared/detection-data.js';
+export { SECRET_PATTERNS as SENSITIVE_PATTERNS } from '../core/shared/detection-data.js';
 
 /**
  * Check if content contains sensitive data
@@ -59,7 +23,7 @@ export function containsSensitiveData(content: string): {
   const matches: { type: string; match: string; truncated: string }[] = [];
   const types: Set<string> = new Set();
 
-  for (const [type, pattern] of Object.entries(SENSITIVE_PATTERNS)) {
+  for (const [type, pattern] of Object.entries(SECRET_PATTERNS)) {
     // Reset lastIndex for global patterns
     pattern.lastIndex = 0;
 
@@ -92,7 +56,7 @@ export function containsSensitiveData(content: string): {
 export function maskSensitiveData(content: string): string {
   let masked = content;
 
-  for (const pattern of Object.values(SENSITIVE_PATTERNS)) {
+  for (const pattern of Object.values(SECRET_PATTERNS)) {
     pattern.lastIndex = 0;
     masked = masked.replace(pattern, (match) => {
       if (match.length <= 8) {

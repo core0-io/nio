@@ -26,19 +26,24 @@ import type { Severity } from './models.js';
 import { deduplicateFindings } from './deduplicator.js';
 import { createAnalyzers, type AnalyzerFactoryOptions } from './analyzer-factory.js';
 import { defaultPolicy } from './scan-policy.js';
+import { ScanCache } from './scan-cache.js';
 
 // ── Orchestrator ─────────────────────────────────────────────────────────
 
 export interface OrchestratorOptions extends AnalyzerFactoryOptions {
   policy?: ScanPolicy;
+  /** Optional scan cache instance for persisting results */
+  scanCache?: ScanCache;
 }
 
 export class ScanOrchestrator {
   private policy: ScanPolicy;
   private factoryOpts: AnalyzerFactoryOptions;
+  private scanCache?: ScanCache;
 
   constructor(opts?: OrchestratorOptions) {
     this.policy = opts?.policy ?? defaultPolicy();
+    this.scanCache = opts?.scanCache;
     this.factoryOpts = {
       registry: opts?.registry,
       llmApiKey: opts?.llmApiKey,
@@ -49,8 +54,17 @@ export class ScanOrchestrator {
 
   /**
    * Run the full analysis pipeline on a set of files.
+   * @param rootDir  Root directory being scanned
+   * @param files    Pre-collected files with content
+   * @param skillId  Optional skill identifier — when provided, results are cached
+   * @param artifactHash  Optional artifact hash for cache staleness detection
    */
-  async run(rootDir: string, files: FileInfo[]): Promise<ExtendedScanResult> {
+  async run(
+    rootDir: string,
+    files: FileInfo[],
+    skillId?: string,
+    artifactHash?: string,
+  ): Promise<ExtendedScanResult> {
     const startTime = Date.now();
     const analyzersUsed: Set<AnalyzerName> = new Set();
 
@@ -106,6 +120,21 @@ export class ScanOrchestrator {
     const { risk_tags, evidence } = findingsToLegacy(allFindings);
     const riskLevel = aggregateRiskLevel(allFindings);
 
+    const scanTime = new Date().toISOString();
+
+    // Write to scan cache if a skill ID was provided
+    if (skillId && this.scanCache) {
+      this.scanCache.set({
+        skill_id: skillId,
+        scan_time: scanTime,
+        artifact_hash: artifactHash || '',
+        risk_level: riskLevel,
+        finding_count: allFindings.length,
+        critical_findings: allFindings.filter(f => f.severity === 'critical').length,
+        high_findings: allFindings.filter(f => f.severity === 'high').length,
+      });
+    }
+
     return {
       risk_level: riskLevel,
       risk_tags,
@@ -115,7 +144,7 @@ export class ScanOrchestrator {
       metadata: {
         files_scanned: files.length,
         scan_duration_ms: Date.now() - startTime,
-        scan_time: new Date().toISOString(),
+        scan_time: scanTime,
         analyzers_used: Array.from(analyzersUsed),
       },
     };

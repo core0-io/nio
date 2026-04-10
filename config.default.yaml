@@ -4,9 +4,6 @@
 #   permissive  — only block critical threats
 level: balanced
 
-# Scan all installed skills for security vulnerabilities on session start.
-auto_scan: false
-
 # Additional regex patterns injected into built-in scan rules.
 # Keys are rule module names; values are arrays of regex pattern strings.
 # All rules within the named module receive the extra patterns.
@@ -59,3 +56,22 @@ llm:
   model: "claude-sonnet-4-20250514"
   # Maximum input token budget sent to the LLM per scan.
   max_input_tokens: 50000
+
+# Dynamic guard pipeline settings (RuntimeAnalyzer, phases 1-6).
+guard:
+  # External scoring API endpoint (Phase 6). Disabled when empty.
+  scoring_endpoint: ""
+  # Bearer token for scoring endpoint authentication.
+  scoring_api_key: ""
+  # Scoring endpoint timeout in milliseconds.
+  scoring_timeout: 3000
+  # Additional safe command prefixes injected into Phase 1 allowlist.
+  extra_allowlist: []
+  # Phase weights for weighted score aggregation.
+  #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
+  weights:
+    runtime: 1.0       # Phase 2: pattern matching
+    static: 1.0        # Phase 3: static rules on file content
+    behavioral: 2.0    # Phase 4: AST dataflow analysis
+    llm: 1.0           # Phase 5: LLM semantic analysis
+    external: 2.0      # Phase 6: external scoring API

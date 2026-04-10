@@ -66,6 +66,9 @@ export {
 // Deduplication
 export { deduplicateFindings } from './deduplicator.js';
 
+// Scan cache
+export { ScanCache, type ScanCacheEntry } from './scan-cache.js';
+
 // File classification
 export {
   classifyFile,

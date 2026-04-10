@@ -1,4 +1,5 @@
-import type { ActionEnvelope, PolicyDecision } from '../types/action.js';
+import type { ActionEnvelope } from '../types/action.js';
+import type { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
 
 /**
  * Standardized hook input — platform-agnostic representation
@@ -63,16 +64,7 @@ export interface HookAdapter {
  * Agentguard instance interface (subset used by engine)
  */
 export interface AgentGuardInstance {
-  actionScanner: {
-    decide(envelope: ActionEnvelope): Promise<PolicyDecision>;
-  };
-  registry: {
-    lookup(skill: { id: string; source: string; version_ref: string; artifact_hash: string }): Promise<{
-      effective_trust_level: string;
-      effective_capabilities: Record<string, unknown>;
-      record: unknown | null;
-    }>;
-  };
+  runtimeAnalyzer: RuntimeAnalyzer;
 }
 
 /**

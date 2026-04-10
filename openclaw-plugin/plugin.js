@@ -6863,7 +6863,7 @@ ${issues}`);
   }
   return result.data;
 }
-var MetricsConfigSchema, RulesPatternsSchema, LLMConfigSchema, AgentGuardConfigSchema;
+var MetricsConfigSchema, RulesPatternsSchema, LLMConfigSchema, GuardConfigSchema, AgentGuardConfigSchema;
 var init_config_schema = __esm({
   "dist/adapters/config-schema.js"() {
     "use strict";
@@ -6892,13 +6892,117 @@ var init_config_schema = __esm({
       /** Maximum input token budget for LLM analysis. */
       max_input_tokens: external_exports.number().positive().optional()
     });
+    GuardConfigSchema = external_exports.object({
+      /** External scoring endpoint URL. */
+      scoring_endpoint: external_exports.string().optional(),
+      /** External scoring timeout in ms. */
+      scoring_timeout: external_exports.number().positive().optional(),
+      /** API key for external scoring endpoint. */
+      scoring_api_key: external_exports.string().optional(),
+      /** User-injected safe command prefixes for the allowlist. */
+      extra_allowlist: external_exports.array(external_exports.string()).optional(),
+      /** Phase weights for score aggregation. */
+      weights: external_exports.object({
+        runtime: external_exports.number().optional(),
+        static: external_exports.number().optional(),
+        behavioral: external_exports.number().optional(),
+        llm: external_exports.number().optional(),
+        external: external_exports.number().optional()
+      }).optional()
+    });
     AgentGuardConfigSchema = external_exports.object({
       level: external_exports.enum(["strict", "balanced", "permissive"]),
-      auto_scan: external_exports.boolean().optional(),
       collector: MetricsConfigSchema.optional(),
       rules: RulesPatternsSchema.optional(),
-      llm: LLMConfigSchema.optional()
+      llm: LLMConfigSchema.optional(),
+      guard: GuardConfigSchema.optional()
     });
+  }
+});
+
+// dist/core/shared/detection-data.js
+var WEBHOOK_EXFIL_DOMAINS, HIGH_RISK_TLDS, SENSITIVE_FILE_PATHS, SECRET_PATTERNS, SECRET_PRIORITY;
+var init_detection_data = __esm({
+  "dist/core/shared/detection-data.js"() {
+    "use strict";
+    WEBHOOK_EXFIL_DOMAINS = [
+      "discord.com",
+      "discordapp.com",
+      "api.telegram.org",
+      "hooks.slack.com",
+      "webhook.site",
+      "requestbin.com",
+      "pipedream.com",
+      "ngrok.io",
+      "ngrok-free.app",
+      "beeceptor.com",
+      "mockbin.org",
+      "workers.dev",
+      "vercel.app",
+      "netlify.app",
+      "deno.dev",
+      "burpcollaborator.net",
+      "interact.sh",
+      "oast.pro"
+    ];
+    HIGH_RISK_TLDS = [
+      ".xyz",
+      ".top",
+      ".tk",
+      ".ml",
+      ".ga",
+      ".cf",
+      ".gq",
+      ".work",
+      ".click",
+      ".link"
+    ];
+    SENSITIVE_FILE_PATHS = [
+      ".env",
+      ".env.local",
+      ".env.production",
+      ".ssh/",
+      "id_rsa",
+      "id_ed25519",
+      ".aws/credentials",
+      ".aws/config",
+      ".npmrc",
+      ".netrc",
+      "credentials.json",
+      "serviceAccountKey.json",
+      ".kube/config"
+    ];
+    SECRET_PATTERNS = {
+      /** Hex-encoded private key (64 hex characters with 0x prefix) */
+      PRIVATE_KEY: /0x[a-fA-F0-9]{64}/g,
+      /** API key/secret patterns */
+      API_SECRET: /(api[_\-]?secret|secret[_\-]?key|api[_\-]?key)\s*[:=]\s*['"]?[A-Za-z0-9\-_]{20,}['"]?/gi,
+      /** SSH private key */
+      SSH_KEY: /-----BEGIN (OPENSSH|RSA|DSA|EC|PGP) PRIVATE KEY-----/g,
+      /** JWT/Bearer token */
+      BEARER_TOKEN: /Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/g,
+      /** AWS access key ID */
+      AWS_KEY: /(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g,
+      /** AWS secret access key */
+      AWS_SECRET: /aws[_\-]?secret[_\-]?access[_\-]?key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi,
+      /** GitHub token */
+      GITHUB_TOKEN: /gh[pousr]_[A-Za-z0-9_]{36,}/g,
+      /** Generic password in config */
+      PASSWORD_CONFIG: /(password|passwd|pwd)\s*[:=]\s*['"][^'"]{8,}['"]/gi,
+      /** Database connection string */
+      DB_CONNECTION: /(mongodb|postgres|mysql|redis):\/\/[^\s'"]+/gi
+    };
+    SECRET_PRIORITY = {
+      PRIVATE_KEY: 100,
+      SSH_KEY: 90,
+      AWS_SECRET: 80,
+      AWS_KEY: 70,
+      GITHUB_TOKEN: 70,
+      BEARER_TOKEN: 60,
+      API_SECRET: 50,
+      DB_CONNECTION: 50,
+      PASSWORD_CONFIG: 40
+    };
   }
 });
 
@@ -6937,41 +7041,6 @@ function loadConfig() {
   }
   return { ...CONFIG_DEFAULTS };
 }
-function isSensitivePath(filePath) {
-  if (!filePath)
-    return false;
-  let normalized = filePath.replace(/\\/g, "/");
-  if (normalized.startsWith("~/")) {
-    normalized = "/HOME" + normalized.slice(1);
-  }
-  return SENSITIVE_PATHS.some((p) => normalized.includes(`/${p}`) || normalized.endsWith(p));
-}
-function shouldDenyAtLevel(decision, config) {
-  const level = config.level || "balanced";
-  if (level === "strict") {
-    return decision.decision === "deny" || decision.decision === "confirm";
-  }
-  if (level === "balanced") {
-    return decision.decision === "deny";
-  }
-  if (level === "permissive") {
-    return decision.decision === "deny" && decision.risk_level === "critical";
-  }
-  return decision.decision === "deny";
-}
-function shouldAskAtLevel(decision, config) {
-  const level = config.level || "balanced";
-  if (level === "strict") {
-    return false;
-  }
-  if (level === "balanced") {
-    return decision.decision === "confirm";
-  }
-  if (level === "permissive") {
-    return decision.decision === "deny" && decision.risk_level !== "critical" || decision.decision === "confirm" && (decision.risk_level === "high" || decision.risk_level === "critical");
-  }
-  return decision.decision === "confirm";
-}
 function writeAuditLog(input, decision, initiatingSkill, platform) {
   try {
     ensureDir();
@@ -7008,69 +7077,19 @@ function summarizeToolInput(input) {
   }
   return JSON.stringify(toolInput).slice(0, 200);
 }
-async function getSkillTrustPolicy(skillId, registry2) {
-  if (!skillId) {
-    return { trustLevel: null, capabilities: null, isKnown: false };
-  }
-  try {
-    const result = await registry2.lookup({
-      id: skillId,
-      source: skillId,
-      version_ref: "0.0.0",
-      artifact_hash: ""
-    });
-    return {
-      trustLevel: result.effective_trust_level,
-      capabilities: result.effective_capabilities,
-      isKnown: result.record !== null
-    };
-  } catch {
-    return { trustLevel: null, capabilities: null, isKnown: false };
-  }
-}
-function isActionAllowedByCapabilities(actionType, capabilities) {
-  if (!capabilities)
-    return true;
-  switch (actionType) {
-    case "exec_command":
-      return capabilities.can_exec !== false;
-    case "network_request":
-      return capabilities.can_network !== false;
-    case "write_file":
-      return capabilities.can_write !== false;
-    case "read_file":
-      return capabilities.can_read !== false;
-    default:
-      return true;
-  }
-}
-var FFWD_AGENT_GUARD_DIR, CONFIG_YAML_PATH, CONFIG_JSON_PATH, AUDIT_PATH, CONFIG_DEFAULTS, SENSITIVE_PATHS;
+var FFWD_AGENT_GUARD_DIR, CONFIG_YAML_PATH, CONFIG_JSON_PATH, AUDIT_PATH, CONFIG_DEFAULTS;
 var init_common = __esm({
   "dist/adapters/common.js"() {
     "use strict";
     init_js_yaml();
     init_scanner();
     init_config_schema();
+    init_detection_data();
     FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), ".ffwd-agent-guard");
     CONFIG_YAML_PATH = join(FFWD_AGENT_GUARD_DIR, "config.yaml");
     CONFIG_JSON_PATH = join(FFWD_AGENT_GUARD_DIR, "config.json");
     AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, "audit.jsonl");
     CONFIG_DEFAULTS = validateConfig({ level: "balanced" }, "inline-defaults");
-    SENSITIVE_PATHS = [
-      ".env",
-      ".env.local",
-      ".env.production",
-      ".ssh/",
-      "id_rsa",
-      "id_ed25519",
-      ".aws/credentials",
-      ".aws/config",
-      ".npmrc",
-      ".netrc",
-      "credentials.json",
-      "serviceAccountKey.json",
-      ".kube/config"
-    ];
   }
 });
 
@@ -7082,6 +7101,32 @@ function policyHookReason(explanation, skillTag, riskTags, riskLevel) {
   const score = scoreForLevel(riskLevel);
   const tagPart = riskTags && riskTags.length > 0 ? ` [${riskTags.join(", ")}]` : "";
   return `[score: ${score}][level: ${riskLevel}]${tagPart} FFWD AgentGuard: ${explanation}${skillTag}`;
+}
+function runtimeDecisionToHookOutput(rd, initiatingSkill) {
+  const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : "";
+  const riskTags = rd.findings.map((f) => f.rule_id);
+  const uniqueTags = [...new Set(riskTags)];
+  if (rd.decision === "deny") {
+    return {
+      decision: "deny",
+      reason: policyHookReason(rd.explanation || "Action blocked", skillTag, uniqueTags, rd.risk_level),
+      riskLevel: rd.risk_level,
+      riskScore: scoreForLevel(rd.risk_level),
+      riskTags: uniqueTags,
+      initiatingSkill
+    };
+  }
+  if (rd.decision === "confirm") {
+    return {
+      decision: "ask",
+      reason: policyHookReason(rd.explanation || "Action requires confirmation", skillTag, uniqueTags, rd.risk_level),
+      riskLevel: rd.risk_level,
+      riskScore: scoreForLevel(rd.risk_level),
+      riskTags: uniqueTags,
+      initiatingSkill
+    };
+  }
+  return { decision: "allow", initiatingSkill };
 }
 async function evaluateHook(adapter, rawInput, options) {
   const input = adapter.parseInput(rawInput);
@@ -7095,90 +7140,12 @@ async function evaluateHook(adapter, rawInput, options) {
   if (!envelope) {
     return { decision: "allow" };
   }
-  const actionType = adapter.mapToolToActionType(input.toolName);
-  if (actionType === "write_file") {
-    const filePath = input.toolInput.file_path || input.toolInput.path || "";
-    if (isSensitivePath(filePath)) {
-      const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : "";
-      const reason = policyHookReason(`blocked write to sensitive path "${filePath}"`, skillTag, ["SENSITIVE_PATH"], "critical");
-      writeAuditLog(input, { decision: "deny", risk_level: "critical", risk_tags: ["SENSITIVE_PATH"] }, initiatingSkill, adapter.name);
-      if (options.config.level === "permissive" && !initiatingSkill) {
-        return {
-          decision: "ask",
-          reason,
-          riskLevel: "critical",
-          riskScore: scoreForLevel("critical"),
-          riskTags: ["SENSITIVE_PATH"],
-          initiatingSkill
-        };
-      }
-      return {
-        decision: "deny",
-        reason,
-        riskLevel: "critical",
-        riskScore: scoreForLevel("critical"),
-        riskTags: ["SENSITIVE_PATH"],
-        initiatingSkill
-      };
-    }
-  }
   try {
-    const decision = await options.ffwdAgentGuard.actionScanner.decide(envelope);
-    if (initiatingSkill) {
-      const policy = await getSkillTrustPolicy(initiatingSkill, options.ffwdAgentGuard.registry);
-      if (!policy.isKnown || policy.trustLevel === "untrusted") {
-        if (!isActionAllowedByCapabilities(envelope.action.type, { can_exec: false, can_network: false, can_write: false, can_read: true })) {
-          const reason = `FFWD AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} \u2014 register it with /ffwd-agent-guard trust attest to allow [score: ${scoreForLevel("high")}]`;
-          writeAuditLog(input, { decision: "deny", risk_level: "high", risk_tags: ["UNTRUSTED_SKILL", ...decision.risk_tags || []] }, initiatingSkill, adapter.name);
-          return {
-            decision: "ask",
-            reason,
-            riskLevel: "high",
-            riskScore: scoreForLevel("high"),
-            riskTags: ["UNTRUSTED_SKILL"],
-            initiatingSkill
-          };
-        }
-      }
-      if (policy.isKnown && policy.capabilities) {
-        if (!isActionAllowedByCapabilities(envelope.action.type, policy.capabilities)) {
-          const reason = `FFWD AgentGuard: skill "${initiatingSkill}" is not allowed to ${envelope.action.type} per its trust policy [score: ${scoreForLevel("high")}]`;
-          writeAuditLog(input, { decision: "deny", risk_level: "high", risk_tags: ["CAPABILITY_EXCEEDED", ...decision.risk_tags || []] }, initiatingSkill, adapter.name);
-          return {
-            decision: "deny",
-            reason,
-            riskLevel: "high",
-            riskScore: scoreForLevel("high"),
-            riskTags: ["CAPABILITY_EXCEEDED"],
-            initiatingSkill
-          };
-        }
-      }
-    }
-    writeAuditLog(input, decision, initiatingSkill, adapter.name);
-    const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : "";
-    const riskScore = scoreForLevel(decision.risk_level);
-    if (shouldDenyAtLevel(decision, options.config)) {
-      return {
-        decision: "deny",
-        reason: policyHookReason(decision.explanation || "Action blocked", skillTag, decision.risk_tags, decision.risk_level),
-        riskLevel: decision.risk_level,
-        riskScore,
-        riskTags: decision.risk_tags,
-        initiatingSkill
-      };
-    }
-    if (shouldAskAtLevel(decision, options.config)) {
-      return {
-        decision: "ask",
-        reason: policyHookReason(decision.explanation || "Action requires confirmation", skillTag, decision.risk_tags, decision.risk_level),
-        riskLevel: decision.risk_level,
-        riskScore,
-        riskTags: decision.risk_tags,
-        initiatingSkill
-      };
-    }
-    return { decision: "allow", initiatingSkill };
+    const level = options.config.level || "balanced";
+    const rd = await options.ffwdAgentGuard.runtimeAnalyzer.evaluate(envelope, level);
+    const riskTags = [...new Set(rd.findings.map((f) => f.rule_id))];
+    writeAuditLog(input, { decision: rd.decision, risk_level: rd.risk_level, risk_tags: riskTags }, initiatingSkill, adapter.name);
+    return runtimeDecisionToHookOutput(rd, initiatingSkill);
   } catch {
     writeAuditLog(input, { decision: "error", risk_level: "low", risk_tags: ["ENGINE_ERROR"] }, initiatingSkill, adapter.name);
     return { decision: "allow" };
@@ -14758,6 +14725,11 @@ var init_base = __esm({
 });
 
 // dist/core/rule-registry.js
+var rule_registry_exports = {};
+__export(rule_registry_exports, {
+  RuleRegistry: () => RuleRegistry,
+  ruleRegistry: () => ruleRegistry
+});
 var BUILTIN_META, RuleRegistry, ruleRegistry;
 var init_rule_registry = __esm({
   "dist/core/rule-registry.js"() {
@@ -14907,22 +14879,50 @@ var init_rule_registry = __esm({
   }
 });
 
-// dist/core/analyzers/static/index.js
-function extractMarkdownCodeBlocks(content) {
+// dist/core/detection-engine.js
+var detection_engine_exports = {};
+__export(detection_engine_exports, {
+  extractAndDecodeBase64: () => extractAndDecodeBase64,
+  extractMarkdownCodeBlocks: () => extractMarkdownCodeBlocks,
+  runBase64Pass: () => runBase64Pass,
+  runRules: () => runRules
+});
+function runRules(content, rules, filePath, analyzer, registry2, context2) {
+  const findings = [];
   const lines = content.split("\n");
-  const result = [];
-  let inBlock = false;
-  for (const line of lines) {
-    if (/^```/.test(line)) {
-      inBlock = !inBlock;
-      result.push("");
-    } else if (inBlock) {
-      result.push(line);
-    } else {
-      result.push("");
+  for (const rule of rules) {
+    for (const pattern of rule.patterns) {
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const match2 = line.match(pattern);
+        if (!match2)
+          continue;
+        if (rule.validator && !rule.validator(content, match2)) {
+          continue;
+        }
+        const meta = registry2?.getMeta(rule.id);
+        findings.push({
+          id: findingId(rule.id, filePath, i + 1),
+          rule_id: rule.id,
+          category: riskTagToCategory(rule.id),
+          severity: rule.severity === "low" ? "low" : rule.severity === "medium" ? "medium" : rule.severity === "high" ? "high" : "critical",
+          title: meta?.title ?? rule.description,
+          description: rule.description,
+          location: {
+            file: filePath,
+            line: i + 1,
+            snippet: match2[0].slice(0, 200)
+          },
+          remediation: meta?.remediation,
+          analyzer,
+          confidence: 1,
+          // regex matches are deterministic
+          metadata: context2 ? { context: context2 } : void 0
+        });
+      }
     }
   }
-  return result.join("\n");
+  return findings;
 }
 function extractAndDecodeBase64(content) {
   const decoded = [];
@@ -14939,13 +14939,48 @@ function extractAndDecodeBase64(content) {
   }
   return decoded;
 }
+function runBase64Pass(content, rules, filePath, analyzer, registry2) {
+  const decodedPayloads = extractAndDecodeBase64(content);
+  if (decodedPayloads.length === 0)
+    return [];
+  const findings = [];
+  for (const decoded of decodedPayloads) {
+    findings.push(...runRules(decoded, rules, filePath, analyzer, registry2, "decoded_from:base64"));
+  }
+  return findings;
+}
+function extractMarkdownCodeBlocks(content) {
+  const lines = content.split("\n");
+  const result = [];
+  let inBlock = false;
+  for (const line of lines) {
+    if (/^```/.test(line)) {
+      inBlock = !inBlock;
+      result.push("");
+    } else if (inBlock) {
+      result.push(line);
+    } else {
+      result.push("");
+    }
+  }
+  return result.join("\n");
+}
+var init_detection_engine = __esm({
+  "dist/core/detection-engine.js"() {
+    "use strict";
+    init_models();
+  }
+});
+
+// dist/core/analyzers/static/index.js
 var StaticAnalyzer;
 var init_static = __esm({
   "dist/core/analyzers/static/index.js"() {
     "use strict";
     init_base();
-    init_models();
     init_rule_registry();
+    init_detection_engine();
+    init_detection_engine();
     StaticAnalyzer = class extends BaseAnalyzer {
       name = "static";
       phase = 1;
@@ -14960,14 +14995,9 @@ var init_static = __esm({
           const rules = this.registry.getRulesForExtension(file.extension, ctx.policy.extra_patterns);
           const activeRules = rules.filter((r) => !ctx.policy.rules.disabled_rules.includes(r.id));
           const contentToScan = file.extension === ".md" ? extractMarkdownCodeBlocks(file.content) : file.content;
-          this.runPatternPass(contentToScan, activeRules, file.relativePath, findings);
-          const decodedPayloads = extractAndDecodeBase64(file.content);
-          if (decodedPayloads.length > 0) {
-            const allRules = this.registry.allRules().filter((r) => !ctx.policy.rules.disabled_rules.includes(r.id));
-            for (const decoded of decodedPayloads) {
-              this.runPatternPass(decoded, allRules, file.relativePath, findings, "decoded_from:base64");
-            }
-          }
+          findings.push(...runRules(contentToScan, activeRules, file.relativePath, "static", this.registry));
+          const allRules = this.registry.allRules().filter((r) => !ctx.policy.rules.disabled_rules.includes(r.id));
+          findings.push(...runBase64Pass(file.content, allRules, file.relativePath, "static", this.registry));
         }
         for (const f of findings) {
           const override = ctx.policy.rules.severity_overrides.find((o) => o.rule_id === f.rule_id);
@@ -14976,45 +15006,6 @@ var init_static = __esm({
           }
         }
         return findings;
-      }
-      /**
-       * Run regex patterns against content and collect findings.
-       */
-      runPatternPass(content, rules, filePath, findings, context2) {
-        const lines = content.split("\n");
-        for (const rule of rules) {
-          for (const pattern of rule.patterns) {
-            for (let i = 0; i < lines.length; i++) {
-              const line = lines[i];
-              const match2 = line.match(pattern);
-              if (!match2)
-                continue;
-              if (rule.validator && !rule.validator(content, match2)) {
-                continue;
-              }
-              const meta = this.registry.getMeta(rule.id);
-              const finding = {
-                id: findingId(rule.id, filePath, i + 1),
-                rule_id: rule.id,
-                category: riskTagToCategory(rule.id),
-                severity: rule.severity === "low" ? "low" : rule.severity === "medium" ? "medium" : rule.severity === "high" ? "high" : "critical",
-                title: meta?.title ?? rule.description,
-                description: rule.description,
-                location: {
-                  file: filePath,
-                  line: i + 1,
-                  snippet: match2[0].slice(0, 200)
-                },
-                remediation: meta?.remediation,
-                analyzer: "static",
-                confidence: 1,
-                // regex matches are deterministic
-                metadata: context2 ? { context: context2 } : void 0
-              };
-              findings.push(finding);
-            }
-          }
-        }
       }
     };
   }
@@ -30073,6 +30064,10 @@ var init_context = __esm({
 });
 
 // dist/core/analyzers/behavioral/index.js
+var behavioral_exports = {};
+__export(behavioral_exports, {
+  BehavioralAnalyzer: () => BehavioralAnalyzer
+});
 function dataflowToFinding(file, flow) {
   const { category, severity, ruleId } = classifyFlow(flow);
   return {
@@ -36657,6 +36652,10 @@ var init_sdk = __esm({
 });
 
 // dist/core/analyzers/llm/index.js
+var llm_exports = {};
+__export(llm_exports, {
+  LLMAnalyzer: () => LLMAnalyzer
+});
 function parseLLMJson(text) {
   const stripped = text.replace(/^```(?:json)?\s*\n?/m, "").replace(/\n?```\s*$/m, "").trim();
   try {
@@ -36854,8 +36853,21 @@ var init_analyzer_factory = __esm({
 });
 
 // dist/core/scan-policy.js
+var scan_policy_exports = {};
+__export(scan_policy_exports, {
+  POLICY_PRESETS: () => POLICY_PRESETS,
+  defaultPolicy: () => defaultPolicy,
+  mergePolicy: () => mergePolicy,
+  policyFromPreset: () => policyFromPreset
+});
 function defaultPolicy() {
   return { ...POLICY_PRESETS.balanced };
+}
+function policyFromPreset(name) {
+  const preset = POLICY_PRESETS[name];
+  if (!preset)
+    return defaultPolicy();
+  return { ...preset };
 }
 function mergePolicy(base, overrides) {
   return {
@@ -36917,8 +36929,10 @@ var init_scanner2 = __esm({
     ScanOrchestrator = class {
       policy;
       factoryOpts;
+      scanCache;
       constructor(opts) {
         this.policy = opts?.policy ?? defaultPolicy();
+        this.scanCache = opts?.scanCache;
         this.factoryOpts = {
           registry: opts?.registry,
           llmApiKey: opts?.llmApiKey,
@@ -36928,8 +36942,12 @@ var init_scanner2 = __esm({
       }
       /**
        * Run the full analysis pipeline on a set of files.
+       * @param rootDir  Root directory being scanned
+       * @param files    Pre-collected files with content
+       * @param skillId  Optional skill identifier — when provided, results are cached
+       * @param artifactHash  Optional artifact hash for cache staleness detection
        */
-      async run(rootDir, files) {
+      async run(rootDir, files, skillId, artifactHash) {
         const startTime = Date.now();
         const analyzersUsed = /* @__PURE__ */ new Set();
         const { phase1, phase2 } = createAnalyzers(this.policy, this.factoryOpts);
@@ -36960,6 +36978,18 @@ var init_scanner2 = __esm({
         allFindings = sortFindings(allFindings);
         const { risk_tags, evidence } = findingsToLegacy(allFindings);
         const riskLevel = aggregateRiskLevel(allFindings);
+        const scanTime = (/* @__PURE__ */ new Date()).toISOString();
+        if (skillId && this.scanCache) {
+          this.scanCache.set({
+            skill_id: skillId,
+            scan_time: scanTime,
+            artifact_hash: artifactHash || "",
+            risk_level: riskLevel,
+            finding_count: allFindings.length,
+            critical_findings: allFindings.filter((f) => f.severity === "critical").length,
+            high_findings: allFindings.filter((f) => f.severity === "high").length
+          });
+        }
         return {
           risk_level: riskLevel,
           risk_tags,
@@ -36969,7 +36999,7 @@ var init_scanner2 = __esm({
           metadata: {
             files_scanned: files.length,
             scan_duration_ms: Date.now() - startTime,
-            scan_time: (/* @__PURE__ */ new Date()).toISOString(),
+            scan_time: scanTime,
             analyzers_used: Array.from(analyzersUsed)
           }
         };
@@ -37761,491 +37791,60 @@ var init_registry2 = __esm({
   }
 });
 
-// dist/utils/patterns.js
-function containsSensitiveData(content) {
-  const matches = [];
-  const types2 = /* @__PURE__ */ new Set();
-  for (const [type2, pattern] of Object.entries(SENSITIVE_PATTERNS)) {
-    pattern.lastIndex = 0;
-    let match2;
-    while ((match2 = pattern.exec(content)) !== null) {
-      types2.add(type2);
-      matches.push({
-        type: type2,
-        match: match2[0],
-        truncated: match2[0].slice(0, 20) + (match2[0].length > 20 ? "..." : "")
-      });
-      if (match2.index === pattern.lastIndex) {
-        pattern.lastIndex++;
-      }
-    }
-  }
-  return {
-    found: types2.size > 0,
-    types: Array.from(types2),
-    matches
-  };
-}
-function extractDomain(url) {
-  try {
-    const parsed = new URL(url);
-    return parsed.hostname;
-  } catch {
-    return null;
-  }
-}
-function domainMatchesPattern(domain, pattern) {
-  if (pattern === "*")
-    return true;
-  if (pattern.startsWith("*.")) {
-    const suffix = pattern.slice(2);
-    return domain === suffix || domain.endsWith("." + suffix);
-  }
-  return domain === pattern;
-}
-function isDomainAllowed(domain, allowlist) {
-  return allowlist.some((pattern) => domainMatchesPattern(domain, pattern));
-}
-var SENSITIVE_PATTERNS;
-var init_patterns = __esm({
-  "dist/utils/patterns.js"() {
-    "use strict";
-    SENSITIVE_PATTERNS = {
-      /**
-       * Hex-encoded private key (64 hex characters with 0x prefix)
-       */
-      PRIVATE_KEY: /0x[a-fA-F0-9]{64}/g,
-      /**
-       * API key/secret patterns
-       */
-      API_SECRET: /(api[_\-]?secret|secret[_\-]?key|api[_\-]?key)\s*[:=]\s*['"]?[A-Za-z0-9\-_]{20,}['"]?/gi,
-      /**
-       * SSH private key
-       */
-      SSH_KEY: /-----BEGIN (OPENSSH|RSA|DSA|EC|PGP) PRIVATE KEY-----/g,
-      /**
-       * JWT/Bearer token
-       */
-      BEARER_TOKEN: /Bearer\s+[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_]*/g,
-      /**
-       * AWS credentials
-       */
-      AWS_KEY: /(AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16}/g,
-      AWS_SECRET: /aws[_\-]?secret[_\-]?access[_\-]?key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?/gi,
-      /**
-       * GitHub token
-       */
-      GITHUB_TOKEN: /gh[pousr]_[A-Za-z0-9_]{36,}/g,
-      /**
-       * Generic password in config
-       */
-      PASSWORD_CONFIG: /(password|passwd|pwd)\s*[:=]\s*['"][^'"]{8,}['"]/gi,
-      /**
-       * Database connection string
-       */
-      DB_CONNECTION: /(mongodb|postgres|mysql|redis):\/\/[^\s'"]+/gi
-    };
-  }
-});
-
-// dist/action/detectors/secret-leak.js
-function detectSecretLeak(content) {
-  const detection = containsSensitiveData(content);
-  if (!detection.found) {
-    return {
-      found: false,
-      risk_level: "low",
-      secret_types: [],
-      evidence: []
-    };
-  }
-  const maxPriority = Math.max(...detection.types.map((t) => SECRET_PRIORITY[t] || 0));
-  let riskLevel;
-  if (maxPriority >= 90) {
-    riskLevel = "critical";
-  } else if (maxPriority >= 70) {
-    riskLevel = "high";
-  } else if (maxPriority >= 50) {
-    riskLevel = "medium";
-  } else {
-    riskLevel = "low";
-  }
-  const evidence = detection.matches.map((m) => ({
-    type: "secret_leak",
-    field: "content",
-    match: m.truncated,
-    description: `Found ${m.type} pattern`
-  }));
-  return {
-    found: true,
-    risk_level: riskLevel,
-    secret_types: detection.types,
-    evidence
-  };
-}
-function containsCriticalSecrets(content) {
-  SENSITIVE_PATTERNS.PRIVATE_KEY.lastIndex = 0;
-  SENSITIVE_PATTERNS.SSH_KEY.lastIndex = 0;
-  return SENSITIVE_PATTERNS.PRIVATE_KEY.test(content) || SENSITIVE_PATTERNS.SSH_KEY.test(content);
-}
-var SECRET_PRIORITY;
-var init_secret_leak = __esm({
-  "dist/action/detectors/secret-leak.js"() {
-    "use strict";
-    init_patterns();
-    SECRET_PRIORITY = {
-      PRIVATE_KEY: 100,
-      SSH_KEY: 90,
-      AWS_SECRET: 80,
-      AWS_KEY: 70,
-      GITHUB_TOKEN: 70,
-      BEARER_TOKEN: 60,
-      API_SECRET: 50,
-      DB_CONNECTION: 50,
-      PASSWORD_CONFIG: 40
-    };
-  }
-});
-
-// dist/action/detectors/network.js
-function analyzeNetworkRequest(request, allowlist = []) {
-  const riskTags = [];
-  const evidence = [];
-  let riskLevel = "low";
-  let shouldBlock = false;
-  let blockReason;
-  const domain = extractDomain(request.url);
-  if (!domain) {
-    return {
-      risk_level: "high",
-      risk_tags: ["INVALID_URL"],
-      evidence: [
-        {
-          type: "invalid_url",
-          field: "url",
-          match: request.url,
-          description: "Could not parse URL"
-        }
-      ],
-      should_block: true,
-      block_reason: "Invalid URL"
-    };
-  }
-  const isAllowed = isDomainAllowed(domain, allowlist);
-  const isWebhook = WEBHOOK_DOMAINS.some((d) => domain === d || domain.endsWith("." + d));
-  if (isWebhook) {
-    riskTags.push("WEBHOOK_EXFIL");
-    evidence.push({
-      type: "webhook_domain",
-      field: "url",
-      match: domain,
-      description: `Webhook/exfiltration domain detected: ${domain}`
-    });
-    riskLevel = "high";
-    if (!isAllowed) {
-      shouldBlock = true;
-      blockReason = "Webhook domain not in allowlist";
-    }
-  }
-  const hasHighRiskTLD = HIGH_RISK_TLDS.some((tld) => domain.endsWith(tld));
-  if (hasHighRiskTLD && !isAllowed) {
-    riskTags.push("HIGH_RISK_TLD");
-    evidence.push({
-      type: "high_risk_tld",
-      field: "url",
-      match: domain,
-      description: `High-risk TLD detected`
-    });
-    if (riskLevel === "low")
-      riskLevel = "medium";
-  }
-  if (!isAllowed && !isWebhook) {
-    riskTags.push("UNTRUSTED_DOMAIN");
-    evidence.push({
-      type: "untrusted_domain",
-      field: "url",
-      match: domain,
-      description: `Domain not in allowlist`
-    });
-    if (riskLevel === "low")
-      riskLevel = "medium";
-  }
-  if (request.body_preview) {
-    if (containsCriticalSecrets(request.body_preview)) {
-      riskTags.push("CRITICAL_SECRET_EXFIL");
-      evidence.push({
-        type: "critical_secret",
-        field: "body",
-        description: "Request body contains private key or SSH key"
-      });
-      riskLevel = "critical";
-      shouldBlock = true;
-      blockReason = "Attempt to exfiltrate private key or SSH key";
-    } else {
-      const secretLeak = detectSecretLeak(request.body_preview);
-      if (secretLeak.found) {
-        riskTags.push("POTENTIAL_SECRET_EXFIL");
-        evidence.push(...secretLeak.evidence);
-        if (secretLeak.risk_level === "critical") {
-          riskLevel = "critical";
-          shouldBlock = true;
-          blockReason = `Attempt to exfiltrate: ${secretLeak.secret_types.join(", ")}`;
-        } else if (secretLeak.risk_level === "high") {
-          riskLevel = "high";
-        }
-      }
-    }
-  }
-  if ((request.method === "POST" || request.method === "PUT") && !isAllowed && riskLevel === "medium") {
-    riskLevel = "high";
-  }
-  return {
-    risk_level: riskLevel,
-    risk_tags: riskTags,
-    evidence,
-    should_block: shouldBlock,
-    block_reason: blockReason
-  };
-}
-var WEBHOOK_DOMAINS, HIGH_RISK_TLDS;
-var init_network = __esm({
-  "dist/action/detectors/network.js"() {
-    "use strict";
-    init_patterns();
-    init_secret_leak();
-    WEBHOOK_DOMAINS = [
-      "discord.com",
-      "discordapp.com",
-      "api.telegram.org",
-      "hooks.slack.com",
-      "webhook.site",
-      "requestbin.com",
-      "pipedream.com",
-      "ngrok.io",
-      "ngrok-free.app",
-      "beeceptor.com",
-      "mockbin.org",
-      "workers.dev",
-      "vercel.app",
-      "netlify.app",
-      "deno.dev",
-      "burpcollaborator.net",
-      "interact.sh",
-      "oast.pro"
-    ];
-    HIGH_RISK_TLDS = [
-      ".xyz",
-      ".top",
-      ".tk",
-      ".ml",
-      ".ga",
-      ".cf",
-      ".gq",
-      ".work",
-      ".click",
-      ".link"
-    ];
-  }
-});
-
-// dist/action/detectors/exec.js
+// dist/core/analyzers/runtime/allowlist.js
 function extractCommandTargetPaths(command) {
   const tokens = command.trim().split(/\s+/);
   if (tokens.length < 2)
     return [];
   const base = tokens[0].toLowerCase();
   if (FILE_MUTATING_COMMANDS.includes(base)) {
-    const args = tokens.slice(1).filter((t) => !t.startsWith("-"));
-    return args;
-  }
-  if (base === "tee") {
     return tokens.slice(1).filter((t) => !t.startsWith("-"));
   }
   return [];
 }
-function analyzeExecCommand(command, execAllowed = false) {
-  const fullCommand = command.args ? `${command.command} ${command.args.join(" ")}` : command.command;
-  const lowerCommand = fullCommand.toLowerCase();
-  const riskTags = [];
-  const evidence = [];
-  let riskLevel = "low";
-  let shouldBlock = !execAllowed;
-  let blockReason = execAllowed ? void 0 : "Command execution not allowed";
-  for (const pattern of FORK_BOMB_PATTERNS) {
-    if (pattern.test(fullCommand)) {
-      riskTags.push("DANGEROUS_COMMAND");
-      evidence.push({
-        type: "dangerous_command",
-        field: "command",
-        match: "fork bomb",
-        description: "Fork bomb detected"
-      });
-      riskLevel = "critical";
-      shouldBlock = true;
-      blockReason = "Dangerous command: fork bomb";
-      break;
-    }
+function isSensitivePath(filePath) {
+  if (!filePath)
+    return false;
+  let normalized = filePath.replace(/\\/g, "/");
+  if (normalized.startsWith("~/")) {
+    normalized = "/HOME" + normalized.slice(1);
   }
-  if (riskLevel !== "critical") {
-    for (const dangerous of DANGEROUS_COMMANDS) {
-      if (lowerCommand.includes(dangerous.toLowerCase())) {
-        riskTags.push("DANGEROUS_COMMAND");
-        evidence.push({
-          type: "dangerous_command",
-          field: "command",
-          match: dangerous,
-          description: `Dangerous command pattern detected: ${dangerous}`
-        });
-        riskLevel = "critical";
-        shouldBlock = true;
-        blockReason = `Dangerous command: ${dangerous}`;
-        break;
-      }
-    }
-  }
-  if (riskLevel !== "critical" && !SHELL_METACHAR_PATTERN.test(fullCommand)) {
-    const hasSensitivePath = SENSITIVE_COMMANDS.some((s) => lowerCommand.includes(s.toLowerCase()));
-    const sensitiveTarget = extractCommandTargetPaths(fullCommand).find((p) => isSensitivePath(p));
-    if (sensitiveTarget) {
-      return {
-        risk_level: "critical",
-        risk_tags: ["SENSITIVE_PATH"],
-        evidence: [{
-          type: "sensitive_path",
-          field: "command",
-          match: sensitiveTarget,
-          description: `Command targets sensitive path: "${sensitiveTarget}"`
-        }],
-        should_block: true,
-        block_reason: `Command targets sensitive path: "${sensitiveTarget}"`
-      };
-    }
-    if (!hasSensitivePath) {
-      const isSafe = SAFE_COMMAND_PREFIXES.some((prefix) => lowerCommand === prefix || lowerCommand.startsWith(prefix + " "));
-      if (isSafe) {
-        return {
-          risk_level: "low",
-          risk_tags: [],
-          evidence: [],
-          should_block: false
-        };
-      }
-      const isAudit = AUDIT_COMMAND_PREFIXES.some((prefix) => lowerCommand === prefix || lowerCommand.startsWith(prefix + " "));
-      if (isAudit) {
-        return {
-          risk_level: "medium",
-          risk_tags: ["INSTALL_COMMAND"],
-          evidence: [{
-            type: "install_command",
-            field: "command",
-            description: "Package install or clone command can execute arbitrary code via hooks"
-          }],
-          should_block: false
-        };
-      }
-    }
-  }
-  for (const sensitive of SENSITIVE_COMMANDS) {
-    if (lowerCommand.includes(sensitive.toLowerCase())) {
-      riskTags.push("SENSITIVE_DATA_ACCESS");
-      evidence.push({
-        type: "sensitive_access",
-        field: "command",
-        match: sensitive,
-        description: `Sensitive data access: ${sensitive}`
-      });
-      if (riskLevel !== "critical")
-        riskLevel = "high";
-    }
-  }
-  for (const sys of SYSTEM_COMMANDS) {
-    if (lowerCommand.startsWith(sys.toLowerCase()) || lowerCommand.includes(" " + sys.toLowerCase())) {
-      riskTags.push("SYSTEM_COMMAND");
-      evidence.push({
-        type: "system_command",
-        field: "command",
-        match: sys.trim(),
-        description: `System modification command: ${sys.trim()}`
-      });
-      if (riskLevel === "low")
-        riskLevel = "medium";
-    }
-  }
-  for (const net of NETWORK_COMMANDS) {
-    if (lowerCommand.startsWith(net.toLowerCase()) || lowerCommand.includes(" " + net.toLowerCase())) {
-      riskTags.push("NETWORK_COMMAND");
-      evidence.push({
-        type: "network_command",
-        field: "command",
-        match: net.trim(),
-        description: `Network command: ${net.trim()}`
-      });
-      if (riskLevel === "low")
-        riskLevel = "medium";
-    }
-  }
-  const shellInjectionPatterns = [
-    /;\s*\w+/,
-    // ; command
-    /\|\s*\w+/,
-    // | command
-    /`[^`]+`/,
-    // `command`
-    /\$\([^)]+\)/,
-    // $(command)
-    /&&\s*\w+/,
-    // && command
-    /\|\|\s*\w+/
-    // || command
-  ];
-  for (const pattern of shellInjectionPatterns) {
-    if (pattern.test(fullCommand)) {
-      riskTags.push("SHELL_INJECTION_RISK");
-      evidence.push({
-        type: "shell_injection",
-        field: "command",
-        description: "Command contains shell metacharacters"
-      });
-      if (riskLevel === "low")
-        riskLevel = "medium";
-      break;
-    }
-  }
-  if (command.env) {
-    const sensitiveEnvKeys = [
-      "API_KEY",
-      "SECRET",
-      "PASSWORD",
-      "TOKEN",
-      "PRIVATE",
-      "CREDENTIAL"
-    ];
-    for (const [key, value] of Object.entries(command.env)) {
-      const upperKey = key.toUpperCase();
-      if (sensitiveEnvKeys.some((s) => upperKey.includes(s))) {
-        riskTags.push("SENSITIVE_ENV_VAR");
-        evidence.push({
-          type: "sensitive_env",
-          field: "env",
-          match: key,
-          description: `Sensitive environment variable: ${key}`
-        });
-      }
-    }
-  }
-  return {
-    risk_level: riskLevel,
-    risk_tags: riskTags,
-    evidence,
-    should_block: shouldBlock,
-    block_reason: blockReason
-  };
+  return SENSITIVE_FILE_PATHS.some((p) => normalized.includes(`/${p}`) || normalized.endsWith(p));
 }
-var SAFE_COMMAND_PREFIXES, AUDIT_COMMAND_PREFIXES, SHELL_METACHAR_PATTERN, FORK_BOMB_PATTERNS, DANGEROUS_COMMANDS, SENSITIVE_COMMANDS, SYSTEM_COMMANDS, NETWORK_COMMANDS, FILE_MUTATING_COMMANDS;
-var init_exec = __esm({
-  "dist/action/detectors/exec.js"() {
+function checkAllowlist(envelope, extraAllowlist = []) {
+  if (envelope.action.type !== "exec_command") {
+    return { allowed: false };
+  }
+  const data = envelope.action.data;
+  const fullCommand = data.args ? `${data.command} ${data.args.join(" ")}` : data.command;
+  const lowerCommand = fullCommand.toLowerCase();
+  if (SHELL_METACHAR_PATTERN.test(fullCommand)) {
+    return { allowed: false };
+  }
+  const targetPaths = extractCommandTargetPaths(fullCommand);
+  if (targetPaths.some((p) => isSensitivePath(p))) {
+    return { allowed: false };
+  }
+  const allPrefixes = [...SAFE_COMMAND_PREFIXES, ...extraAllowlist];
+  const isSafe = allPrefixes.some((prefix) => lowerCommand === prefix || lowerCommand.startsWith(prefix + " "));
+  if (isSafe) {
+    return { allowed: true };
+  }
+  const isAudit = AUDIT_COMMAND_PREFIXES.some((prefix) => lowerCommand === prefix || lowerCommand.startsWith(prefix + " "));
+  if (isAudit) {
+    return {
+      allowed: true,
+      audit: true,
+      auditReason: "Package install or clone command can execute arbitrary code via hooks"
+    };
+  }
+  return { allowed: false };
+}
+var SAFE_COMMAND_PREFIXES, AUDIT_COMMAND_PREFIXES, SHELL_METACHAR_PATTERN, FILE_MUTATING_COMMANDS;
+var init_allowlist = __esm({
+  "dist/core/analyzers/runtime/allowlist.js"() {
     "use strict";
-    init_common();
+    init_detection_data();
     SAFE_COMMAND_PREFIXES = [
       // Basic read-only
       "ls",
@@ -38289,7 +37888,7 @@ var init_exec = __esm({
       "git add",
       "git commit",
       "git push",
-      // Package managers (run/test/start only — install commands moved to audit list)
+      // Package managers (run/test/start only)
       "npm run",
       "npm test",
       "npm ci",
@@ -38328,12 +37927,314 @@ var init_exec = __esm({
       "git clone"
     ];
     SHELL_METACHAR_PATTERN = /[;|&`$(){}<>!#\n\t]/;
+    FILE_MUTATING_COMMANDS = ["mv", "cp", "rsync", "scp", "install", "ln", "tee"];
+  }
+});
+
+// dist/core/analyzers/runtime/denylist.js
+function isSensitivePath2(filePath) {
+  if (!filePath)
+    return false;
+  let normalized = filePath.replace(/\\/g, "/");
+  if (normalized.startsWith("~/")) {
+    normalized = "/HOME" + normalized.slice(1);
+  }
+  return SENSITIVE_FILE_PATHS.some((p) => normalized.includes(`/${p}`) || normalized.endsWith(p));
+}
+function checkSecretLeak(content) {
+  const findings = [];
+  for (const [type2, pattern] of Object.entries(SECRET_PATTERNS)) {
+    pattern.lastIndex = 0;
+    if (pattern.test(content)) {
+      const priority = SECRET_PRIORITY[type2] || 0;
+      const severity = priority >= 90 ? "critical" : priority >= 70 ? "high" : priority >= 50 ? "medium" : "low";
+      findings.push({
+        id: findingId(`SECRET_LEAK_${type2}`, "request_body", 0),
+        rule_id: `SECRET_LEAK_${type2}`,
+        category: "secrets",
+        severity,
+        title: `${type2} detected in request body`,
+        description: `Request body contains ${type2} pattern`,
+        location: { file: "request_body", line: 0 },
+        remediation: "Remove sensitive data from HTTP request body",
+        analyzer: "static",
+        confidence: 0.95
+      });
+    }
+  }
+  return findings;
+}
+function analyzeBashCommand(envelope) {
+  const findings = [];
+  const data = envelope.action.data;
+  const fullCommand = data.args ? `${data.command} ${data.args.join(" ")}` : data.command;
+  const lowerCommand = fullCommand.toLowerCase();
+  for (const pattern of FORK_BOMB_PATTERNS) {
+    if (pattern.test(fullCommand)) {
+      findings.push({
+        id: findingId("FORK_BOMB", "command", 0),
+        rule_id: "FORK_BOMB",
+        category: "execution",
+        severity: "critical",
+        title: "Fork bomb detected",
+        description: "Command contains a fork bomb pattern",
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 1
+      });
+      return findings;
+    }
+  }
+  for (const dangerous of DANGEROUS_COMMAND_STRINGS) {
+    if (lowerCommand.includes(dangerous.toLowerCase())) {
+      findings.push({
+        id: findingId("DANGEROUS_COMMAND", "command", 0),
+        rule_id: "DANGEROUS_COMMAND",
+        category: "execution",
+        severity: "critical",
+        title: `Dangerous command: ${dangerous}`,
+        description: `Dangerous command pattern detected: ${dangerous}`,
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 1
+      });
+      return findings;
+    }
+  }
+  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
+    if (pattern.test(fullCommand)) {
+      findings.push({
+        id: findingId("DANGEROUS_COMMAND", "command", 0),
+        rule_id: "DANGEROUS_COMMAND",
+        category: "execution",
+        severity: "critical",
+        title: "Dangerous command: pipe to shell",
+        description: `Dangerous command pattern detected: pipe to shell interpreter`,
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 1
+      });
+      return findings;
+    }
+  }
+  for (const sensitive of SENSITIVE_COMMANDS) {
+    if (lowerCommand.includes(sensitive.toLowerCase())) {
+      findings.push({
+        id: findingId("SENSITIVE_DATA_ACCESS", "command", 0),
+        rule_id: "SENSITIVE_DATA_ACCESS",
+        category: "secrets",
+        severity: "high",
+        title: `Sensitive data access: ${sensitive}`,
+        description: `Command accesses sensitive data: ${sensitive}`,
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.9
+      });
+    }
+  }
+  for (const sys of SYSTEM_COMMANDS) {
+    if (lowerCommand.startsWith(sys.toLowerCase()) || lowerCommand.includes(" " + sys.toLowerCase())) {
+      findings.push({
+        id: findingId("SYSTEM_COMMAND", "command", 0),
+        rule_id: "SYSTEM_COMMAND",
+        category: "execution",
+        severity: "high",
+        title: `System command: ${sys.trim()}`,
+        description: `System modification command: ${sys.trim()}`,
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.9
+      });
+    }
+  }
+  for (const net of NETWORK_COMMANDS) {
+    if (lowerCommand.startsWith(net.toLowerCase()) || lowerCommand.includes(" " + net.toLowerCase())) {
+      findings.push({
+        id: findingId("NETWORK_COMMAND", "command", 0),
+        rule_id: "NETWORK_COMMAND",
+        category: "exfiltration",
+        severity: "medium",
+        title: `Network command: ${net.trim()}`,
+        description: `Network command: ${net.trim()}`,
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.8
+      });
+    }
+  }
+  for (const pattern of SHELL_INJECTION_PATTERNS) {
+    if (pattern.test(fullCommand)) {
+      findings.push({
+        id: findingId("SHELL_INJECTION", "command", 0),
+        rule_id: "SHELL_INJECTION",
+        category: "execution",
+        severity: "medium",
+        title: "Shell injection risk",
+        description: "Command contains shell metacharacters",
+        location: { file: "command", line: 0, snippet: fullCommand.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.7
+      });
+      break;
+    }
+  }
+  if (data.env) {
+    const sensitiveEnvKeys = ["API_KEY", "SECRET", "PASSWORD", "TOKEN", "PRIVATE", "CREDENTIAL"];
+    for (const key of Object.keys(data.env)) {
+      if (sensitiveEnvKeys.some((s) => key.toUpperCase().includes(s))) {
+        findings.push({
+          id: findingId("SENSITIVE_ENV", "env", 0),
+          rule_id: "SENSITIVE_ENV",
+          category: "secrets",
+          severity: "medium",
+          title: `Sensitive env var: ${key}`,
+          description: `Sensitive environment variable passed: ${key}`,
+          location: { file: "env", line: 0 },
+          analyzer: "static",
+          confidence: 0.8
+        });
+      }
+    }
+  }
+  const decodedPayloads = extractAndDecodeBase64(fullCommand);
+  for (const decoded of decodedPayloads) {
+    const decodedLower = decoded.toLowerCase();
+    for (const dangerous of DANGEROUS_COMMAND_STRINGS) {
+      if (decodedLower.includes(dangerous.toLowerCase())) {
+        findings.push({
+          id: findingId("BASE64_DANGEROUS", "command", 0),
+          rule_id: "BASE64_DANGEROUS",
+          category: "execution",
+          severity: "critical",
+          title: `Base64-encoded dangerous command: ${dangerous}`,
+          description: `Decoded base64 payload contains dangerous command: ${dangerous}`,
+          location: { file: "command", line: 0, snippet: decoded.slice(0, 200) },
+          analyzer: "static",
+          confidence: 0.95,
+          metadata: { context: "decoded_from:base64" }
+        });
+      }
+    }
+  }
+  return findings;
+}
+function analyzeNetworkRequest(envelope) {
+  const findings = [];
+  const data = envelope.action.data;
+  const url = data.url || "";
+  let domain = null;
+  try {
+    domain = new URL(url).hostname;
+  } catch {
+    if (url) {
+      findings.push({
+        id: findingId("INVALID_URL", "url", 0),
+        rule_id: "INVALID_URL",
+        category: "exfiltration",
+        severity: "high",
+        title: "Invalid URL",
+        description: `Could not parse URL: ${url.slice(0, 100)}`,
+        location: { file: "url", line: 0 },
+        analyzer: "static",
+        confidence: 0.9
+      });
+      return findings;
+    }
+  }
+  if (domain) {
+    const isWebhook = WEBHOOK_EXFIL_DOMAINS.some((d) => domain === d || domain.endsWith("." + d));
+    if (isWebhook) {
+      findings.push({
+        id: findingId("WEBHOOK_EXFIL", "url", 0),
+        rule_id: "WEBHOOK_EXFIL",
+        category: "exfiltration",
+        severity: "high",
+        title: `Webhook exfil domain: ${domain}`,
+        description: `Webhook/exfiltration domain detected: ${domain}`,
+        location: { file: "url", line: 0, snippet: url.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.95
+      });
+    }
+    const hasHighRiskTLD = HIGH_RISK_TLDS.some((tld) => domain.endsWith(tld));
+    if (hasHighRiskTLD) {
+      findings.push({
+        id: findingId("HIGH_RISK_TLD", "url", 0),
+        rule_id: "HIGH_RISK_TLD",
+        category: "exfiltration",
+        severity: "medium",
+        title: `High-risk TLD: ${domain}`,
+        description: `Domain uses a high-risk TLD`,
+        location: { file: "url", line: 0, snippet: url.slice(0, 200) },
+        analyzer: "static",
+        confidence: 0.7
+      });
+    }
+  }
+  if (data.body_preview) {
+    findings.push(...checkSecretLeak(data.body_preview));
+  }
+  return findings;
+}
+function analyzeFileOperation(envelope) {
+  const findings = [];
+  const data = envelope.action.data;
+  const filePath = data.path || "";
+  if (isSensitivePath2(filePath)) {
+    findings.push({
+      id: findingId("SENSITIVE_PATH", filePath, 0),
+      rule_id: "SENSITIVE_PATH",
+      category: "secrets",
+      severity: "critical",
+      title: `Sensitive path: ${filePath}`,
+      description: `Write to sensitive path: ${filePath}`,
+      location: { file: filePath, line: 0 },
+      analyzer: "static",
+      confidence: 1
+    });
+  }
+  if (filePath.includes("../") || filePath.includes("..\\")) {
+    findings.push({
+      id: findingId("PATH_TRAVERSAL", filePath, 0),
+      rule_id: "PATH_TRAVERSAL",
+      category: "execution",
+      severity: "high",
+      title: "Path traversal detected",
+      description: `Path traversal in file path: ${filePath}`,
+      location: { file: filePath, line: 0 },
+      analyzer: "static",
+      confidence: 0.9
+    });
+  }
+  return findings;
+}
+function analyzeAction(envelope) {
+  switch (envelope.action.type) {
+    case "exec_command":
+      return analyzeBashCommand(envelope);
+    case "network_request":
+      return analyzeNetworkRequest(envelope);
+    case "write_file":
+      return analyzeFileOperation(envelope);
+    case "read_file":
+      return [];
+    // Read operations are generally safe
+    default:
+      return [];
+  }
+}
+var FORK_BOMB_PATTERNS, DANGEROUS_COMMAND_STRINGS, DANGEROUS_COMMAND_PATTERNS, SENSITIVE_COMMANDS, SYSTEM_COMMANDS, NETWORK_COMMANDS, SHELL_INJECTION_PATTERNS;
+var init_denylist = __esm({
+  "dist/core/analyzers/runtime/denylist.js"() {
+    "use strict";
+    init_models();
+    init_detection_data();
+    init_detection_engine();
     FORK_BOMB_PATTERNS = [
       /:\s*\(\s*\)\s*\{.*:\s*\|\s*:.*&.*\}/,
-      // :(){ :|:& };: and space variants
       /\bfork\s*bomb\b/i
     ];
-    DANGEROUS_COMMANDS = [
+    DANGEROUS_COMMAND_STRINGS = [
       "rm -rf",
       "rm -fr",
       "mkfs",
@@ -38341,11 +38242,13 @@ var init_exec = __esm({
       "chmod 777",
       "chmod -R 777",
       "> /dev/sda",
-      "mv /* ",
-      "wget.*\\|.*sh",
-      "curl.*\\|.*sh",
-      "curl.*\\|.*bash",
-      "wget.*\\|.*bash"
+      "mv /* "
+    ];
+    DANGEROUS_COMMAND_PATTERNS = [
+      /wget\s.*\|\s*sh/i,
+      /curl\s.*\|\s*sh/i,
+      /curl\s.*\|\s*bash/i,
+      /wget\s.*\|\s*bash/i
     ];
     SENSITIVE_COMMANDS = [
       "cat /etc/passwd",
@@ -38389,243 +38292,369 @@ var init_exec = __esm({
       "ftp ",
       "sftp "
     ];
-    FILE_MUTATING_COMMANDS = ["mv", "cp", "rsync", "scp", "install", "ln"];
+    SHELL_INJECTION_PATTERNS = [
+      /;\s*\w+/,
+      /\|\s*\w+/,
+      /`[^`]+`/,
+      /\$\([^)]+\)/,
+      /&&\s*\w+/,
+      /\|\|\s*\w+/
+    ];
   }
 });
 
-// dist/action/detectors/index.js
-var init_detectors = __esm({
-  "dist/action/detectors/index.js"() {
+// dist/core/analyzers/runtime/scoring.js
+function findingsToScore(findings) {
+  if (findings.length === 0)
+    return 0;
+  let maxWeighted = 0;
+  for (const f of findings) {
+    const sevWeight = SEVERITY_WEIGHT[f.severity] || 0;
+    const weighted = sevWeight / MAX_SEVERITY * (f.confidence ?? 1);
+    if (weighted > maxWeighted)
+      maxWeighted = weighted;
+  }
+  return Math.min(1, maxWeighted);
+}
+function aggregateScores(scores, weights = DEFAULT_WEIGHTS) {
+  let numerator = 0;
+  let denominator = 0;
+  for (const [label, weightKey] of Object.entries(SCORE_TO_WEIGHT_KEY)) {
+    const score = scores[label];
+    if (score != null) {
+      const w = weights[weightKey];
+      numerator += w * score;
+      denominator += w;
+    }
+  }
+  if (denominator === 0)
+    return 0;
+  return numerator / denominator;
+}
+var DEFAULT_WEIGHTS, SCORE_TO_WEIGHT_KEY, MAX_SEVERITY;
+var init_scoring = __esm({
+  "dist/core/analyzers/runtime/scoring.js"() {
     "use strict";
-    init_secret_leak();
-    init_network();
-    init_exec();
+    init_models();
+    DEFAULT_WEIGHTS = {
+      runtime: 1,
+      static: 1,
+      behavioral: 2,
+      llm: 1,
+      external: 2
+    };
+    SCORE_TO_WEIGHT_KEY = {
+      a: "runtime",
+      b: "static",
+      c: "behavioral",
+      d: "llm",
+      e: "external"
+    };
+    MAX_SEVERITY = SEVERITY_WEIGHT["critical"];
   }
 });
 
-// dist/action/index.js
-import * as nodePath from "path";
-var ActionScanner, actionScanner;
-var init_action = __esm({
-  "dist/action/index.js"() {
+// dist/core/analyzers/runtime/decision.js
+function scoreToDecision(score, level = "balanced") {
+  const t = THRESHOLDS[level] || THRESHOLDS.balanced;
+  if (score >= t.deny)
+    return "deny";
+  if (t.warning != null && score >= t.warning)
+    return "confirm";
+  return "allow";
+}
+function shouldShortCircuit(score, level = "balanced") {
+  const t = THRESHOLDS[level] || THRESHOLDS.balanced;
+  return score >= t.deny;
+}
+var THRESHOLDS;
+var init_decision = __esm({
+  "dist/core/analyzers/runtime/decision.js"() {
     "use strict";
-    init_skill();
-    init_registry2();
-    init_network();
-    init_exec();
-    init_detectors();
-    ActionScanner = class {
-      registry;
-      defaultCapabilities;
-      constructor(options = {}) {
-        this.registry = options.registry || new SkillRegistry();
-        this.defaultCapabilities = options.defaultCapabilities || DEFAULT_CAPABILITY;
+    THRESHOLDS = {
+      strict: { deny: 0.5 },
+      balanced: { deny: 0.8, warning: 0.5 },
+      permissive: { deny: 0.9 }
+    };
+  }
+});
+
+// dist/core/analyzers/runtime/external-scorer.js
+var ExternalScorer;
+var init_external_scorer = __esm({
+  "dist/core/analyzers/runtime/external-scorer.js"() {
+    "use strict";
+    ExternalScorer = class {
+      endpoint;
+      apiKey;
+      timeout;
+      constructor(opts) {
+        this.endpoint = opts.endpoint;
+        this.apiKey = opts.apiKey;
+        this.timeout = opts.timeout ?? 3e3;
       }
       /**
-       * Main decision method
+       * Call the external scoring endpoint.
+       * Returns a 0-1 score, or null if the call fails.
        */
-      async decide(envelope) {
-        const { actor, action, context: context2 } = envelope;
-        const lookupResult = await this.registry.lookup(actor.skill);
-        const capabilities = lookupResult.effective_capabilities;
-        const trustLevel = lookupResult.effective_trust_level;
-        const isUserAction = !context2.initiating_skill;
-        switch (action.type) {
-          case "network_request":
-            return this.handleNetworkRequest(action.data, capabilities, context2.user_present);
-          case "exec_command":
-            return this.handleExecCommand(action.data, capabilities);
-          case "secret_access":
-            return this.handleSecretAccess(action.data, capabilities);
-          case "read_file":
-          case "write_file":
-            if (isUserAction) {
-              return { decision: "allow", risk_level: "low", risk_tags: [], evidence: [] };
-            }
-            return this.handleFileOperation(action.data, action.type, capabilities);
-          default:
-            return {
-              decision: "deny",
-              risk_level: "high",
-              risk_tags: ["UNKNOWN_ACTION_TYPE"],
-              evidence: [
-                {
-                  type: "unknown_action",
-                  description: `Unknown action type: ${action.type}`
-                }
-              ],
-              explanation: `Unknown action type: ${action.type}`
-            };
-        }
-      }
-      /**
-       * Handle network request actions
-       */
-      async handleNetworkRequest(request, capabilities, userPresent) {
-        const analysis = analyzeNetworkRequest(request, capabilities.network_allowlist);
-        if (analysis.risk_tags.includes("CRITICAL_SECRET_EXFIL")) {
-          return {
-            decision: "deny",
-            risk_level: "critical",
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: analysis.block_reason || "Critical secret exfiltration blocked"
-          };
-        }
-        if (analysis.should_block) {
-          return {
-            decision: "deny",
-            risk_level: analysis.risk_level,
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: analysis.block_reason || "Request blocked"
-          };
-        }
-        if (analysis.risk_level === "high" || analysis.risk_level === "critical") {
-          return {
-            decision: userPresent ? "confirm" : "deny",
-            risk_level: analysis.risk_level,
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: userPresent ? "High-risk request requires confirmation" : "High-risk request denied (user not present)"
-          };
-        }
-        if (analysis.risk_tags.includes("UNTRUSTED_DOMAIN")) {
-          return {
-            decision: userPresent ? "confirm" : "deny",
-            risk_level: analysis.risk_level,
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: userPresent ? "Request to untrusted domain requires confirmation" : "Request to untrusted domain denied (user not present)"
-          };
-        }
-        return {
-          decision: "allow",
-          risk_level: analysis.risk_level,
-          risk_tags: analysis.risk_tags,
-          evidence: analysis.evidence
+      async score(envelope, priorScores, priorFindings) {
+        const body = {
+          tool_name: envelope.action.type,
+          tool_input: envelope.action.data,
+          prior_scores: priorScores,
+          prior_findings: priorFindings.map((f) => ({
+            rule_id: f.rule_id,
+            severity: f.severity,
+            title: f.title,
+            file: f.location.file
+          })),
+          initiating_skill: envelope.context.initiating_skill
         };
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+          const headers = {
+            "Content-Type": "application/json"
+          };
+          if (this.apiKey) {
+            headers["Authorization"] = `Bearer ${this.apiKey}`;
+          }
+          const response = await fetch(this.endpoint, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(body),
+            signal: controller.signal
+          });
+          clearTimeout(timeoutId);
+          if (!response.ok) {
+            console.warn(`[ExternalScorer] HTTP ${response.status}: ${response.statusText}`);
+            return null;
+          }
+          const data = await response.json();
+          const score = Math.max(0, Math.min(1, data.score ?? 0));
+          return { score, reason: data.reason };
+        } catch (err) {
+          const error = err;
+          if (error.name === "AbortError") {
+            console.warn(`[ExternalScorer] Request timed out after ${this.timeout}ms`);
+          } else {
+            console.warn(`[ExternalScorer] Request failed: ${error.message}`);
+          }
+          return null;
+        }
+      }
+    };
+  }
+});
+
+// dist/core/analyzers/runtime/index.js
+var RuntimeAnalyzer;
+var init_runtime = __esm({
+  "dist/core/analyzers/runtime/index.js"() {
+    "use strict";
+    init_models();
+    init_allowlist();
+    init_denylist();
+    init_scoring();
+    init_decision();
+    init_external_scorer();
+    RuntimeAnalyzer = class {
+      weights;
+      level;
+      extraAllowlist;
+      llmApiKey;
+      llmModel;
+      externalScorer;
+      constructor(opts) {
+        this.weights = { ...DEFAULT_WEIGHTS, ...opts?.weights };
+        this.level = opts?.level ?? "balanced";
+        this.extraAllowlist = opts?.extraAllowlist ?? [];
+        this.llmApiKey = opts?.llmApiKey;
+        this.llmModel = opts?.llmModel;
+        if (opts?.scoringEndpoint) {
+          this.externalScorer = new ExternalScorer({
+            endpoint: opts.scoringEndpoint,
+            apiKey: opts.scoringApiKey,
+            timeout: opts.scoringTimeout
+          });
+        }
       }
       /**
-       * Handle command execution actions
+       * Evaluate an action through the 6-phase pipeline.
+       * @param envelope  The action to evaluate
+       * @param levelOverride  Optional protection level override (e.g. from config)
        */
-      handleExecCommand(command, capabilities) {
-        const execAllowed = capabilities.exec === "allow";
-        const analysis = analyzeExecCommand(command, execAllowed);
-        if (analysis.should_block) {
-          const isCritical = analysis.risk_level === "critical";
-          return {
-            decision: isCritical ? "deny" : "confirm",
-            risk_level: analysis.risk_level,
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: analysis.block_reason || "Command execution blocked"
-          };
-        }
-        if (analysis.risk_level === "high" || analysis.risk_level === "critical") {
-          return {
-            decision: "confirm",
-            risk_level: analysis.risk_level,
-            risk_tags: analysis.risk_tags,
-            evidence: analysis.evidence,
-            explanation: "High-risk command requires confirmation"
-          };
-        }
-        return {
-          decision: "allow",
-          risk_level: analysis.risk_level,
-          risk_tags: analysis.risk_tags,
-          evidence: analysis.evidence
-        };
-      }
-      /**
-       * Handle secret access
-       */
-      handleSecretAccess(access2, capabilities) {
-        const isAllowed = capabilities.secrets_allowlist.includes(access2.secret_name);
-        if (isAllowed) {
+      async evaluate(envelope, levelOverride) {
+        const level = levelOverride ?? this.level;
+        const allFindings = [];
+        const scores = {};
+        const allowlistResult = checkAllowlist(envelope, this.extraAllowlist);
+        if (allowlistResult.allowed) {
           return {
             decision: "allow",
-            risk_level: "low",
-            risk_tags: [],
-            evidence: []
+            risk_level: allowlistResult.audit ? "medium" : "low",
+            findings: [],
+            scores: {},
+            phase_stopped: 1,
+            explanation: allowlistResult.audit ? allowlistResult.auditReason : "Matched allowlist"
           };
         }
-        return {
-          decision: "deny",
-          risk_level: "high",
-          risk_tags: ["SECRET_NOT_ALLOWED"],
-          evidence: [
-            {
-              type: "secret_access_denied",
-              field: "secret_name",
-              match: access2.secret_name,
-              description: `Secret ${access2.secret_name} not in allowlist`
+        const phase2Findings = analyzeAction(envelope);
+        allFindings.push(...phase2Findings);
+        const scoreA = findingsToScore(phase2Findings);
+        scores.a = scoreA;
+        if (shouldShortCircuit(scoreA, level)) {
+          return this.buildResult(allFindings, scores, 2, level);
+        }
+        if (envelope.action.type === "write_file") {
+          const data = envelope.action.data;
+          if (data.content_preview) {
+            const phase3Findings = await this.runStaticOnContent(data.content_preview, data.path || "unknown");
+            allFindings.push(...phase3Findings);
+            const scoreB = findingsToScore(phase3Findings);
+            scores.b = scoreB;
+            if (shouldShortCircuit(scoreB, level)) {
+              return this.buildResult(allFindings, scores, 3, level);
             }
-          ],
-          explanation: `Access to secret '${access2.secret_name}' is not allowed`
-        };
-      }
-      /**
-       * Handle file operations
-       */
-      handleFileOperation(file, type2, capabilities) {
-        const normalizedPath = nodePath.normalize(file.path);
-        if (normalizedPath !== file.path && file.path.includes("..")) {
-          return {
-            decision: "deny",
-            risk_level: "high",
-            risk_tags: ["PATH_TRAVERSAL"],
-            evidence: [
-              {
-                type: "path_traversal",
-                field: "path",
-                match: file.path,
-                description: `Path traversal detected: "${file.path}" resolves to "${normalizedPath}"`
-              }
-            ],
-            explanation: "Path traversal attack blocked"
-          };
+          }
         }
-        const isAllowed = capabilities.filesystem_allowlist.some((pattern) => {
-          if (pattern === "*")
-            return true;
-          if (pattern.endsWith("/**")) {
-            const prefix = pattern.slice(0, -3);
-            return normalizedPath.startsWith(prefix);
+        if (envelope.action.type === "write_file") {
+          const data = envelope.action.data;
+          const path7 = data.path || "";
+          const isJSTS = /\.(js|ts|mjs|mts|jsx|tsx)$/.test(path7);
+          if (isJSTS && data.content_preview) {
+            const phase4Findings = await this.runBehavioralOnContent(data.content_preview, path7);
+            allFindings.push(...phase4Findings);
+            const scoreC = findingsToScore(phase4Findings);
+            scores.c = scoreC;
+            if (shouldShortCircuit(scoreC, level)) {
+              return this.buildResult(allFindings, scores, 4, level);
+            }
           }
-          if (pattern.endsWith("/*")) {
-            const prefix = pattern.slice(0, -2);
-            const remainder = normalizedPath.slice(prefix.length);
-            return normalizedPath.startsWith(prefix) && !remainder.includes("/");
+        }
+        if (this.llmApiKey) {
+          const phase5Findings = await this.runLLMOnAction(envelope);
+          allFindings.push(...phase5Findings);
+          const scoreD = findingsToScore(phase5Findings);
+          scores.d = scoreD;
+          if (shouldShortCircuit(scoreD, level)) {
+            return this.buildResult(allFindings, scores, 5, level);
           }
-          return normalizedPath === pattern || normalizedPath.startsWith(pattern + "/");
+        }
+        if (this.externalScorer) {
+          const result = await this.externalScorer.score(envelope, scores, allFindings);
+          if (result) {
+            scores.e = result.score;
+            if (shouldShortCircuit(result.score, level)) {
+              allFindings.push({
+                id: `EXTERNAL_SCORE:${envelope.action.type}:0`,
+                rule_id: "EXTERNAL_SCORE",
+                category: "policy_violation",
+                severity: result.score >= 0.9 ? "critical" : result.score >= 0.7 ? "high" : "medium",
+                title: "External scorer flagged action",
+                description: result.reason || "External scoring API returned high risk score",
+                location: { file: envelope.action.type, line: 0 },
+                analyzer: "static",
+                confidence: result.score
+              });
+              return this.buildResult(allFindings, scores, 6, level);
+            }
+          }
+        }
+        return this.buildResult(allFindings, scores, 6, level);
+      }
+      // ── Phase 3: Static analysis on file content ──────────────────────────
+      async runStaticOnContent(content, filePath) {
+        const { runRules: runRules2, runBase64Pass: runBase64Pass2 } = await Promise.resolve().then(() => (init_detection_engine(), detection_engine_exports));
+        const { ruleRegistry: ruleRegistry2 } = await Promise.resolve().then(() => (init_rule_registry(), rule_registry_exports));
+        const ext2 = "." + (filePath.split(".").pop() || "txt");
+        const rules = ruleRegistry2.getRulesForExtension(ext2);
+        const allRules = ruleRegistry2.allRules();
+        const findings = [
+          ...runRules2(content, rules, filePath, "static", ruleRegistry2),
+          ...runBase64Pass2(content, allRules, filePath, "static", ruleRegistry2)
+        ];
+        return findings;
+      }
+      // ── Phase 4: Behavioral analysis on file content ──────────────────────
+      async runBehavioralOnContent(content, filePath) {
+        const { BehavioralAnalyzer: BehavioralAnalyzer2 } = await Promise.resolve().then(() => (init_behavioral(), behavioral_exports));
+        const { defaultPolicy: defaultPolicy2 } = await Promise.resolve().then(() => (init_scan_policy(), scan_policy_exports));
+        const analyzer = new BehavioralAnalyzer2();
+        const policy = defaultPolicy2();
+        const ext2 = "." + (filePath.split(".").pop() || "ts");
+        const fakeFileInfo = {
+          path: filePath,
+          relativePath: filePath,
+          content,
+          extension: ext2
+        };
+        return analyzer.analyze({
+          rootDir: ".",
+          files: [fakeFileInfo],
+          policy
         });
-        if (isAllowed) {
-          return {
-            decision: "allow",
-            risk_level: "low",
-            risk_tags: [],
-            evidence: []
-          };
+      }
+      // ── Phase 5: LLM analysis on action ────────────────────────────────────
+      async runLLMOnAction(envelope) {
+        const { LLMAnalyzer: LLMAnalyzer2 } = await Promise.resolve().then(() => (init_llm(), llm_exports));
+        const { defaultPolicy: defaultPolicy2 } = await Promise.resolve().then(() => (init_scan_policy(), scan_policy_exports));
+        const analyzer = new LLMAnalyzer2({
+          apiKey: this.llmApiKey,
+          model: this.llmModel
+        });
+        const policy = defaultPolicy2();
+        if (!analyzer.isEnabled(policy))
+          return [];
+        let content;
+        let filePath;
+        if (envelope.action.type === "write_file") {
+          const data = envelope.action.data;
+          content = data.content_preview || "";
+          filePath = data.path || "unknown";
+        } else if (envelope.action.type === "exec_command") {
+          const data = envelope.action.data;
+          content = `#!/bin/bash
+${data.command}`;
+          filePath = "command.sh";
+        } else if (envelope.action.type === "network_request") {
+          const data = envelope.action.data;
+          content = JSON.stringify(data, null, 2);
+          filePath = "request.json";
+        } else {
+          return [];
         }
+        if (!content)
+          return [];
+        const ext2 = "." + (filePath.split(".").pop() || "txt");
+        return analyzer.analyze({
+          rootDir: ".",
+          files: [{
+            path: filePath,
+            relativePath: filePath,
+            content,
+            extension: ext2
+          }],
+          policy
+        });
+      }
+      // ── Result Builder ────────────────────────────────────────────────────
+      buildResult(findings, scores, phaseStopped, level = this.level) {
+        const finalScore = aggregateScores(scores, this.weights);
+        const decision = scoreToDecision(finalScore, level);
+        const riskLevel = findings.length > 0 ? aggregateRiskLevel(findings) : "low";
+        const topFinding = findings[0];
+        const explanation = topFinding ? `${topFinding.title}: ${topFinding.description}` : void 0;
         return {
-          decision: "deny",
-          risk_level: "medium",
-          risk_tags: ["PATH_NOT_ALLOWED"],
-          evidence: [
-            {
-              type: "path_access_denied",
-              field: "path",
-              match: file.path,
-              description: `Path ${file.path} not in allowlist`
-            }
-          ],
-          explanation: `${type2 === "read_file" ? "Read" : "Write"} access to '${file.path}' is not allowed`
+          decision,
+          risk_level: riskLevel,
+          findings,
+          scores: { ...scores, final: finalScore },
+          phase_stopped: phaseStopped,
+          explanation
         };
       }
     };
-    actionScanner = new ActionScanner();
   }
 });
 
@@ -66101,13 +66130,13 @@ var require_path = __commonJS({
         return /^(?:\/|\w+:)/.test(path8);
       }
     );
-    var normalize3 = (
+    var normalize2 = (
       /**
        * Normalizes the specified path.
        * @param {string} path Path to normalize
        * @returns {string} Normalized path
        */
-      path7.normalize = function normalize4(path8) {
+      path7.normalize = function normalize3(path8) {
         path8 = path8.replace(/\\/g, "/").replace(/\/{2,}/g, "/");
         var parts = path8.split("/"), absolute = isAbsolute(path8), prefix = "";
         if (absolute)
@@ -66130,12 +66159,12 @@ var require_path = __commonJS({
     );
     path7.resolve = function resolve2(originPath, includePath, alreadyNormalized) {
       if (!alreadyNormalized)
-        includePath = normalize3(includePath);
+        includePath = normalize2(includePath);
       if (isAbsolute(includePath))
         return includePath;
       if (!alreadyNormalized)
-        originPath = normalize3(originPath);
-      return (originPath = originPath.replace(/(?:\/|^)[^/]+$/, "")).length ? normalize3(originPath + "/" + includePath) : includePath;
+        originPath = normalize2(originPath);
+      return (originPath = originPath.replace(/(?:\/|^)[^/]+$/, "")).length ? normalize2(originPath + "/" + includePath) : includePath;
     };
   }
 });
@@ -84852,19 +84881,22 @@ function registerOpenClawPlugin(api, options = {}) {
   const meterProvider = createMeterProvider(collectorConfig);
   const logger = (msg) => console.log(msg);
   let ffwdAgentGuard = null;
-  const defaultCapabilities = options.workspacePaths ? { ...DEFAULT_CAPABILITY, filesystem_allowlist: options.workspacePaths } : void 0;
   function getFfwdAgentGuard() {
     if (!ffwdAgentGuard) {
       if (options.ffwdAgentGuardFactory) {
         ffwdAgentGuard = options.ffwdAgentGuardFactory();
       } else {
-        const actionScanner2 = new ActionScanner({
-          registry: trustRegistry,
-          ...defaultCapabilities ? { defaultCapabilities } : {}
-        });
         ffwdAgentGuard = {
-          registry: trustRegistry,
-          actionScanner: actionScanner2
+          runtimeAnalyzer: new RuntimeAnalyzer({
+            level: config.level || "balanced",
+            extraAllowlist: config.guard?.extra_allowlist,
+            weights: config.guard?.weights,
+            llmApiKey: config.llm?.api_key,
+            llmModel: config.llm?.model,
+            scoringEndpoint: config.guard?.scoring_endpoint,
+            scoringApiKey: config.guard?.scoring_api_key,
+            scoringTimeout: config.guard?.scoring_timeout
+          })
         };
       }
     }
@@ -85076,8 +85108,7 @@ var init_openclaw_plugin = __esm({
     init_common();
     init_scanner3();
     init_registry2();
-    init_action();
-    init_skill();
+    init_runtime();
     init_config_loader();
     init_traces_collector();
     init_metrics_collector();

@@ -2,38 +2,132 @@
 
 ## Overview
 
-AgentGuard is a three-layered security framework for AI agents:
+AgentGuard is a two-pipeline security framework for AI agents:
 
-1. **Skill Scanner** — Multi-engine code analysis (static + behavioral + LLM)
-2. **Skill Registry** — Trust level and capability management
-3. **Action Scanner** — Runtime action decision engine
-
-## Three-Layer Architecture
+1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioral + LLM)
+2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyzer pipeline
 
 ```
-┌──────────────────────────────────────────────────────┐
-│  Layer 1: Auto Guard (hooks — install once, forget)  │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐  │
-│  │ PreToolUse   │ │ PostToolUse  │ │ Config       │  │
-│  │ Block danger │ │ Audit log    │ │ 3 levels     │  │
-│  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘  │
-│         └────────┬───────┘               │           │
-│                  ▼                       │           │
-│        ActionScanner Engine ◄────────────┘           │
-└──────────────────────────────────────────────────────┘
-┌──────────────────────────────────────────────────────┐
-│  Layer 2: Deep Scan (skill — on demand)              │
-│  /ffwd-agent-guard scan   — Multi-engine analysis    │
-│  /ffwd-agent-guard action — Runtime action evaluation│
-│  /ffwd-agent-guard trust  — Skill trust management   │
-│  /ffwd-agent-guard report — Security event log       │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│ Static Scan (on-demand, triggered by user)              │
+│   /ffwd-agent-guard scan <path>                         │
+│   → ScanOrchestrator → Static + Behavioral + LLM       │
+│   → Finding[] → ScanResult                              │
+│   → writes scan-cache for dynamic guard to read         │
+└─────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────┐
+│ Dynamic Guard (real-time, every PreToolUse hook)        │
+│   guard-hook → evaluateHook() → RuntimeAnalyzer         │
+│   → 6-phase pipeline → allow / deny / confirm           │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Skill Scanner Architecture
+## Dynamic Guard: 6-Phase Pipeline
 
-The scanner uses a **two-phase, multi-engine pipeline** inspired by
-[Cisco AI Defense skill-scanner](https://github.com/cisco-ai-defense/skill-scanner):
+Every `PreToolUse` hook event flows through the RuntimeAnalyzer's 6-phase
+pipeline. Each phase produces a 0–1 score and can short-circuit if the score
+exceeds the deny threshold for the active protection level.
+
+```
+hook event → Phase 1 → Phase 2 → Phase 3 → Phase 4 → Phase 5 → Phase 6 → decision
+             allow?     score a   score b   score c   score d   score e
+             (exit)     critical? critical? critical? critical? aggregate
+                        (exit)    (exit)    (exit)    (exit)    → decision
+```
+
+### Which phases run per action type
+
+| Phase | Bash | Write/Edit | WebFetch |
+|-------|------|------------|----------|
+| 1 Allowlist | ✅ | ✅ | ✅ |
+| 2 RuntimeAnalyzer | ✅ | ✅ | ✅ |
+| 3 StaticAnalyzer | ❌ skip | ✅ file content | ❌ skip |
+| 4 BehavioralAnalyzer | ❌ skip | ✅ .ts/.js only | ❌ skip |
+| 5 LLM (optional) | ✅ | ✅ | ✅ |
+| 6 External API (optional) | ✅ | ✅ | ✅ |
+
+### Phase 1: Allowlist Gate (<1ms)
+
+Check if the action matches a known-safe pattern. If yes → **allow**, stop.
+
+- 200+ safe command prefixes: `git status`, `ls`, `npm test`, etc.
+- Only applied when command has no shell metacharacters (`;`, `|`, `$()`, etc.)
+- User can inject additional patterns via `config.yaml` → `guard.extra_allowlist`
+
+### Phase 2: Pattern Analysis (<5ms) → score `a`
+
+Produces `Finding[]` from action data pattern matching:
+
+- **Bash**: dangerous commands, fork bombs, shell injection, system/network commands, base64 decode
+- **Network**: webhook exfil domains, high-risk TLDs, secret leak in body
+- **File ops**: path traversal, sensitive path detection (`.env`, `.ssh/`, `.aws/`)
+
+### Phase 3: Static Analysis (<50ms) → score `b`
+
+**Only runs for Write/Edit actions** (file content exists to scan).
+Runs the scan engine's 16 static rules + base64 decode pass against the file
+content being written.
+
+### Phase 4: Behavioral Analysis (<200ms) → score `c`
+
+**Only runs for Write/Edit actions** where content is JS/TS (parseable AST).
+Runs dataflow analysis: source→sink tracking, dangerous capability combinations.
+
+### Phase 5: LLM Analysis (2–10s, optional) → score `d`
+
+**Gated on `llm.api_key` in config.** Sends action context to Claude for
+semantic analysis. For Write/Edit, analyzes the file content. For Bash, wraps
+the command as a shell script. Reuses the existing `LLMAnalyzer` from the scan pipeline.
+
+### Phase 6: External Scoring API (optional) → score `e`
+
+**Gated on `guard.scoring_endpoint` in config.** Sends action context + prior
+scores/findings to a user-configured HTTP endpoint. Returns a 0–1 score.
+
+```yaml
+guard:
+  scoring_endpoint: "https://my-security-api.example.com/score"
+  scoring_api_key: ""
+  scoring_timeout: 3000
+```
+
+### Score Aggregation
+
+Each phase produces a 0–1 score via `findingsToScore()`:
+`score = max(severity_weight / 4 × confidence)` across all findings.
+
+Final score is a weighted average of all phases that ran:
+
+```
+final_score = Σ(wi × si) / Σ(wi)
+```
+
+Default weights:
+
+| Phase | Weight | Rationale |
+|-------|--------|-----------|
+| Runtime (a) | 1.0 | Pattern matching — fast but coarse |
+| Static (b) | 1.0 | Regex rules on file content |
+| Behavioral (c) | 2.0 | AST dataflow — more reliable |
+| LLM (d) | 1.0 | Semantic analysis — broad but slow |
+| External (e) | 2.0 | External API — authoritative |
+
+### Protection Level → Decision Mapping
+
+| Mode | allow | confirm | deny |
+|------|-------|---------|------|
+| **strict** | 0 — 0.5 | _(none)_ | 0.5 — 1.0 |
+| **balanced** | 0 — 0.5 | 0.5 — 0.8 | 0.8 — 1.0 |
+| **permissive** | 0 — 0.9 | _(none)_ | 0.9 — 1.0 |
+
+- **strict**: binary allow/deny, no user confirmation — anything suspicious is blocked
+- **balanced**: three-zone with confirm buffer — the default mode
+- **permissive**: binary allow/deny with high tolerance — only blocks near-certain threats
+
+## Static Scan: Multi-Engine Pipeline
+
+The scanner uses a **two-phase, multi-engine pipeline**:
 
 ```
               Phase 1 (parallel)                    Phase 2 (sequential)
@@ -56,6 +150,7 @@ The scanner uses a **two-phase, multi-engine pipeline** inspired by
                                                             │
                                                             ▼
                                                       ScanResult
+                                                   (+ scan-cache write)
 ```
 
 ### Static Analyzer (Phase 1)
@@ -121,19 +216,9 @@ Uses Claude for semantic threat analysis, enriched by Phase 1 findings.
 2. **Severity filtering** — Drop below `min_severity` from policy
 3. **Sorting** — Critical first, then by file + line
 4. **Projection** — `Finding[]` → legacy `ScanEvidence[]` + `RiskTag[]`
+5. **Cache write** — Optional: persist to scan-cache when `skillId` provided
 
 ## Key Abstractions
-
-### BaseAnalyzer
-
-```typescript
-abstract class BaseAnalyzer {
-  abstract readonly name: 'static' | 'behavioral' | 'llm';
-  abstract readonly phase: 1 | 2;
-  abstract analyze(ctx: AnalysisContext): Promise<Finding[]>;
-  isEnabled(policy: ScanPolicy): boolean;
-}
-```
 
 ### Finding
 
@@ -154,9 +239,35 @@ interface Finding {
 }
 ```
 
+### RuntimeDecision
+
+Output of the dynamic guard pipeline:
+
+```typescript
+interface RuntimeDecision {
+  decision: 'allow' | 'deny' | 'confirm';
+  risk_level: RiskLevel;
+  findings: Finding[];
+  scores: { a?: number; b?: number; c?: number; d?: number; e?: number; final?: number };
+  phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
+  explanation?: string;
+}
+```
+
+### BaseAnalyzer
+
+```typescript
+abstract class BaseAnalyzer {
+  abstract readonly name: 'static' | 'behavioral' | 'llm';
+  abstract readonly phase: 1 | 2;
+  abstract analyze(ctx: AnalysisContext): Promise<Finding[]>;
+  isEnabled(policy: ScanPolicy): boolean;
+}
+```
+
 ### ScanPolicy
 
-Controls analysis behavior. Three presets:
+Controls scan analysis behavior. Three presets:
 
 | Preset | Analyzers | Min Severity |
 |--------|-----------|-------------|
@@ -164,11 +275,24 @@ Controls analysis behavior. Three presets:
 | `balanced` | static + behavioral | low |
 | `permissive` | static only | medium |
 
-### RuleRegistry
+### ScanCache
 
-Central catalog of all detection rules with enriched metadata
-(title, category, remediation). Wraps 16 built-in regex rules and
-supports dynamic registration.
+File-backed cache (`~/.ffwd-agent-guard/scan-cache.json`) with 24h TTL.
+Written by `ScanOrchestrator` after scans. Entries track skill ID, risk level,
+and finding counts for use as trust context by the guard pipeline.
+
+## Shared Infrastructure
+
+### Detection Data (`src/core/shared/detection-data.ts`)
+
+Single source of truth for constants used by both scan and guard pipelines:
+`WEBHOOK_EXFIL_DOMAINS`, `HIGH_RISK_TLDS`, `SENSITIVE_FILE_PATHS`,
+`SECRET_PATTERNS`, `SECRET_PRIORITY`.
+
+### Detection Engine (`src/core/detection-engine.ts`)
+
+Pure functions extracted from StaticAnalyzer, reusable by both scan and guard:
+`runRules()`, `runBase64Pass()`, `extractAndDecodeBase64()`.
 
 ## Project Structure
 
@@ -176,12 +300,16 @@ supports dynamic registration.
 src/
 ├── core/                              # Analysis engine
 │   ├── models.ts                      # Finding, ThreatCategory, Severity
-│   ├── scanner.ts                     # ScanOrchestrator
+│   ├── scanner.ts                     # ScanOrchestrator (static scan)
+│   ├── scan-cache.ts                  # ScanCache (file-backed)
+│   ├── detection-engine.ts            # Shared rule engine (pure functions)
 │   ├── analyzer-factory.ts            # Create analyzers from policy
 │   ├── scan-policy.ts                 # Policy presets
 │   ├── rule-registry.ts              # Rule catalog
 │   ├── deduplicator.ts               # Finding dedup
 │   ├── file-classifier.ts            # File categorization
+│   ├── shared/
+│   │   └── detection-data.ts          # Shared constants
 │   └── analyzers/
 │       ├── base.ts                    # BaseAnalyzer abstract class
 │       ├── static/index.ts           # StaticAnalyzer (regex)
@@ -190,22 +318,51 @@ src/
 │       │   ├── ast-parser.ts         # Babel AST extraction
 │       │   ├── dataflow.ts           # Source→sink taint tracking
 │       │   └── context.ts            # Cross-file aggregation
-│       └── llm/                       # LLMAnalyzer (Claude)
-│           ├── index.ts
-│           ├── prompts.ts            # Injection-protected prompts
-│           └── taxonomy.ts           # Threat category mapping
-├── scanner/                           # Legacy wrapper (delegates to core/)
-│   ├── index.ts                       # SkillScanner public API
+│       ├── llm/                       # LLMAnalyzer (Claude)
+│       │   ├── index.ts
+│       │   ├── prompts.ts            # Injection-protected prompts
+│       │   └── taxonomy.ts           # Threat category mapping
+│       └── runtime/                   # RuntimeAnalyzer (guard pipeline)
+│           ├── index.ts              # 6-phase orchestration
+│           ├── allowlist.ts          # Phase 1: safe command prefixes
+│           ├── denylist.ts           # Phase 2: dangerous patterns
+│           ├── scoring.ts            # Score conversion + weighted aggregation
+│           ├── decision.ts           # Score → decision (per protection level)
+│           └── external-scorer.ts    # Phase 6: HTTP client
+├── scanner/                           # SkillScanner public API
+│   ├── index.ts                       # Scan entry point
 │   ├── file-walker.ts                # Directory traversal
 │   └── rules/                        # 16 detection rules
-├── action/                            # Runtime action evaluation
-├── registry/                          # Trust management
-├── adapters/                          # Platform integration (Claude Code, OpenClaw)
+├── registry/                          # Trust management (SkillRegistry)
+├── adapters/                          # Platform integration
+│   ├── engine.ts                     # evaluateHook() — guard entry point
+│   ├── claude-code.ts                # Claude Code adapter
+│   ├── openclaw.ts                   # OpenClaw adapter
+│   ├── openclaw-plugin.ts            # OpenClaw plugin registration
+│   ├── config-schema.ts              # Zod config schema
+│   ├── common.ts                     # Shared utilities
+│   └── types.ts                      # HookInput/HookOutput/HookAdapter
 ├── policy/                            # Default policies
 ├── types/                             # Type definitions
 ├── utils/                             # Utility functions
 └── scripts/                           # CLI entry points
+    ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
+    ├── action-cli.ts                  # CLI for RuntimeAnalyzer
+    ├── config-cli.ts                  # Protection level CLI
+    └── collector-hook.ts              # Telemetry collector hook
 ```
+
+## Configuration
+
+Runtime config: `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+Full template: `config.default.yaml`.
+
+Key sections:
+- `level` — Protection level: `strict` | `balanced` | `permissive`
+- `guard` — Dynamic guard settings: scoring endpoint, weights, extra allowlist
+- `llm` — LLM analyzer: API key, model, token budget
+- `collector` — OTLP telemetry: endpoint, protocol, log file
+- `rules` — Extra regex patterns injected into scan rules
 
 ## Testing
 

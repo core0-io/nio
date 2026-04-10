@@ -8,6 +8,7 @@ import { riskLevelToNumericScore } from '../types/scanner.js';
 import { validateConfig } from './config-schema.js';
 import type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './config-schema.js';
 export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig } from './config-schema.js';
+import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
 
 // ---------------------------------------------------------------------------
 // Paths
@@ -92,15 +93,6 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
 // Sensitive path detection
 // ---------------------------------------------------------------------------
 
-const SENSITIVE_PATHS = [
-  '.env', '.env.local', '.env.production',
-  '.ssh/', 'id_rsa', 'id_ed25519',
-  '.aws/credentials', '.aws/config',
-  '.npmrc', '.netrc',
-  'credentials.json', 'serviceAccountKey.json',
-  '.kube/config',
-];
-
 export function isSensitivePath(filePath: string): boolean {
   if (!filePath) return false;
   // Normalize backslashes and expand leading ~ so ~/.ssh matches /.ssh
@@ -108,7 +100,7 @@ export function isSensitivePath(filePath: string): boolean {
   if (normalized.startsWith('~/')) {
     normalized = '/HOME' + normalized.slice(1);
   }
-  return SENSITIVE_PATHS.some(
+  return SENSITIVE_FILE_PATHS.some(
     (p) => normalized.includes(`/${p}`) || normalized.endsWith(p)
   );
 }

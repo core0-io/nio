@@ -3,12 +3,12 @@
 export {};
 
 /**
- * FFWD AgentGuard Action CLI — lightweight wrapper for ActionScanner operations.
+ * FFWD AgentGuard Action CLI — lightweight wrapper for RuntimeAnalyzer.
  *
  * Usage:
- *   node action-cli.js decide --type <action_type> [action-specific args]
+ *   node action-cli.js evaluate --type <action_type> [action-specific args]
  *
- * Action-specific args for `decide`:
+ * Action-specific args for `evaluate`:
  *
  *   exec_command:
  *     --command <cmd> [--args <json_array>] [--cwd <dir>]
@@ -55,8 +55,8 @@ interface ActionEnvelope {
 
 interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => {
-    actionScanner: {
-      decide: (envelope: ActionEnvelope) => Promise<unknown>;
+    runtimeAnalyzer: {
+      evaluate: (envelope: ActionEnvelope) => Promise<unknown>;
     };
     [key: string]: unknown;
   };
@@ -98,12 +98,12 @@ function hasFlag(name: string): boolean {
 }
 
 function printUsage(): never {
-  console.error(`Usage: action-cli.js decide [options]
+  console.error(`Usage: action-cli.js evaluate [options]
 
 Commands:
-  decide    Evaluate an action and return a policy decision
+  evaluate  Evaluate an action through the 6-phase guard pipeline
 
-decide options:
+evaluate options:
   --type <type>        Action type: exec_command, network_request,
                        secret_access, read_file, write_file
 
@@ -130,7 +130,7 @@ decide options:
 function buildEnvelope(): ActionEnvelope {
   const type = getArg('type') as ActionType;
   if (!type) {
-    console.error('Error: --type is required for decide');
+    console.error('Error: --type is required for evaluate');
     printUsage();
   }
 
@@ -200,16 +200,16 @@ async function main(): Promise<void> {
     printUsage();
   }
 
-  const registryPath = getArg('registry-path');
-  const { actionScanner } = createAgentGuard({ registryPath });
+  const { runtimeAnalyzer } = createAgentGuard({});
 
-  if (command !== 'decide') {
+  // Support both "evaluate" and legacy "decide" command
+  if (command !== 'evaluate' && command !== 'decide') {
     console.error(`Unknown command: ${command}`);
     printUsage();
   }
 
   const envelope = buildEnvelope();
-  const result = await actionScanner.decide(envelope);
+  const result = await runtimeAnalyzer.evaluate(envelope);
   console.log(JSON.stringify(result, null, 2));
 }
 

@@ -253,9 +253,9 @@ describe('Integration: Protection Level Matrix', () => {
     assert.equal(result.decision, 'deny');
   });
 
-  it('permissive: write .env → ASK (user-initiated)', async () => {
+  it('permissive: write .env → DENY (critical always denied)', async () => {
     ctx = createTestContext('permissive');
     const result = await evaluateHook(ctx.claudeAdapter, sensitiveWriteInput, ctx.options);
-    assert.equal(result.decision, 'ask');
+    assert.equal(result.decision, 'deny');
   });
 });

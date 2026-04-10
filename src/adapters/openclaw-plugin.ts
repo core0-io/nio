@@ -29,8 +29,8 @@ import { loadConfig, writeAuditLog } from './common.js';
 import type { AgentGuardInstance } from './types.js';
 import { SkillScanner } from '../scanner/index.js';
 import { SkillRegistry } from '../registry/index.js';
-import { ActionScanner } from '../action/index.js';
-import { DEFAULT_CAPABILITY } from '../types/skill.js';
+import { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
+import type { ProtectionLevel } from '../core/analyzers/runtime/decision.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider, recordToolUse, recordTurn } from '../scripts/lib/metrics-collector.js';
@@ -420,25 +420,22 @@ export function registerOpenClawPlugin(
   // Lazy-initialize engine instance
   let ffwdAgentGuard: AgentGuardInstance | null = null;
 
-  // Build default capabilities from workspacePaths so the core session
-  // can access its own workspace files without a manual registry entry.
-  const defaultCapabilities = options.workspacePaths
-    ? { ...DEFAULT_CAPABILITY, filesystem_allowlist: options.workspacePaths }
-    : undefined;
-
   function getFfwdAgentGuard(): AgentGuardInstance {
     if (!ffwdAgentGuard) {
       if (options.ffwdAgentGuardFactory) {
         ffwdAgentGuard = options.ffwdAgentGuardFactory();
       } else {
-        // Build inline — avoids require() and passes workspace defaults
-        const actionScanner = new ActionScanner({
-          registry: trustRegistry,
-          ...(defaultCapabilities ? { defaultCapabilities } : {}),
-        });
         ffwdAgentGuard = {
-          registry: trustRegistry as unknown as AgentGuardInstance['registry'],
-          actionScanner,
+          runtimeAnalyzer: new RuntimeAnalyzer({
+            level: (config.level || 'balanced') as ProtectionLevel,
+            extraAllowlist: config.guard?.extra_allowlist,
+            weights: config.guard?.weights,
+            llmApiKey: config.llm?.api_key,
+            llmModel: config.llm?.model,
+            scoringEndpoint: config.guard?.scoring_endpoint,
+            scoringApiKey: config.guard?.scoring_api_key,
+            scoringTimeout: config.guard?.scoring_timeout,
+          }),
         };
       }
     }

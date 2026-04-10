@@ -35,12 +35,33 @@ export const LLMConfigSchema = z.object({
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>;
 
+export const GuardConfigSchema = z.object({
+  /** External scoring endpoint URL. */
+  scoring_endpoint: z.string().optional(),
+  /** External scoring timeout in ms. */
+  scoring_timeout: z.number().positive().optional(),
+  /** API key for external scoring endpoint. */
+  scoring_api_key: z.string().optional(),
+  /** User-injected safe command prefixes for the allowlist. */
+  extra_allowlist: z.array(z.string()).optional(),
+  /** Phase weights for score aggregation. */
+  weights: z.object({
+    runtime: z.number().optional(),
+    static: z.number().optional(),
+    behavioral: z.number().optional(),
+    llm: z.number().optional(),
+    external: z.number().optional(),
+  }).optional(),
+});
+
+export type GuardConfig = z.infer<typeof GuardConfigSchema>;
+
 export const AgentGuardConfigSchema = z.object({
   level: z.enum(['strict', 'balanced', 'permissive']),
-  auto_scan: z.boolean().optional(),
   collector: MetricsConfigSchema.optional(),
   rules: RulesPatternsSchema.optional(),
   llm: LLMConfigSchema.optional(),
+  guard: GuardConfigSchema.optional(),
 });
 
 // ---------------------------------------------------------------------------

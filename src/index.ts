@@ -1,10 +1,9 @@
 /**
  * FFWD AgentGuard — Security guard for AI agents
  *
- * Three-module security framework:
- * - Skill Scanner: Static analysis of skill code
- * - Skill Registry: Trust level and capability management
- * - Action Scanner: Runtime action decision engine
+ * Two-pipeline security framework:
+ * - Static Scan: On-demand code analysis (ScanOrchestrator → Static + Behavioral + LLM)
+ * - Dynamic Guard: Real-time hook protection (RuntimeAnalyzer → 6-phase pipeline)
  */
 
 // Export types
@@ -23,10 +22,9 @@ export {
   type LookupResult,
   type AttestResult,
 } from './registry/index.js';
-export {
-  ActionScanner,
-  type ActionScannerOptions,
-} from './action/index.js';
+
+// Export RuntimeAnalyzer (guard pipeline)
+export { RuntimeAnalyzer, type RuntimeDecision, type RuntimeAnalyzerOptions } from './core/analyzers/runtime/index.js';
 
 // Export policy presets
 export {
@@ -71,8 +69,8 @@ export {
 import { SkillScanner } from './scanner/index.js';
 import { SkillRegistry } from './registry/index.js';
 import { loadConfig } from './adapters/index.js';
-import { ActionScanner } from './action/index.js';
-import type { CapabilityModel } from './types/skill.js';
+import { RuntimeAnalyzer } from './core/analyzers/runtime/index.js';
+import type { ProtectionLevel } from './core/analyzers/runtime/decision.js';
 
 /**
  * Create a complete AgentGuard instance with all modules
@@ -80,8 +78,6 @@ import type { CapabilityModel } from './types/skill.js';
 export function createAgentGuard(options?: {
   registryPath?: string;
   useExternalScanner?: boolean;
-  /** Default capabilities used when no registry record is found for an actor */
-  defaultCapabilities?: CapabilityModel;
 }) {
   const registry = new SkillRegistry({
     filePath: options?.registryPath,
@@ -93,15 +89,21 @@ export function createAgentGuard(options?: {
     extraPatterns: config.rules,
   });
 
-  const actionScanner = new ActionScanner({
-    registry,
-    defaultCapabilities: options?.defaultCapabilities,
+  const runtimeAnalyzer = new RuntimeAnalyzer({
+    level: (config.level || 'balanced') as ProtectionLevel,
+    weights: config.guard?.weights,
+    extraAllowlist: config.guard?.extra_allowlist,
+    llmApiKey: config.llm?.api_key,
+    llmModel: config.llm?.model,
+    scoringEndpoint: config.guard?.scoring_endpoint,
+    scoringApiKey: config.guard?.scoring_api_key,
+    scoringTimeout: config.guard?.scoring_timeout,
   });
 
   return {
     scanner,
     registry,
-    actionScanner,
+    runtimeAnalyzer,
   };
 }
 

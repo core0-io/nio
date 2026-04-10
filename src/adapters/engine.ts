@@ -1,14 +1,9 @@
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
-import {
-  isSensitivePath,
-  shouldDenyAtLevel,
-  shouldAskAtLevel,
-  writeAuditLog,
-  getSkillTrustPolicy,
-  isActionAllowedByCapabilities,
-} from './common.js';
+import { writeAuditLog } from './common.js';
+import type { RuntimeDecision } from '../core/analyzers/runtime/index.js';
+import type { ProtectionLevel } from '../core/analyzers/runtime/decision.js';
 
 function scoreForLevel(level: string | undefined): number {
   return riskLevelToNumericScore((level || 'medium') as RiskLevel);
@@ -27,10 +22,56 @@ function policyHookReason(
 }
 
 /**
- * Evaluate a hook event using the common AgentGuard decision engine.
+ * Map RuntimeDecision to HookOutput using the new score-based system.
+ */
+function runtimeDecisionToHookOutput(
+  rd: RuntimeDecision,
+  initiatingSkill: string | null,
+): HookOutput {
+  const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
+  const riskTags = rd.findings.map(f => f.rule_id);
+  const uniqueTags = [...new Set(riskTags)];
+
+  if (rd.decision === 'deny') {
+    return {
+      decision: 'deny',
+      reason: policyHookReason(
+        rd.explanation || 'Action blocked',
+        skillTag,
+        uniqueTags,
+        rd.risk_level,
+      ),
+      riskLevel: rd.risk_level,
+      riskScore: scoreForLevel(rd.risk_level),
+      riskTags: uniqueTags,
+      initiatingSkill,
+    };
+  }
+
+  if (rd.decision === 'confirm') {
+    return {
+      decision: 'ask',
+      reason: policyHookReason(
+        rd.explanation || 'Action requires confirmation',
+        skillTag,
+        uniqueTags,
+        rd.risk_level,
+      ),
+      riskLevel: rd.risk_level,
+      riskScore: scoreForLevel(rd.risk_level),
+      riskTags: uniqueTags,
+      initiatingSkill,
+    };
+  }
+
+  return { decision: 'allow', initiatingSkill };
+}
+
+/**
+ * Evaluate a hook event using the RuntimeAnalyzer pipeline.
  *
  * This is the platform-agnostic core — adapters handle I/O protocol,
- * this function handles security logic.
+ * this function handles security logic via the 6-phase pipeline.
  */
 export async function evaluateHook(
   adapter: HookAdapter,
@@ -54,128 +95,29 @@ export async function evaluateHook(
     return { decision: 'allow' };
   }
 
-  // Fast check: sensitive file paths (Write/Edit and shell commands targeting sensitive paths)
-  const actionType = adapter.mapToolToActionType(input.toolName);
-  if (actionType === 'write_file') {
-    const filePath = (input.toolInput.file_path as string) ||
-                     (input.toolInput.path as string) || '';
-    if (isSensitivePath(filePath)) {
-      const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
-      const reason = policyHookReason(
-        `blocked write to sensitive path "${filePath}"`,
-        skillTag,
-        ['SENSITIVE_PATH'],
-        'critical'
-      );
-      writeAuditLog(input, { decision: 'deny', risk_level: 'critical', risk_tags: ['SENSITIVE_PATH'] }, initiatingSkill, adapter.name);
-
-      // In permissive mode, ask for user-initiated writes
-      if (options.config.level === 'permissive' && !initiatingSkill) {
-        return {
-          decision: 'ask',
-          reason,
-          riskLevel: 'critical',
-          riskScore: scoreForLevel('critical'),
-          riskTags: ['SENSITIVE_PATH'],
-          initiatingSkill,
-        };
-      }
-      return {
-        decision: 'deny',
-        reason,
-        riskLevel: 'critical',
-        riskScore: scoreForLevel('critical'),
-        riskTags: ['SENSITIVE_PATH'],
-        initiatingSkill,
-      };
-    }
-  }
-
-  // Full ActionScanner evaluation
+  // Run RuntimeAnalyzer pipeline
   try {
-    const decision = await options.ffwdAgentGuard.actionScanner.decide(envelope);
-
-    // Skill trust policy enforcement
-    if (initiatingSkill) {
-      const policy = await getSkillTrustPolicy(initiatingSkill, options.ffwdAgentGuard.registry);
-
-      if (!policy.isKnown || policy.trustLevel === 'untrusted') {
-        if (!isActionAllowedByCapabilities(
-          envelope.action.type,
-          { can_exec: false, can_network: false, can_write: false, can_read: true }
-        )) {
-          const reason = `FFWD AgentGuard: untrusted skill "${initiatingSkill}" attempted ${envelope.action.type} — register it with /ffwd-agent-guard trust attest to allow [score: ${scoreForLevel('high')}]`;
-          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['UNTRUSTED_SKILL', ...(decision.risk_tags || [])] }, initiatingSkill, adapter.name);
-          return {
-            decision: 'ask',
-            reason,
-            riskLevel: 'high',
-            riskScore: scoreForLevel('high'),
-            riskTags: ['UNTRUSTED_SKILL'],
-            initiatingSkill,
-          };
-        }
-      }
-
-      if (policy.isKnown && policy.capabilities) {
-        if (!isActionAllowedByCapabilities(envelope.action.type, policy.capabilities)) {
-          const reason = `FFWD AgentGuard: skill "${initiatingSkill}" is not allowed to ${envelope.action.type} per its trust policy [score: ${scoreForLevel('high')}]`;
-          writeAuditLog(input, { decision: 'deny', risk_level: 'high', risk_tags: ['CAPABILITY_EXCEEDED', ...(decision.risk_tags || [])] }, initiatingSkill, adapter.name);
-          return {
-            decision: 'deny',
-            reason,
-            riskLevel: 'high',
-            riskScore: scoreForLevel('high'),
-            riskTags: ['CAPABILITY_EXCEEDED'],
-            initiatingSkill,
-          };
-        }
-      }
-    }
+    const level = (options.config.level || 'balanced') as ProtectionLevel;
+    const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyzer.evaluate(envelope, level);
 
     // Write audit log
-    writeAuditLog(input, decision, initiatingSkill, adapter.name);
+    const riskTags = [...new Set(rd.findings.map(f => f.rule_id))];
+    writeAuditLog(
+      input,
+      { decision: rd.decision, risk_level: rd.risk_level, risk_tags: riskTags },
+      initiatingSkill,
+      adapter.name,
+    );
 
-    // Apply protection level thresholds
-    const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
-    const riskScore = scoreForLevel(decision.risk_level);
-
-    if (shouldDenyAtLevel(decision, options.config)) {
-      return {
-        decision: 'deny',
-        reason: policyHookReason(
-          decision.explanation || 'Action blocked',
-          skillTag,
-          decision.risk_tags,
-          decision.risk_level
-        ),
-        riskLevel: decision.risk_level,
-        riskScore,
-        riskTags: decision.risk_tags,
-        initiatingSkill,
-      };
-    }
-
-    if (shouldAskAtLevel(decision, options.config)) {
-      return {
-        decision: 'ask',
-        reason: policyHookReason(
-          decision.explanation || 'Action requires confirmation',
-          skillTag,
-          decision.risk_tags,
-          decision.risk_level
-        ),
-        riskLevel: decision.risk_level,
-        riskScore,
-        riskTags: decision.risk_tags,
-        initiatingSkill,
-      };
-    }
-
-    return { decision: 'allow', initiatingSkill };
+    return runtimeDecisionToHookOutput(rd, initiatingSkill);
   } catch {
     // Engine error → fail open
-    writeAuditLog(input, { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] }, initiatingSkill, adapter.name);
+    writeAuditLog(
+      input,
+      { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] },
+      initiatingSkill,
+      adapter.name,
+    );
     return { decision: 'allow' };
   }
 }
