@@ -14,5 +14,16 @@ coverage/
 tmp/
 .npmrc
 .pnpm-store/
-skills/ffwd-agent-guard/scripts/*.js
-skills/ffwd-agent-guard/scripts/*.js.map
+plugins/claude-code/skills/ffwd-agent-guard/scripts/*.js
+plugins/claude-code/skills/ffwd-agent-guard/scripts/*.js.map
+plugins/claude-code/skills/ffwd-agent-guard/scripts/lib/*.js
+plugins/claude-code/skills/ffwd-agent-guard/scripts/lib/*.js.map
+plugins/openclaw/plugin.js
+# Synced shared files (build output, source of truth is plugins/shared/)
+plugins/claude-code/config.default.yaml
+plugins/claude-code/config.schema.json
+plugins/claude-code/README.md
+plugins/openclaw/config.default.yaml
+plugins/openclaw/config.schema.json
+plugins/openclaw/README.md
+releases/

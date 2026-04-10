@@ -381,4 +381,4 @@ file:
 
 ---
 
-*This document consolidates security policies from `skills/ffwd-agent-guard/action-policies.md`, `skills/ffwd-agent-guard/scan-rules.md`, and implementation in `src/action/detectors/`.*
+*This document consolidates security policies from `plugins/claude-code/skills/ffwd-agent-guard/action-policies.md`, `plugins/claude-code/skills/ffwd-agent-guard/scan-rules.md`, and implementation in `src/action/detectors/`.*

@@ -2,7 +2,7 @@
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
-const outDir = 'skills/ffwd-agent-guard/scripts';
+const outDir = 'plugins/claude-code/skills/ffwd-agent-guard/scripts';
 const srcDir = 'src/scripts';
 
 for (const file of readdirSync(outDir)) {

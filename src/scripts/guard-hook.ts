@@ -40,7 +40,7 @@ interface AgentGuardModule {
 // ---------------------------------------------------------------------------
 
 const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
+const agentguardPath = join(dirname(__filename), '..', '..', '..', '..', '..', 'dist', 'index.js');
 
 let mod: AgentGuardModule;
 try {

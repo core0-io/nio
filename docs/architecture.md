@@ -547,7 +547,7 @@ src/
 ## Configuration
 
 Runtime config: `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
-Full template: `config.default.yaml`.
+Full template: `plugins/shared/config.default.yaml`.
 
 Key sections:
 - `level` — Protection level: `strict` | `balanced` | `permissive`

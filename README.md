@@ -117,8 +117,8 @@ npm install @core0-io/ffwd-agent-guard
 
 ```bash
 git clone https://github.com/core0-io/ffwd-agent-guard.git
-cd ffwd-agent-guard && ./setup.sh
-claude plugin add /path/to/ffwd-agent-guard
+cd ffwd-agent-guard && ./plugins/claude-code/setup.sh
+claude plugin add /path/to/ffwd-agent-guard/plugins/claude-code
 ```
 
 This installs the skill, configures hooks, and sets your protection level.
@@ -130,13 +130,20 @@ This installs the skill, configures hooks, and sets your protection level.
 
 ```bash
 git clone https://github.com/core0-io/ffwd-agent-guard.git
-cp -r ffwd-agent-guard/skills/ffwd-agent-guard ~/.claude/skills/ffwd-agent-guard
+cp -r ffwd-agent-guard/plugins/claude-code/skills/ffwd-agent-guard ~/.claude/skills/ffwd-agent-guard
 ```
 
 </details>
 
 <details>
 <summary><b>OpenClaw plugin install</b></summary>
+
+```bash
+git clone https://github.com/core0-io/ffwd-agent-guard.git
+cd ffwd-agent-guard && ./plugins/openclaw/setup.sh
+```
+
+Or install via npm:
 
 ```bash
 npm install @core0-io/ffwd-agent-guard
@@ -149,19 +156,19 @@ import register from '@core0-io/ffwd-agent-guard/openclaw';
 export default register;
 ```
 
-Or register manually with options:
+AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
 
-```typescript
-import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
+</details>
 
-export default function setup(api) {
-  registerOpenClawPlugin(api, {
-    level: 'balanced',
-  });
-};
+<details>
+<summary><b>All platforms (auto-detect)</b></summary>
+
+```bash
+git clone https://github.com/core0-io/ffwd-agent-guard.git
+cd ffwd-agent-guard && ./setup.sh
 ```
 
-AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
+Detects installed platforms and runs the appropriate setup for each.
 
 </details>
 

@@ -14,7 +14,7 @@ import { SkillScanner } from '../scanner/index.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..', '..');
-const GUARD_HOOK_PATH = join(projectRoot, 'skills', 'ffwd-agent-guard', 'scripts', 'guard-hook.js');
+const GUARD_HOOK_PATH = join(projectRoot, 'plugins', 'claude-code', 'skills', 'ffwd-agent-guard', 'scripts', 'guard-hook.js');
 
 function runGuardHook(input: Record<string, unknown>): Promise<{
   exitCode: number;

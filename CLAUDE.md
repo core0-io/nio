@@ -15,22 +15,33 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ## Project Structure
 
-- `skills/ffwd-agent-guard/` — Claude Code skill definition and supporting files
+- `plugins/shared/` — Shared config files (config.default.yaml, config.schema.json)
+- `plugins/claude-code/` — Claude Code plugin (hooks, skills, setup)
+- `plugins/openclaw/` — OpenClaw plugin (manifest, bundled plugin.js, setup)
 - `src/` — TypeScript source (scanner, analyzers, runtime guard, adapters)
-- `dist/` — Compiled JavaScript output
+- `dist/` — Compiled JavaScript output (npm library export)
+- `scripts/` — Build and release scripts
 
 ## Build
 
-Scripts in `src/scripts/` compile to `skills/ffwd-agent-guard/scripts/`:
+Scripts in `src/scripts/` compile to `plugins/claude-code/skills/ffwd-agent-guard/scripts/`:
 
 ```bash
 npm run build
 ```
 
+## Release
+
+```bash
+npm run release                    # All platforms
+npm run release:claude-code        # Claude Code only
+npm run release:openclaw           # OpenClaw only
+```
+
 ## Configuration
 
-Runtime config lives at `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
-A template with all options is at `config.default.yaml` in the repo root. Full schema:
+Runtime config lives at `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+A template with all options is at `plugins/shared/config.default.yaml` (synced to each plugin dir during build). Full schema:
 
 ```yaml
 level: balanced

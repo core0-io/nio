@@ -10,11 +10,15 @@
     ]
   },
   "scripts": {
-    "prebuild": "cp package.json pnpm-lock.yaml skills/ffwd-agent-guard/ && cd skills/ffwd-agent-guard && pnpm install --prod --frozen-lockfile --node-linker=hoisted && rm package.json pnpm-lock.yaml",
-    "build": "rm -rf dist && tsc -p tsconfig.lib.json && tsc -p tsconfig.scripts.json && node scripts/add-banner.js && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=openclaw-plugin/plugin.js --external:node:*",
+    "prebuild": "cp package.json pnpm-lock.yaml plugins/claude-code/skills/ffwd-agent-guard/ && cd plugins/claude-code/skills/ffwd-agent-guard && pnpm install --prod --frozen-lockfile --node-linker=hoisted && rm package.json pnpm-lock.yaml",
+    "build": "rm -rf dist && tsc -p tsconfig.lib.json && tsc -p tsconfig.scripts.json && node scripts/add-banner.js && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=plugins/openclaw/plugin.js --external:node:* && node scripts/sync-shared.js",
     "dev": "tsc -w -p tsconfig.lib.json & tsc -w -p tsconfig.scripts.json",
     "test": "node --test dist/tests/*.test.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "release": "node scripts/release.js all",
+    "release:claude-code": "node scripts/release.js claude-code",
+    "release:openclaw": "node scripts/release.js openclaw",
+    "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes"
   },
   "keywords": [
     "claude-code-skill",
@@ -70,8 +74,8 @@
   "files": [
     "dist",
     "README.md",
-    "openclaw.plugin.json",
-    "skills"
+    "plugins/openclaw/openclaw.plugin.json",
+    "plugins/claude-code/skills"
   ],
   "type": "module"
 }

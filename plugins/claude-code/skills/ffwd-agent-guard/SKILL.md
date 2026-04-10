@@ -180,7 +180,7 @@ View or update the FFWD AgentGuard configuration.
 ### Config File
 
 All configuration is stored in `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
-A template with all options is available at `config.default.yaml` in the repo root.
+A template with all options is available at `config.default.yaml` in the plugin directory.
 
 Full schema:
 

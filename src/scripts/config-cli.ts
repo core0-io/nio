@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', 'dist', 'index.js');
+const agentguardPath = join(dirname(__filename), '..', '..', '..', '..', '..', 'dist', 'index.js');
 
 interface AgentGuardModule {
   loadConfig: () => Record<string, unknown>;
