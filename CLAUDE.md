@@ -45,6 +45,15 @@ A template with all options is at `plugins/shared/config.default.yaml` (synced t
 
 ```yaml
 level: balanced
+guard:
+  available_tools: []     # Phase 0: when non-empty, only these tools are available
+  blocked_tools: []       # Phase 0: these tools are unconditionally blocked
+  guarded_tools:          # Tools entering Phase 1-6 deep analysis
+    Bash: exec_command
+    Write: write_file
+    Edit: write_file
+    WebFetch: network_request
+    WebSearch: network_request
 collector:
   endpoint: ""
   api_key: ""

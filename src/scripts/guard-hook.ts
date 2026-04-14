@@ -30,9 +30,9 @@ interface HookOutput {
 
 interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => Record<string, unknown>;
-  ClaudeCodeAdapter: new () => unknown;
+  ClaudeCodeAdapter: new (opts?: { guardedTools?: Record<string, string> }) => unknown;
   evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>) => Promise<HookOutput>;
-  loadConfig: () => { level: string; metrics?: Record<string, unknown> };
+  loadConfig: () => { level: string; guard?: { guarded_tools?: Record<string, string> }; metrics?: Record<string, unknown> };
 }
 
 // ---------------------------------------------------------------------------
@@ -111,8 +111,8 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const adapter = new ClaudeCodeAdapter();
   const config = loadConfig();
+  const adapter = new ClaudeCodeAdapter({ guardedTools: config.guard?.guarded_tools });
   const ffwdAgentGuard = createAgentGuard();
 
   const result = await evaluateHook(adapter, input, { config, ffwdAgentGuard });

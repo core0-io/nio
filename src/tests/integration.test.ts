@@ -181,6 +181,151 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// B2: Phase 0 — Tool Gate (blocked_tools / available_tools)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: Phase 0 Tool Gate', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+
+  afterEach(() => ctx?.cleanup());
+
+  it('should DENY a tool in blocked_tools', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: ['Bash'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('should ALLOW a tool not in blocked_tools', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: ['WebFetch'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('should DENY a tool not in available_tools', async () => {
+    ctx = createTestContext({ guard: { available_tools: ['Read', 'Grep'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+  });
+
+  it('should ALLOW a tool in available_tools', async () => {
+    ctx = createTestContext({ guard: { available_tools: ['Read', 'Bash'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('blocked_tools should take precedence over available_tools', async () => {
+    ctx = createTestContext({
+      guard: { available_tools: ['Bash'], blocked_tools: ['Bash'] },
+    });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('should be case-insensitive', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: ['bash'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('should DENY unmapped tool (Read) when not in available_tools', async () => {
+    ctx = createTestContext({ guard: { available_tools: ['Bash'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/test.txt' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('should DENY PostToolUse event for blocked tool', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: ['Bash'] } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hello' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('should pass through to Phase 1-6 when no gate configured', async () => {
+    ctx = createTestContext({ guard: {} });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny'); // denied by Phase 2, not Phase 0
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// B3: Configurable guarded_tools
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: Configurable guarded_tools', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+
+  afterEach(() => ctx?.cleanup());
+
+  it('should skip Phase 1-6 for tool removed from guarded_tools', async () => {
+    ctx = createTestContext({
+      guard: {
+        guarded_tools: { Bash: 'exec_command' }, // Write not guarded
+      },
+    });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: '/project/.env' },
+    }, ctx.options);
+    // Write is not in guarded_tools → buildEnvelope returns null → auto-allow
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('should still analyze tools that remain in guarded_tools', async () => {
+    ctx = createTestContext({
+      guard: {
+        guarded_tools: { Bash: 'exec_command', Write: 'write_file' },
+      },
+    });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // C: Protection Level Matrix
 // ─────────────────────────────────────────────────────────────────────────────
 

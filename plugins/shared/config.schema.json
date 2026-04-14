@@ -6,7 +6,6 @@
   "required": [
     "level"
   ],
-  "additionalProperties": false,
   "properties": {
     "level": {
       "type": "string",
@@ -30,6 +29,46 @@
         "prompt_injection": { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for PROMPT_INJECTION rule." },
         "exfiltration":     { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for NET_EXFIL_UNRESTRICTED and WEBHOOK_EXFIL rules." },
         "trojan":           { "type": "array", "items": { "type": "string" }, "description": "Extra patterns for TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING rules." }
+      }
+    },
+    "llm": {
+      "type": "object",
+      "description": "LLM analyzer settings (Phase 5 semantic analysis using Claude). Disabled when api_key is empty.",
+      "additionalProperties": false,
+      "properties": {
+        "api_key": { "type": "string", "default": "", "description": "Anthropic API key for LLM-based security analysis." },
+        "model": { "type": "string", "default": "claude-sonnet-4-20250514", "description": "Model identifier for LLM analysis." },
+        "max_input_tokens": { "type": "number", "minimum": 1, "default": 50000, "description": "Maximum input token budget sent to the LLM per scan." }
+      }
+    },
+    "guard": {
+      "type": "object",
+      "description": "Dynamic guard pipeline settings (RuntimeAnalyzer, phases 0-6).",
+      "additionalProperties": false,
+      "properties": {
+        "scoring_endpoint": { "type": "string", "default": "", "description": "External scoring API endpoint (Phase 6). Disabled when empty." },
+        "scoring_api_key": { "type": "string", "default": "", "description": "Bearer token for scoring endpoint authentication." },
+        "scoring_timeout": { "type": "number", "minimum": 1, "default": 3000, "description": "Scoring endpoint timeout in milliseconds." },
+        "extra_allowlist": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional safe command prefixes injected into Phase 1 allowlist." },
+        "available_tools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Tool-level allowlist (Phase 0). When non-empty, only listed tools are available to the agent." },
+        "blocked_tools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Tool-level denylist (Phase 0). Listed tools are unconditionally blocked." },
+        "guarded_tools": {
+          "type": "object",
+          "description": "Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis. Others pass through Phase 0 only.",
+          "additionalProperties": { "type": "string", "enum": ["exec_command", "write_file", "network_request"] },
+          "default": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" }
+        },
+        "weights": {
+          "type": "object",
+          "description": "Phase weights for weighted score aggregation.",
+          "properties": {
+            "runtime": { "type": "number", "default": 1.0 },
+            "static": { "type": "number", "default": 1.0 },
+            "behavioral": { "type": "number", "default": 2.0 },
+            "llm": { "type": "number", "default": 1.0 },
+            "external": { "type": "number", "default": 2.0 }
+          }
+        }
       }
     },
     "collector": {

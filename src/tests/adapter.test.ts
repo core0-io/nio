@@ -82,6 +82,23 @@ describe('ClaudeCodeAdapter', () => {
     });
   });
 
+  describe('custom guarded_tools', () => {
+    it('should use custom mapping when provided', () => {
+      const custom = new ClaudeCodeAdapter({
+        guardedTools: { Agent: 'exec_command', Bash: 'exec_command' },
+      });
+      assert.equal(custom.mapToolToActionType('Agent'), 'exec_command');
+      assert.equal(custom.mapToolToActionType('Bash'), 'exec_command');
+      assert.equal(custom.mapToolToActionType('Write'), null); // not in custom map
+    });
+
+    it('should use defaults when no guardedTools provided', () => {
+      const defaultAdapter = new ClaudeCodeAdapter();
+      assert.equal(defaultAdapter.mapToolToActionType('Bash'), 'exec_command');
+      assert.equal(defaultAdapter.mapToolToActionType('Write'), 'write_file');
+    });
+  });
+
   describe('buildEnvelope', () => {
     it('should build exec_command envelope', () => {
       const input = adapter.parseInput({

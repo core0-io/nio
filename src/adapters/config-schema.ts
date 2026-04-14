@@ -44,6 +44,12 @@ export const GuardConfigSchema = z.object({
   scoring_api_key: z.string().optional(),
   /** User-injected safe command prefixes for the allowlist. */
   extra_allowlist: z.array(z.string()).optional(),
+  /** Tool-level allowlist (Phase 0). When non-empty, only listed tools are available. */
+  available_tools: z.array(z.string()).optional(),
+  /** Tool-level denylist (Phase 0). Listed tools are unconditionally blocked. */
+  blocked_tools: z.array(z.string()).optional(),
+  /** Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis. */
+  guarded_tools: z.record(z.string(), z.enum(['exec_command', 'write_file', 'network_request'])).optional(),
   /** Phase weights for score aggregation. */
   weights: z.object({
     runtime: z.number().optional(),

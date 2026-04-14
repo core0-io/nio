@@ -16,41 +16,14 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
-            "timeout": 10,
-            "statusMessage": "FFWD AgentGuard: checking command safety..."
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
-            "timeout": 10,
-            "statusMessage": "FFWD AgentGuard: checking file write safety..."
-          }
-        ]
-      },
-      {
-        "matcher": "WebFetch|WebSearch",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
-            "timeout": 10,
-            "statusMessage": "FFWD AgentGuard: checking network request..."
-          }
-        ]
-      },
-      {
         "matcher": ".*",
         "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
+            "timeout": 10,
+            "statusMessage": "FFWD AgentGuard: checking tool safety..."
+          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",
@@ -86,19 +59,14 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|Write|Edit|WebFetch|WebSearch",
+        "matcher": ".*",
         "hooks": [
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/guard-hook.js\"",
             "timeout": 5,
             "async": true
-          }
-        ]
-      },
-      {
-        "matcher": ".*",
-        "hooks": [
+          },
           {
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/ffwd-agent-guard/scripts/collector-hook.js\"",

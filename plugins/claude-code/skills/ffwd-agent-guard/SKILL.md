@@ -187,6 +187,17 @@ Full schema:
 ```json
 {
   "level": "balanced",
+  "guard": {
+    "available_tools": [],
+    "blocked_tools": [],
+    "guarded_tools": {
+      "Bash": "exec_command",
+      "Write": "write_file",
+      "Edit": "write_file",
+      "WebFetch": "network_request",
+      "WebSearch": "network_request"
+    }
+  },
   "collector": {
     "endpoint": "",
     "api_key": "",
@@ -199,6 +210,9 @@ Full schema:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `guard.available_tools` | string[] | `[]` | Tool-level allowlist (Phase 0). When non-empty, only listed tools are available |
+| `guard.blocked_tools` | string[] | `[]` | Tool-level denylist (Phase 0). Listed tools are unconditionally blocked |
+| `guard.guarded_tools` | object | *(see above)* | Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis |
 | `collector.endpoint` | string | `""` | OTLP endpoint URL for traces/metrics |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
 | `collector.timeout` | number | `5000` | Collector request timeout in ms |

@@ -68,6 +68,44 @@ function runtimeDecisionToHookOutput(
 }
 
 /**
+ * Phase 0: Tool-level gate.
+ *
+ * Checks `blocked_tools` and `available_tools` from config before any
+ * content-level analysis. Returns a deny HookOutput if the tool is
+ * blocked or not in the available list; null to proceed to Phase 1-6.
+ */
+function checkToolGate(toolName: string, config: EngineOptions['config']): HookOutput | null {
+  const blocked = config.guard?.blocked_tools ?? [];
+  const available = config.guard?.available_tools ?? [];
+
+  if (blocked.length > 0 && blocked.some(t => t.toLowerCase() === toolName.toLowerCase())) {
+    return {
+      decision: 'deny',
+      reason: policyHookReason(
+        `Tool "${toolName}" is blocked (blocked_tools)`, '', ['TOOL_GATE_BLOCKED'], 'critical'
+      ),
+      riskLevel: 'critical',
+      riskScore: scoreForLevel('critical'),
+      riskTags: ['TOOL_GATE_BLOCKED'],
+    };
+  }
+
+  if (available.length > 0 && !available.some(t => t.toLowerCase() === toolName.toLowerCase())) {
+    return {
+      decision: 'deny',
+      reason: policyHookReason(
+        `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical'
+      ),
+      riskLevel: 'critical',
+      riskScore: scoreForLevel('critical'),
+      riskTags: ['TOOL_GATE_UNAVAILABLE'],
+    };
+  }
+
+  return null;
+}
+
+/**
  * Evaluate a hook event using the RuntimeAnalyzer pipeline.
  *
  * This is the platform-agnostic core — adapters handle I/O protocol,
@@ -79,6 +117,19 @@ export async function evaluateHook(
   options: EngineOptions
 ): Promise<HookOutput> {
   const input = adapter.parseInput(rawInput);
+
+  // Phase 0: Tool-level gate
+  const toolGate = checkToolGate(input.toolName, options.config);
+  if (toolGate) {
+    const skill = await adapter.inferInitiatingSkill(input);
+    writeAuditLog(
+      input,
+      { decision: 'deny', risk_level: 'critical', risk_tags: toolGate.riskTags ?? [] },
+      skill,
+      adapter.name,
+    );
+    return toolGate;
+  }
 
   // Post-tool events → audit only
   if (input.eventType === 'post') {

@@ -67,6 +67,20 @@ guard:
   scoring_timeout: 3000
   # Additional safe command prefixes injected into Phase 1 allowlist.
   extra_allowlist: []
+  # Tool-level gate (Phase 0). Checked before any content analysis.
+  # Valid tool names: Bash, Write, Edit, Read, Glob, Grep, WebFetch, WebSearch, Agent, Skill, TodoWrite, etc.
+  # When non-empty, ONLY listed tools are available to the agent.
+  available_tools: []
+  # Listed tools are unconditionally blocked.
+  blocked_tools: []
+  # Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis.
+  # Others pass through Phase 0 only (if allowed) and are auto-approved.
+  guarded_tools:
+    Bash: exec_command
+    Write: write_file
+    Edit: write_file
+    WebFetch: network_request
+    WebSearch: network_request
   # Phase weights for weighted score aggregation.
   #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
   weights:

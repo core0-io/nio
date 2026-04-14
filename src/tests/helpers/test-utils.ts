@@ -10,11 +10,27 @@ import type { EngineOptions } from '../../adapters/types.js';
  * Create an isolated test context with injectable config level.
  * No real ~/.ffwd-agent-guard/ pollution.
  */
-export function createTestContext(level: string = 'balanced') {
+export interface TestContextOptions {
+  level?: string;
+  guard?: {
+    available_tools?: string[];
+    blocked_tools?: string[];
+    guarded_tools?: Record<string, string>;
+  };
+}
+
+export function createTestContext(levelOrOpts: string | TestContextOptions = 'balanced') {
+  const opts: TestContextOptions = typeof levelOrOpts === 'string'
+    ? { level: levelOrOpts }
+    : levelOrOpts;
+
   const tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-integ-'));
   const ffwdAgentGuard = createAgentGuard();
 
-  const config = { level };
+  const config: EngineOptions['config'] = {
+    level: opts.level ?? 'balanced',
+    guard: opts.guard,
+  };
   const options: EngineOptions = {
     config,
     ffwdAgentGuard: ffwdAgentGuard as unknown as EngineOptions['ffwdAgentGuard'],
@@ -25,7 +41,7 @@ export function createTestContext(level: string = 'balanced') {
     ffwdAgentGuard,
     config,
     options,
-    claudeAdapter: new ClaudeCodeAdapter(),
+    claudeAdapter: new ClaudeCodeAdapter({ guardedTools: opts.guard?.guarded_tools }),
     openclawAdapter: new OpenClawAdapter(),
     cleanup() {
       try {

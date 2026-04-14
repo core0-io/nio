@@ -3,15 +3,20 @@ import type { ActionEnvelope, ActionData, ActionType, ExecCommandData, FileOpera
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
- * Tool name → action type mapping for Claude Code
+ * Default guarded tools mapping — used when config does not provide one.
  */
-const TOOL_ACTION_MAP: Record<string, ActionType> = {
+const DEFAULT_GUARDED_TOOLS: Record<string, ActionType> = {
   Bash: 'exec_command',
   Write: 'write_file',
   Edit: 'write_file',
   WebFetch: 'network_request',
   WebSearch: 'network_request',
 };
+
+export interface ClaudeCodeAdapterOptions {
+  /** Config-driven tool → action type mapping, overrides the built-in default. */
+  guardedTools?: Record<string, string>;
+}
 
 /**
  * Claude Code hook adapter
@@ -21,6 +26,11 @@ const TOOL_ACTION_MAP: Record<string, ActionType> = {
  */
 export class ClaudeCodeAdapter implements HookAdapter {
   readonly name = 'claude-code';
+  private guardedTools: Record<string, ActionType>;
+
+  constructor(opts?: ClaudeCodeAdapterOptions) {
+    this.guardedTools = (opts?.guardedTools as Record<string, ActionType>) ?? DEFAULT_GUARDED_TOOLS;
+  }
 
   parseInput(raw: unknown): HookInput {
     const data = raw as Record<string, unknown>;
@@ -36,7 +46,7 @@ export class ClaudeCodeAdapter implements HookAdapter {
   }
 
   mapToolToActionType(toolName: string): string | null {
-    return TOOL_ACTION_MAP[toolName] || null;
+    return this.guardedTools[toolName] || null;
   }
 
   buildEnvelope(input: HookInput, initiatingSkill?: string | null): ActionEnvelope | null {
