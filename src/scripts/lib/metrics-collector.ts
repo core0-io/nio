@@ -24,6 +24,26 @@ export const METRICS_SCHEMA = {
       platform: 'Runtime platform identifier',
     },
   },
+  decisionCount: {
+    name: 'agentguard.decision.count',
+    description: 'Number of guard decisions by outcome',
+    unit: '{decisions}',
+    labels: {
+      decision: 'Guard decision (allow, deny, ask)',
+      risk_level: 'Risk level (low, medium, high, critical)',
+      tool_name: 'Name of the tool being evaluated',
+      platform: 'Runtime platform identifier',
+    },
+  },
+  riskScore: {
+    name: 'agentguard.risk.score',
+    description: 'Risk score distribution for guard evaluations (0–1)',
+    unit: '{score}',
+    labels: {
+      tool_name: 'Name of the tool being evaluated',
+      platform: 'Runtime platform identifier',
+    },
+  },
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -100,6 +120,40 @@ export async function recordToolUse(
     'agentguard.event': event,
     'agentguard.platform': platform,
   });
+  await provider.forceFlush();
+}
+
+
+export async function recordGuardDecision(
+  provider: MeterProvider,
+  decision: string,
+  riskLevel: string,
+  riskScore: number,
+  toolName: string,
+  platform: string,
+): Promise<void> {
+  const meter = provider.getMeter('agentguard-collector', '1.0.0');
+
+  const counter = meter.createCounter(METRICS_SCHEMA.decisionCount.name, {
+    description: METRICS_SCHEMA.decisionCount.description,
+    unit: METRICS_SCHEMA.decisionCount.unit,
+  });
+  counter.add(1, {
+    'agentguard.decision': decision,
+    'agentguard.risk_level': riskLevel,
+    'agentguard.tool_name': toolName,
+    'agentguard.platform': platform,
+  });
+
+  const histogram = meter.createHistogram(METRICS_SCHEMA.riskScore.name, {
+    description: METRICS_SCHEMA.riskScore.description,
+    unit: METRICS_SCHEMA.riskScore.unit,
+  });
+  histogram.record(riskScore, {
+    'agentguard.tool_name': toolName,
+    'agentguard.platform': platform,
+  });
+
   await provider.forceFlush();
 }
 

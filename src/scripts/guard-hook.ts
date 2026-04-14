@@ -18,6 +18,8 @@ export {};
 
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { loadCollectorConfig } from './lib/config-loader.js';
+import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 
 // ---------------------------------------------------------------------------
 // Types (local declarations to avoid cross-project imports)
@@ -26,6 +28,8 @@ import { fileURLToPath } from 'node:url';
 interface HookOutput {
   decision: string;
   reason?: string;
+  riskLevel?: string;
+  riskScore?: number;
 }
 
 interface AgentGuardModule {
@@ -116,6 +120,21 @@ async function main(): Promise<void> {
   const ffwdAgentGuard = createAgentGuard();
 
   const result = await evaluateHook(adapter, input, { config, ffwdAgentGuard });
+
+  // Record guard decision metrics
+  const collectorConfig = loadCollectorConfig();
+  const meterProvider = createMeterProvider(collectorConfig);
+  if (meterProvider) {
+    const toolName = (input as Record<string, unknown>).tool_name as string || '';
+    await recordGuardDecision(
+      meterProvider,
+      result.decision,
+      result.riskLevel || 'low',
+      result.riskScore ?? 0,
+      toolName,
+      'claude-code',
+    );
+  }
 
   if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked');
   else if (result.decision === 'ask') outputAsk(result.reason || 'Action requires confirmation');

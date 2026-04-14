@@ -48,12 +48,14 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 |--------|------|--------|
 | `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
 | `agentguard.turn.count` | Counter | `platform` |
+| `agentguard.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
+| `agentguard.risk.score` | Histogram | `tool_name`, `platform` |
 
 **Traces** — one trace per conversation turn:
 
 | Span | Trigger | Key Attributes |
 |------|---------|----------------|
-| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd` |
+| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd`, `input_tokens`, `output_tokens`, `cache_hit_rate` |
 | `tool:<name>` | `PreToolUse` → `PostToolUse` | `tool_name`, `tool_summary` |
 | `task:execute` | `TaskCreated` → `TaskCompleted` | `task_id`, `task_summary` |
 

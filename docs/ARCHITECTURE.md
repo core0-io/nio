@@ -459,6 +459,102 @@ class ExternalAnalyser {
 
 ---
 
+## Collector: Telemetry Pipeline
+
+Captures agent activity as **OpenTelemetry** metrics and traces. Runs independently from the guard — never influences allow/deny decisions.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│ Claude Code (cross-process)                                         │
+│                                                                     │
+│   collector-hook.ts (async, runs per hook event)                    │
+│     ├─ MeterProvider  → OTLP metrics export                        │
+│     └─ TracerProvider → OTLP traces export                         │
+│         └─ State file (collector-state.json) for cross-process      │
+│            span correlation (PreToolUse ↔ PostToolUse)              │
+│                                                                     │
+│   guard-hook.ts (sync, runs per PreToolUse)                         │
+│     └─ MeterProvider  → guard decision + risk score metrics         │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ OpenClaw (in-process)                                               │
+│                                                                     │
+│   openclaw-plugin.ts                                                │
+│     ├─ MeterProvider  → all metrics (tool use + turn + decision)    │
+│     └─ TracerProvider → all traces (in-memory span tracking)        │
+│         └─ No state file needed — same process across events        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Metrics
+
+| Metric | Type | Labels |
+|--------|------|--------|
+| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
+| `agentguard.turn.count` | Counter | `platform` |
+| `agentguard.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
+| `agentguard.risk.score` | Histogram | `tool_name`, `platform` |
+
+- `decision.count` — recorded by guard-hook (Claude Code) / openclaw-plugin after each `evaluateHook()` call
+- `risk.score` — histogram of 0–1 risk scores, enables avg/p50/p99 queries
+- `tool_use.count` and `turn.count` — recorded by collector-hook / openclaw-plugin on hook events
+
+### Traces
+
+One trace per conversation turn, with child spans per tool call / task:
+
+```
+Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
+  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
+  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
+  └─ Span: task:execute    (TaskCreated → TaskCompleted)
+```
+
+**Turn span attributes:**
+
+| Attribute | Source |
+|-----------|--------|
+| `agentguard.session_id` | Hook stdin `session_id` |
+| `agentguard.turn_number` | Auto-incrementing per session |
+| `agentguard.platform` | `claude-code` or `openclaw` |
+| `agentguard.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
+| `agentguard.turn.input_tokens` | Sum of API call input tokens for this turn |
+| `agentguard.turn.output_tokens` | Sum of API call output tokens for this turn |
+| `agentguard.turn.cache_creation_input_tokens` | Tokens written to prompt cache |
+| `agentguard.turn.cache_read_input_tokens` | Tokens read from prompt cache |
+| `agentguard.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
+
+**Token usage collection** differs by platform:
+- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start
+- **OpenClaw**: `llm_output` event passes `usage` directly in event payload, accumulated in-memory across calls
+
+**Tool span attributes:** `tool_name`, `tool_summary`, `tool.input`, `tool.output`, `tool.error`, `tool.call_id`
+
+**Task span attributes:** `task_id`, `task_summary`
+
+### Cross-Process State (Claude Code only)
+
+Claude Code hooks run as separate processes per event. To correlate spans:
+
+1. `PreToolUse` → writes span start time + span ID to `collector-state.json`
+2. `PostToolUse` → reads pending span, emits with correct start/end time
+3. `Stop` → emits turn root span, clears state
+
+State file location: derived from `collector.log` config path or `~/.ffwd-agent-guard/`.
+
+### Local JSONL Log
+
+Besides OTEL export, every hook event is appended to a local JSONL file (`collector.log` config):
+
+```jsonl
+{"timestamp":"...","platform":"claude-code","event":"PreToolUse","tool_name":"Bash","session_id":"...","tool_summary":"npm test"}
+```
+
+---
+
 ## Shared Infrastructure
 
 ### Detection Data (`src/core/shared/detection-data.ts`)

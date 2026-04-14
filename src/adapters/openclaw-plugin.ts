@@ -20,7 +20,7 @@ import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
-import { createMeterProvider, recordToolUse, recordTurn } from '../scripts/lib/metrics-collector.js';
+import { createMeterProvider, recordToolUse, recordTurn, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
 import { trace, ROOT_CONTEXT, SpanStatusCode, type Span, type Context } from '@opentelemetry/api';
 
 // ---------------------------------------------------------------------------
@@ -223,6 +223,18 @@ export function registerOpenClawPlugin(
         config,
         ffwdAgentGuard: getFfwdAgentGuard(),
       });
+
+      // Record guard decision metrics
+      if (meterProvider) {
+        recordGuardDecision(
+          meterProvider,
+          result.decision,
+          result.riskLevel || 'low',
+          result.riskScore ?? 0,
+          toolName,
+          'openclaw',
+        ).catch(() => {});
+      }
 
       if (result.decision === 'deny') {
         return {
