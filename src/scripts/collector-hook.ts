@@ -268,7 +268,7 @@ async function main(): Promise<void> {
         const state = ensureTurn(config, sessionId);
         // Only emit turn span if there was actually an active turn
         if (state.turn_trace_id) {
-          await endTurn(config, tracerProvider, state, platform, cwd);
+          await endTurn(config, tracerProvider, state, platform, cwd, transcriptPath);
         }
       }
 

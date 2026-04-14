@@ -29,10 +29,18 @@ import { trace, ROOT_CONTEXT, SpanStatusCode, type Span, type Context } from '@o
 // state machine that Claude Code's cross-process hooks require.
 // ---------------------------------------------------------------------------
 
+interface TurnTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
 interface ActiveTurn {
   span: Span;
   ctx: Context;
   turnNumber: number;
+  usage: TurnTokenUsage;
 }
 
 const turnCounters = new Map<string, number>();
@@ -59,7 +67,7 @@ function getOrStartTurn(sessionId: string, platform = 'openclaw', cwd: string | 
     ROOT_CONTEXT,
   );
   const ctx = trace.setSpan(ROOT_CONTEXT, span);
-  t = { span, ctx, turnNumber: n };
+  t = { span, ctx, turnNumber: n, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
   activeTurns.set(sessionId, t);
   return t;
 }
@@ -74,6 +82,17 @@ function finishTurn(sessionId: string): void {
   for (const [k, s] of activeTaskSpans) {
     if (k.startsWith(`${sessionId}:`)) { s.end(); activeTaskSpans.delete(k); }
   }
+
+  // Attach token usage to turn span
+  const u = t.usage;
+  t.span.setAttribute('agentguard.turn.input_tokens', u.input);
+  t.span.setAttribute('agentguard.turn.output_tokens', u.output);
+  t.span.setAttribute('agentguard.turn.cache_creation_input_tokens', u.cacheWrite);
+  t.span.setAttribute('agentguard.turn.cache_read_input_tokens', u.cacheRead);
+  const totalInput = u.input + u.cacheWrite + u.cacheRead;
+  const cacheHitRate = totalInput > 0 ? Math.round((u.cacheRead / totalInput) * 1000) / 1000 : 0;
+  t.span.setAttribute('agentguard.turn.cache_hit_rate', cacheHitRate);
+
   t.span.end();
   activeTurns.delete(sessionId);
 }
@@ -346,12 +365,22 @@ export function registerOpenClawPlugin(
     } catch { /* non-critical */ }
   });
 
-  // llm_output → capture assistant reply onto turn root span
+  // llm_output → accumulate token usage + capture assistant reply
   api.on('llm_output', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { assistantTexts?: string[] };
+      const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+
+      // Accumulate token usage
+      if (e.usage) {
+        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
+        turn.usage.input += (e.usage['input'] as number) || 0;
+        turn.usage.output += (e.usage['output'] as number) || 0;
+        turn.usage.cacheRead += (e.usage['cacheRead'] as number) || 0;
+        turn.usage.cacheWrite += (e.usage['cacheWrite'] as number) || 0;
+      }
+
       if (tracerProvider && e.assistantTexts?.length) {
         const turn = activeTurns.get(sessionId);
         if (turn) turn.span.setAttribute('agentguard.turn.assistant_reply', redactAndTruncate(e.assistantTexts.join('\n')));

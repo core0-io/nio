@@ -376,6 +376,80 @@ export async function recordPostToolUse(
 }
 
 // ---------------------------------------------------------------------------
+// Transcript token usage
+// ---------------------------------------------------------------------------
+
+export interface TurnUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+  cache_hit_rate: number;
+}
+
+/**
+ * Parse the transcript JSONL and sum token usage for the current turn.
+ *
+ * Reads the file from the end backwards (last 256 KB) to limit I/O.
+ * Only extracts `message.usage` numeric fields — never touches message content.
+ */
+export function parseTranscriptUsage(
+  transcriptPath: string,
+  turnStartMs: number,
+): TurnUsage | null {
+  try {
+    const content = readFileSync(transcriptPath, 'utf-8');
+    const lines = content.split('\n').filter(Boolean);
+
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let cacheCreation = 0;
+    let cacheRead = 0;
+
+    for (const line of lines) {
+      let entry: Record<string, unknown>;
+      try {
+        entry = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      // Only look at assistant messages with usage
+      if (entry['type'] !== 'assistant') continue;
+      const message = entry['message'] as Record<string, unknown> | undefined;
+      if (!message) continue;
+
+      // Skip entries before this turn started
+      const timestamp = entry['timestamp'] as string | undefined;
+      if (timestamp && new Date(timestamp).getTime() < turnStartMs) continue;
+
+      const usage = message['usage'] as Record<string, unknown> | undefined;
+      if (!usage) continue;
+
+      inputTokens += (usage['input_tokens'] as number) || 0;
+      outputTokens += (usage['output_tokens'] as number) || 0;
+      cacheCreation += (usage['cache_creation_input_tokens'] as number) || 0;
+      cacheRead += (usage['cache_read_input_tokens'] as number) || 0;
+    }
+
+    if (inputTokens === 0 && outputTokens === 0) return null;
+
+    const totalInput = inputTokens + cacheCreation + cacheRead;
+    const cacheHitRate = totalInput > 0 ? cacheRead / totalInput : 0;
+
+    return {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      cache_creation_input_tokens: cacheCreation,
+      cache_read_input_tokens: cacheRead,
+      cache_hit_rate: Math.round(cacheHitRate * 1000) / 1000,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Turn end
 // ---------------------------------------------------------------------------
 
@@ -389,6 +463,7 @@ export async function endTurn(
   _state: CollectorState,
   platform: string,
   cwd: string | null,
+  transcriptPath?: string | null,
 ): Promise<void> {
   // Reload state from disk to serialize against concurrent endTurn calls —
   // if turn_trace_id has already been cleared by a sibling handler, bail.
@@ -422,6 +497,18 @@ export async function endTurn(
     },
     rootCtx,
   );
+  // Attach token usage from transcript
+  if (transcriptPath) {
+    const usage = parseTranscriptUsage(transcriptPath, state.turn_start_ms);
+    if (usage) {
+      span.setAttribute('agentguard.turn.input_tokens', usage.input_tokens);
+      span.setAttribute('agentguard.turn.output_tokens', usage.output_tokens);
+      span.setAttribute('agentguard.turn.cache_creation_input_tokens', usage.cache_creation_input_tokens);
+      span.setAttribute('agentguard.turn.cache_read_input_tokens', usage.cache_read_input_tokens);
+      span.setAttribute('agentguard.turn.cache_hit_rate', usage.cache_hit_rate);
+    }
+  }
+
   // Force the turn span's own spanId to match the synthetic parent spanId that
   // child tool/task spans use (traceId.slice(0,16)). This makes the turn span
   // the actual parent of its children in the trace tree instead of a sibling
