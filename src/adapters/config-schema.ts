@@ -25,7 +25,7 @@ const RulesPatternsSchema = z.object({
 export type RulesPatterns = z.infer<typeof RulesPatternsSchema>;
 
 export const LLMConfigSchema = z.object({
-  /** Anthropic API key for the LLM analyzer. */
+  /** Anthropic API key for the LLM analyser. */
   api_key: z.string().optional(),
   /** Model identifier (e.g. "claude-sonnet-4-20250514"). */
   model: z.string().optional(),
@@ -54,7 +54,7 @@ export const GuardConfigSchema = z.object({
   weights: z.object({
     runtime: z.number().optional(),
     static: z.number().optional(),
-    behavioral: z.number().optional(),
+    behavioural: z.number().optional(),
     llm: z.number().optional(),
     external: z.number().optional(),
   }).optional(),

@@ -6,7 +6,7 @@
 export {
   type Severity,
   type ThreatCategory,
-  type AnalyzerName,
+  type AnalyserName,
   type Finding,
   type FindingLocation,
   type ScanMetadata,
@@ -21,21 +21,21 @@ export {
   generateSummary,
 } from './models.js';
 
-// Base analyzer
+// Base analyser
 export {
-  BaseAnalyzer,
+  BaseAnalyser,
   type AnalysisContext,
-} from './analyzers/base.js';
+} from './analysers/base.js';
 
-// Concrete analyzers
-export { StaticAnalyzer } from './analyzers/static/index.js';
-export { BehavioralAnalyzer } from './analyzers/behavioral/index.js';
-export { LLMAnalyzer } from './analyzers/llm/index.js';
+// Concrete analysers
+export { StaticAnalyser } from './analysers/static/index.js';
+export { BehaviouralAnalyser } from './analysers/behavioural/index.js';
+export { LLMAnalyser } from './analysers/llm/index.js';
 
 // Scan policy
 export {
   type ScanPolicy,
-  type AnalyzerFlags,
+  type AnalyserFlags,
   type RuleScoping,
   type SeverityOverride,
   POLICY_PRESETS,
@@ -57,11 +57,11 @@ export {
   type OrchestratorOptions,
 } from './scanner.js';
 
-// Analyzer factory
+// Analyser factory
 export {
-  createAnalyzers,
-  type AnalyzerFactoryOptions,
-} from './analyzer-factory.js';
+  createAnalysers,
+  type AnalyserFactoryOptions,
+} from './analyser-factory.js';
 
 // Deduplication
 export { deduplicateFindings } from './deduplicator.js';
@@ -72,7 +72,7 @@ export { ScanCache, type ScanCacheEntry } from './scan-cache.js';
 // File classification
 export {
   classifyFile,
-  isASTAnalyzable,
+  isASTAnalysable,
   groupByCategory,
   type FileCategory,
 } from './file-classifier.js';

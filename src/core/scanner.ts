@@ -3,18 +3,18 @@
  *
  * Executes the two-phase analysis pipeline:
  *
- *   Phase 1 (parallel):   Static + Behavioral analyzers
- *   Phase 2 (sequential): LLM analyzer (enriched with Phase 1 findings)
+ *   Phase 1 (parallel):   Static + Behavioural analysers
+ *   Phase 2 (sequential): LLM analyser (enriched with Phase 1 findings)
  *   Post-processing:      Deduplication, severity filtering, sorting
  *
  * Returns an ExtendedScanResult that includes both structured `findings`
  * and the legacy `evidence` / `risk_tags` for backward compatibility.
  */
 
-import type { AnalysisContext } from './analyzers/base.js';
+import type { AnalysisContext } from './analysers/base.js';
 import type { ScanPolicy } from './scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
-import type { Finding, ExtendedScanResult, AnalyzerName } from './models.js';
+import type { Finding, ExtendedScanResult, AnalyserName } from './models.js';
 import {
   aggregateRiskLevel,
   findingsToLegacy,
@@ -24,13 +24,13 @@ import {
 } from './models.js';
 import type { Severity } from './models.js';
 import { deduplicateFindings } from './deduplicator.js';
-import { createAnalyzers, type AnalyzerFactoryOptions } from './analyzer-factory.js';
+import { createAnalysers, type AnalyserFactoryOptions } from './analyser-factory.js';
 import { defaultPolicy } from './scan-policy.js';
 import { ScanCache } from './scan-cache.js';
 
 // ── Orchestrator ─────────────────────────────────────────────────────────
 
-export interface OrchestratorOptions extends AnalyzerFactoryOptions {
+export interface OrchestratorOptions extends AnalyserFactoryOptions {
   policy?: ScanPolicy;
   /** Optional scan cache instance for persisting results */
   scanCache?: ScanCache;
@@ -38,7 +38,7 @@ export interface OrchestratorOptions extends AnalyzerFactoryOptions {
 
 export class ScanOrchestrator {
   private policy: ScanPolicy;
-  private factoryOpts: AnalyzerFactoryOptions;
+  private factoryOpts: AnalyserFactoryOptions;
   private scanCache?: ScanCache;
 
   constructor(opts?: OrchestratorOptions) {
@@ -66,10 +66,10 @@ export class ScanOrchestrator {
     artifactHash?: string,
   ): Promise<ExtendedScanResult> {
     const startTime = Date.now();
-    const analyzersUsed: Set<AnalyzerName> = new Set();
+    const analysersUsed: Set<AnalyserName> = new Set();
 
-    // Create analyzers based on policy
-    const { phase1, phase2 } = createAnalyzers(this.policy, this.factoryOpts);
+    // Create analysers based on policy
+    const { phase1, phase2 } = createAnalysers(this.policy, this.factoryOpts);
 
     // Build Phase 1 context (no prior findings)
     const ctx: AnalysisContext = {
@@ -78,27 +78,27 @@ export class ScanOrchestrator {
       policy: this.policy,
     };
 
-    // ── Phase 1: Run analyzers in parallel ──────────────────────────
+    // ── Phase 1: Run analysers in parallel ──────────────────────────
     const phase1Results = await Promise.all(
-      phase1.map(async (analyzer) => {
-        const findings = await analyzer.analyze(ctx);
-        analyzersUsed.add(analyzer.name);
+      phase1.map(async (analyser) => {
+        const findings = await analyser.analyze(ctx);
+        analysersUsed.add(analyser.name);
         return findings;
       }),
     );
 
     let allFindings: Finding[] = phase1Results.flat();
 
-    // ── Phase 2: Run enriched analyzers sequentially ────────────────
+    // ── Phase 2: Run enriched analysers sequentially ────────────────
     if (phase2.length > 0 && allFindings.length > 0) {
       const phase2Ctx: AnalysisContext = {
         ...ctx,
         priorFindings: allFindings,
       };
 
-      for (const analyzer of phase2) {
-        const findings = await analyzer.analyze(phase2Ctx);
-        analyzersUsed.add(analyzer.name);
+      for (const analyser of phase2) {
+        const findings = await analyser.analyze(phase2Ctx);
+        analysersUsed.add(analyser.name);
         allFindings = [...allFindings, ...findings];
       }
     }
@@ -145,7 +145,7 @@ export class ScanOrchestrator {
         files_scanned: files.length,
         scan_duration_ms: Date.now() - startTime,
         scan_time: scanTime,
-        analyzers_used: Array.from(analyzersUsed),
+        analysers_used: Array.from(analysersUsed),
       },
     };
   }

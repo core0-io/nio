@@ -8,7 +8,7 @@
  *   - Call expressions that match security-relevant sinks
  *   - String literals that look like URLs, IPs, or paths
  *
- * Implements LanguageExtractor so the BehavioralAnalyzer can dispatch by extension.
+ * Implements LanguageExtractor so the BehaviouralAnalyser can dispatch by extension.
  */
 
 import { parse, type ParserPlugin } from '@babel/parser';

@@ -1,14 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { LLMAnalyzer } from '../core/analyzers/llm/index.js';
+import { LLMAnalyser } from '../core/analysers/llm/index.js';
 import { defaultPolicy, mergePolicy } from '../core/scan-policy.js';
 import {
   buildAnalysisPrompt,
   generateDelimiter,
   selectFilesForLLM,
   estimateTokens,
-} from '../core/analyzers/llm/prompts.js';
-import { mapCategory, mapSeverity } from '../core/analyzers/llm/taxonomy.js';
+} from '../core/analysers/llm/prompts.js';
+import { mapCategory, mapSeverity } from '../core/analysers/llm/taxonomy.js';
 import type { Finding } from '../core/models.js';
 
 // ── Taxonomy Tests ───────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ describe('LLM Prompts', () => {
         title: 'Command Execution',
         description: 'exec call detected',
         location: { file: 'test.ts', line: 1 },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 1.0,
       };
       const prompt = buildAnalysisPrompt({
@@ -147,7 +147,7 @@ describe('LLM Prompts', () => {
         title: 'Test',
         description: 'Test',
         location: { file: 'dirty.ts', line: 1 },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 1.0,
       }];
       const selected = selectFilesForLLM(files, findings, 10000);
@@ -170,37 +170,37 @@ describe('LLM Prompts', () => {
   });
 });
 
-// ── LLMAnalyzer Tests ────────────────────────────────────────────────────
+// ── LLMAnalyser Tests ────────────────────────────────────────────────────
 
-describe('LLMAnalyzer', () => {
+describe('LLMAnalyser', () => {
   describe('isEnabled', () => {
     it('should be disabled without API key', () => {
-      const analyzer = new LLMAnalyzer({ apiKey: undefined });
+      const analyser = new LLMAnalyser({ apiKey: undefined });
       const policy = mergePolicy(defaultPolicy(), {
-        analyzers: { static: true, behavioral: true, llm: true },
+        analysers: { static: true, behavioural: true, llm: true },
       });
-      assert.equal(analyzer.isEnabled(policy), false);
+      assert.equal(analyser.isEnabled(policy), false);
     });
 
-    it('should be disabled when policy.analyzers.llm is false', () => {
-      const analyzer = new LLMAnalyzer({ apiKey: 'test-key' });
+    it('should be disabled when policy.analysers.llm is false', () => {
+      const analyser = new LLMAnalyser({ apiKey: 'test-key' });
       const policy = defaultPolicy(); // llm: false by default
-      assert.equal(analyzer.isEnabled(policy), false);
+      assert.equal(analyser.isEnabled(policy), false);
     });
 
     it('should be enabled with API key and policy', () => {
-      const analyzer = new LLMAnalyzer({ apiKey: 'test-key' });
+      const analyser = new LLMAnalyser({ apiKey: 'test-key' });
       const policy = mergePolicy(defaultPolicy(), {
-        analyzers: { static: true, behavioral: true, llm: true },
+        analysers: { static: true, behavioural: true, llm: true },
       });
-      assert.equal(analyzer.isEnabled(policy), true);
+      assert.equal(analyser.isEnabled(policy), true);
     });
   });
 
   it('should return empty findings without API key', async () => {
-    const analyzer = new LLMAnalyzer({ apiKey: undefined });
+    const analyser = new LLMAnalyser({ apiKey: undefined });
     const policy = defaultPolicy();
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/test',
       files: [{ path: '/test/a.ts', relativePath: 'a.ts', content: 'code', extension: '.ts' }],
       policy,
@@ -209,8 +209,8 @@ describe('LLMAnalyzer', () => {
   });
 
   it('should be phase 2', () => {
-    const analyzer = new LLMAnalyzer();
-    assert.equal(analyzer.phase, 2);
-    assert.equal(analyzer.name, 'llm');
+    const analyser = new LLMAnalyser();
+    assert.equal(analyser.phase, 2);
+    assert.equal(analyser.name, 'llm');
   });
 });

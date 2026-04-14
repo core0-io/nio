@@ -1,9 +1,9 @@
 /**
- * Static Analyzer — Phase 1 deterministic detection engine.
+ * Static Analyser — Phase 1 deterministic detection engine.
  *
  * Runs multiple detection passes over collected files using regex-based
  * rules from the RuleRegistry.  This is the TypeScript equivalent of
- * Cisco skill-scanner's StaticAnalyzer with its 14-pass architecture,
+ * Cisco skill-scanner's StaticAnalyser with its 14-pass architecture,
  * adapted to our rule set.
  *
  * Detection passes:
@@ -12,11 +12,11 @@
  *   3. Markdown extraction — only scan fenced code blocks in .md files
  *
  * The actual matching logic lives in `detection-engine.ts` so it can be
- * reused by the RuntimeAnalyzer (dynamic guard).
+ * reused by the RuntimeAnalyser (dynamic guard).
  */
 
-import { BaseAnalyzer, type AnalysisContext } from '../base.js';
-import type { Finding, AnalyzerName } from '../../models.js';
+import { BaseAnalyser, type AnalysisContext } from '../base.js';
+import type { Finding, AnalyserName } from '../../models.js';
 import { RuleRegistry, ruleRegistry } from '../../rule-registry.js';
 import {
   runRules,
@@ -24,10 +24,10 @@ import {
   extractMarkdownCodeBlocks,
 } from '../../detection-engine.js';
 
-// ── Static Analyzer ──────────────────────────────────────────────────────
+// ── Static Analyser ──────────────────────────────────────────────────────
 
-export class StaticAnalyzer extends BaseAnalyzer {
-  readonly name: AnalyzerName = 'static';
+export class StaticAnalyser extends BaseAnalyser {
+  readonly name: AnalyserName = 'static';
   readonly phase: 1 = 1;
 
   private registry: RuleRegistry;

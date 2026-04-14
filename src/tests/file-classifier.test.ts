@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyFile, isASTAnalyzable, groupByCategory } from '../core/file-classifier.js';
+import { classifyFile, isASTAnalysable, groupByCategory } from '../core/file-classifier.js';
 import type { FileInfo } from '../scanner/file-walker.js';
 
 function makeFile(relativePath: string): FileInfo {
@@ -52,17 +52,17 @@ describe('File Classifier', () => {
     });
   });
 
-  describe('isASTAnalyzable', () => {
+  describe('isASTAnalysable', () => {
     it('should return true for JS/TS files', () => {
-      assert.ok(isASTAnalyzable(makeFile('app.ts')));
-      assert.ok(isASTAnalyzable(makeFile('app.js')));
-      assert.ok(isASTAnalyzable(makeFile('app.tsx')));
+      assert.ok(isASTAnalysable(makeFile('app.ts')));
+      assert.ok(isASTAnalysable(makeFile('app.js')));
+      assert.ok(isASTAnalysable(makeFile('app.tsx')));
     });
 
     it('should return false for non-JS files', () => {
-      assert.ok(!isASTAnalyzable(makeFile('app.py')));
-      assert.ok(!isASTAnalyzable(makeFile('README.md')));
-      assert.ok(!isASTAnalyzable(makeFile('config.json')));
+      assert.ok(!isASTAnalysable(makeFile('app.py')));
+      assert.ok(!isASTAnalysable(makeFile('README.md')));
+      assert.ok(!isASTAnalysable(makeFile('config.json')));
     });
   });
 

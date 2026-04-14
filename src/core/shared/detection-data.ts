@@ -1,6 +1,6 @@
 /**
  * Shared detection data — single source of truth for both the static scan
- * engine and the dynamic guard (RuntimeAnalyzer).
+ * engine and the dynamic guard (RuntimeAnalyser).
  *
  * Consolidates constants that were previously duplicated across:
  *   - src/action/detectors/network.ts     (WEBHOOK_DOMAINS, HIGH_RISK_TLDS)

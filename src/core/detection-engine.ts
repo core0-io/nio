@@ -1,14 +1,14 @@
 /**
  * Detection Engine — shared pure functions for regex-based pattern matching.
  *
- * Extracted from StaticAnalyzer.runPatternPass() so both the static scan
- * pipeline and the dynamic guard (RuntimeAnalyzer) can reuse the same logic.
+ * Extracted from StaticAnalyser.runPatternPass() so both the static scan
+ * pipeline and the dynamic guard (RuntimeAnalyser) can reuse the same logic.
  *
  * Pure functions — no class state, no side effects.
  */
 
 import type { ScanRule, RiskTag } from '../types/scanner.js';
-import type { Finding, AnalyzerName } from './models.js';
+import type { Finding, AnalyserName } from './models.js';
 import { findingId, riskTagToCategory } from './models.js';
 import { RuleRegistry } from './rule-registry.js';
 
@@ -17,14 +17,14 @@ import { RuleRegistry } from './rule-registry.js';
 /**
  * Run regex rules against content and return findings.
  *
- * This is the core detection loop shared by StaticAnalyzer (scan) and
- * RuntimeAnalyzer (guard). Each rule's patterns are tested line-by-line.
+ * This is the core detection loop shared by StaticAnalyser (scan) and
+ * RuntimeAnalyser (guard). Each rule's patterns are tested line-by-line.
  */
 export function runRules(
   content: string,
   rules: ScanRule[],
   filePath: string,
-  analyzer: AnalyzerName,
+  analyser: AnalyserName,
   registry?: RuleRegistry,
   context?: string,
 ): Finding[] {
@@ -60,7 +60,7 @@ export function runRules(
             snippet: match[0].slice(0, 200),
           },
           remediation: meta?.remediation,
-          analyzer,
+          analyser,
           confidence: 1.0, // regex matches are deterministic
           metadata: context ? { context } : undefined,
         });
@@ -104,7 +104,7 @@ export function runBase64Pass(
   content: string,
   rules: ScanRule[],
   filePath: string,
-  analyzer: AnalyzerName,
+  analyser: AnalyserName,
   registry?: RuleRegistry,
 ): Finding[] {
   const decodedPayloads = extractAndDecodeBase64(content);
@@ -112,7 +112,7 @@ export function runBase64Pass(
 
   const findings: Finding[] = [];
   for (const decoded of decodedPayloads) {
-    findings.push(...runRules(decoded, rules, filePath, analyzer, registry, 'decoded_from:base64'));
+    findings.push(...runRules(decoded, rules, filePath, analyser, registry, 'decoded_from:base64'));
   }
   return findings;
 }

@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { StaticAnalyzer, extractMarkdownCodeBlocks, extractAndDecodeBase64 } from '../core/analyzers/static/index.js';
+import { StaticAnalyser, extractMarkdownCodeBlocks, extractAndDecodeBase64 } from '../core/analysers/static/index.js';
 import { defaultPolicy, mergePolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
 
@@ -16,16 +16,16 @@ function makeFile(relativePath: string, content: string): FileInfo {
   };
 }
 
-const analyzer = new StaticAnalyzer();
+const analyser = new StaticAnalyser();
 const policy = defaultPolicy();
 
 async function analyze(files: FileInfo[]) {
-  return analyzer.analyze({ rootDir: '/scan-root', files, policy });
+  return analyser.analyze({ rootDir: '/scan-root', files, policy });
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
-describe('StaticAnalyzer', () => {
+describe('StaticAnalyser', () => {
   describe('basic detection', () => {
     it('should detect child_process require', async () => {
       const files = [makeFile('evil.ts', 'const cp = require("child_process");')];
@@ -94,7 +94,7 @@ describe('StaticAnalyzer', () => {
       assert.ok(f.location, 'should have location');
       assert.ok(f.location.file, 'should have file');
       assert.ok(f.location.line > 0, 'should have line number');
-      assert.equal(f.analyzer, 'static');
+      assert.equal(f.analyser, 'static');
       assert.equal(f.confidence, 1.0);
     });
 
@@ -141,7 +141,7 @@ exec("this should match");
         rules: { disabled_rules: ['SHELL_EXEC'], severity_overrides: [] },
       });
       const files = [makeFile('evil.ts', 'const cp = require("child_process");')];
-      const findings = await analyzer.analyze({
+      const findings = await analyser.analyze({
         rootDir: '/scan-root',
         files,
         policy: customPolicy,
@@ -157,7 +157,7 @@ exec("this should match");
         },
       });
       const files = [makeFile('evil.ts', 'exec("ls");')];
-      const findings = await analyzer.analyze({
+      const findings = await analyser.analyze({
         rootDir: '/scan-root',
         files,
         policy: customPolicy,

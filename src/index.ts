@@ -2,8 +2,8 @@
  * FFWD AgentGuard — Security guard for AI agents
  *
  * Two-pipeline security framework:
- * - Static Scan: On-demand code analysis (ScanOrchestrator → Static + Behavioral + LLM)
- * - Dynamic Guard: Real-time hook protection (RuntimeAnalyzer → 6-phase pipeline)
+ * - Static Scan: On-demand code analysis (ScanOrchestrator → Static + Behavioural + LLM)
+ * - Dynamic Guard: Real-time hook protection (RuntimeAnalyser → 6-phase pipeline)
  */
 
 // Export types
@@ -15,11 +15,11 @@ export * from './core/index.js';
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
 
-// Export RuntimeAnalyzer (guard pipeline)
-export { RuntimeAnalyzer, type RuntimeDecision, type RuntimeAnalyzerOptions } from './core/analyzers/runtime/index.js';
+// Export RuntimeAnalyser (guard pipeline)
+export { RuntimeAnalyser, type RuntimeDecision, type RuntimeAnalyserOptions } from './core/analysers/runtime/index.js';
 
-// Export ExternalAnalyzer (pluggable HTTP scorer for both pipelines)
-export { ExternalAnalyzer, type ExternalAnalyzerOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analyzers/external/index.js';
+// Export ExternalAnalyser (pluggable HTTP scorer for both pipelines)
+export { ExternalAnalyser, type ExternalAnalyserOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analysers/external/index.js';
 
 // Export policy presets
 export {
@@ -63,8 +63,8 @@ export {
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
 import { loadConfig } from './adapters/index.js';
-import { RuntimeAnalyzer } from './core/analyzers/runtime/index.js';
-import type { ProtectionLevel } from './core/analyzers/runtime/decision.js';
+import { RuntimeAnalyser } from './core/analysers/runtime/index.js';
+import type { ProtectionLevel } from './core/analysers/runtime/decision.js';
 
 /**
  * Create a complete AgentGuard instance with all modules
@@ -78,7 +78,7 @@ export function createAgentGuard(options?: {
     extraPatterns: config.rules,
   });
 
-  const runtimeAnalyzer = new RuntimeAnalyzer({
+  const runtimeAnalyser = new RuntimeAnalyser({
     level: (config.level || 'balanced') as ProtectionLevel,
     weights: config.guard?.weights,
     extraAllowlist: config.guard?.extra_allowlist,
@@ -91,7 +91,7 @@ export function createAgentGuard(options?: {
 
   return {
     scanner,
-    runtimeAnalyzer,
+    runtimeAnalyser,
   };
 }
 

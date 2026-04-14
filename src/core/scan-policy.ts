@@ -1,5 +1,5 @@
 /**
- * Scan policy — controls which analyzers run, severity thresholds, and
+ * Scan policy — controls which analysers run, severity thresholds, and
  * rule-level overrides.
  *
  * Three built-in presets: strict, balanced, permissive.
@@ -10,12 +10,12 @@ import type { Severity } from './models.js';
 
 // ── Policy types ─────────────────────────────────────────────────────────
 
-export interface AnalyzerFlags {
-  /** Enable/disable the static (regex) analyzer. Default: true. */
+export interface AnalyserFlags {
+  /** Enable/disable the static (regex) analyser. Default: true. */
   static: boolean;
-  /** Enable/disable the behavioral (AST + dataflow) analyzer. Default: true. */
-  behavioral: boolean;
-  /** Enable/disable the LLM (semantic) analyzer. Default: false. */
+  /** Enable/disable the behavioural (AST + dataflow) analyser. Default: true. */
+  behavioural: boolean;
+  /** Enable/disable the LLM (semantic) analyser. Default: false. */
   llm: boolean;
 }
 
@@ -34,20 +34,20 @@ export interface RuleScoping {
 }
 
 export interface ScanPolicy {
-  /** Which analyzers are active. */
-  analyzers: AnalyzerFlags;
+  /** Which analysers are active. */
+  analysers: AnalyserFlags;
   /** Minimum severity to include in results (findings below are dropped). */
   min_severity: Severity;
   /** Rule-level knobs. */
   rules: RuleScoping;
-  /** Extra regex patterns injected into static analyzer rule modules. */
+  /** Extra regex patterns injected into static analyser rule modules. */
   extra_patterns: Partial<Record<string, string[]>>;
 }
 
 // ── Presets ──────────────────────────────────────────────────────────────
 
 const BASE: ScanPolicy = {
-  analyzers: { static: true, behavioral: true, llm: false },
+  analysers: { static: true, behavioural: true, llm: false },
   min_severity: 'low',
   rules: { disabled_rules: [], severity_overrides: [] },
   extra_patterns: {},
@@ -56,7 +56,7 @@ const BASE: ScanPolicy = {
 export const POLICY_PRESETS: Record<string, ScanPolicy> = {
   strict: {
     ...BASE,
-    analyzers: { static: true, behavioral: true, llm: true },
+    analysers: { static: true, behavioural: true, llm: true },
     min_severity: 'info',
   },
   balanced: {
@@ -64,7 +64,7 @@ export const POLICY_PRESETS: Record<string, ScanPolicy> = {
   },
   permissive: {
     ...BASE,
-    analyzers: { static: true, behavioral: false, llm: false },
+    analysers: { static: true, behavioural: false, llm: false },
     min_severity: 'medium',
   },
 };
@@ -89,7 +89,7 @@ export function mergePolicy(
   overrides: Partial<ScanPolicy>,
 ): ScanPolicy {
   return {
-    analyzers: { ...base.analyzers, ...overrides.analyzers },
+    analysers: { ...base.analysers, ...overrides.analysers },
     min_severity: overrides.min_severity ?? base.min_severity,
     rules: {
       disabled_rules: [

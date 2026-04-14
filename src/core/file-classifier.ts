@@ -2,7 +2,7 @@
  * File type classification.
  *
  * Categorizes files by extension and (optionally) content-based heuristics.
- * Used by the orchestrator to route files to the appropriate analyzers.
+ * Used by the orchestrator to route files to the appropriate analysers.
  */
 
 import type { FileInfo } from '../scanner/file-walker.js';
@@ -39,8 +39,8 @@ export function classifyFile(file: FileInfo): FileCategory {
   return EXTENSION_MAP[file.extension] ?? 'other';
 }
 
-/** Check if a file is analyzable by the behavioral (AST) analyzer. */
-export function isASTAnalyzable(file: FileInfo): boolean {
+/** Check if a file is analysable by the behavioural (AST) analyser. */
+export function isASTAnalysable(file: FileInfo): boolean {
   return classifyFile(file) === 'code_js';
 }
 

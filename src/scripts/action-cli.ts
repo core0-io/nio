@@ -3,7 +3,7 @@
 export {};
 
 /**
- * FFWD AgentGuard Action CLI — lightweight wrapper for RuntimeAnalyzer.
+ * FFWD AgentGuard Action CLI — lightweight wrapper for RuntimeAnalyser.
  *
  * Usage:
  *   node action-cli.js evaluate --type <action_type> [action-specific args]
@@ -55,7 +55,7 @@ interface ActionEnvelope {
 
 interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => {
-    runtimeAnalyzer: {
+    runtimeAnalyser: {
       evaluate: (envelope: ActionEnvelope) => Promise<unknown>;
     };
     [key: string]: unknown;
@@ -200,7 +200,7 @@ async function main(): Promise<void> {
     printUsage();
   }
 
-  const { runtimeAnalyzer } = createAgentGuard({});
+  const { runtimeAnalyser } = createAgentGuard({});
 
   // Support both "evaluate" and legacy "decide" command
   if (command !== 'evaluate' && command !== 'decide') {
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
   }
 
   const envelope = buildEnvelope();
-  const result = await runtimeAnalyzer.evaluate(envelope);
+  const result = await runtimeAnalyser.evaluate(envelope);
   console.log(JSON.stringify(result, null, 2));
 }
 

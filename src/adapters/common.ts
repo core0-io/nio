@@ -172,7 +172,7 @@ export function writeAuditLog(
       timestamp: new Date().toISOString(),
       platform: platform || 'unknown',
       tool_name: input.toolName,
-      tool_input_summary: summarizeToolInput(input),
+      tool_input_summary: summariseToolInput(input),
       decision: decision?.decision || 'allow',
       risk_level: rl,
       risk_tags: decision?.risk_tags || [],
@@ -187,7 +187,7 @@ export function writeAuditLog(
   }
 }
 
-function summarizeToolInput(input: HookInput): string {
+function summariseToolInput(input: HookInput): string {
   const toolInput = input.toolInput;
   if (typeof toolInput === 'object' && toolInput !== null) {
     const cmd = (toolInput as Record<string, unknown>).command;

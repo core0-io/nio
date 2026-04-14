@@ -1,5 +1,5 @@
 /**
- * Prompt templates for the LLM analyzer.
+ * Prompt templates for the LLM analyser.
  *
  * Uses random delimiters to protect against prompt injection from the
  * analyzed skill code — the same technique used by Cisco skill-scanner.
@@ -41,7 +41,7 @@ export function buildAnalysisPrompt(opts: {
         .join('\n')
     : 'None';
 
-  return `You are a security analyzer reviewing AI agent skill code for threats.
+  return `You are a security analyser reviewing AI agent skill code for threats.
 
 ## Instructions
 

@@ -7,7 +7,7 @@ Security and observability for AI coding agents. Provides code scanning, runtime
 This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ```
-/ffwd-agent-guard scan <path>          — Scan code for security risks (15 static + 7 behavioral rules)
+/ffwd-agent-guard scan <path>          — Scan code for security risks (15 static + 7 behavioural rules)
 /ffwd-agent-guard action <description> — Evaluate runtime action safety (allow/deny/confirm)
 /ffwd-agent-guard report               — View security event audit log
 /ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
@@ -18,7 +18,7 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 - `plugins/shared/` — Shared config files (config.default.yaml, config.schema.json)
 - `plugins/claude-code/` — Claude Code plugin (hooks, skills, setup)
 - `plugins/openclaw/` — OpenClaw plugin (manifest, bundled plugin.js, setup)
-- `src/` — TypeScript source (scanner, analyzers, runtime guard, adapters)
+- `src/` — TypeScript source (scanner, analysers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output (npm library export)
 - `scripts/` — Build and release scripts
 

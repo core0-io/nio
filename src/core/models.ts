@@ -1,8 +1,8 @@
 /**
- * Core models for the three-analyzer architecture.
+ * Core models for the three-analyser architecture.
  *
- * These types form the shared language between Static, Behavioral, and LLM
- * analyzers.  The `Finding` model is the primary output unit — every analyzer
+ * These types form the shared language between Static, Behavioural, and LLM
+ * analysers.  The `Finding` model is the primary output unit — every analyser
  * produces an array of findings that the orchestrator merges, deduplicates,
  * and projects into the legacy `ScanResult` format.
  */
@@ -54,11 +54,11 @@ export interface FindingLocation {
   snippet?: string;
 }
 
-/** Which analyzer produced this finding. */
-export type AnalyzerName = 'static' | 'behavioral' | 'llm';
+/** Which analyser produced this finding. */
+export type AnalyserName = 'static' | 'behavioural' | 'llm';
 
 /**
- * A single security finding — the primary output of every analyzer.
+ * A single security finding — the primary output of every analyser.
  */
 export interface Finding {
   /** Deterministic ID: sha256(rule_id + file + line). */
@@ -77,8 +77,8 @@ export interface Finding {
   location: FindingLocation;
   /** Suggested remediation (optional). */
   remediation?: string;
-  /** Analyzer that produced this finding. */
-  analyzer: AnalyzerName;
+  /** Analyser that produced this finding. */
+  analyser: AnalyserName;
   /** Confidence score 0.0–1.0 (1.0 = deterministic match). */
   confidence: number;
   /** Arbitrary metadata (e.g. decoded payload, dataflow path). */
@@ -91,7 +91,7 @@ export interface ScanMetadata {
   files_scanned: number;
   scan_duration_ms: number;
   scan_time: string;
-  analyzers_used: AnalyzerName[];
+  analysers_used: AnalyserName[];
 }
 
 /**
@@ -99,7 +99,7 @@ export interface ScanMetadata {
  * legacy `evidence` / `risk_tags` fields for backward compatibility.
  */
 export interface ExtendedScanResult extends ScanResult {
-  /** Structured findings from all analyzers. */
+  /** Structured findings from all analysers. */
   findings: Finding[];
   /** Extended metadata. */
   metadata: ScanMetadata;

@@ -47,7 +47,7 @@ collector:
   # Path to local JSONL file for metric payloads. Supports ~/ prefix.
   log: "~/.ffwd-agent-guard/metrics.jsonl"
 
-# LLM analyzer settings (Phase 2 semantic analysis using Claude).
+# LLM analyser settings (Phase 2 semantic analysis using Claude).
 # Disabled when api_key is empty.
 llm:
   # Anthropic API key for LLM-based security analysis.
@@ -57,7 +57,7 @@ llm:
   # Maximum input token budget sent to the LLM per scan.
   max_input_tokens: 50000
 
-# Dynamic guard pipeline settings (RuntimeAnalyzer, phases 1-6).
+# Dynamic guard pipeline settings (RuntimeAnalyser, phases 1-6).
 guard:
   # External scoring API endpoint (Phase 6). Disabled when empty.
   scoring_endpoint: ""
@@ -86,6 +86,6 @@ guard:
   weights:
     runtime: 1.0       # Phase 2: pattern matching
     static: 1.0        # Phase 3: static rules on file content
-    behavioral: 2.0    # Phase 4: AST dataflow analysis
+    behavioural: 2.0    # Phase 4: AST dataflow analysis
     llm: 1.0           # Phase 5: LLM semantic analysis
     external: 2.0      # Phase 6: external scoring API

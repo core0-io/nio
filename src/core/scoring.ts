@@ -14,7 +14,7 @@ import { SEVERITY_WEIGHT } from './models.js';
 export interface PhaseWeights {
   runtime: number;     // Phase 2
   static: number;      // Phase 3
-  behavioral: number;  // Phase 4
+  behavioural: number;  // Phase 4
   llm: number;         // Phase 5
   external: number;    // Phase 6
 }
@@ -22,7 +22,7 @@ export interface PhaseWeights {
 export const DEFAULT_WEIGHTS: PhaseWeights = {
   runtime: 1.0,
   static: 1.0,
-  behavioral: 2.0,
+  behavioural: 2.0,
   llm: 1.0,
   external: 2.0,
 };
@@ -61,7 +61,7 @@ export function findingsToScore(findings: Finding[]): number {
 export interface PhaseScores {
   runtime?: number;
   static?: number;
-  behavioral?: number;
+  behavioural?: number;
   llm?: number;
   external?: number;
 }

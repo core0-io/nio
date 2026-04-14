@@ -64,11 +64,11 @@ export class SkillScanner {
     // Build scan policy from options
     const policy = mergePolicy(defaultPolicy(), {
       extra_patterns: this.options.extraPatterns ?? {},
-      // Enable behavioral analysis when deep mode is on
-      analyzers: {
+      // Enable behavioural analysis when deep mode is on
+      analysers: {
         static: true,
-        behavioral: !!this.options.deep,
-        llm: false, // LLM gated on API key, handled by LLMAnalyzer.isEnabled()
+        behavioural: !!this.options.deep,
+        llm: false, // LLM gated on API key, handled by LLMAnalyser.isEnabled()
       },
     });
 
@@ -119,7 +119,7 @@ export class SkillScanner {
       const args = ['scan', dirPath, '--format', 'json'];
 
       if (this.options.deep) {
-        args.push('--use-behavioral');
+        args.push('--use-behavioural');
       }
 
       const proc = spawn('skill-scanner', args, {

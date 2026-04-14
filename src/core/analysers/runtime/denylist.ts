@@ -1,5 +1,5 @@
 /**
- * Phase 2: RuntimeAnalyzer — pattern-based action analysis.
+ * Phase 2: RuntimeAnalyser — pattern-based action analysis.
  *
  * Produces Finding[] from action data. Covers three action types:
  *   - Bash commands: dangerous commands, fork bombs, metacharacters, base64 decode
@@ -100,7 +100,7 @@ function checkSecretLeak(content: string): Finding[] {
         description: `Request body contains ${type} pattern`,
         location: { file: 'request_body', line: 0 },
         remediation: 'Remove sensitive data from HTTP request body',
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.95,
       });
     }
@@ -130,7 +130,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: 'Fork bomb detected',
         description: 'Command contains a fork bomb pattern',
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 1.0,
       });
       return findings; // critical — no need to check further
@@ -148,7 +148,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: `Dangerous command: ${dangerous}`,
         description: `Dangerous command pattern detected: ${dangerous}`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 1.0,
       });
       return findings; // critical
@@ -166,7 +166,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: 'Dangerous command: pipe to shell',
         description: `Dangerous command pattern detected: pipe to shell interpreter`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 1.0,
       });
       return findings; // critical
@@ -184,7 +184,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: `Sensitive data access: ${sensitive}`,
         description: `Command accesses sensitive data: ${sensitive}`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.9,
       });
     }
@@ -201,7 +201,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: `System command: ${sys.trim()}`,
         description: `System modification command: ${sys.trim()}`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.9,
       });
     }
@@ -218,7 +218,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: `Network command: ${net.trim()}`,
         description: `Network command: ${net.trim()}`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.8,
       });
     }
@@ -235,7 +235,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
         title: 'Shell injection risk',
         description: 'Command contains shell metacharacters',
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.7,
       });
       break;
@@ -255,7 +255,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
           title: `Sensitive env var: ${key}`,
           description: `Sensitive environment variable passed: ${key}`,
           location: { file: 'env', line: 0 },
-          analyzer: 'static',
+          analyser: 'static',
           confidence: 0.8,
         });
       }
@@ -277,7 +277,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
           title: `Base64-encoded dangerous command: ${dangerous}`,
           description: `Decoded base64 payload contains dangerous command: ${dangerous}`,
           location: { file: 'command', line: 0, snippet: decoded.slice(0, 200) },
-          analyzer: 'static',
+          analyser: 'static',
           confidence: 0.95,
           metadata: { context: 'decoded_from:base64' },
         });
@@ -307,7 +307,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
         title: 'Invalid URL',
         description: `Could not parse URL: ${url.slice(0, 100)}`,
         location: { file: 'url', line: 0 },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.9,
       });
       return findings;
@@ -328,7 +328,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
         title: `Webhook exfil domain: ${domain}`,
         description: `Webhook/exfiltration domain detected: ${domain}`,
         location: { file: 'url', line: 0, snippet: url.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.95,
       });
     }
@@ -344,7 +344,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
         title: `High-risk TLD: ${domain}`,
         description: `Domain uses a high-risk TLD`,
         location: { file: 'url', line: 0, snippet: url.slice(0, 200) },
-        analyzer: 'static',
+        analyser: 'static',
         confidence: 0.7,
       });
     }
@@ -373,7 +373,7 @@ function analyzeFileOperation(envelope: ActionEnvelope): Finding[] {
       title: `Sensitive path: ${filePath}`,
       description: `Write to sensitive path: ${filePath}`,
       location: { file: filePath, line: 0 },
-      analyzer: 'static',
+      analyser: 'static',
       confidence: 1.0,
     });
   }
@@ -388,7 +388,7 @@ function analyzeFileOperation(envelope: ActionEnvelope): Finding[] {
       title: 'Path traversal detected',
       description: `Path traversal in file path: ${filePath}`,
       location: { file: filePath, line: 0 },
-      analyzer: 'static',
+      analyser: 'static',
       confidence: 0.9,
     });
   }

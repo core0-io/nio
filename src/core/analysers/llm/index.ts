@@ -1,9 +1,9 @@
 /**
- * LLM Analyzer — Phase 2 semantic security analysis using Claude.
+ * LLM Analyser — Phase 2 semantic security analysis using Claude.
  *
- * This analyzer uses the Anthropic API to perform deep semantic analysis
+ * This analyser uses the Anthropic API to perform deep semantic analysis
  * of skill code, enriched by Phase 1 findings from the Static and
- * Behavioral analyzers.
+ * Behavioural analysers.
  *
  * Key features:
  *   - Random delimiter injection protection (Cisco pattern)
@@ -12,8 +12,8 @@
  *   - Gated: disabled without ANTHROPIC_API_KEY
  */
 
-import { BaseAnalyzer, type AnalysisContext } from '../base.js';
-import type { Finding, AnalyzerName } from '../../models.js';
+import { BaseAnalyser, type AnalysisContext } from '../base.js';
+import type { Finding, AnalyserName } from '../../models.js';
 import { findingId } from '../../models.js';
 import type { ScanPolicy } from '../../scan-policy.js';
 import {
@@ -32,10 +32,10 @@ const DEFAULT_MAX_INPUT_TOKENS = 50_000;
 /** Model to use. */
 const DEFAULT_MODEL = 'claude-sonnet-4-20250514';
 
-// ── LLM Analyzer ─────────────────────────────────────────────────────────
+// ── LLM Analyser ─────────────────────────────────────────────────────────
 
-export class LLMAnalyzer extends BaseAnalyzer {
-  readonly name: AnalyzerName = 'llm';
+export class LLMAnalyser extends BaseAnalyser {
+  readonly name: AnalyserName = 'llm';
   readonly phase: 2 = 2;
 
   private apiKey: string | undefined;
@@ -54,7 +54,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
   }
 
   isEnabled(policy: ScanPolicy): boolean {
-    return policy.analyzers.llm && !!this.apiKey;
+    return policy.analysers.llm && !!this.apiKey;
   }
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
@@ -137,7 +137,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
         }
       }
 
-      console.warn('[LLMAnalyzer] API call failed:', error.message);
+      console.warn('[LLMAnalyser] API call failed:', error.message);
       return null;
     }
   }
@@ -168,7 +168,7 @@ export class LLMAnalyzer extends BaseAnalyzer {
           line: f.line || 0,
         },
         remediation: f.remediation,
-        analyzer: 'llm',
+        analyser: 'llm',
         confidence: 0.7, // LLM findings have lower confidence than deterministic
         metadata: {
           references: f.references,
@@ -230,10 +230,10 @@ function detectPromptInjection(
         title: 'Prompt Injection Attempt',
         description:
           'Code contains the analysis delimiter, suggesting a prompt injection attempt ' +
-          'targeting the LLM analyzer.',
+          'targeting the LLM analyser.',
         location: { file: file.path, line: 0 },
         remediation: 'Remove injection payloads from the skill code.',
-        analyzer: 'llm',
+        analyser: 'llm',
         confidence: 0.95,
       });
     }

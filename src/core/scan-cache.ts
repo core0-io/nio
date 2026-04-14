@@ -1,7 +1,7 @@
 /**
  * ScanCache — lightweight in-memory + file-backed cache of scan results.
  *
- * Written by ScanOrchestrator after each scan. Read by RuntimeAnalyzer
+ * Written by ScanOrchestrator after each scan. Read by RuntimeAnalyser
  * to incorporate prior scan intelligence into guard decisions.
  *
  * Cache file: ~/.ffwd-agent-guard/scan-cache.json

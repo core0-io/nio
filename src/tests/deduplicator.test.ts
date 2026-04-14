@@ -12,7 +12,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     title: 'Test',
     description: 'Test',
     location: { file: 'test.ts', line: 10 },
-    analyzer: 'static',
+    analyser: 'static',
     confidence: 1.0,
     ...overrides,
   };

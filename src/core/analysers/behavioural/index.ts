@@ -1,5 +1,5 @@
 /**
- * Behavioral Analyzer — Phase 1 AST-based security analysis.
+ * Behavioural Analyser — Phase 1 AST-based security analysis.
  *
  * Pipeline (per Cisco skill-scanner architecture, adapted for TypeScript):
  *
@@ -16,11 +16,11 @@
  *   Finding Generation
  *
  * Only processes .ts, .tsx, .js, .jsx, .mjs, .cjs files.
- * Non-JS files are skipped (the StaticAnalyzer handles those with regex).
+ * Non-JS files are skipped (the StaticAnalyser handles those with regex).
  */
 
-import { BaseAnalyzer, type AnalysisContext } from '../base.js';
-import type { Finding, AnalyzerName, ThreatCategory, Severity } from '../../models.js';
+import { BaseAnalyser, type AnalysisContext } from '../base.js';
+import type { Finding, AnalyserName, ThreatCategory, Severity } from '../../models.js';
 import { findingId } from '../../models.js';
 import type { ScanPolicy } from '../../scan-policy.js';
 import type { LanguageExtractor } from './types.js';
@@ -47,14 +47,14 @@ for (const ext of EXTRACTORS) {
   }
 }
 
-// ── BehavioralAnalyzer ───────────────────────────────────────────────────
+// ── BehaviouralAnalyser ───────────────────────────────────────────────────
 
-export class BehavioralAnalyzer extends BaseAnalyzer {
-  readonly name: AnalyzerName = 'behavioral';
+export class BehaviouralAnalyser extends BaseAnalyser {
+  readonly name: AnalyserName = 'behavioural';
   readonly phase: 1 = 1;
 
   isEnabled(policy: ScanPolicy): boolean {
-    return policy.analyzers.behavioral;
+    return policy.analysers.behavioural;
   }
 
   async analyze(ctx: AnalysisContext): Promise<Finding[]> {
@@ -101,7 +101,7 @@ export class BehavioralAnalyzer extends BaseAnalyzer {
         title: 'Cross-file Data Flow',
         description: cf.description,
         location: { file: cf.sinkFile, line: 0 },
-        analyzer: 'behavioral',
+        analyser: 'behavioural',
         confidence: 0.6,
         metadata: {
           source_file: cf.sourceFile,
@@ -140,7 +140,7 @@ function dataflowToFinding(file: string, flow: DataflowPath): Finding {
       snippet: flow.sink.snippet,
     },
     remediation: flowRemediation(flow),
-    analyzer: 'behavioral',
+    analyser: 'behavioural',
     confidence: 0.8,
     metadata: {
       source_kind: flow.source.kind,
@@ -249,7 +249,7 @@ function capabilityFindings(
         remediation:
           'Review whether both capabilities are necessary. ' +
           'Consider restricting network access or command execution.',
-        analyzer: 'behavioral',
+        analyser: 'behavioural',
         confidence: 0.5,
         metadata: { capabilities: Array.from(caps) },
       });
@@ -278,7 +278,7 @@ function capabilityFindings(
             snippet: evalSink.snippet,
           },
           remediation: 'Replace eval/Function with safer alternatives (JSON.parse, structured APIs).',
-          analyzer: 'behavioral',
+          analyser: 'behavioural',
           confidence: 0.9,
         });
       }

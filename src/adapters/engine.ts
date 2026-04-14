@@ -2,8 +2,8 @@ import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
 import { writeAuditLog } from './common.js';
-import type { RuntimeDecision } from '../core/analyzers/runtime/index.js';
-import type { ProtectionLevel } from '../core/analyzers/runtime/decision.js';
+import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
+import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 
 function scoreForLevel(level: string | undefined): number {
   return riskLevelToNumericScore((level || 'medium') as RiskLevel);
@@ -106,7 +106,7 @@ function checkToolGate(toolName: string, config: EngineOptions['config']): HookO
 }
 
 /**
- * Evaluate a hook event using the RuntimeAnalyzer pipeline.
+ * Evaluate a hook event using the RuntimeAnalyser pipeline.
  *
  * This is the platform-agnostic core — adapters handle I/O protocol,
  * this function handles security logic via the 6-phase pipeline.
@@ -146,10 +146,10 @@ export async function evaluateHook(
     return { decision: 'allow' };
   }
 
-  // Run RuntimeAnalyzer pipeline
+  // Run RuntimeAnalyser pipeline
   try {
     const level = (options.config.level || 'balanced') as ProtectionLevel;
-    const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyzer.evaluate(envelope, level);
+    const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyser.evaluate(envelope, level);
 
     // Write audit log
     const riskTags = [...new Set(rd.findings.map(f => f.rule_id))];

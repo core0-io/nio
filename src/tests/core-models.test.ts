@@ -23,7 +23,7 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
     title: 'Test Finding',
     description: 'Test description',
     location: { file: 'test.ts', line: 1 },
-    analyzer: 'static',
+    analyser: 'static',
     confidence: 1.0,
     ...overrides,
   };

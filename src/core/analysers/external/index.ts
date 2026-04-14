@@ -1,10 +1,10 @@
 /**
- * ExternalAnalyzer — pluggable HTTP endpoint for external security analysis.
+ * ExternalAnalyser — pluggable HTTP endpoint for external security analysis.
  *
  * A generalized scorer that sends context to a user-configured API and
  * receives a 0-1 score + optional findings. Usable by both pipelines:
  *
- *   - Dynamic Guard (RuntimeAnalyzer Phase 6): action context + prior scores
+ *   - Dynamic Guard (RuntimeAnalyser Phase 6): action context + prior scores
  *   - Static Scan (ScanOrchestrator): file content + prior findings
  */
 
@@ -12,7 +12,7 @@ import type { Finding } from '../../models.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
-export interface ExternalAnalyzerOptions {
+export interface ExternalAnalyserOptions {
   endpoint: string;
   apiKey?: string;
   timeout?: number; // ms, default 3000
@@ -45,21 +45,21 @@ export interface ExternalScoreResponse {
   reason?: string;
 }
 
-// ── ExternalAnalyzer ────────────────────────────────────────────────────
+// ── ExternalAnalyser ────────────────────────────────────────────────────
 
-export class ExternalAnalyzer {
+export class ExternalAnalyser {
   private endpoint: string;
   private apiKey?: string;
   private timeout: number;
 
-  constructor(opts: ExternalAnalyzerOptions) {
+  constructor(opts: ExternalAnalyserOptions) {
     this.endpoint = opts.endpoint;
     this.apiKey = opts.apiKey;
     this.timeout = opts.timeout ?? 3000;
   }
 
   /**
-   * Score an action (guard pipeline — RuntimeAnalyzer Phase 6).
+   * Score an action (guard pipeline — RuntimeAnalyser Phase 6).
    */
   async scoreAction(
     toolName: string,
@@ -119,7 +119,7 @@ export class ExternalAnalyzer {
       clearTimeout(timeoutId);
 
       if (!response.ok) {
-        console.warn(`[ExternalAnalyzer] HTTP ${response.status}: ${response.statusText}`);
+        console.warn(`[ExternalAnalyser] HTTP ${response.status}: ${response.statusText}`);
         return null;
       }
 
@@ -131,9 +131,9 @@ export class ExternalAnalyzer {
     } catch (err: unknown) {
       const error = err as { name?: string; message?: string };
       if (error.name === 'AbortError') {
-        console.warn(`[ExternalAnalyzer] Request timed out after ${this.timeout}ms`);
+        console.warn(`[ExternalAnalyser] Request timed out after ${this.timeout}ms`);
       } else {
-        console.warn(`[ExternalAnalyzer] Request failed: ${error.message}`);
+        console.warn(`[ExternalAnalyser] Request failed: ${error.message}`);
       }
       return null;
     }

@@ -4,21 +4,21 @@
 
 AgentGuard is a two-pipeline security framework for AI agents:
 
-1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioral + LLM)
-2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyzer pipeline
+1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioural + LLM)
+2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyser pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Static Scan (on-demand, triggered by user)              │
 │   /ffwd-agent-guard scan <path>                         │
-│   → ScanOrchestrator → Static + Behavioral + LLM       │
+│   → ScanOrchestrator → Static + Behavioural + LLM       │
 │   → Finding[] → ScanResult                              │
 │   → writes scan-cache for dynamic guard to read         │
 └─────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────┐
 │ Dynamic Guard (real-time, every PreToolUse hook)        │
-│   guard-hook → evaluateHook() → RuntimeAnalyzer         │
+│   guard-hook → evaluateHook() → RuntimeAnalyser         │
 │   → 6-phase pipeline → allow / deny / confirm           │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -27,7 +27,7 @@ AgentGuard is a two-pipeline security framework for AI agents:
 
 ## Dynamic Guard: 6-Phase Pipeline
 
-Every `PreToolUse` hook event flows through the RuntimeAnalyzer's 6-phase
+Every `PreToolUse` hook event flows through the RuntimeAnalyser's 6-phase
 pipeline. Each phase produces a 0–1 score and can short-circuit if the score
 exceeds the deny threshold for the active protection level.
 
@@ -84,7 +84,7 @@ exceeds the deny threshold for the active protection level.
                      │ not critical
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 4: Behavioral Analysis (<200ms) → `behavioral` score          │
+│ Phase 4: Behavioural Analysis (<200ms) → `behavioural` score          │
 │ [Write/Edit only — JS/TS/Python/Shell/Ruby/PHP/Go]                  │
 │                                                                     │
 │   file content ──► LanguageExtractor ──► ASTExtraction              │
@@ -105,7 +105,7 @@ exceeds the deny threshold for the active protection level.
 │              Cross-file Context Aggregation                         │
 │              capability detection (C2, eval)                        │
 │                                                                     │
-│   Finding[] → behavioral score ──► critical? ──YES──► DENY (exit)  │
+│   Finding[] → behavioural score ──► critical? ──YES──► DENY (exit)  │
 └────────────────────┬────────────────────────────────────────────────┘
                      │ not critical
                      ▼
@@ -149,7 +149,7 @@ exceeds the deny threshold for the active protection level.
 | 1 Allowlist | yes | yes | yes |
 | 2 Pattern Analysis | yes | yes | yes |
 | 3 Static Analysis | skip | yes (file content) | skip |
-| 4 Behavioral Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip |
+| 4 Behavioural Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip |
 | 5 LLM (optional) | yes | yes | yes |
 | 6 External API (optional) | yes | yes | yes |
 
@@ -175,7 +175,7 @@ Produces `Finding[]` from action data pattern matching:
 Runs the scan engine's 16 static rules + base64 decode pass against the file
 content being written.
 
-### Phase 4: Behavioral Analysis (<200ms) → `behavioral`
+### Phase 4: Behavioural Analysis (<200ms) → `behavioural`
 
 **Only runs for Write/Edit actions** where content is a supported language.
 Uses a pluggable `LanguageExtractor` interface to extract sources, sinks, imports,
@@ -206,16 +206,16 @@ and functions, then runs language-aware dataflow tracking.
 
 **Gated on `llm.api_key` in config.** Sends action context to Claude for
 semantic analysis. For Write/Edit, analyzes the file content. For Bash, wraps
-the command as a shell script. Reuses the existing `LLMAnalyzer` from the scan pipeline.
+the command as a shell script. Reuses the existing `LLMAnalyser` from the scan pipeline.
 
 ### Phase 6: External Scoring API (optional) → `external`
 
 **Gated on `guard.scoring_endpoint` in config.** Sends action context + prior
 scores/findings to a user-configured HTTP endpoint. Returns a 0–1 score.
 
-The `ExternalAnalyzer` is a standalone module (`src/core/analyzers/external/`)
+The `ExternalAnalyser` is a standalone module (`src/core/analysers/external/`)
 usable by both pipelines:
-- `scoreAction()` — guard pipeline (RuntimeAnalyzer Phase 6)
+- `scoreAction()` — guard pipeline (RuntimeAnalyser Phase 6)
 - `scoreScan()` — scan pipeline (ScanOrchestrator post-phase)
 
 ```yaml
@@ -242,7 +242,7 @@ Default weights:
 |-------|--------|-----------|
 | `runtime` | 1.0 | Pattern matching — fast but coarse |
 | `static` | 1.0 | Regex rules on file content |
-| `behavioral` | 2.0 | AST/regex dataflow — more reliable |
+| `behavioural` | 2.0 | AST/regex dataflow — more reliable |
 | `llm` | 1.0 | Semantic analysis — broad but slow |
 | `external` | 2.0 | External API — authoritative |
 
@@ -268,12 +268,12 @@ The scanner uses a **two-phase, multi-engine pipeline**:
               Phase 1 (parallel)                    Phase 2 (sequential)
 
            ┌──────────────────────┐
-           │   Static Analyzer    │
+           │   Static Analyser    │
            │  (regex, 16 rules)   │──┐
            └──────────────────────┘  │
                                      ├─ merge ──► ┌──────────────────────┐
-           ┌──────────────────────┐  │            │    LLM Analyzer      │
-           │ Behavioral Analyzer  │──┘            │  (Claude semantic)   │
+           ┌──────────────────────┐  │            │    LLM Analyser      │
+           │ Behavioural Analyser  │──┘            │  (Claude semantic)   │
            │ (multi-lang dataflow)│               └──────────┬───────────┘
            └──────────────────────┘                          │
                                                              ▼
@@ -288,7 +288,7 @@ The scanner uses a **two-phase, multi-engine pipeline**:
                                                    (+ scan-cache write)
 ```
 
-### Static Analyzer (Phase 1)
+### Static Analyser (Phase 1)
 
 Deterministic pattern-based detection using regex rules. Handles all file types.
 
@@ -302,7 +302,7 @@ READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, NET_EXFIL_UNRESTRICTED,
 WEBHOOK_EXFIL, OBFUSCATION, PROMPT_INJECTION, TROJAN_DISTRIBUTION,
 SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
 
-### Behavioral Analyzer (Phase 1)
+### Behavioural Analyser (Phase 1)
 
 Multi-language dataflow analysis with pluggable extractors:
 
@@ -331,7 +331,7 @@ Finding Generation
 **Sources** (data origins): env vars, file reads, credential files, user input, network responses
 **Sinks** (dangerous destinations): command exec, code eval, network send, file write, process spawn
 
-**Behavioral rules:**
+**Behavioural rules:**
 
 | Rule | Severity | Detection |
 |------|----------|-----------|
@@ -343,14 +343,14 @@ Finding Generation
 | `CAPABILITY_EVAL` | high | Skill uses dynamic code evaluation |
 | `CROSS_FILE_FLOW` | medium | Data crosses file boundaries |
 
-### LLM Analyzer (Phase 2)
+### LLM Analyser (Phase 2)
 
 Uses Claude for semantic threat analysis, enriched by Phase 1 findings.
 
 - **Injection protection** — Wraps untrusted code in random delimiters
 - **Scoped analysis** — Only sends files with Phase 1 findings (token budget)
 - **Structured output** — JSON response with threat taxonomy mapping
-- **Optional** — Gated on `ANTHROPIC_API_KEY` and `policy.analyzers.llm`
+- **Optional** — Gated on `ANTHROPIC_API_KEY` and `policy.analysers.llm`
 
 ### Post-Processing
 
@@ -366,7 +366,7 @@ Uses Claude for semantic threat analysis, enriched by Phase 1 findings.
 
 ### Finding
 
-Primary output unit — every analyzer produces `Finding[]`:
+Primary output unit — every analyser produces `Finding[]`:
 
 ```typescript
 interface Finding {
@@ -378,7 +378,7 @@ interface Finding {
   description: string;
   location: { file, line, column?, snippet? };
   remediation?: string;
-  analyzer: 'static' | 'behavioral' | 'llm';
+  analyser: 'static' | 'behavioural' | 'llm';
   confidence: number;          // 0.0–1.0
 }
 ```
@@ -395,7 +395,7 @@ interface RuntimeDecision {
   scores: {
     runtime?: number;
     static?: number;
-    behavioral?: number;
+    behavioural?: number;
     llm?: number;
     external?: number;
     final?: number;
@@ -407,7 +407,7 @@ interface RuntimeDecision {
 
 ### LanguageExtractor
 
-Pluggable interface for multi-language behavioral analysis:
+Pluggable interface for multi-language behavioural analysis:
 
 ```typescript
 interface LanguageExtractor {
@@ -419,11 +419,11 @@ interface LanguageExtractor {
 type Language = 'javascript' | 'python' | 'shell' | 'ruby' | 'php' | 'go';
 ```
 
-### BaseAnalyzer
+### BaseAnalyser
 
 ```typescript
-abstract class BaseAnalyzer {
-  abstract readonly name: 'static' | 'behavioral' | 'llm';
+abstract class BaseAnalyser {
+  abstract readonly name: 'static' | 'behavioural' | 'llm';
   abstract readonly phase: 1 | 2;
   abstract analyze(ctx: AnalysisContext): Promise<Finding[]>;
   isEnabled(policy: ScanPolicy): boolean;
@@ -432,12 +432,12 @@ abstract class BaseAnalyzer {
 
 ### ScanPolicy
 
-Controls scan analysis behavior. Three presets:
+Controls scan analysis behaviour. Three presets:
 
-| Preset | Analyzers | Min Severity |
+| Preset | Analysers | Min Severity |
 |--------|-----------|-------------|
-| `strict` | static + behavioral + llm | info |
-| `balanced` | static + behavioral | low |
+| `strict` | static + behavioural + llm | info |
+| `balanced` | static + behavioural | low |
 | `permissive` | static only | medium |
 
 ### ScanCache
@@ -446,12 +446,12 @@ File-backed cache (`~/.ffwd-agent-guard/scan-cache.json`) with 24h TTL.
 Written by `ScanOrchestrator` after scans. Entries track skill ID, risk level,
 and finding counts for use as context by the guard pipeline.
 
-### ExternalAnalyzer
+### ExternalAnalyser
 
 Standalone HTTP scorer usable by both pipelines:
 
 ```typescript
-class ExternalAnalyzer {
+class ExternalAnalyser {
   scoreAction(toolName, toolInput, priorScores, priorFindings): Promise<{score, reason?} | null>;
   scoreScan(skillId, files, priorFindings): Promise<{score, reason?} | null>;
 }
@@ -469,7 +469,7 @@ Single source of truth for constants used by both scan and guard pipelines:
 
 ### Detection Engine (`src/core/detection-engine.ts`)
 
-Pure functions extracted from StaticAnalyzer, reusable by both scan and guard:
+Pure functions extracted from StaticAnalyser, reusable by both scan and guard:
 `runRules()`, `runBase64Pass()`, `extractAndDecodeBase64()`.
 
 ### Scoring (`src/core/scoring.ts`)
@@ -489,17 +489,17 @@ src/
 │   ├── scanner.ts                     # ScanOrchestrator (static scan)
 │   ├── scan-cache.ts                  # ScanCache (file-backed)
 │   ├── detection-engine.ts            # Shared rule engine (pure functions)
-│   ├── analyzer-factory.ts            # Create analyzers from policy
+│   ├── analyser-factory.ts            # Create analysers from policy
 │   ├── scan-policy.ts                 # Policy presets
 │   ├── rule-registry.ts              # Rule catalog
 │   ├── deduplicator.ts               # Finding dedup
 │   ├── file-classifier.ts            # File categorization
 │   ├── shared/
 │   │   └── detection-data.ts          # Shared constants
-│   └── analyzers/
-│       ├── base.ts                    # BaseAnalyzer abstract class
-│       ├── static/index.ts           # StaticAnalyzer (regex)
-│       ├── behavioral/               # BehavioralAnalyzer (multi-language)
+│   └── analysers/
+│       ├── base.ts                    # BaseAnalyser abstract class
+│       ├── static/index.ts           # StaticAnalyser (regex)
+│       ├── behavioural/               # BehaviouralAnalyser (multi-language)
 │       │   ├── index.ts              # Orchestration + language dispatch
 │       │   ├── types.ts              # LanguageExtractor interface
 │       │   ├── ast-parser.ts         # JS/TS: Babel AST extraction
@@ -510,13 +510,13 @@ src/
 │       │   ├── go-extractor.ts       # Go: regex extraction
 │       │   ├── dataflow.ts           # Source→sink taint tracking
 │       │   └── context.ts            # Cross-file aggregation
-│       ├── llm/                       # LLMAnalyzer (Claude)
+│       ├── llm/                       # LLMAnalyser (Claude)
 │       │   ├── index.ts
 │       │   ├── prompts.ts            # Injection-protected prompts
 │       │   └── taxonomy.ts           # Threat category mapping
-│       ├── external/                  # ExternalAnalyzer (HTTP scorer)
+│       ├── external/                  # ExternalAnalyser (HTTP scorer)
 │       │   └── index.ts              # Dual-pipeline: scoreAction + scoreScan
-│       └── runtime/                   # RuntimeAnalyzer (guard pipeline)
+│       └── runtime/                   # RuntimeAnalyser (guard pipeline)
 │           ├── index.ts              # 6-phase orchestration
 │           ├── allowlist.ts          # Phase 1: safe command prefixes
 │           ├── denylist.ts           # Phase 2: dangerous patterns
@@ -539,7 +539,7 @@ src/
 └── scripts/                           # CLI entry points
     ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
     ├── scanner-hook.ts                # SessionStart: scan installed skills
-    ├── action-cli.ts                  # CLI for RuntimeAnalyzer
+    ├── action-cli.ts                  # CLI for RuntimeAnalyser
     ├── config-cli.ts                  # Protection level CLI
     └── collector-hook.ts              # Telemetry collector hook
 ```
@@ -552,7 +552,7 @@ Full template: `plugins/shared/config.default.yaml`.
 Key sections:
 - `level` — Protection level: `strict` | `balanced` | `permissive`
 - `guard` — Dynamic guard settings: scoring endpoint, weights, extra allowlist
-- `llm` — LLM analyzer: API key, model, token budget
+- `llm` — LLM analyser: API key, model, token budget
 - `collector` — OTLP telemetry: endpoint, protocol, log file
 - `rules` — Extra regex patterns injected into scan rules
 

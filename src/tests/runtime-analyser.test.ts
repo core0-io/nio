@@ -9,9 +9,9 @@ import {
 import {
   scoreToDecision,
   shouldShortCircuit,
-} from '../core/analyzers/runtime/decision.js';
-import { ExternalAnalyzer } from '../core/analyzers/external/index.js';
-import { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
+} from '../core/analysers/runtime/decision.js';
+import { ExternalAnalyser } from '../core/analysers/external/index.js';
+import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 import type { Finding } from '../core/models.js';
 import type { ActionEnvelope, ActionContext } from '../types/action.js';
 
@@ -43,7 +43,7 @@ describe('Scoring: findingsToScore', () => {
     const findings: Finding[] = [{
       id: 'test', rule_id: 'TEST', category: 'execution',
       severity: 'critical', title: 'Test', description: 'Test',
-      location: { file: 'test', line: 0 }, analyzer: 'static', confidence: 1.0,
+      location: { file: 'test', line: 0 }, analyser: 'static', confidence: 1.0,
     }];
     assert.equal(findingsToScore(findings), 1.0);
   });
@@ -52,7 +52,7 @@ describe('Scoring: findingsToScore', () => {
     const findings: Finding[] = [{
       id: 'test', rule_id: 'TEST', category: 'execution',
       severity: 'high', title: 'Test', description: 'Test',
-      location: { file: 'test', line: 0 }, analyzer: 'static', confidence: 1.0,
+      location: { file: 'test', line: 0 }, analyser: 'static', confidence: 1.0,
     }];
     assert.equal(findingsToScore(findings), 0.75);
   });
@@ -62,12 +62,12 @@ describe('Scoring: findingsToScore', () => {
       {
         id: 'a', rule_id: 'A', category: 'execution',
         severity: 'low', title: 'Low', description: 'Low',
-        location: { file: 'test', line: 0 }, analyzer: 'static', confidence: 1.0,
+        location: { file: 'test', line: 0 }, analyser: 'static', confidence: 1.0,
       },
       {
         id: 'b', rule_id: 'B', category: 'execution',
         severity: 'high', title: 'High', description: 'High',
-        location: { file: 'test', line: 0 }, analyzer: 'static', confidence: 1.0,
+        location: { file: 'test', line: 0 }, analyser: 'static', confidence: 1.0,
       },
     ];
     assert.equal(findingsToScore(findings), 0.75);
@@ -77,7 +77,7 @@ describe('Scoring: findingsToScore', () => {
     const findings: Finding[] = [{
       id: 'test', rule_id: 'TEST', category: 'execution',
       severity: 'critical', title: 'Test', description: 'Test',
-      location: { file: 'test', line: 0 }, analyzer: 'static', confidence: 0.5,
+      location: { file: 'test', line: 0 }, analyser: 'static', confidence: 0.5,
     }];
     assert.equal(findingsToScore(findings), 0.5);
   });
@@ -98,15 +98,15 @@ describe('Scoring: aggregateScores', () => {
   });
 
   it('should compute weighted average of multiple phases', () => {
-    // runtime=0.8 (w=1.0), behavioral=0.4 (w=2.0)
-    const scores: PhaseScores = { runtime: 0.8, behavioral: 0.4 };
+    // runtime=0.8 (w=1.0), behavioural=0.4 (w=2.0)
+    const scores: PhaseScores = { runtime: 0.8, behavioural: 0.4 };
     // (1.0*0.8 + 2.0*0.4) / (1.0 + 2.0) = (0.8 + 0.8) / 3.0 ≈ 0.5333
     const result = aggregateScores(scores);
     assert.ok(Math.abs(result - 0.5333) < 0.01, `Expected ~0.533, got ${result}`);
   });
 
   it('should handle all five phases', () => {
-    const scores: PhaseScores = { runtime: 0.5, static: 0.5, behavioral: 0.5, llm: 0.5, external: 0.5 };
+    const scores: PhaseScores = { runtime: 0.5, static: 0.5, behavioural: 0.5, llm: 0.5, external: 0.5 };
     // All scores equal → weighted average = 0.5 regardless of weights
     assert.equal(aggregateScores(scores), 0.5);
   });
@@ -118,9 +118,9 @@ describe('Scoring: aggregateScores', () => {
     assert.equal(aggregateScores(scores, weights), 0.5);
   });
 
-  it('should give higher weight to behavioral and external', () => {
-    // runtime=1.0 (w=1), behavioral=0.0 (w=2) → (1*1 + 2*0) / (1+2) = 0.333
-    const scores: PhaseScores = { runtime: 1.0, behavioral: 0.0 };
+  it('should give higher weight to behavioural and external', () => {
+    // runtime=1.0 (w=1), behavioural=0.0 (w=2) → (1*1 + 2*0) / (1+2) = 0.333
+    const scores: PhaseScores = { runtime: 1.0, behavioural: 0.0 };
     const result = aggregateScores(scores);
     assert.ok(Math.abs(result - 0.333) < 0.01, `Expected ~0.333, got ${result}`);
   });
@@ -195,12 +195,12 @@ describe('Decision: shouldShortCircuit', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ExternalAnalyzer
+// ExternalAnalyser
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('ExternalAnalyzer', () => {
+describe('ExternalAnalyser', () => {
   it('should construct with endpoint and optional settings', () => {
-    const scorer = new ExternalAnalyzer({
+    const scorer = new ExternalAnalyser({
       endpoint: 'https://example.com/score',
       apiKey: 'test-key',
       timeout: 5000,
@@ -209,7 +209,7 @@ describe('ExternalAnalyzer', () => {
   });
 
   it('should return null on network error (unreachable endpoint)', async () => {
-    const scorer = new ExternalAnalyzer({
+    const scorer = new ExternalAnalyser({
       endpoint: 'http://127.0.0.1:1/score', // unreachable
       timeout: 500,
     });
@@ -221,42 +221,42 @@ describe('ExternalAnalyzer', () => {
   it('should clamp score to [0, 1] range', async () => {
     // We can't easily mock fetch in node:test without a library,
     // but we test the clamping logic indirectly through the class.
-    // The ExternalAnalyzer.score method clamps: Math.max(0, Math.min(1, data.score ?? 0))
+    // The ExternalAnalyser.score method clamps: Math.max(0, Math.min(1, data.score ?? 0))
     // This is verified by the integration test above (returns null on error).
-    assert.ok(true, 'Clamping logic exists in ExternalAnalyzer.call()');
+    assert.ok(true, 'Clamping logic exists in ExternalAnalyser.call()');
   });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuntimeAnalyzer: Phase 5/6 wiring
+// RuntimeAnalyser: Phase 5/6 wiring
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('RuntimeAnalyzer: Phase 5/6 options', () => {
+describe('RuntimeAnalyser: Phase 5/6 options', () => {
   it('should accept llmApiKey and scoringEndpoint options', () => {
-    const analyzer = new RuntimeAnalyzer({
+    const analyser = new RuntimeAnalyser({
       llmApiKey: 'test-key',
       llmModel: 'claude-sonnet-4-20250514',
       scoringEndpoint: 'https://example.com/score',
       scoringApiKey: 'score-key',
       scoringTimeout: 5000,
     });
-    assert.ok(analyzer, 'Should construct with Phase 5/6 options');
+    assert.ok(analyser, 'Should construct with Phase 5/6 options');
   });
 
   it('should skip Phase 5 when no llmApiKey', async () => {
-    const analyzer = new RuntimeAnalyzer({}); // no llmApiKey
+    const analyser = new RuntimeAnalyser({}); // no llmApiKey
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
-    const result = await analyzer.evaluate(envelope);
+    const result = await analyser.evaluate(envelope);
     // Phase 5 should not have run — llm score should be absent
     assert.equal(result.scores.llm, undefined, 'Phase 5 score should be undefined when no API key');
   });
 
   it('should skip Phase 6 when no scoringEndpoint', async () => {
-    const analyzer = new RuntimeAnalyzer({}); // no scoringEndpoint
+    const analyser = new RuntimeAnalyser({}); // no scoringEndpoint
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
-    const result = await analyzer.evaluate(envelope);
+    const result = await analyser.evaluate(envelope);
     assert.equal(result.scores.external, undefined, 'Phase 6 score should be undefined when no endpoint');
   });
 });

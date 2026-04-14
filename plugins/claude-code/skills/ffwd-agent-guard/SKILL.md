@@ -57,7 +57,7 @@ Skip files: `*.min.js`, `*.min.css`, `package-lock.json`, `yarn.lock`, `pnpm-loc
 
 ### Detection Rules
 
-For each rule, use Grep to search the relevant file types. Record every match with file path, line number, and matched content. For detailed rule patterns, see [scan-rules.md](scan-rules.md).
+For each rule, use Grep to search the relevant file types. Record every match with file path, line number, and matched content. For detailed rule patterns, see [SCAN-RULES.md](SCAN-RULES.md).
 
 | # | Rule ID | Severity | File Types | Description |
 |---|---------|----------|------------|-------------|
@@ -108,7 +108,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 
 ## Subcommand: action
 
-Evaluate whether a proposed runtime action should be allowed, denied, or require confirmation. For detailed policies and detector rules, see [action-policies.md](action-policies.md).
+Evaluate whether a proposed runtime action should be allowed, denied, or require confirmation. For detailed policies and detector rules, see [ACTION-POLICIES.md](ACTION-POLICIES.md).
 
 ### Supported Action Types
 
@@ -222,7 +222,7 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 
 ### Protection Levels
 
-| Level | Behavior |
+| Level | Behaviour |
 |-------|----------|
 | `strict` | Block all risky actions — every dangerous or suspicious command is denied |
 | `balanced` | Block dangerous, confirm risky — default level, good for daily use |

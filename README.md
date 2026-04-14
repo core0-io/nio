@@ -31,7 +31,7 @@ AgentGuard is a Claude Code / OpenClaw plugin with two core systems:
 │  │  TaskCompleted           │    │  ┌─────────────────────────┐  │  │
 │  │  Stop / SubagentStop     │    │  │    Static Scan          │  │  │
 │  │                          │    │  │    (on-demand)          │  │  │
-│  └──────────────────────────┘    │  │    Static + Behavioral  │  │  │
+│  └──────────────────────────┘    │  │    Static + Behavioural  │  │  │
 │                                  │  │    + LLM engines        │  │  │
 │                                  │  └─────────────────────────┘  │  │
 │                                  └───────────────────────────────┘  │
@@ -61,14 +61,14 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 
 Security evaluation with two modes:
 
-**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a 6-phase RuntimeAnalyzer pipeline:
+**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a 6-phase RuntimeAnalyser pipeline:
 
 | Phase | Name | Latency | Applies To |
 |-------|------|---------|------------|
 | 1 | **Allowlist Gate** | <1ms | All actions |
 | 2 | **Pattern Analysis** | <5ms | All actions |
 | 3 | **Static Analysis** | <50ms | Write/Edit only |
-| 4 | **Behavioral Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
+| 4 | **Behavioural Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
 | 5 | **LLM Analysis** | 2–10s | All (optional, needs `llm.api_key`) |
 | 6 | **External Scoring API** | configurable | All (optional, needs `guard.scoring_endpoint`) |
 
@@ -78,16 +78,16 @@ Each phase produces a 0–1 score and can short-circuit on critical findings. Fi
 final = Σ(weight × score) / Σ(weight)
 ```
 
-Default weights: `runtime: 1.0`, `static: 1.0`, `behavioral: 2.0`, `llm: 1.0`, `external: 2.0`
+Default weights: `runtime: 1.0`, `static: 1.0`, `behavioural: 2.0`, `llm: 1.0`, `external: 2.0`
 
 **Static Scan** — on-demand multi-engine code analysis triggered by `/ffwd-agent-guard scan <path>`:
-- **StaticAnalyzer**: 15 regex rules + base64 decode pass
-- **BehavioralAnalyzer**: multi-language source→sink dataflow tracking
-- **LLMAnalyzer**: Claude semantic analysis (optional)
+- **StaticAnalyser**: 15 regex rules + base64 decode pass
+- **BehaviouralAnalyser**: multi-language source→sink dataflow tracking
+- **LLMAnalyser**: Claude semantic analysis (optional)
 
-### Multi-Language Behavioral Analysis
+### Multi-Language Behavioural Analysis
 
-Both pipelines share the BehavioralAnalyzer, which uses pluggable `LanguageExtractor` modules for dataflow tracking:
+Both pipelines share the BehaviouralAnalyser, which uses pluggable `LanguageExtractor` modules for dataflow tracking:
 
 | Language | Parser | Extensions |
 |----------|--------|------------|
@@ -191,9 +191,9 @@ Detects installed platforms and runs the appropriate setup for each.
 - Data exfiltration to Discord/Telegram/Slack webhooks
 - Base64-encoded payloads decoded and re-scanned
 
-**Layer 3 — Static + Behavioral Analysis** (Write/Edit only):
+**Layer 3 — Static + Behavioural Analysis** (Write/Edit only):
 - 15 static regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
-- 7 behavioral rules via source→sink dataflow tracking across 6 languages
+- 7 behavioural rules via source→sink dataflow tracking across 6 languages
 - Detects env→network exfiltration, network→eval RCE, capability combinations (C2)
 
 **Layer 4 — LLM + External** (optional):
@@ -214,7 +214,7 @@ Pattern-based detection via regex matching on file content.
 | **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH–CRITICAL |
 | **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM–CRITICAL |
 
-### Behavioral Rules (7)
+### Behavioural Rules (7)
 
 Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ruby/PHP/Go).
 
@@ -241,7 +241,7 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 
 ## Documentation
 
-- [Architecture](docs/architecture.md) — Two-pipeline design, 6-phase guard flow, scoring system
+- [Architecture](docs/ARCHITECTURE.md) — Two-pipeline design, 6-phase guard flow, scoring system
 - [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
 

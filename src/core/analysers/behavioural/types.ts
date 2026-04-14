@@ -1,5 +1,5 @@
 /**
- * Shared types for the Behavioral Analyzer — language-agnostic interfaces
+ * Shared types for the Behavioural Analyser — language-agnostic interfaces
  * that all language extractors produce and the dataflow tracker consumes.
  */
 

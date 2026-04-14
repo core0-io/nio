@@ -33,7 +33,7 @@
     },
     "llm": {
       "type": "object",
-      "description": "LLM analyzer settings (Phase 5 semantic analysis using Claude). Disabled when api_key is empty.",
+      "description": "LLM analyser settings (Phase 5 semantic analysis using Claude). Disabled when api_key is empty.",
       "additionalProperties": false,
       "properties": {
         "api_key": { "type": "string", "default": "", "description": "Anthropic API key for LLM-based security analysis." },
@@ -43,7 +43,7 @@
     },
     "guard": {
       "type": "object",
-      "description": "Dynamic guard pipeline settings (RuntimeAnalyzer, phases 0-6).",
+      "description": "Dynamic guard pipeline settings (RuntimeAnalyser, phases 0-6).",
       "additionalProperties": false,
       "properties": {
         "scoring_endpoint": { "type": "string", "default": "", "description": "External scoring API endpoint (Phase 6). Disabled when empty." },
@@ -64,7 +64,7 @@
           "properties": {
             "runtime": { "type": "number", "default": 1.0 },
             "static": { "type": "number", "default": 1.0 },
-            "behavioral": { "type": "number", "default": 2.0 },
+            "behavioural": { "type": "number", "default": 2.0 },
             "llm": { "type": "number", "default": 1.0 },
             "external": { "type": "number", "default": 2.0 }
           }

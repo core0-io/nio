@@ -1,12 +1,12 @@
 /**
- * RuntimeAnalyzer — 6-phase dynamic guard pipeline.
+ * RuntimeAnalyser — 6-phase dynamic guard pipeline.
  *
  * Executes phases sequentially with short-circuit evaluation:
  *
  *   Phase 1: Allowlist gate (<1ms)          → allow? exit
- *   Phase 2: RuntimeAnalyzer patterns (<5ms) → score a → critical? exit
- *   Phase 3: StaticAnalyzer on file (<50ms)  → score b → critical? exit (Write/Edit only)
- *   Phase 4: BehavioralAnalyzer (<200ms)     → score c → critical? exit (Write/Edit .ts/.js only)
+ *   Phase 2: RuntimeAnalyser patterns (<5ms) → score a → critical? exit
+ *   Phase 3: StaticAnalyser on file (<50ms)  → score b → critical? exit (Write/Edit only)
+ *   Phase 4: BehaviouralAnalyser (<200ms)     → score c → critical? exit (Write/Edit .ts/.js only)
  *   Phase 5: LLM (2-10s, optional)          → score d → critical? exit
  *   Phase 6: External API (optional)         → score e
  *   Final:   Weighted aggregate → allow/deny/confirm
@@ -31,7 +31,7 @@ import {
   type ProtectionLevel,
   type GuardDecision,
 } from './decision.js';
-import { ExternalAnalyzer } from '../external/index.js';
+import { ExternalAnalyser } from '../external/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -44,7 +44,7 @@ export interface RuntimeDecision {
   explanation?: string;
 }
 
-export interface RuntimeAnalyzerOptions {
+export interface RuntimeAnalyserOptions {
   weights?: Partial<PhaseWeights>;
   level?: ProtectionLevel;
   extraAllowlist?: string[];
@@ -56,17 +56,17 @@ export interface RuntimeAnalyzerOptions {
   scoringTimeout?: number;
 }
 
-// ── RuntimeAnalyzer ─────────────────────────────────────────────────────
+// ── RuntimeAnalyser ─────────────────────────────────────────────────────
 
-export class RuntimeAnalyzer {
+export class RuntimeAnalyser {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
   private extraAllowlist: string[];
   private llmApiKey?: string;
   private llmModel?: string;
-  private externalScorer?: ExternalAnalyzer;
+  private externalScorer?: ExternalAnalyser;
 
-  constructor(opts?: RuntimeAnalyzerOptions) {
+  constructor(opts?: RuntimeAnalyserOptions) {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.weights };
     this.level = opts?.level ?? 'balanced';
     this.extraAllowlist = opts?.extraAllowlist ?? [];
@@ -74,7 +74,7 @@ export class RuntimeAnalyzer {
     this.llmModel = opts?.llmModel;
 
     if (opts?.scoringEndpoint) {
-      this.externalScorer = new ExternalAnalyzer({
+      this.externalScorer = new ExternalAnalyser({
         endpoint: opts.scoringEndpoint,
         apiKey: opts.scoringApiKey,
         timeout: opts.scoringTimeout,
@@ -107,7 +107,7 @@ export class RuntimeAnalyzer {
       };
     }
 
-    // ── Phase 2: RuntimeAnalyzer (pattern matching) ──────────────────
+    // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
     const phase2Findings = analyzeAction(envelope);
     allFindings.push(...phase2Findings);
     const scoreA = findingsToScore(phase2Findings);
@@ -117,7 +117,7 @@ export class RuntimeAnalyzer {
       return this.buildResult(allFindings, scores, 2, level);
     }
 
-    // ── Phase 3: StaticAnalyzer (Write/Edit only) ────────────────────
+    // ── Phase 3: StaticAnalyser (Write/Edit only) ────────────────────
     if (envelope.action.type === 'write_file') {
       const data = envelope.action.data as { content_preview?: string; path?: string };
       if (data.content_preview) {
@@ -135,20 +135,20 @@ export class RuntimeAnalyzer {
       }
     }
 
-    // ── Phase 4: BehavioralAnalyzer (Write/Edit .ts/.js/.py only) ─────
+    // ── Phase 4: BehaviouralAnalyser (Write/Edit .ts/.js/.py only) ─────
     if (envelope.action.type === 'write_file') {
       const data = envelope.action.data as { content_preview?: string; path?: string };
       const path = data.path || '';
-      const isBehavioralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path);
+      const isBehaviouralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path);
 
-      if (isBehavioralTarget && data.content_preview) {
-        const phase4Findings = await this.runBehavioralOnContent(
+      if (isBehaviouralTarget && data.content_preview) {
+        const phase4Findings = await this.runBehaviouralOnContent(
           data.content_preview,
           path,
         );
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
-        scores.behavioral = scoreC;
+        scores.behavioural = scoreC;
 
         if (shouldShortCircuit(scoreC, level)) {
           return this.buildResult(allFindings, scores, 4, level);
@@ -190,7 +190,7 @@ export class RuntimeAnalyzer {
             title: 'External scorer flagged action',
             description: result.reason || 'External scoring API returned high risk score',
             location: { file: envelope.action.type, line: 0 },
-            analyzer: 'static',
+            analyser: 'static',
             confidence: result.score,
           });
           return this.buildResult(allFindings, scores, 6, level);
@@ -221,17 +221,17 @@ export class RuntimeAnalyzer {
     return findings;
   }
 
-  // ── Phase 4: Behavioral analysis on file content ──────────────────────
+  // ── Phase 4: Behavioural analysis on file content ──────────────────────
 
-  private async runBehavioralOnContent(content: string, filePath: string): Promise<Finding[]> {
+  private async runBehaviouralOnContent(content: string, filePath: string): Promise<Finding[]> {
     // Lazy import
-    const { BehavioralAnalyzer } = await import('../behavioral/index.js');
+    const { BehaviouralAnalyser } = await import('../behavioural/index.js');
     const { defaultPolicy } = await import('../../scan-policy.js');
 
-    const analyzer = new BehavioralAnalyzer();
+    const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
 
-    // BehavioralAnalyzer expects FileInfo[] in AnalysisContext
+    // BehaviouralAnalyser expects FileInfo[] in AnalysisContext
     const ext = '.' + (filePath.split('.').pop() || 'ts');
     const fakeFileInfo = {
       path: filePath,
@@ -240,7 +240,7 @@ export class RuntimeAnalyzer {
       extension: ext,
     };
 
-    return analyzer.analyze({
+    return analyser.analyze({
       rootDir: '.',
       files: [fakeFileInfo],
       policy,
@@ -251,16 +251,16 @@ export class RuntimeAnalyzer {
 
   private async runLLMOnAction(envelope: ActionEnvelope): Promise<Finding[]> {
     // Lazy import to avoid loading Anthropic SDK when not needed
-    const { LLMAnalyzer } = await import('../llm/index.js');
+    const { LLMAnalyser } = await import('../llm/index.js');
     const { defaultPolicy } = await import('../../scan-policy.js');
 
-    const analyzer = new LLMAnalyzer({
+    const analyser = new LLMAnalyser({
       apiKey: this.llmApiKey,
       model: this.llmModel,
     });
 
     const policy = defaultPolicy();
-    if (!analyzer.isEnabled(policy)) return [];
+    if (!analyser.isEnabled(policy)) return [];
 
     // Build a synthetic file from the action data for LLM analysis
     let content: string;
@@ -285,7 +285,7 @@ export class RuntimeAnalyzer {
     if (!content) return [];
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
-    return analyzer.analyze({
+    return analyser.analyze({
       rootDir: '.',
       files: [{
         path: filePath,

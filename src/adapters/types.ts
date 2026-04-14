@@ -1,5 +1,5 @@
 import type { ActionEnvelope } from '../types/action.js';
-import type { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
+import type { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 
 /**
  * Standardized hook input — platform-agnostic representation
@@ -64,7 +64,7 @@ export interface HookAdapter {
  * Agentguard instance interface (subset used by engine)
  */
 export interface AgentGuardInstance {
-  runtimeAnalyzer: RuntimeAnalyzer;
+  runtimeAnalyser: RuntimeAnalyser;
 }
 
 /**

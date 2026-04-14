@@ -26,7 +26,7 @@ Unified security policy reference for all platforms (Claude Code, OpenClaw, and 
 
 Configure via `/ffwd-agent-guard config <level>`:
 
-| Level | Description | DENY Behavior | CONFIRM Behavior |
+| Level | Description | DENY Behaviour | CONFIRM Behaviour |
 |-------|-------------|---------------|------------------|
 | **strict** | Maximum security. All risk operations blocked. | Block | Block (treated as deny) |
 | **balanced** (default) | Critical threats blocked, high-risk prompts user. | Block | Prompt user |
@@ -381,4 +381,4 @@ file:
 
 ---
 
-*This document consolidates security policies from `plugins/claude-code/skills/ffwd-agent-guard/action-policies.md`, `plugins/claude-code/skills/ffwd-agent-guard/scan-rules.md`, and implementation in `src/action/detectors/`.*
+*This document consolidates security policies from `plugins/claude-code/skills/ffwd-agent-guard/ACTION-POLICIES.md`, `plugins/claude-code/skills/ffwd-agent-guard/SCAN-RULES.md`, and implementation in `src/action/detectors/`.*

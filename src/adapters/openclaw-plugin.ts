@@ -16,8 +16,8 @@ import { OpenClawAdapter } from './openclaw.js';
 import { evaluateHook } from './engine.js';
 import { loadConfig, writeAuditLog } from './common.js';
 import type { AgentGuardInstance } from './types.js';
-import { RuntimeAnalyzer } from '../core/analyzers/runtime/index.js';
-import type { ProtectionLevel } from '../core/analyzers/runtime/decision.js';
+import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
+import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider, recordToolUse, recordTurn } from '../scripts/lib/metrics-collector.js';
@@ -144,7 +144,7 @@ export function registerOpenClawPlugin(
         ffwdAgentGuard = options.ffwdAgentGuardFactory();
       } else {
         ffwdAgentGuard = {
-          runtimeAnalyzer: new RuntimeAnalyzer({
+          runtimeAnalyser: new RuntimeAnalyser({
             level: (config.level || 'balanced') as ProtectionLevel,
             extraAllowlist: config.guard?.extra_allowlist,
             weights: config.guard?.weights,

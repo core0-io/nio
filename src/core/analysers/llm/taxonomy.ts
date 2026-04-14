@@ -1,5 +1,5 @@
 /**
- * Threat taxonomy mapping for LLM analyzer output.
+ * Threat taxonomy mapping for LLM analyser output.
  *
  * Maps free-text threat descriptions from Claude to our structured
  * ThreatCategory and Severity types.
