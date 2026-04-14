@@ -25,11 +25,12 @@ AgentGuard is a two-pipeline security framework for AI agents:
 
 ---
 
-## Dynamic Guard: 6-Phase Pipeline
+## Dynamic Guard: Phase 0–6 Pipeline
 
-Every `PreToolUse` hook event flows through the RuntimeAnalyser's 6-phase
-pipeline. Each phase produces a 0–1 score and can short-circuit if the score
-exceeds the deny threshold for the active protection level.
+Every `PreToolUse` hook event flows through the guard pipeline.
+Phase 0 is a tool-level gate (in `engine.ts`). Phases 1–6 run in the
+RuntimeAnalyser, each producing a 0–1 score that can short-circuit
+if it exceeds the deny threshold for the active protection level.
 
 ### High-Level Flow
 
@@ -40,6 +41,25 @@ exceeds the deny threshold for the active protection level.
                          └──────┬───────┘
                                 │
                                 ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│ Phase 0: Tool Gate (<1ms)  [engine.ts, before envelope building]    │
+│                                                                     │
+│   tool_name ──► in blocked_tools? ──YES──► DENY (exit)             │
+│                    │ NO                                              │
+│                    ▼                                                 │
+│              available_tools non-empty?                              │
+│                    │ YES                                             │
+│                    ▼                                                 │
+│              tool_name in available_tools? ──NO──► DENY (exit)     │
+│                    │ YES                                             │
+│                    ▼                                                 │
+│              tool_name in guarded_tools? ──NO──► ALLOW (exit)      │
+│                    │ YES                                             │
+│                    ▼                                                 │
+│              Build ActionEnvelope → proceed to Phase 1              │
+└────────────────────┬────────────────────────────────────────────────┘
+                     │ passed gate
+                     ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 1: Allowlist Gate (<1ms)                                      │
 │                                                                     │
@@ -144,14 +164,27 @@ exceeds the deny threshold for the active protection level.
 
 ### Which phases run per action type
 
-| Phase | Bash | Write/Edit | WebFetch |
-|-------|------|------------|----------|
-| 1 Allowlist | yes | yes | yes |
-| 2 Pattern Analysis | yes | yes | yes |
-| 3 Static Analysis | skip | yes (file content) | skip |
-| 4 Behavioural Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip |
-| 5 LLM (optional) | yes | yes | yes |
-| 6 External API (optional) | yes | yes | yes |
+| Phase | Bash | Write/Edit | WebFetch | Read/Grep/Glob/etc. |
+|-------|------|------------|----------|---------------------|
+| 0 Tool Gate | yes | yes | yes | yes |
+| 1 Allowlist | yes | yes | yes | skip (no envelope) |
+| 2 Pattern Analysis | yes | yes | yes | skip |
+| 3 Static Analysis | skip | yes (file content) | skip | skip |
+| 4 Behavioural Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip | skip |
+| 5 LLM (optional) | yes | yes | yes | skip |
+| 6 External API (optional) | yes | yes | yes | skip |
+
+Tools not in `guarded_tools` pass Phase 0 but skip Phases 1–6 (auto-allow).
+
+### Phase 0: Tool Gate (<1ms)
+
+Runs in `engine.ts` before envelope building. Three checks in order:
+
+1. **blocked_tools** — if tool is listed → DENY
+2. **available_tools** — if list is non-empty and tool is not listed → DENY
+3. **guarded_tools** — if tool is not mapped → ALLOW (skip Phase 1–6)
+
+Configured under `guard:` in config. Matching is case-insensitive.
 
 ### Phase 1: Allowlist Gate (<1ms)
 

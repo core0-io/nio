@@ -24,7 +24,7 @@ AgentGuard is a Claude Code / OpenClaw plugin with two core systems:
 │  │  Hook events             │    │  ┌─────────────────────────┐  │  │
 │  │  → metrics + traces      │    │  │    Dynamic Guard        │  │  │
 │  │  → OTLP export           │    │  │    (real-time hooks)    │  │  │
-│  │                          │    │  │    6-phase pipeline     │  │  │
+│  │                          │    │  │    Phase 0–6 pipeline   │  │  │
 │  │  PreToolUse              │    │  │    → allow/deny/confirm │  │  │
 │  │  PostToolUse             │    │  └─────────────────────────┘  │  │
 │  │  TaskCreated             │    │                               │  │
@@ -63,12 +63,13 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 
 Security evaluation with two modes:
 
-**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a 6-phase RuntimeAnalyser pipeline:
+**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a Phase 0–6 pipeline:
 
 | Phase | Name | Latency | Applies To |
 |-------|------|---------|------------|
-| 1 | **Allowlist Gate** | <1ms | All actions |
-| 2 | **Pattern Analysis** | <5ms | All actions |
+| 0 | **Tool Gate** | <1ms | All tools (`blocked_tools` / `available_tools` / `guarded_tools`) |
+| 1 | **Allowlist Gate** | <1ms | Guarded tools only |
+| 2 | **Pattern Analysis** | <5ms | Guarded tools only |
 | 3 | **Static Analysis** | <50ms | Write/Edit only |
 | 4 | **Behavioural Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
 | 5 | **LLM Analysis** | 2–10s | All (optional, needs `llm.api_key`) |

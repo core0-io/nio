@@ -5,7 +5,7 @@ Security and observability for AI coding agents.
 ## Features
 
 - **Code Scanning** — 15 static detection rules + 7 behavioural dataflow rules covering shell injection, credential leaks, prompt injection, and more
-- **Dynamic Guard** — Real-time 6-phase RuntimeAnalyser pipeline for allow/deny/confirm decisions on every tool call
+- **Dynamic Guard** — Real-time Phase 0–6 pipeline for allow/deny/confirm decisions on every tool call
 - **OTEL Collector** — OpenTelemetry traces and metrics for agent activity monitoring
 - **Audit Logging** — Full security event trail with reporting
 
