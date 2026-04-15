@@ -47,6 +47,16 @@ collector:
   # Path to local JSONL file for metric payloads. Supports ~/ prefix.
   log: "~/.ffwd-agent-guard/metrics.jsonl"
 
+# Audit log settings.
+# Controls where guard/scan/lifecycle events are recorded.
+audit:
+  # Enable local JSONL audit log at ~/.ffwd-agent-guard/audit.jsonl
+  local: true
+  # Maximum local log file size in MB before rotation (0 = no rotation)
+  max_size_mb: 10
+  # Enable OTEL Logs export (uses collector endpoint/api_key/protocol)
+  otel: true
+
 # LLM analyser settings (Phase 2 semantic analysis using Claude).
 # Disabled when api_key is empty.
 llm:

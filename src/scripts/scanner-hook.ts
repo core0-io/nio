@@ -19,6 +19,21 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { loadCollectorConfig } from './lib/config-loader.js';
+import { createLoggerProvider, emitAuditLog } from './lib/logs-collector.js';
+
+/** Audit scan entry shape (avoids cross-rootDir import from adapters). */
+interface AuditScanEntry {
+  event: 'session_scan';
+  timestamp: string;
+  platform: string;
+  session_id?: string;
+  skill_name: string;
+  risk_level: string;
+  risk_tags: string[];
+  finding_count?: number;
+  [key: string]: unknown;
+}
 
 // ---------------------------------------------------------------------------
 // Types (local to avoid cross-project imports in compiled scripts)
@@ -85,7 +100,28 @@ function ensureDir(): void {
   }
 }
 
-function writeAuditLog(entry: Record<string, unknown>): void {
+// LoggerProvider for OTEL audit log export (lazy-initialized)
+let _loggerProvider: import('@opentelemetry/sdk-logs').LoggerProvider | null | undefined;
+function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider | null {
+  if (_loggerProvider === undefined) {
+    try {
+      const cc = loadCollectorConfig();
+      _loggerProvider = createLoggerProvider(cc);
+    } catch {
+      _loggerProvider = null;
+    }
+  }
+  return _loggerProvider;
+}
+
+function writeScanAuditLog(entry: AuditScanEntry): void {
+  // OTEL export
+  try {
+    const lp = getLoggerProvider();
+    if (lp) emitAuditLog(lp, entry);
+  } catch { /* non-critical */ }
+
+  // Local JSONL
   try {
     ensureDir();
     appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
@@ -200,9 +236,10 @@ async function main(): Promise<void> {
         cached: false,
       });
 
-      writeAuditLog({
-        timestamp: new Date().toISOString(),
+      writeScanAuditLog({
         event: 'session_scan',
+        timestamp: new Date().toISOString(),
+        platform: 'claude-code',
         skill_name: skill.name,
         risk_level: result.risk_level,
         risk_tags: result.risk_tags,

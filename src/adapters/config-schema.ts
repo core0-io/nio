@@ -62,9 +62,21 @@ export const GuardConfigSchema = z.object({
 
 export type GuardConfig = z.infer<typeof GuardConfigSchema>;
 
+export const AuditConfigSchema = z.object({
+  /** Enable local JSONL audit log at ~/.ffwd-agent-guard/audit.jsonl */
+  local: z.boolean().optional(),
+  /** Maximum local log file size in MB before rotation (0 = no rotation) */
+  max_size_mb: z.number().optional(),
+  /** Enable OTEL Logs export (uses collector endpoint/api_key/protocol) */
+  otel: z.boolean().optional(),
+});
+
+export type AuditConfig = z.infer<typeof AuditConfigSchema>;
+
 export const AgentGuardConfigSchema = z.object({
   level: z.enum(['strict', 'balanced', 'permissive']),
   collector: MetricsConfigSchema.optional(),
+  audit: AuditConfigSchema.optional(),
   rules: RulesPatternsSchema.optional(),
   llm: LLMConfigSchema.optional(),
   guard: GuardConfigSchema.optional(),

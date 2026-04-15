@@ -15,12 +15,15 @@
 import { OpenClawAdapter } from './openclaw.js';
 import { evaluateHook } from './engine.js';
 import { loadConfig, writeAuditLog } from './common.js';
+import type { WriteAuditLogOptions } from './common.js';
+import type { AuditLifecycleEntry } from './audit-types.js';
 import type { AgentGuardInstance } from './types.js';
 import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider, recordToolUse, recordTurn, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
+import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 import { trace, ROOT_CONTEXT, SpanStatusCode, type Span, type Context } from '@opentelemetry/api';
 
 // ---------------------------------------------------------------------------
@@ -151,6 +154,11 @@ export function registerOpenClawPlugin(
   const collectorConfig = loadCollectorConfig();
   const tracerProvider = createTracerProvider(collectorConfig);
   const meterProvider = createMeterProvider(collectorConfig);
+  const auditConfig = config.audit;
+  const loggerProvider = (auditConfig?.otel !== false)
+    ? createLoggerProvider(collectorConfig)
+    : null;
+  const auditOpts: WriteAuditLogOptions = { loggerProvider, auditConfig };
 
   const logger = (msg: string) => console.log(msg);
 
@@ -222,7 +230,7 @@ export function registerOpenClawPlugin(
       const result = await evaluateHook(adapter, event, {
         config,
         ffwdAgentGuard: getFfwdAgentGuard(),
-      });
+      }, auditOpts);
 
       // Record guard decision metrics
       if (meterProvider) {
@@ -272,7 +280,21 @@ export function registerOpenClawPlugin(
         durationMs?: number;
       };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-      writeAuditLog(input, null, null, 'openclaw');
+      writeAuditLog({
+        event: 'guard',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        tool_name: input.toolName,
+        tool_input_summary: JSON.stringify(input.toolInput).slice(0, 200),
+        decision: 'allow',
+        risk_level: 'low',
+        risk_score: 0,
+        risk_tags: [],
+        phase_stopped: 0,
+        scores: {},
+        top_findings: [],
+        event_type: 'post',
+      }, auditOpts);
 
       const toolName = toolEvent.toolName || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';
@@ -304,12 +326,15 @@ export function registerOpenClawPlugin(
     try {
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-      writeAuditLog(
-        { toolName: 'subagent_spawning', toolInput: e as Record<string, unknown>, eventType: 'pre', raw: e },
-        { decision: 'allow', risk_level: 'low', risk_tags: [] },
-        null,
-        'openclaw'
-      );
+      const lifecycleEntry: AuditLifecycleEntry = {
+        event: 'lifecycle',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        session_id: c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw',
+        lifecycle_type: 'subagent_spawning',
+        details: { subagent_id: e.subagentId, run_id: e.runId },
+      };
+      writeAuditLog(lifecycleEntry, auditOpts);
       const taskId = e.subagentId || e.runId || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
@@ -341,12 +366,15 @@ export function registerOpenClawPlugin(
     try {
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-      writeAuditLog(
-        { toolName: 'subagent_ended', toolInput: e as Record<string, unknown>, eventType: 'post', raw: e },
-        { decision: 'allow', risk_level: 'low', risk_tags: [] },
-        null,
-        'openclaw'
-      );
+      const endEntry: AuditLifecycleEntry = {
+        event: 'lifecycle',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        session_id: c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw',
+        lifecycle_type: 'subagent_ended',
+        details: { subagent_id: e.subagentId, run_id: e.runId },
+      };
+      writeAuditLog(endEntry, auditOpts);
       const taskId = e.subagentId || e.runId || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
@@ -401,23 +429,27 @@ export function registerOpenClawPlugin(
   });
 
   // agent_end → end-turn span flush
-  api.on('agent_end', async (event: unknown, ctx: unknown) => {
+  api.on('agent_end', async (_event: unknown, ctx: unknown) => {
     try {
-      const e = event as Record<string, unknown>;
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-      writeAuditLog(
-        { toolName: 'agent_end', toolInput: e, eventType: 'post', raw: e },
-        { decision: 'allow', risk_level: 'low', risk_tags: [] },
-        null,
-        'openclaw'
-      );
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      const agentEndEntry: AuditLifecycleEntry = {
+        event: 'lifecycle',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        session_id: sessionId,
+        lifecycle_type: 'agent_end',
+      };
+      writeAuditLog(agentEndEntry, auditOpts);
       if (tracerProvider) {
         finishTurn(sessionId);
         await tracerProvider.forceFlush();
       }
       if (meterProvider) {
         await recordTurn(meterProvider, 'openclaw');
+      }
+      if (loggerProvider) {
+        await loggerProvider.forceFlush();
       }
     } catch {
       // Non-critical

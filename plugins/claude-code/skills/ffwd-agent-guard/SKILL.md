@@ -202,7 +202,13 @@ Full schema:
     "endpoint": "",
     "api_key": "",
     "timeout": 5000,
+    "protocol": "http",
     "log": ""
+  },
+  "audit": {
+    "local": true,
+    "max_size_mb": 10,
+    "otel": true
   }
 }
 ```
@@ -213,10 +219,14 @@ Full schema:
 | `guard.available_tools` | string[] | `[]` | Tool-level allowlist (Phase 0). When non-empty, only listed tools are available |
 | `guard.blocked_tools` | string[] | `[]` | Tool-level denylist (Phase 0). Listed tools are unconditionally blocked |
 | `guard.guarded_tools` | object | *(see above)* | Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis |
-| `collector.endpoint` | string | `""` | OTLP endpoint URL for traces/metrics |
+| `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
 | `collector.timeout` | number | `5000` | Collector request timeout in ms |
+| `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |
 | `collector.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
+| `audit.local` | boolean | `true` | Write audit entries to local JSONL (`~/.ffwd-agent-guard/audit.jsonl`) |
+| `audit.max_size_mb` | number | `10` | Rotate local log when exceeded (0 = no rotation) |
+| `audit.otel` | boolean | `true` | Export audit logs via OTEL Logs (uses collector endpoint/api_key) |
 
 Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory (default: `~/.ffwd-agent-guard`).
 
@@ -249,20 +259,35 @@ Display recent security events from the FFWD AgentGuard audit log.
 
 ### Log Location
 
-The audit log is stored at `~/.ffwd-agent-guard/audit.jsonl`. Each line is a JSON object with:
+The audit log is stored at `~/.ffwd-agent-guard/audit.jsonl`. Each line is a JSON object with an `event` discriminator field:
+
+**Guard entry** (`event: "guard"`) — one per tool call evaluation:
 
 ```json
-{"timestamp":"...","tool_name":"Bash","tool_input_summary":"rm -rf /","decision":"deny","risk_level":"critical","risk_tags":["DANGEROUS_COMMAND"],"initiating_skill":"some-skill"}
+{"event":"guard","timestamp":"...","platform":"claude-code","session_id":"...","tool_name":"Bash","action_type":"exec_command","tool_input_summary":"rm -rf /","decision":"deny","risk_level":"critical","risk_score":0.95,"risk_tags":["DANGEROUS_COMMAND"],"phase_stopped":2,"scores":{"runtime":0.95,"final":0.95},"phases":{"runtime":{"score":0.95,"finding_count":1,"duration_ms":2}},"top_findings":[{"rule_id":"DANGEROUS_COMMAND","severity":"critical","category":"execution","title":"Destructive command","confidence":1.0}],"explanation":"...","initiating_skill":"some-skill","event_type":"pre"}
 ```
 
-The `initiating_skill` field is present when the action was triggered by a skill (inferred from the session transcript). When absent, the action came from the user directly.
+**Scan entry** (`event: "session_scan"`) — from session-start skill scanning:
+
+```json
+{"event":"session_scan","timestamp":"...","platform":"claude-code","skill_name":"some-skill","risk_level":"high","risk_tags":["SHELL_EXEC"],"finding_count":3}
+```
+
+**Lifecycle entry** (`event: "lifecycle"`) — subagent/agent lifecycle (OpenClaw only):
+
+```json
+{"event":"lifecycle","timestamp":"...","platform":"openclaw","session_id":"...","lifecycle_type":"subagent_spawning"}
+```
+
+Old-format lines (without `event` field) are also valid — treat them as guard entries with `event_type: "pre"`.
 
 ### How to Display
 
 1. Read `~/.ffwd-agent-guard/audit.jsonl` using the Read tool
 2. Parse each line as JSON
-3. Format as a table showing recent events (last 50 by default)
-4. If any events have `initiating_skill`, add a "Skill Activity" section grouping events by skill
+3. Filter by `event` type — show guard entries in the main table, scan entries in a separate section
+4. Format as a table showing recent events (last 50 by default)
+5. If any events have `initiating_skill`, add a "Skill Activity" section grouping events by skill
 
 ### Output Format
 
@@ -275,10 +300,20 @@ The `initiating_skill` field is present when the action was triggered by a skill
 
 ### Recent Events
 
-| Time | Tool | Action | Decision | Risk | Tags | Skill |
-|------|------|--------|----------|------|------|-------|
-| 2025-01-15 14:30 | Bash | rm -rf / | DENY | critical | DANGEROUS_COMMAND | some-skill |
-| 2025-01-15 14:28 | Write | .env | CONFIRM | high | SENSITIVE_PATH | — |
+| Time | Tool | Type | Decision | Risk | Score | Phase | Top Finding | Skill |
+|------|------|------|----------|------|-------|-------|-------------|-------|
+| 14:30 | Bash | exec | DENY | critical | 0.95 | 2 | DANGEROUS_COMMAND | some-skill |
+| 14:28 | Write | write | ASK | high | 0.65 | 4 | OBFUSCATION | — |
+
+### Pipeline Stats
+
+If enough events exist, show per-phase statistics:
+
+| Phase | Invocations | Avg Score | Avg Duration |
+|-------|-------------|-----------|--------------|
+| Runtime (2) | 45 | 0.12 | 2ms |
+| Static (3) | 20 | 0.08 | 18ms |
+| Behavioural (4) | 12 | 0.15 | 85ms |
 
 ### Skill Activity
 

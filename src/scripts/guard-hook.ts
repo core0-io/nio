@@ -20,6 +20,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
+import { createLoggerProvider } from './lib/logs-collector.js';
 
 // ---------------------------------------------------------------------------
 // Types (local declarations to avoid cross-project imports)
@@ -35,8 +36,8 @@ interface HookOutput {
 interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => Record<string, unknown>;
   ClaudeCodeAdapter: new (opts?: { guardedTools?: Record<string, string> }) => unknown;
-  evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>) => Promise<HookOutput>;
-  loadConfig: () => { level: string; guard?: { guarded_tools?: Record<string, string> }; metrics?: Record<string, unknown> };
+  evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>, auditOpts?: Record<string, unknown>) => Promise<HookOutput>;
+  loadConfig: () => { level: string; audit?: { local?: boolean; max_size_mb?: number; otel?: boolean }; guard?: { guarded_tools?: Record<string, string> }; metrics?: Record<string, unknown> };
 }
 
 // ---------------------------------------------------------------------------
@@ -119,11 +120,20 @@ async function main(): Promise<void> {
   const adapter = new ClaudeCodeAdapter({ guardedTools: config.guard?.guarded_tools });
   const ffwdAgentGuard = createAgentGuard();
 
-  const result = await evaluateHook(adapter, input, { config, ffwdAgentGuard });
-
-  // Record guard decision metrics
+  // Set up OTEL providers for metrics + audit logs
   const collectorConfig = loadCollectorConfig();
   const meterProvider = createMeterProvider(collectorConfig);
+  const auditConfig = config.audit;
+  const loggerProvider = (auditConfig?.otel !== false)
+    ? createLoggerProvider(collectorConfig)
+    : null;
+
+  const result = await evaluateHook(
+    adapter, input, { config, ffwdAgentGuard },
+    { loggerProvider, auditConfig },
+  );
+
+  // Record guard decision metrics
   if (meterProvider) {
     const toolName = (input as Record<string, unknown>).tool_name as string || '';
     await recordGuardDecision(
@@ -135,6 +145,12 @@ async function main(): Promise<void> {
       'claude-code',
     );
   }
+
+  // Flush OTEL providers before exit
+  await Promise.all([
+    meterProvider?.forceFlush(),
+    loggerProvider?.forceFlush(),
+  ]);
 
   if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked');
   else if (result.decision === 'ask') outputAsk(result.reason || 'Action requires confirmation');

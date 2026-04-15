@@ -35,12 +35,23 @@ import { ExternalAnalyser } from '../external/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
+export interface PhaseTimingEntry {
+  score: number;
+  finding_count: number;
+  duration_ms: number;
+}
+
+export type PhaseTimings = Partial<
+  Record<'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', PhaseTimingEntry>
+>;
+
 export interface RuntimeDecision {
   decision: GuardDecision;
   risk_level: RiskLevel;
   findings: Finding[];
   scores: PhaseScores & { final?: number };
   phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
+  phase_timings?: PhaseTimings;
   explanation?: string;
 }
 
@@ -91,46 +102,58 @@ export class RuntimeAnalyser {
     const level = levelOverride ?? this.level;
     const allFindings: Finding[] = [];
     const scores: PhaseScores = {};
+    const timings: PhaseTimings = {};
 
     // ── Phase 1: Allowlist Gate ───────────────────────────────────────
+    const t1 = performance.now();
     const allowlistResult = checkAllowlist(envelope, this.extraAllowlist);
+    const t1End = performance.now();
     if (allowlistResult.allowed) {
+      timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
       return {
         decision: 'allow',
         risk_level: allowlistResult.audit ? 'medium' : 'low',
         findings: [],
         scores: {},
         phase_stopped: 1,
+        phase_timings: timings,
         explanation: allowlistResult.audit
           ? allowlistResult.auditReason
           : 'Matched allowlist',
       };
     }
+    timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
 
     // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
+    const t2 = performance.now();
     const phase2Findings = analyzeAction(envelope);
+    const t2End = performance.now();
     allFindings.push(...phase2Findings);
     const scoreA = findingsToScore(phase2Findings);
     scores.runtime = scoreA;
+    timings.runtime = { score: scoreA, finding_count: phase2Findings.length, duration_ms: Math.round(t2End - t2) };
 
     if (shouldShortCircuit(scoreA, level)) {
-      return this.buildResult(allFindings, scores, 2, level);
+      return this.buildResult(allFindings, scores, 2, level, timings);
     }
 
     // ── Phase 3: StaticAnalyser (Write/Edit only) ────────────────────
     if (envelope.action.type === 'write_file') {
       const data = envelope.action.data as { content_preview?: string; path?: string };
       if (data.content_preview) {
+        const t3 = performance.now();
         const phase3Findings = await this.runStaticOnContent(
           data.content_preview,
           data.path || 'unknown',
         );
+        const t3End = performance.now();
         allFindings.push(...phase3Findings);
         const scoreB = findingsToScore(phase3Findings);
         scores.static = scoreB;
+        timings.static = { score: scoreB, finding_count: phase3Findings.length, duration_ms: Math.round(t3End - t3) };
 
         if (shouldShortCircuit(scoreB, level)) {
-          return this.buildResult(allFindings, scores, 3, level);
+          return this.buildResult(allFindings, scores, 3, level, timings);
         }
       }
     }
@@ -142,34 +165,41 @@ export class RuntimeAnalyser {
       const isBehaviouralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path);
 
       if (isBehaviouralTarget && data.content_preview) {
+        const t4 = performance.now();
         const phase4Findings = await this.runBehaviouralOnContent(
           data.content_preview,
           path,
         );
+        const t4End = performance.now();
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
         scores.behavioural = scoreC;
+        timings.behavioural = { score: scoreC, finding_count: phase4Findings.length, duration_ms: Math.round(t4End - t4) };
 
         if (shouldShortCircuit(scoreC, level)) {
-          return this.buildResult(allFindings, scores, 4, level);
+          return this.buildResult(allFindings, scores, 4, level, timings);
         }
       }
     }
 
     // ── Phase 5: LLM (optional, gated on API key) ────────────────────
     if (this.llmApiKey) {
+      const t5 = performance.now();
       const phase5Findings = await this.runLLMOnAction(envelope);
+      const t5End = performance.now();
       allFindings.push(...phase5Findings);
       const scoreD = findingsToScore(phase5Findings);
       scores.llm = scoreD;
+      timings.llm = { score: scoreD, finding_count: phase5Findings.length, duration_ms: Math.round(t5End - t5) };
 
       if (shouldShortCircuit(scoreD, level)) {
-        return this.buildResult(allFindings, scores, 5, level);
+        return this.buildResult(allFindings, scores, 5, level, timings);
       }
     }
 
     // ── Phase 6: External API (optional, gated on endpoint) ─────────
     if (this.externalScorer) {
+      const t6 = performance.now();
       const result = await this.externalScorer.scoreAction(
           envelope.action.type,
           envelope.action.data as unknown as Record<string, unknown>,
@@ -177,8 +207,10 @@ export class RuntimeAnalyser {
           allFindings,
           envelope.context.initiating_skill,
         );
+      const t6End = performance.now();
       if (result) {
         scores.external = result.score;
+        timings.external = { score: result.score, finding_count: 0, duration_ms: Math.round(t6End - t6) };
 
         if (shouldShortCircuit(result.score, level)) {
           // Add a synthetic finding for the external score
@@ -193,13 +225,14 @@ export class RuntimeAnalyser {
             analyser: 'static',
             confidence: result.score,
           });
-          return this.buildResult(allFindings, scores, 6, level);
+          timings.external!.finding_count = 1;
+          return this.buildResult(allFindings, scores, 6, level, timings);
         }
       }
     }
 
     // ── Final: Aggregate scores ──────────────────────────────────────
-    return this.buildResult(allFindings, scores, 6, level);
+    return this.buildResult(allFindings, scores, 6, level, timings);
   }
 
   // ── Phase 3: Static analysis on file content ──────────────────────────
@@ -304,6 +337,7 @@ export class RuntimeAnalyser {
     scores: PhaseScores,
     phaseStopped: 1 | 2 | 3 | 4 | 5 | 6,
     level: ProtectionLevel = this.level,
+    phaseTimings?: PhaseTimings,
   ): RuntimeDecision {
     const finalScore = aggregateScores(scores, this.weights);
     const decision = scoreToDecision(finalScore, level);
@@ -323,6 +357,7 @@ export class RuntimeAnalyser {
       findings,
       scores: { ...scores, final: finalScore },
       phase_stopped: phaseStopped,
+      phase_timings: phaseTimings,
       explanation,
     };
   }

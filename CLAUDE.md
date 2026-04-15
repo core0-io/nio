@@ -55,10 +55,15 @@ guard:
     WebFetch: network_request
     WebSearch: network_request
 collector:
-  endpoint: ""
+  endpoint: ""            # OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs)
   api_key: ""
   timeout: 5000
-  log: ""
+  protocol: http          # http | grpc
+  log: ""                 # Local JSONL metrics log path
+audit:
+  local: true             # Write to ~/.ffwd-agent-guard/audit.jsonl
+  max_size_mb: 10         # Rotate when exceeded (0 = no rotation)
+  otel: true              # Export audit logs via OTEL (uses collector endpoint)
 ```
 
 Set `FFWD_AGENT_GUARD_HOME` to change the config directory (default: `~/.ffwd-agent-guard`).

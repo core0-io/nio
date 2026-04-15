@@ -1,7 +1,8 @@
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
-import { writeAuditLog } from './common.js';
+import { writeAuditLog, buildGuardAuditEntry } from './common.js';
+import type { WriteAuditLogOptions } from './common.js';
 import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 
@@ -109,12 +110,13 @@ function checkToolGate(toolName: string, config: EngineOptions['config']): HookO
  * Evaluate a hook event using the RuntimeAnalyser pipeline.
  *
  * This is the platform-agnostic core — adapters handle I/O protocol,
- * this function handles security logic via the 6-phase pipeline.
+ * this function handles security logic via the Phase 0–6 pipeline.
  */
 export async function evaluateHook(
   adapter: HookAdapter,
   rawInput: unknown,
-  options: EngineOptions
+  options: EngineOptions,
+  auditOpts?: WriteAuditLogOptions,
 ): Promise<HookOutput> {
   const input = adapter.parseInput(rawInput);
 
@@ -122,19 +124,21 @@ export async function evaluateHook(
   const toolGate = checkToolGate(input.toolName, options.config);
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);
-    writeAuditLog(
-      input,
-      { decision: 'deny', risk_level: 'critical', risk_tags: toolGate.riskTags ?? [] },
-      skill,
-      adapter.name,
-    );
+    const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
+    entry.decision = 'deny';
+    entry.risk_level = 'critical';
+    entry.risk_score = scoreForLevel('critical');
+    entry.risk_tags = toolGate.riskTags ?? [];
+    entry.explanation = toolGate.reason;
+    writeAuditLog(entry, auditOpts);
     return toolGate;
   }
 
   // Post-tool events → audit only
   if (input.eventType === 'post') {
     const skill = await adapter.inferInitiatingSkill(input);
-    writeAuditLog(input, null, skill, adapter.name);
+    const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
+    writeAuditLog(entry, auditOpts);
     return { decision: 'allow' };
   }
 
@@ -151,24 +155,18 @@ export async function evaluateHook(
     const level = (options.config.level || 'balanced') as ProtectionLevel;
     const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyser.evaluate(envelope, level);
 
-    // Write audit log
-    const riskTags = [...new Set(rd.findings.map(f => f.rule_id))];
-    writeAuditLog(
-      input,
-      { decision: rd.decision, risk_level: rd.risk_level, risk_tags: riskTags },
-      initiatingSkill,
-      adapter.name,
+    const entry = buildGuardAuditEntry(
+      input, rd, initiatingSkill, adapter.name, envelope.action.type,
     );
+    writeAuditLog(entry, auditOpts);
 
     return runtimeDecisionToHookOutput(rd, initiatingSkill);
   } catch {
     // Engine error → fail open
-    writeAuditLog(
-      input,
-      { decision: 'error', risk_level: 'low', risk_tags: ['ENGINE_ERROR'] },
-      initiatingSkill,
-      adapter.name,
-    );
+    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name);
+    entry.decision = 'error';
+    entry.risk_tags = ['ENGINE_ERROR'];
+    writeAuditLog(entry, auditOpts);
     return { decision: 'allow' };
   }
 }
