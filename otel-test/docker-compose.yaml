@@ -154,6 +154,21 @@ services:
       # - "1777:1777"     # pprof extension
       - "4317:4317" # OTLP gRPC receiver
       - "4318:4318" # OTLP HTTP receiver
+  mock-scorer:
+    !!merge <<: *common
+    image: node:22-alpine
+    container_name: mock-scorer
+    working_dir: /app
+    volumes:
+      - ./mock-scorer:/app:ro
+    command: ["node", "server.js"]
+    ports:
+      - "9090:8080"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
   signoz-telemetrystore-migrator:
     !!merge <<: *db-depend
     image: signoz/signoz-otel-collector:${OTELCOL_TAG:-v0.144.2}

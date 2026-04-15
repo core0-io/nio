@@ -59,6 +59,7 @@ guard:
   external_analyser:
     # Enable/disable Phase 6 external scoring.
     enabled: false
+    # Scoring API endpoint. Use http://localhost:9090 for the bundled mock scorer.
     endpoint: ""
     api_key: ""
     timeout: 3000

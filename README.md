@@ -72,8 +72,8 @@ Security evaluation with two modes:
 | 2 | **Pattern Analysis** | <5ms | Guarded tools only |
 | 3 | **Static Analysis** | <50ms | Write/Edit only |
 | 4 | **Behavioural Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
-| 5 | **LLM Analysis** | 2–10s | All (optional, needs `llm.api_key`) |
-| 6 | **External Scoring API** | configurable | All (optional, needs `guard.scoring_endpoint`) |
+| 5 | **LLM Analysis** | 2–10s | All (optional, needs `guard.llm_analyser.enabled` + `api_key`) |
+| 6 | **External Scoring API** | configurable | All (optional, needs `guard.external_analyser.enabled` + `endpoint`) |
 
 Each phase produces a 0–1 score and can short-circuit on critical findings. Final score is a **weighted average** across all phases that ran:
 
@@ -172,6 +172,12 @@ cd ffwd-agent-guard && ./setup.sh
 ```
 
 Detects installed platforms and runs the appropriate setup for each.
+
+To reset config to defaults after an upgrade:
+
+```bash
+./setup.sh --reset-config
+```
 
 </details>
 

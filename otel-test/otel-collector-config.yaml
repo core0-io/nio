@@ -22,3 +22,6 @@ service:
     metrics:
       receivers: [otlp]
       exporters: [debug, otlp_grpc/signoz]
+    logs:
+      receivers: [otlp]
+      exporters: [debug, otlp_grpc/signoz]
