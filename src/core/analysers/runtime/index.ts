@@ -48,11 +48,21 @@ export type PhaseTimings = Partial<
 export interface RuntimeDecision {
   decision: GuardDecision;
   risk_level: RiskLevel;
+  /** Highest severity among all findings (independent of score). */
+  max_finding_severity: RiskLevel;
   findings: Finding[];
   scores: PhaseScores & { final?: number };
   phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
   phase_timings?: PhaseTimings;
   explanation?: string;
+}
+
+/** Map a 0-1 risk score to a risk level. */
+function scoreToRiskLevel(score: number): RiskLevel {
+  if (score >= 0.9) return 'critical';
+  if (score >= 0.7) return 'high';
+  if (score >= 0.5) return 'medium';
+  return 'low';
 }
 
 export interface RuntimeAnalyserOptions {
@@ -128,6 +138,7 @@ export class RuntimeAnalyser {
       return {
         decision: 'allow',
         risk_level: allowlistResult.audit ? 'medium' : 'low',
+        max_finding_severity: 'low',
         findings: [],
         scores: {},
         phase_stopped: 1,
@@ -356,7 +367,8 @@ export class RuntimeAnalyser {
   ): RuntimeDecision {
     const finalScore = aggregateScores(scores, this.weights);
     const decision = scoreToDecision(finalScore, level);
-    const riskLevel = findings.length > 0
+    const riskLevel = scoreToRiskLevel(finalScore);
+    const maxFindingSeverity = findings.length > 0
       ? aggregateRiskLevel(findings)
       : 'low';
 
@@ -369,6 +381,7 @@ export class RuntimeAnalyser {
     return {
       decision,
       risk_level: riskLevel,
+      max_finding_severity: maxFindingSeverity,
       findings,
       scores: { ...scores, final: finalScore },
       phase_stopped: phaseStopped,

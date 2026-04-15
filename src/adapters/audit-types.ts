@@ -29,7 +29,7 @@ export interface AuditPhaseDetail {
 }
 
 export type AuditPhaseMap = Partial<
-  Record<'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', AuditPhaseDetail>
+  Record<'tool_gate' | 'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', AuditPhaseDetail>
 >;
 
 // ── Guard entry ─────────────────────────────────────────────────────────
@@ -47,10 +47,11 @@ export interface AuditGuardEntry {
 
   decision: string;
   risk_level: string;
+  max_finding_severity: string;
   risk_score: number;
   risk_tags: string[];
 
-  phase_stopped: number;
+  phase_stopped: number | null;
   scores: Record<string, number | undefined>;
   phases?: AuditPhaseMap;
   top_findings: AuditFindingSummary[];

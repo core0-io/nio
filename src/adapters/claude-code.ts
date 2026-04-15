@@ -84,8 +84,11 @@ export class ClaudeCodeAdapter implements HookAdapter {
       }
 
       case 'write_file': {
+        const content = (input.toolInput.content as string) ||
+                        (input.toolInput.new_string as string) || '';
         const data: FileOperationData = {
           path: (input.toolInput.file_path as string) || '',
+          content_preview: content.slice(0, 10_000),
         };
         actionData = data;
         break;

@@ -1,25 +1,20 @@
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
-import type { RiskLevel } from '../types/scanner.js';
-import { riskLevelToNumericScore } from '../types/scanner.js';
 import { writeAuditLog, buildGuardAuditEntry } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 
-function scoreForLevel(level: string | undefined): number {
-  return riskLevelToNumericScore((level || 'medium') as RiskLevel);
-}
-
 function policyHookReason(
   explanation: string,
   skillTag: string,
   riskTags: string[] | undefined,
-  riskLevel: string
+  riskLevel: string,
+  score: number,
 ): string {
-  const score = scoreForLevel(riskLevel);
+  const rounded = Math.round(score * 1000) / 1000;
   const tagPart =
     riskTags && riskTags.length > 0 ? ` [${riskTags.join(', ')}]` : '';
-  return `[score: ${score}][level: ${riskLevel}]${tagPart} FFWD AgentGuard: ${explanation}${skillTag}`;
+  return `[score: ${rounded}][level: ${riskLevel}]${tagPart} FFWD AgentGuard: ${explanation}${skillTag}`;
 }
 
 /**
@@ -33,6 +28,8 @@ function runtimeDecisionToHookOutput(
   const riskTags = rd.findings.map(f => f.rule_id);
   const uniqueTags = [...new Set(riskTags)];
 
+  const finalScore = rd.scores.final ?? 0;
+
   if (rd.decision === 'deny') {
     return {
       decision: 'deny',
@@ -41,9 +38,10 @@ function runtimeDecisionToHookOutput(
         skillTag,
         uniqueTags,
         rd.risk_level,
+        finalScore,
       ),
       riskLevel: rd.risk_level,
-      riskScore: scoreForLevel(rd.risk_level),
+      riskScore: finalScore,
       riskTags: uniqueTags,
       initiatingSkill,
     };
@@ -57,15 +55,21 @@ function runtimeDecisionToHookOutput(
         skillTag,
         uniqueTags,
         rd.risk_level,
+        finalScore,
       ),
       riskLevel: rd.risk_level,
-      riskScore: scoreForLevel(rd.risk_level),
+      riskScore: finalScore,
       riskTags: uniqueTags,
       initiatingSkill,
     };
   }
 
-  return { decision: 'allow', initiatingSkill };
+  return {
+    decision: 'allow',
+    riskLevel: rd.risk_level,
+    riskScore: finalScore,
+    initiatingSkill,
+  };
 }
 
 /**
@@ -84,10 +88,10 @@ function checkToolGate(toolName: string, config: EngineOptions['config'], platfo
     return {
       decision: 'deny',
       reason: policyHookReason(
-        `Tool "${toolName}" is blocked (blocked_tools)`, '', ['TOOL_GATE_BLOCKED'], 'critical'
+        `Tool "${toolName}" is blocked (blocked_tools)`, '', ['TOOL_GATE_BLOCKED'], 'critical', 1.0
       ),
       riskLevel: 'critical',
-      riskScore: scoreForLevel('critical'),
+      riskScore: 1.0,
       riskTags: ['TOOL_GATE_BLOCKED'],
     };
   }
@@ -96,10 +100,10 @@ function checkToolGate(toolName: string, config: EngineOptions['config'], platfo
     return {
       decision: 'deny',
       reason: policyHookReason(
-        `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical'
+        `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical', 1.0
       ),
       riskLevel: 'critical',
-      riskScore: scoreForLevel('critical'),
+      riskScore: 1.0,
       riskTags: ['TOOL_GATE_UNAVAILABLE'],
     };
   }
@@ -122,24 +126,25 @@ export async function evaluateHook(
   const input = adapter.parseInput(rawInput);
 
   // Phase 0: Tool-level gate
+  const t0 = performance.now();
   const toolGate = checkToolGate(input.toolName, options.config, adapter.name);
+  const t0End = performance.now();
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);
     const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
     entry.decision = 'deny';
     entry.risk_level = 'critical';
-    entry.risk_score = scoreForLevel('critical');
+    entry.risk_score = 1.0;
     entry.risk_tags = toolGate.riskTags ?? [];
     entry.explanation = toolGate.reason;
+    entry.phase_stopped = 0;
+    entry.phases = { tool_gate: { score: 1, finding_count: 1, duration_ms: Math.round(t0End - t0) } };
     writeAuditLog(entry, auditOpts);
     return toolGate;
   }
 
-  // Post-tool events → audit only
+  // Post-tool events → no guard evaluation needed
   if (input.eventType === 'post') {
-    const skill = await adapter.inferInitiatingSkill(input);
-    const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
-    writeAuditLog(entry, auditOpts);
     return { decision: 'allow' };
   }
 

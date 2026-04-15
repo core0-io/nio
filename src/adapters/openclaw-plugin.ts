@@ -250,19 +250,37 @@ export function registerOpenClawPlugin(
         ).catch(() => {});
       }
 
-      if (result.decision === 'deny') {
-        return {
-          block: true,
-          blockReason: result.reason || 'Blocked by FFWD AgentGuard',
-        };
+      if (result.decision === 'deny' || result.decision === 'ask') {
+        // Close the tool span immediately — after_tool_call won't fire for blocked tools
+        if (tracerProvider) {
+          const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+          if (span) {
+            span.setAttribute('agentguard.guard.decision', result.decision);
+            span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
+            span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
+            if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
+            const reason = result.reason || (result.decision === 'deny' ? 'Blocked by FFWD AgentGuard' : 'Requires confirmation (FFWD AgentGuard)');
+            span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
+            span.recordException(reason);
+            span.end();
+            activeToolSpans.delete(`${sessionId}:${spanKey}`);
+          }
+        }
+
+        const blockReason = result.decision === 'deny'
+          ? (result.reason || 'Blocked by FFWD AgentGuard')
+          : (result.reason || 'Requires confirmation (FFWD AgentGuard)');
+        return { block: true, blockReason };
       }
 
-      // OpenClaw has no 'ask' mode — block with explanation in strict/balanced
-      if (result.decision === 'ask') {
-        return {
-          block: true,
-          blockReason: result.reason || 'Requires confirmation (FFWD AgentGuard)',
-        };
+      // Allow — record decision on span for observability
+      if (tracerProvider) {
+        const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+        if (span) {
+          span.setAttribute('agentguard.guard.decision', 'allow');
+          span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'low');
+          span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
+        }
       }
 
       return undefined; // allow
@@ -275,7 +293,6 @@ export function registerOpenClawPlugin(
   // after_tool_call → audit log + collector (fire-and-forget)
   api.on('after_tool_call', async (event: unknown, ctx: unknown) => {
     try {
-      const input = adapter.parseInput(event);
       const toolEvent = event as {
         toolName?: string;
         params?: Record<string, unknown>;
@@ -286,21 +303,6 @@ export function registerOpenClawPlugin(
         durationMs?: number;
       };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-      writeAuditLog({
-        event: 'guard',
-        timestamp: new Date().toISOString(),
-        platform: 'openclaw',
-        tool_name: input.toolName,
-        tool_input_summary: JSON.stringify(input.toolInput).slice(0, 200),
-        decision: 'allow',
-        risk_level: 'low',
-        risk_score: 0,
-        risk_tags: [],
-        phase_stopped: 0,
-        scores: {},
-        top_findings: [],
-        event_type: 'post',
-      }, auditOpts);
 
       const toolName = toolEvent.toolName || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';

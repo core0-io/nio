@@ -93,12 +93,16 @@ export class OpenClawAdapter implements HookAdapter {
         };
         break;
 
-      case 'write_file':
+      case 'write_file': {
+        const content = (input.toolInput.content as string) ||
+                        (input.toolInput.file_text as string) || '';
         actionData = {
           path: (input.toolInput.path as string) ||
                 (input.toolInput.file_path as string) || '',
+          content_preview: content.slice(0, 10_000),
         };
         break;
+      }
 
       case 'read_file':
         actionData = {

@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createAgentGuard } from '../../index.js';
 import { ClaudeCodeAdapter } from '../../adapters/claude-code.js';
 import { OpenClawAdapter } from '../../adapters/openclaw.js';
+import { RuntimeAnalyser } from '../../core/analysers/runtime/index.js';
 import type { EngineOptions } from '../../adapters/types.js';
 
 /**
@@ -25,7 +25,10 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     : levelOrOpts;
 
   const tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-integ-'));
-  const ffwdAgentGuard = createAgentGuard();
+  // Create an isolated RuntimeAnalyser — no external services, no loadConfig() side effects
+  const ffwdAgentGuard = {
+    runtimeAnalyser: new RuntimeAnalyser(),
+  };
 
   const config: EngineOptions['config'] = {
     guard: {
