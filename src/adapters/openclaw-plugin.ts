@@ -147,18 +147,20 @@ export function registerOpenClawPlugin(
   api: OpenClawRegisterApi,
   options: OpenClawPluginOptions = {}
 ): void {
-  const adapter = new OpenClawAdapter();
   const config = loadConfig();
-  if (options.level) config.level = options.level as typeof config.level;
+  const guard = config.guard;
+  if (options.level && guard) guard.level = options.level as typeof guard.level;
+
+  const adapter = new OpenClawAdapter({ guardedTools: guard?.guarded_tools?.openclaw });
 
   const collectorConfig = loadCollectorConfig();
   const tracerProvider = createTracerProvider(collectorConfig);
   const meterProvider = createMeterProvider(collectorConfig);
-  const auditConfig = config.audit;
-  const loggerProvider = (auditConfig?.otel !== false)
+  const logsConfig = config.collector?.logs;
+  const loggerProvider = (logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig)
     : null;
-  const auditOpts: WriteAuditLogOptions = { loggerProvider, auditConfig };
+  const auditOpts: WriteAuditLogOptions = { loggerProvider, logsConfig };
 
   const logger = (msg: string) => console.log(msg);
 
@@ -172,14 +174,15 @@ export function registerOpenClawPlugin(
       } else {
         ffwdAgentGuard = {
           runtimeAnalyser: new RuntimeAnalyser({
-            level: (config.level || 'balanced') as ProtectionLevel,
-            extraAllowlist: config.guard?.extra_allowlist,
-            weights: config.guard?.weights,
-            llmApiKey: config.llm?.api_key,
-            llmModel: config.llm?.model,
-            scoringEndpoint: config.guard?.scoring_endpoint,
-            scoringApiKey: config.guard?.scoring_api_key,
-            scoringTimeout: config.guard?.scoring_timeout,
+            level: (guard?.level || 'balanced') as ProtectionLevel,
+            extraAllowlist: guard?.allowed_commands,
+            extraPatterns: guard?.rules,
+            weights: guard?.weights,
+            llmApiKey: guard?.llm?.api_key,
+            llmModel: guard?.llm?.model,
+            scoringEndpoint: guard?.external_scoring?.endpoint,
+            scoringApiKey: guard?.external_scoring?.api_key,
+            scoringTimeout: guard?.external_scoring?.timeout,
           }),
         };
       }
@@ -456,7 +459,7 @@ export function registerOpenClawPlugin(
     }
   });
 
-  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${config.level || 'balanced'})`);
+  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${guard?.level || 'balanced'})`);
 }
 
 /**

@@ -175,58 +175,62 @@ View or update the FFWD AgentGuard configuration.
 | Input | Action |
 |-------|--------|
 | `config` or `config show` | Run `node scripts/config-cli.js show` |
-| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.json`, update only the `level` field (preserve all other settings), write back, confirm to user |
+| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.yaml`, update only the `guard.level` field (preserve all other settings), write back, confirm to user |
 
 ### Config File
 
-All configuration is stored in `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+All configuration is stored in `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
 A template with all options is available at `config.default.yaml` in the plugin directory.
 
-Full schema:
+Two top-level sections: `guard` (security settings) and `collector` (telemetry settings).
 
 ```json
 {
-  "level": "balanced",
   "guard": {
-    "available_tools": [],
-    "blocked_tools": [],
+    "level": "balanced",
+    "rules": {},
+    "llm": { "api_key": "" },
+    "external_scoring": { "endpoint": "" },
+    "allowed_commands": [],
+    "available_tools": {},
+    "blocked_tools": {},
     "guarded_tools": {
-      "Bash": "exec_command",
-      "Write": "write_file",
-      "Edit": "write_file",
-      "WebFetch": "network_request",
-      "WebSearch": "network_request"
-    }
+      "claude_code": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" },
+      "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" }
+    },
+    "weights": {}
   },
   "collector": {
     "endpoint": "",
     "api_key": "",
     "timeout": 5000,
     "protocol": "http",
-    "log": ""
-  },
-  "audit": {
-    "local": true,
-    "max_size_mb": 10,
-    "otel": true
+    "metrics": { "enabled": true, "local": true, "log": "", "max_size_mb": 100 },
+    "traces": { "enabled": true },
+    "logs": { "enabled": true, "local": true, "path": "", "max_size_mb": 100 }
   }
 }
 ```
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
-| `guard.available_tools` | string[] | `[]` | Tool-level allowlist (Phase 0). When non-empty, only listed tools are available |
-| `guard.blocked_tools` | string[] | `[]` | Tool-level denylist (Phase 0). Listed tools are unconditionally blocked |
-| `guard.guarded_tools` | object | *(see above)* | Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis |
+| `guard.level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `guard.rules` | object | `{}` | Extra scan patterns (used by scan + guard Phase 3) |
+| `guard.llm.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
+| `guard.external_scoring.endpoint` | string | `""` | Phase 6 external scoring API URL |
+| `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
+| `guard.available_tools` | object | `{}` | Per-platform tool allowlist (Phase 0) |
+| `guard.blocked_tools` | object | `{}` | Per-platform tool denylist (Phase 0) |
+| `guard.guarded_tools` | object | *(see above)* | Per-platform tool → action type mapping |
 | `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
-| `collector.timeout` | number | `5000` | Collector request timeout in ms |
 | `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |
-| `collector.log` | string | `""` | Path to local JSONL metrics log file (supports `~/`) |
-| `audit.local` | boolean | `true` | Write audit entries to local JSONL (`~/.ffwd-agent-guard/audit.jsonl`) |
-| `audit.max_size_mb` | number | `10` | Rotate local log when exceeded (0 = no rotation) |
-| `audit.otel` | boolean | `true` | Export audit logs via OTEL Logs (uses collector endpoint/api_key) |
+| `collector.metrics.enabled` | boolean | `true` | Enable OTEL metrics export |
+| `collector.metrics.local` | boolean | `true` | Write metrics to local JSONL |
+| `collector.traces.enabled` | boolean | `true` | Enable OTEL traces export |
+| `collector.logs.enabled` | boolean | `true` | Enable OTEL audit log export |
+| `collector.logs.local` | boolean | `true` | Write audit logs to local JSONL |
+| `collector.logs.max_size_mb` | number | `100` | Rotate local audit log when exceeded |
 
 Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory (default: `~/.ffwd-agent-guard`).
 

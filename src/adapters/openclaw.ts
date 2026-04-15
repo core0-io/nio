@@ -2,15 +2,21 @@ import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
- * Tool name → action type mapping for OpenClaw
+ * Default tool name → action type mapping for OpenClaw.
+ * Used when config does not provide guard.guarded_tools.openclaw.
  */
-const TOOL_ACTION_MAP: Record<string, string> = {
+const DEFAULT_TOOL_ACTION_MAP: Record<string, string> = {
   exec: 'exec_command',
   write: 'write_file',
   read: 'read_file',
   web_fetch: 'network_request',
   browser: 'network_request',
 };
+
+export interface OpenClawAdapterOptions {
+  /** Config-driven tool → action type mapping, overrides the built-in default. */
+  guardedTools?: Record<string, string>;
+}
 
 /**
  * OpenClaw hook adapter
@@ -26,6 +32,11 @@ const TOOL_ACTION_MAP: Record<string, string> = {
  */
 export class OpenClawAdapter implements HookAdapter {
   readonly name = 'openclaw';
+  private toolActionMap: Record<string, string>;
+
+  constructor(opts?: OpenClawAdapterOptions) {
+    this.toolActionMap = opts?.guardedTools ?? DEFAULT_TOOL_ACTION_MAP;
+  }
 
   parseInput(raw: unknown): HookInput {
     const event = raw as Record<string, unknown>;
@@ -39,11 +50,11 @@ export class OpenClawAdapter implements HookAdapter {
 
   mapToolToActionType(toolName: string): string | null {
     // Direct match
-    if (TOOL_ACTION_MAP[toolName]) {
-      return TOOL_ACTION_MAP[toolName];
+    if (this.toolActionMap[toolName]) {
+      return this.toolActionMap[toolName];
     }
     // Prefix match for tool families (e.g. "exec_python" → "exec_command")
-    for (const [prefix, actionType] of Object.entries(TOOL_ACTION_MAP)) {
+    for (const [prefix, actionType] of Object.entries(this.toolActionMap)) {
       if (toolName.startsWith(prefix)) {
         return actionType;
       }

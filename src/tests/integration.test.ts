@@ -190,7 +190,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   afterEach(() => ctx?.cleanup());
 
   it('should DENY a tool in blocked_tools', async () => {
-    ctx = createTestContext({ guard: { blocked_tools: ['Bash'] } });
+    ctx = createTestContext({ guard: { blocked_tools: { claude_code: ['Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -201,7 +201,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should ALLOW a tool not in blocked_tools', async () => {
-    ctx = createTestContext({ guard: { blocked_tools: ['WebFetch'] } });
+    ctx = createTestContext({ guard: { blocked_tools: { claude_code: ['WebFetch'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -211,7 +211,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should DENY a tool not in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: ['Read', 'Grep'] } });
+    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Read', 'Grep'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -222,7 +222,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should ALLOW a tool in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: ['Read', 'Bash'] } });
+    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Read', 'Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -233,7 +233,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
 
   it('blocked_tools should take precedence over available_tools', async () => {
     ctx = createTestContext({
-      guard: { available_tools: ['Bash'], blocked_tools: ['Bash'] },
+      guard: { available_tools: { claude_code: ['Bash'] }, blocked_tools: { claude_code: ['Bash'] } },
     });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
@@ -245,7 +245,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should be case-insensitive', async () => {
-    ctx = createTestContext({ guard: { blocked_tools: ['bash'] } });
+    ctx = createTestContext({ guard: { blocked_tools: { claude_code: ['bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -255,7 +255,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should DENY unmapped tool (Read) when not in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: ['Bash'] } });
+    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Read',
@@ -265,7 +265,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
   });
 
   it('should DENY PostToolUse event for blocked tool', async () => {
-    ctx = createTestContext({ guard: { blocked_tools: ['Bash'] } });
+    ctx = createTestContext({ guard: { blocked_tools: { claude_code: ['Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PostToolUse',
       tool_name: 'Bash',

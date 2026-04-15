@@ -74,7 +74,7 @@ export class SkillScanner {
 
     // Load LLM config from config.yaml
     const config = loadConfig();
-    const llmCfg = config.llm;
+    const llmCfg = config.guard?.llm;
 
     this.orchestrator = new ScanOrchestrator({
       policy,

@@ -53,11 +53,12 @@ export {
   type HookOutput,
   type EngineOptions,
   type AgentGuardConfig,
-  type MetricsConfig,
+  type CollectorConfig,
+  type CollectorLogsConfig,
   type ResolvedMetricsConfig,
   validateConfig,
   AgentGuardConfigSchema,
-  MetricsConfigSchema,
+  CollectorConfigSchema,
 } from './adapters/index.js';
 
 // Convenience factory functions
@@ -73,20 +74,22 @@ export function createAgentGuard(options?: {
   useExternalScanner?: boolean;
 }) {
   const config = loadConfig();
+  const guard = config.guard;
   const scanner = new SkillScanner({
     useExternalScanner: options?.useExternalScanner ?? true,
-    extraPatterns: config.rules,
+    extraPatterns: guard?.rules,
   });
 
   const runtimeAnalyser = new RuntimeAnalyser({
-    level: (config.level || 'balanced') as ProtectionLevel,
-    weights: config.guard?.weights,
-    extraAllowlist: config.guard?.extra_allowlist,
-    llmApiKey: config.llm?.api_key,
-    llmModel: config.llm?.model,
-    scoringEndpoint: config.guard?.scoring_endpoint,
-    scoringApiKey: config.guard?.scoring_api_key,
-    scoringTimeout: config.guard?.scoring_timeout,
+    level: (guard?.level || 'balanced') as ProtectionLevel,
+    weights: guard?.weights,
+    extraAllowlist: guard?.allowed_commands,
+    extraPatterns: guard?.rules,
+    llmApiKey: guard?.llm?.api_key,
+    llmModel: guard?.llm?.model,
+    scoringEndpoint: guard?.external_scoring?.endpoint,
+    scoringApiKey: guard?.external_scoring?.api_key,
+    scoringTimeout: guard?.external_scoring?.timeout,
   });
 
   return {

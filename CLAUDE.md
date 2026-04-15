@@ -40,30 +40,31 @@ npm run release:openclaw           # OpenClaw only
 
 ## Configuration
 
-Runtime config lives at `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
-A template with all options is at `plugins/shared/config.default.yaml` (synced to each plugin dir during build). Full schema:
+Runtime config lives at `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
+A template with all options is at `plugins/shared/config.default.yaml` (synced to each plugin dir during build). Two top-level sections:
 
 ```yaml
-level: balanced
 guard:
-  available_tools: []     # Phase 0: when non-empty, only these tools are available
-  blocked_tools: []       # Phase 0: these tools are unconditionally blocked
-  guarded_tools:          # Tools entering Phase 1-6 deep analysis
-    Bash: exec_command
-    Write: write_file
-    Edit: write_file
-    WebFetch: network_request
-    WebSearch: network_request
+  level: balanced
+  rules: {}                 # Extra scan patterns (used by scan + guard Phase 3)
+  llm: { api_key: "" }     # Phase 5 LLM analyser
+  external_scoring: {}      # Phase 6 external scoring API
+  allowed_commands: []      # Phase 1 safe command prefixes
+  available_tools: {}       # Per-platform tool allowlist (Phase 0)
+  blocked_tools: {}         # Per-platform tool denylist (Phase 0)
+  guarded_tools:            # Per-platform tool → action type mapping
+    claude_code: { Bash: exec_command, Write: write_file, Edit: write_file, WebFetch: network_request, WebSearch: network_request }
+    openclaw: { exec: exec_command, write: write_file, web_fetch: network_request, browser: network_request }
+  weights: {}               # Phase score aggregation weights
+
 collector:
-  endpoint: ""            # OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs)
+  endpoint: ""              # OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs)
   api_key: ""
   timeout: 5000
-  protocol: http          # http | grpc
-  log: ""                 # Local JSONL metrics log path
-audit:
-  local: true             # Write to ~/.ffwd-agent-guard/audit.jsonl
-  max_size_mb: 10         # Rotate when exceeded (0 = no rotation)
-  otel: true              # Export audit logs via OTEL (uses collector endpoint)
+  protocol: http            # http | grpc
+  metrics: { enabled: true, local: true, log: "~/.ffwd-agent-guard/metrics.jsonl", max_size_mb: 100 }
+  traces: { enabled: true }
+  logs: { enabled: true, local: true, path: "~/.ffwd-agent-guard/audit.jsonl", max_size_mb: 100 }
 ```
 
 Set `FFWD_AGENT_GUARD_HOME` to change the config directory (default: `~/.ffwd-agent-guard`).

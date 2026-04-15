@@ -72,11 +72,10 @@ export interface AgentGuardInstance {
  */
 export interface EngineOptions {
   config: {
-    level?: string;
     guard?: {
-      available_tools?: string[];
-      blocked_tools?: string[];
-      guarded_tools?: Record<string, string>;
+      level?: string;
+      available_tools?: Record<string, string[]>;
+      blocked_tools?: Record<string, string[]>;
     };
   };
   /** Runtime AgentGuard engine (scanner + registry facade) */

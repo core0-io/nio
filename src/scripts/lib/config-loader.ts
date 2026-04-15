@@ -20,25 +20,39 @@ export interface CollectorConfig {
   enabled: boolean;
 }
 
-export function loadCollectorConfig(): CollectorConfig {
+export interface LogsConfig {
+  enabled: boolean;
+  local: boolean;
+  path: string;
+  max_size_mb: number;
+}
+
+function readRawConfig(): Record<string, unknown> {
   const configDir = process.env['FFWD_AGENT_GUARD_HOME']
     ?? join(homedir(), '.ffwd-agent-guard');
   const configPath = join(configDir, 'config.json');
 
-  let raw: Record<string, unknown> = {};
   try {
-    raw = JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    return JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
   } catch {
-    // No config file — return disabled
-    return disabled();
+    return {};
   }
+}
 
-  const c = (raw['collector'] ?? {}) as Record<string, unknown>;
+function expandHome(path: string): string {
+  return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+}
 
-  let log = (c['log'] as string) ?? '';
-  if (log.startsWith('~/')) {
-    log = join(homedir(), log.slice(2));
-  }
+export function loadCollectorConfig(): CollectorConfig {
+  const raw = readRawConfig();
+
+  // New format: collector at top level
+  let c = (raw['collector'] ?? {}) as Record<string, unknown>;
+
+  // Metrics log: new path (collector.metrics.log) or legacy (collector.log)
+  const metrics = (c['metrics'] ?? {}) as Record<string, unknown>;
+  let log = (metrics['log'] as string) ?? (c['log'] as string) ?? '';
+  if (log) log = expandHome(log);
 
   const endpoint = (c['endpoint'] as string) ?? '';
   const enabled = endpoint !== '' || log !== '';
@@ -53,6 +67,26 @@ export function loadCollectorConfig(): CollectorConfig {
   };
 }
 
-function disabled(): CollectorConfig {
-  return { endpoint: '', api_key: '', timeout: 5000, log: '', protocol: 'http', enabled: false };
+export function loadLogsConfig(): LogsConfig {
+  const raw = readRawConfig();
+
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  let logs = (collector['logs'] ?? {}) as Record<string, unknown>;
+
+  // Backward compat: top-level `audit` section
+  if (raw['audit'] && typeof raw['audit'] === 'object' && Object.keys(logs).length === 0) {
+    const audit = raw['audit'] as Record<string, unknown>;
+    logs = {
+      enabled: audit['otel'],
+      local: audit['local'],
+      max_size_mb: audit['max_size_mb'],
+    };
+  }
+
+  return {
+    enabled: (logs['enabled'] as boolean) ?? true,
+    local: (logs['local'] as boolean) ?? true,
+    path: expandHome((logs['path'] as string) ?? '~/.ffwd-agent-guard/audit.jsonl'),
+    max_size_mb: (logs['max_size_mb'] as number) ?? 100,
+  };
 }

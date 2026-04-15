@@ -75,9 +75,10 @@ function runtimeDecisionToHookOutput(
  * content-level analysis. Returns a deny HookOutput if the tool is
  * blocked or not in the available list; null to proceed to Phase 1-6.
  */
-function checkToolGate(toolName: string, config: EngineOptions['config']): HookOutput | null {
-  const blocked = config.guard?.blocked_tools ?? [];
-  const available = config.guard?.available_tools ?? [];
+function checkToolGate(toolName: string, config: EngineOptions['config'], platform: string): HookOutput | null {
+  const platformKey = platform.replace(/-/g, '_');
+  const blocked = config.guard?.blocked_tools?.[platformKey] ?? [];
+  const available = config.guard?.available_tools?.[platformKey] ?? [];
 
   if (blocked.length > 0 && blocked.some(t => t.toLowerCase() === toolName.toLowerCase())) {
     return {
@@ -121,7 +122,7 @@ export async function evaluateHook(
   const input = adapter.parseInput(rawInput);
 
   // Phase 0: Tool-level gate
-  const toolGate = checkToolGate(input.toolName, options.config);
+  const toolGate = checkToolGate(input.toolName, options.config, adapter.name);
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);
     const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
@@ -152,7 +153,7 @@ export async function evaluateHook(
 
   // Run RuntimeAnalyser pipeline
   try {
-    const level = (options.config.level || 'balanced') as ProtectionLevel;
+    const level = (options.config.guard?.level || 'balanced') as ProtectionLevel;
     const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyser.evaluate(envelope, level);
 
     const entry = buildGuardAuditEntry(

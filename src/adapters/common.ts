@@ -6,8 +6,8 @@ import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
 import { validateConfig } from './config-schema.js';
-import type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig, AuditConfig } from './config-schema.js';
-export type { AgentGuardConfig, MetricsConfig, ResolvedMetricsConfig, AuditConfig } from './config-schema.js';
+import type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
+export type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
@@ -32,7 +32,7 @@ function ensureDir(): void {
 
 // Inline built-in defaults. Does NOT read any file, so the plugin can be
 // safely bundled and loaded from any cwd.
-const CONFIG_DEFAULTS: AgentGuardConfig = validateConfig({ level: 'balanced' }, 'inline-defaults');
+const CONFIG_DEFAULTS: AgentGuardConfig = validateConfig({ guard: { level: 'balanced' } }, 'inline-defaults');
 
 // ---------------------------------------------------------------------------
 // Config loading
@@ -79,13 +79,13 @@ export function loadConfig(): AgentGuardConfig {
 
 export function loadMetricsConfig(): ResolvedMetricsConfig {
   const config = loadConfig();
-  const m = config.collector ?? {};
+  const c = config.collector ?? {};
 
-  const endpoint = m.endpoint ?? '';
-  const api_key = m.api_key ?? '';
-  const timeout = m.timeout || 5000;
-  const protocol = m.protocol ?? 'http';
-  let log = m.log ?? '';
+  const endpoint = c.endpoint ?? '';
+  const api_key = c.api_key ?? '';
+  const timeout = c.timeout || 5000;
+  const protocol = c.protocol ?? 'http';
+  let log = c.metrics?.log ?? '';
 
   if (log.startsWith('~/')) {
     log = join(homedir(), log.slice(2));
@@ -168,7 +168,7 @@ const DEFAULT_MAX_AUDIT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export interface WriteAuditLogOptions {
   loggerProvider?: LoggerProvider | null;
-  auditConfig?: AuditConfig;
+  logsConfig?: CollectorLogsConfig;
 }
 
 /**
@@ -180,10 +180,10 @@ export function writeAuditLog(
   entry: AuditEntry,
   opts?: WriteAuditLogOptions,
 ): void {
-  const auditConfig = opts?.auditConfig;
+  const logsConfig = opts?.logsConfig;
 
   // OTEL Logs export (fire-and-forget)
-  if (auditConfig?.otel !== false && opts?.loggerProvider) {
+  if (logsConfig?.enabled !== false && opts?.loggerProvider) {
     try {
       // Dynamic import avoided — emitAuditLog is called from hook scripts
       // that construct the LoggerProvider themselves.
@@ -197,10 +197,10 @@ export function writeAuditLog(
   }
 
   // Local JSONL backup
-  if (auditConfig?.local !== false) {
+  if (logsConfig?.local !== false) {
     try {
       ensureDir();
-      rotateIfNeeded(auditConfig?.max_size_mb);
+      rotateIfNeeded(logsConfig?.max_size_mb);
       appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
     } catch {
       // Non-critical

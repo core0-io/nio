@@ -15,11 +15,13 @@ export {
   shouldAskAtLevel,
   writeAuditLog,
   type AgentGuardConfig,
-  type MetricsConfig,
+  type CollectorConfig,
+  type CollectorLogsConfig,
   type ResolvedMetricsConfig,
 } from './common.js';
 export {
   validateConfig,
+  normalizeConfig,
   AgentGuardConfigSchema,
-  MetricsConfigSchema,
+  CollectorConfigSchema,
 } from './config-schema.js';

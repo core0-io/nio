@@ -1,40 +1,100 @@
-# Protection level: strict | balanced | permissive
-#   strict      — block all risky actions (deny + confirm)
-#   balanced    — block dangerous, confirm on risky (default)
-#   permissive  — only block critical threats
-level: balanced
+# Runtime guard pipeline settings (phases 0–6) + scan rules.
+guard:
+  # Protection level: strict | balanced | permissive
+  #   strict      — block all risky actions (deny + confirm)
+  #   balanced    — block dangerous, confirm on risky (default)
+  #   permissive  — only block critical threats
+  level: balanced
 
-# Additional regex patterns injected into built-in scan rules.
-# Keys are rule module names; values are arrays of regex pattern strings.
-# All rules within the named module receive the extra patterns.
-#
-# Modules and the rules they cover:
-#   shell_exec       — SHELL_EXEC, AUTO_UPDATE
-#   remote_loader    — REMOTE_LOADER
-#   secrets          — READ_ENV_SECRETS, PRIVATE_KEY_PATTERN, READ_SSH_KEYS, READ_KEYCHAIN
-#   obfuscation      — OBFUSCATION
-#   prompt_injection — PROMPT_INJECTION
-#   exfiltration     — NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL
-#   trojan           — TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
-#
-# Example:
-#   shell_exec:
-#     - "my_unsafe_exec\\("
-#   prompt_injection:
-#     - "override_all_rules"
-rules:
-  shell_exec: []
-  remote_loader: []
-  secrets: []
-  obfuscation: []
-  prompt_injection: []
-  exfiltration: []
-  trojan: []
+  # Additional regex patterns injected into built-in scan rules.
+  # Used by both the scan pipeline AND the guard Phase 3 static analysis.
+  #
+  # Keys are rule module names; values are arrays of regex pattern strings.
+  # All rules within the named module receive the extra patterns.
+  #
+  # Modules and the rules they cover:
+  #   shell_exec       — SHELL_EXEC, AUTO_UPDATE
+  #   remote_loader    — REMOTE_LOADER
+  #   secrets          — READ_ENV_SECRETS, PRIVATE_KEY_PATTERN, READ_SSH_KEYS, READ_KEYCHAIN
+  #   obfuscation      — OBFUSCATION
+  #   prompt_injection — PROMPT_INJECTION
+  #   exfiltration     — NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL
+  #   trojan           — TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
+  #
+  # Example:
+  #   shell_exec:
+  #     - "my_unsafe_exec\\("
+  #   prompt_injection:
+  #     - "override_all_rules"
+  rules:
+    shell_exec: []
+    remote_loader: []
+    secrets: []
+    obfuscation: []
+    prompt_injection: []
+    exfiltration: []
+    trojan: []
 
-# Telemetry collection settings (metrics + traces).
-# Disabled when both endpoint and log are empty.
+  # LLM analyser settings (Phase 5 semantic analysis using Claude).
+  # Disabled when api_key is empty.
+  llm:
+    # Anthropic API key for LLM-based security analysis.
+    api_key: ""
+    # Model identifier for LLM analysis.
+    model: "claude-sonnet-4-20250514"
+    # Maximum input token budget sent to the LLM per scan.
+    max_input_tokens: 50000
+
+  # External scoring API (Phase 6). Disabled when endpoint is empty.
+  external_scoring:
+    endpoint: ""
+    api_key: ""
+    timeout: 3000
+
+  # Phase 1 allowlist: additional command prefixes treated as safe.
+  # Commands matching these prefixes bypass the guard pipeline.
+  # Example: ["npm run", "pnpm "]
+  allowed_commands: []
+
+  # Phase 0 tool gate, per platform. Checked before any content analysis.
+  # When non-empty, ONLY listed tools are available to the agent on that platform.
+  available_tools:
+    claude_code: []
+    openclaw: []
+  # Listed tools are unconditionally blocked on that platform.
+  blocked_tools:
+    claude_code: []
+    openclaw: []
+
+  # Tool → action type mapping, per platform.
+  # Tools listed here enter Phase 1-6 deep analysis.
+  # Others pass through Phase 0 only (if allowed) and are auto-approved.
+  guarded_tools:
+    claude_code:
+      Bash: exec_command
+      Write: write_file
+      Edit: write_file
+      WebFetch: network_request
+      WebSearch: network_request
+    openclaw:
+      exec: exec_command
+      write: write_file
+      web_fetch: network_request
+      browser: network_request
+
+  # Phase weights for weighted score aggregation.
+  #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
+  weights:
+    runtime: 1.0       # Phase 2: pattern matching
+    static: 1.0        # Phase 3: static rules on file content
+    behavioural: 2.0   # Phase 4: AST dataflow analysis
+    llm: 1.0           # Phase 5: LLM semantic analysis
+    external: 2.0      # Phase 6: external scoring API
+
+# Telemetry collection — shared OTLP connection + per-signal settings.
+# Disabled when endpoint is empty and all local options are disabled.
 collector:
-  # OTLP collector base URL. /v1/traces and /v1/metrics are appended automatically.
+  # OTLP collector base URL. /v1/traces, /v1/metrics, /v1/logs are appended automatically.
   endpoint: "http://localhost:4318"
   # Bearer token for OTLP endpoint authentication.
   api_key: ""
@@ -44,58 +104,27 @@ collector:
   #   http — HTTP/JSON on port 4318
   #   grpc — gRPC on port 4317
   protocol: http
-  # Path to local JSONL file for metric payloads. Supports ~/ prefix.
-  log: "~/.ffwd-agent-guard/metrics.jsonl"
 
-# Audit log settings.
-# Controls where guard/scan/lifecycle events are recorded.
-audit:
-  # Enable local JSONL audit log at ~/.ffwd-agent-guard/audit.jsonl
-  local: true
-  # Maximum local log file size in MB before rotation (0 = no rotation)
-  max_size_mb: 10
-  # Enable OTEL Logs export (uses collector endpoint/api_key/protocol)
-  otel: true
+  # Metrics signal (counters, histograms).
+  metrics:
+    enabled: true
+    local: true
+    # Path to local JSONL file for metric payloads. Supports ~/ prefix.
+    log: "~/.ffwd-agent-guard/metrics.jsonl"
+    # Maximum local file size in MB before rotation (0 = no rotation).
+    max_size_mb: 100
 
-# LLM analyser settings (Phase 2 semantic analysis using Claude).
-# Disabled when api_key is empty.
-llm:
-  # Anthropic API key for LLM-based security analysis.
-  api_key: ""
-  # Model identifier for LLM analysis.
-  model: "claude-sonnet-4-20250514"
-  # Maximum input token budget sent to the LLM per scan.
-  max_input_tokens: 50000
+  # Traces signal (spans for tool calls, turns, tasks).
+  traces:
+    enabled: true
 
-# Dynamic guard pipeline settings (RuntimeAnalyser, phases 1-6).
-guard:
-  # External scoring API endpoint (Phase 6). Disabled when empty.
-  scoring_endpoint: ""
-  # Bearer token for scoring endpoint authentication.
-  scoring_api_key: ""
-  # Scoring endpoint timeout in milliseconds.
-  scoring_timeout: 3000
-  # Additional safe command prefixes injected into Phase 1 allowlist.
-  extra_allowlist: []
-  # Tool-level gate (Phase 0). Checked before any content analysis.
-  # Valid tool names: Bash, Write, Edit, Read, Glob, Grep, WebFetch, WebSearch, Agent, Skill, TodoWrite, etc.
-  # When non-empty, ONLY listed tools are available to the agent.
-  available_tools: []
-  # Listed tools are unconditionally blocked.
-  blocked_tools: []
-  # Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis.
-  # Others pass through Phase 0 only (if allowed) and are auto-approved.
-  guarded_tools:
-    Bash: exec_command
-    Write: write_file
-    Edit: write_file
-    WebFetch: network_request
-    WebSearch: network_request
-  # Phase weights for weighted score aggregation.
-  #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
-  weights:
-    runtime: 1.0       # Phase 2: pattern matching
-    static: 1.0        # Phase 3: static rules on file content
-    behavioural: 2.0    # Phase 4: AST dataflow analysis
-    llm: 1.0           # Phase 5: LLM semantic analysis
-    external: 2.0      # Phase 6: external scoring API
+  # Logs signal (audit log entries: guard, scan, lifecycle events).
+  logs:
+    # Enable OTEL Logs export to collector endpoint.
+    enabled: true
+    # Enable local JSONL backup at the path below.
+    local: true
+    # Path to local JSONL audit log. Supports ~/ prefix.
+    path: "~/.ffwd-agent-guard/audit.jsonl"
+    # Maximum local file size in MB before rotation (0 = no rotation).
+    max_size_mb: 100

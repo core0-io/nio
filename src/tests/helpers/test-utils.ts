@@ -13,8 +13,8 @@ import type { EngineOptions } from '../../adapters/types.js';
 export interface TestContextOptions {
   level?: string;
   guard?: {
-    available_tools?: string[];
-    blocked_tools?: string[];
+    available_tools?: Record<string, string[]>;
+    blocked_tools?: Record<string, string[]>;
     guarded_tools?: Record<string, string>;
   };
 }
@@ -28,8 +28,11 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
   const ffwdAgentGuard = createAgentGuard();
 
   const config: EngineOptions['config'] = {
-    level: opts.level ?? 'balanced',
-    guard: opts.guard,
+    guard: {
+      level: opts.level ?? 'balanced',
+      available_tools: opts.guard?.available_tools,
+      blocked_tools: opts.guard?.blocked_tools,
+    },
   };
   const options: EngineOptions = {
     config,

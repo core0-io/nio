@@ -59,6 +59,8 @@ export interface RuntimeAnalyserOptions {
   weights?: Partial<PhaseWeights>;
   level?: ProtectionLevel;
   extraAllowlist?: string[];
+  /** Extra regex patterns for Phase 3 static analysis (from guard.rules config). */
+  extraPatterns?: Partial<Record<string, string[]>>;
   // Phase 5/6 options (Phase 2C)
   llmApiKey?: string;
   llmModel?: string;
@@ -73,6 +75,7 @@ export class RuntimeAnalyser {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
   private extraAllowlist: string[];
+  private extraPatterns?: Partial<Record<string, string[]>>;
   private llmApiKey?: string;
   private llmModel?: string;
   private externalScorer?: ExternalAnalyser;
@@ -81,6 +84,7 @@ export class RuntimeAnalyser {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.weights };
     this.level = opts?.level ?? 'balanced';
     this.extraAllowlist = opts?.extraAllowlist ?? [];
+    this.extraPatterns = opts?.extraPatterns;
     this.llmApiKey = opts?.llmApiKey;
     this.llmModel = opts?.llmModel;
 
@@ -243,7 +247,7 @@ export class RuntimeAnalyser {
     const { ruleRegistry } = await import('../../rule-registry.js');
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
-    const rules = ruleRegistry.getRulesForExtension(ext);
+    const rules = ruleRegistry.getRulesForExtension(ext, this.extraPatterns);
     const allRules = ruleRegistry.allRules();
 
     const findings = [

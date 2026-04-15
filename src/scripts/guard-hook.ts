@@ -37,7 +37,15 @@ interface AgentGuardModule {
   createAgentGuard: (options?: { registryPath?: string }) => Record<string, unknown>;
   ClaudeCodeAdapter: new (opts?: { guardedTools?: Record<string, string> }) => unknown;
   evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>, auditOpts?: Record<string, unknown>) => Promise<HookOutput>;
-  loadConfig: () => { level: string; audit?: { local?: boolean; max_size_mb?: number; otel?: boolean }; guard?: { guarded_tools?: Record<string, string> }; metrics?: Record<string, unknown> };
+  loadConfig: () => {
+    guard?: {
+      level?: string;
+      guarded_tools?: Record<string, Record<string, string>>;
+    };
+    collector?: {
+      logs?: { enabled?: boolean; local?: boolean; max_size_mb?: number };
+    };
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -117,20 +125,21 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
-  const adapter = new ClaudeCodeAdapter({ guardedTools: config.guard?.guarded_tools });
+  const guardedTools = config.guard?.guarded_tools?.claude_code;
+  const adapter = new ClaudeCodeAdapter({ guardedTools });
   const ffwdAgentGuard = createAgentGuard();
 
   // Set up OTEL providers for metrics + audit logs
   const collectorConfig = loadCollectorConfig();
   const meterProvider = createMeterProvider(collectorConfig);
-  const auditConfig = config.audit;
-  const loggerProvider = (auditConfig?.otel !== false)
+  const logsConfig = config.collector?.logs;
+  const loggerProvider = (logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig)
     : null;
 
   const result = await evaluateHook(
     adapter, input, { config, ffwdAgentGuard },
-    { loggerProvider, auditConfig },
+    { loggerProvider, logsConfig },
   );
 
   // Record guard decision metrics
