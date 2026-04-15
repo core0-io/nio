@@ -4,40 +4,50 @@ guard:
   #   strict      — block all risky actions (deny + confirm)
   #   balanced    — block dangerous, confirm on risky (default)
   #   permissive  — only block critical threats
-  level: balanced
+  protection_level: balanced
 
-  # Additional regex patterns injected into built-in scan rules.
-  # Used by both the scan pipeline AND the guard Phase 3 static analysis.
-  #
+  # Extra regex patterns for scan rules (Phase 3 static analysis + scan command).
   # Keys are rule module names; values are arrays of regex pattern strings.
   # All rules within the named module receive the extra patterns.
   #
-  # Modules and the rules they cover:
-  #   shell_exec       — SHELL_EXEC, AUTO_UPDATE
-  #   remote_loader    — REMOTE_LOADER
-  #   secrets          — READ_ENV_SECRETS, PRIVATE_KEY_PATTERN, READ_SSH_KEYS, READ_KEYCHAIN
-  #   obfuscation      — OBFUSCATION
-  #   prompt_injection — PROMPT_INJECTION
-  #   exfiltration     — NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL
-  #   trojan           — TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
+  # Modules: shell_exec, remote_loader, secrets, obfuscation,
+  #          prompt_injection, exfiltration, trojan
   #
   # Example:
-  #   shell_exec:
-  #     - "my_unsafe_exec\\("
-  #   prompt_injection:
-  #     - "override_all_rules"
-  rules:
-    shell_exec: []
-    remote_loader: []
-    secrets: []
-    obfuscation: []
-    prompt_injection: []
-    exfiltration: []
-    trojan: []
+  #   file_scan_rules:
+  #     shell_exec:
+  #       - "my_unsafe_exec\\("
+  file_scan_rules:
+    shell_exec: []        # SHELL_EXEC [high], AUTO_UPDATE [critical]
+    remote_loader: []     # REMOTE_LOADER [critical]
+    secrets: []           # READ_ENV_SECRETS [medium], READ_SSH_KEYS/READ_KEYCHAIN/PRIVATE_KEY_PATTERN [critical]
+    obfuscation: []       # OBFUSCATION [high]
+    prompt_injection: []  # PROMPT_INJECTION [critical]
+    exfiltration: []      # NET_EXFIL_UNRESTRICTED [high], WEBHOOK_EXFIL [critical]
+    trojan: []            # TROJAN_DISTRIBUTION [critical], SUSPICIOUS_PASTE_URL [high], SUSPICIOUS_IP/SOCIAL_ENGINEERING [medium]
+
+  # Extra patterns for Phase 2 guard analysis (runtime action evaluation).
+  # These extend the built-in detection lists for each category.
+  #
+  # Example:
+  #   action_guard_rules:
+  #     dangerous_commands: ["format c:"]
+  #     webhook_domains: ["evil-webhook.example.com"]
+  action_guard_rules:
+    dangerous_commands: []   # Dangerous command strings, case-insensitive match   [critical]
+    dangerous_patterns: []   # Dangerous command regexes                           [critical]
+    sensitive_commands: []   # Sensitive data access commands                      [high]
+    system_commands: []      # System modification commands                        [high]
+    network_commands: []     # Network tool commands                               [medium]
+    webhook_domains: []      # Webhook/exfiltration domains                        [high]
+    sensitive_paths: []      # Sensitive file path fragments                       [critical]
+    secret_patterns: []      # Secret detection regexes (request body scanning)   [varies]
 
   # LLM analyser settings (Phase 5 semantic analysis using Claude).
-  # Disabled when api_key is empty.
-  llm:
+  # Requires api_key to be set. Disable with enabled: false.
+  llm_analyser:
+    # Enable/disable Phase 5 LLM analysis.
+    enabled: false
     # Anthropic API key for LLM-based security analysis.
     api_key: ""
     # Model identifier for LLM analysis.
@@ -45,8 +55,10 @@ guard:
     # Maximum input token budget sent to the LLM per scan.
     max_input_tokens: 50000
 
-  # External scoring API (Phase 6). Disabled when endpoint is empty.
-  external_scoring:
+  # External scoring API (Phase 6). Requires endpoint to be set. Disable with enabled: false.
+  external_analyser:
+    # Enable/disable Phase 6 external scoring.
+    enabled: false
     endpoint: ""
     api_key: ""
     timeout: 3000
@@ -82,9 +94,9 @@ guard:
       web_fetch: network_request
       browser: network_request
 
-  # Phase weights for weighted score aggregation.
+  # Phase scoring weights for weighted score aggregation.
   #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
-  weights:
+  scoring_weights:
     runtime: 1.0       # Phase 2: pattern matching
     static: 1.0        # Phase 3: static rules on file content
     behavioural: 2.0   # Phase 4: AST dataflow analysis

@@ -29,7 +29,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
 
   const config: EngineOptions['config'] = {
     guard: {
-      level: opts.level ?? 'balanced',
+      protection_level: opts.level ?? 'balanced',
       available_tools: opts.guard?.available_tools,
       blocked_tools: opts.guard?.blocked_tools,
     },

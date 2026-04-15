@@ -153,7 +153,7 @@ export async function evaluateHook(
 
   // Run RuntimeAnalyser pipeline
   try {
-    const level = (options.config.guard?.level || 'balanced') as ProtectionLevel;
+    const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
     const rd: RuntimeDecision = await options.ffwdAgentGuard.runtimeAnalyser.evaluate(envelope, level);
 
     const entry = buildGuardAuditEntry(

@@ -49,9 +49,8 @@ export function loadCollectorConfig(): CollectorConfig {
   // New format: collector at top level
   let c = (raw['collector'] ?? {}) as Record<string, unknown>;
 
-  // Metrics log: new path (collector.metrics.log) or legacy (collector.log)
   const metrics = (c['metrics'] ?? {}) as Record<string, unknown>;
-  let log = (metrics['log'] as string) ?? (c['log'] as string) ?? '';
+  let log = (metrics['log'] as string) ?? '';
   if (log) log = expandHome(log);
 
   const endpoint = (c['endpoint'] as string) ?? '';
@@ -71,17 +70,7 @@ export function loadLogsConfig(): LogsConfig {
   const raw = readRawConfig();
 
   const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
-  let logs = (collector['logs'] ?? {}) as Record<string, unknown>;
-
-  // Backward compat: top-level `audit` section
-  if (raw['audit'] && typeof raw['audit'] === 'object' && Object.keys(logs).length === 0) {
-    const audit = raw['audit'] as Record<string, unknown>;
-    logs = {
-      enabled: audit['otel'],
-      local: audit['local'],
-      max_size_mb: audit['max_size_mb'],
-    };
-  }
+  const logs = (collector['logs'] ?? {}) as Record<string, unknown>;
 
   return {
     enabled: (logs['enabled'] as boolean) ?? true,

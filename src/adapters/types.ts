@@ -73,7 +73,7 @@ export interface AgentGuardInstance {
 export interface EngineOptions {
   config: {
     guard?: {
-      level?: string;
+      protection_level?: string;
       available_tools?: Record<string, string[]>;
       blocked_tools?: Record<string, string[]>;
     };

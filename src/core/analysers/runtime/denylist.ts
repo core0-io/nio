@@ -21,6 +21,19 @@ import {
 } from '../../shared/detection-data.js';
 import { extractAndDecodeBase64 } from '../../detection-engine.js';
 
+// ── Config-driven extra patterns ────────────────────────────────────────
+
+export interface GuardRulesConfig {
+  dangerous_commands?:  string[];
+  dangerous_patterns?:  string[];
+  sensitive_commands?:   string[];
+  system_commands?:      string[];
+  network_commands?:     string[];
+  webhook_domains?:      string[];
+  sensitive_paths?:      string[];
+  secret_patterns?:      string[];
+}
+
 // ── Bash Command Patterns ───────────────────────────────────────────────
 
 const FORK_BOMB_PATTERNS = [
@@ -68,13 +81,16 @@ const SHELL_INJECTION_PATTERNS = [
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-function isSensitivePath(filePath: string): boolean {
+function isSensitivePath(filePath: string, extraPaths?: string[]): boolean {
   if (!filePath) return false;
   let normalized = filePath.replace(/\\/g, '/');
   if (normalized.startsWith('~/')) {
     normalized = '/HOME' + normalized.slice(1);
   }
-  return SENSITIVE_FILE_PATHS.some(
+  const paths = extraPaths
+    ? [...SENSITIVE_FILE_PATHS, ...extraPaths]
+    : SENSITIVE_FILE_PATHS as unknown as string[];
+  return paths.some(
     (p) => normalized.includes(`/${p}`) || normalized.endsWith(p),
   );
 }
@@ -111,13 +127,30 @@ function checkSecretLeak(content: string): Finding[] {
 
 // ── Main Analysis Functions ─────────────────────────────────────────────
 
-function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
+function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { command: string; args?: string[]; env?: Record<string, string> };
   const fullCommand = data.args
     ? `${data.command} ${data.args.join(' ')}`
     : data.command;
   const lowerCommand = fullCommand.toLowerCase();
+
+  // Merge extra patterns from config
+  const dangerousStrings = extra?.dangerous_commands
+    ? [...DANGEROUS_COMMAND_STRINGS, ...extra.dangerous_commands]
+    : DANGEROUS_COMMAND_STRINGS;
+  const dangerousPatterns = extra?.dangerous_patterns
+    ? [...DANGEROUS_COMMAND_PATTERNS, ...extra.dangerous_patterns.map(p => new RegExp(p))]
+    : DANGEROUS_COMMAND_PATTERNS;
+  const sensitiveCommands = extra?.sensitive_commands
+    ? [...SENSITIVE_COMMANDS, ...extra.sensitive_commands]
+    : SENSITIVE_COMMANDS;
+  const systemCommands = extra?.system_commands
+    ? [...SYSTEM_COMMANDS, ...extra.system_commands]
+    : SYSTEM_COMMANDS;
+  const networkCommands = extra?.network_commands
+    ? [...NETWORK_COMMANDS, ...extra.network_commands]
+    : NETWORK_COMMANDS;
 
   // Fork bombs
   for (const pattern of FORK_BOMB_PATTERNS) {
@@ -138,7 +171,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   }
 
   // Dangerous commands (string match)
-  for (const dangerous of DANGEROUS_COMMAND_STRINGS) {
+  for (const dangerous of dangerousStrings) {
     if (lowerCommand.includes(dangerous.toLowerCase())) {
       findings.push({
         id: findingId('DANGEROUS_COMMAND', 'command', 0),
@@ -156,7 +189,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   }
 
   // Dangerous commands (regex match, e.g. curl ... | bash)
-  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
+  for (const pattern of dangerousPatterns) {
     if (pattern.test(fullCommand)) {
       findings.push({
         id: findingId('DANGEROUS_COMMAND', 'command', 0),
@@ -174,7 +207,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   }
 
   // Sensitive data access
-  for (const sensitive of SENSITIVE_COMMANDS) {
+  for (const sensitive of sensitiveCommands) {
     if (lowerCommand.includes(sensitive.toLowerCase())) {
       findings.push({
         id: findingId('SENSITIVE_DATA_ACCESS', 'command', 0),
@@ -191,7 +224,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   }
 
   // System commands
-  for (const sys of SYSTEM_COMMANDS) {
+  for (const sys of systemCommands) {
     if (lowerCommand.startsWith(sys.toLowerCase()) || lowerCommand.includes(' ' + sys.toLowerCase())) {
       findings.push({
         id: findingId('SYSTEM_COMMAND', 'command', 0),
@@ -208,7 +241,7 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   }
 
   // Network commands
-  for (const net of NETWORK_COMMANDS) {
+  for (const net of networkCommands) {
     if (lowerCommand.startsWith(net.toLowerCase()) || lowerCommand.includes(' ' + net.toLowerCase())) {
       findings.push({
         id: findingId('NETWORK_COMMAND', 'command', 0),
@@ -288,12 +321,16 @@ function analyzeBashCommand(envelope: ActionEnvelope): Finding[] {
   return findings;
 }
 
-function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
+function analyzeNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { url?: string; method?: string; body_preview?: string };
 
   const url = data.url || '';
   let domain: string | null = null;
+
+  const webhookDomains = extra?.webhook_domains
+    ? [...WEBHOOK_EXFIL_DOMAINS, ...extra.webhook_domains]
+    : WEBHOOK_EXFIL_DOMAINS as unknown as string[];
 
   try {
     domain = new URL(url).hostname;
@@ -316,7 +353,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
 
   if (domain) {
     // Webhook exfil domains
-    const isWebhook = WEBHOOK_EXFIL_DOMAINS.some(
+    const isWebhook = webhookDomains.some(
       d => domain === d || domain!.endsWith('.' + d),
     );
     if (isWebhook) {
@@ -358,13 +395,13 @@ function analyzeNetworkRequest(envelope: ActionEnvelope): Finding[] {
   return findings;
 }
 
-function analyzeFileOperation(envelope: ActionEnvelope): Finding[] {
+function analyzeFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { path?: string; content_preview?: string };
   const filePath = data.path || '';
 
   // Sensitive path
-  if (isSensitivePath(filePath)) {
+  if (isSensitivePath(filePath, extra?.sensitive_paths)) {
     findings.push({
       id: findingId('SENSITIVE_PATH', filePath, 0),
       rule_id: 'SENSITIVE_PATH',
@@ -402,14 +439,14 @@ function analyzeFileOperation(envelope: ActionEnvelope): Finding[] {
  * Run Phase 2 pattern analysis on an action envelope.
  * Returns Finding[] — empty means no issues found.
  */
-export function analyzeAction(envelope: ActionEnvelope): Finding[] {
+export function analyzeAction(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   switch (envelope.action.type) {
     case 'exec_command':
-      return analyzeBashCommand(envelope);
+      return analyzeBashCommand(envelope, extra);
     case 'network_request':
-      return analyzeNetworkRequest(envelope);
+      return analyzeNetworkRequest(envelope, extra);
     case 'write_file':
-      return analyzeFileOperation(envelope);
+      return analyzeFileOperation(envelope, extra);
     case 'read_file':
       return []; // Read operations are generally safe
     default:

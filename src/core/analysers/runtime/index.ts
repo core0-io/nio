@@ -17,7 +17,7 @@ import type { RiskLevel } from '../../../types/scanner.js';
 import type { Finding } from '../../models.js';
 import { aggregateRiskLevel } from '../../models.js';
 import { checkAllowlist } from './allowlist.js';
-import { analyzeAction } from './denylist.js';
+import { analyzeAction, type GuardRulesConfig } from './denylist.js';
 import {
   findingsToScore,
   aggregateScores,
@@ -56,14 +56,19 @@ export interface RuntimeDecision {
 }
 
 export interface RuntimeAnalyserOptions {
-  weights?: Partial<PhaseWeights>;
+  scoringWeights?: Partial<PhaseWeights>;
   level?: ProtectionLevel;
-  extraAllowlist?: string[];
-  /** Extra regex patterns for Phase 3 static analysis (from guard.rules config). */
-  extraPatterns?: Partial<Record<string, string[]>>;
-  // Phase 5/6 options (Phase 2C)
+  allowedCommands?: string[];
+  /** Extra regex patterns for Phase 3 static analysis (from guard.file_scan_rules config). */
+  fileScanRules?: Partial<Record<string, string[]>>;
+  /** Extra patterns for Phase 2 guard analysis (from guard.action_guard_rules config). */
+  actionGuardRules?: GuardRulesConfig;
+  // Phase 5: LLM analyser
+  llmEnabled?: boolean;
   llmApiKey?: string;
   llmModel?: string;
+  // Phase 6: External analyser
+  externalEnabled?: boolean;
   scoringEndpoint?: string;
   scoringApiKey?: string;
   scoringTimeout?: number;
@@ -74,19 +79,25 @@ export interface RuntimeAnalyserOptions {
 export class RuntimeAnalyser {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
-  private extraAllowlist: string[];
-  private extraPatterns?: Partial<Record<string, string[]>>;
+  private allowedCommands: string[];
+  private fileScanRules?: Partial<Record<string, string[]>>;
+  private actionGuardRules?: GuardRulesConfig;
+  private llmEnabled: boolean;
   private llmApiKey?: string;
   private llmModel?: string;
+  private externalEnabled: boolean;
   private externalScorer?: ExternalAnalyser;
 
   constructor(opts?: RuntimeAnalyserOptions) {
-    this.weights = { ...DEFAULT_WEIGHTS, ...opts?.weights };
+    this.weights = { ...DEFAULT_WEIGHTS, ...opts?.scoringWeights };
     this.level = opts?.level ?? 'balanced';
-    this.extraAllowlist = opts?.extraAllowlist ?? [];
-    this.extraPatterns = opts?.extraPatterns;
+    this.allowedCommands = opts?.allowedCommands ?? [];
+    this.fileScanRules = opts?.fileScanRules;
+    this.actionGuardRules = opts?.actionGuardRules;
+    this.llmEnabled = opts?.llmEnabled ?? false;
     this.llmApiKey = opts?.llmApiKey;
     this.llmModel = opts?.llmModel;
+    this.externalEnabled = opts?.externalEnabled ?? false;
 
     if (opts?.scoringEndpoint) {
       this.externalScorer = new ExternalAnalyser({
@@ -110,7 +121,7 @@ export class RuntimeAnalyser {
 
     // ── Phase 1: Allowlist Gate ───────────────────────────────────────
     const t1 = performance.now();
-    const allowlistResult = checkAllowlist(envelope, this.extraAllowlist);
+    const allowlistResult = checkAllowlist(envelope, this.allowedCommands);
     const t1End = performance.now();
     if (allowlistResult.allowed) {
       timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
@@ -130,7 +141,7 @@ export class RuntimeAnalyser {
 
     // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
     const t2 = performance.now();
-    const phase2Findings = analyzeAction(envelope);
+    const phase2Findings = analyzeAction(envelope, this.actionGuardRules);
     const t2End = performance.now();
     allFindings.push(...phase2Findings);
     const scoreA = findingsToScore(phase2Findings);
@@ -186,8 +197,8 @@ export class RuntimeAnalyser {
       }
     }
 
-    // ── Phase 5: LLM (optional, gated on API key) ────────────────────
-    if (this.llmApiKey) {
+    // ── Phase 5: LLM (optional, gated on enabled + API key) ──────────
+    if (this.llmEnabled && this.llmApiKey) {
       const t5 = performance.now();
       const phase5Findings = await this.runLLMOnAction(envelope);
       const t5End = performance.now();
@@ -201,8 +212,8 @@ export class RuntimeAnalyser {
       }
     }
 
-    // ── Phase 6: External API (optional, gated on endpoint) ─────────
-    if (this.externalScorer) {
+    // ── Phase 6: External API (optional, gated on enabled + endpoint)
+    if (this.externalEnabled && this.externalScorer) {
       const t6 = performance.now();
       const result = await this.externalScorer.scoreAction(
           envelope.action.type,
@@ -247,7 +258,7 @@ export class RuntimeAnalyser {
     const { ruleRegistry } = await import('../../rule-registry.js');
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
-    const rules = ruleRegistry.getRulesForExtension(ext, this.extraPatterns);
+    const rules = ruleRegistry.getRulesForExtension(ext, this.fileScanRules);
     const allRules = ruleRegistry.allRules();
 
     const findings = [

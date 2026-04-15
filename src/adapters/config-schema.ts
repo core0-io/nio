@@ -46,9 +46,23 @@ const RulesPatternsSchema = z.object({
   trojan:           z.array(z.string()).optional(),
 });
 
-export type RulesPatterns = z.infer<typeof RulesPatternsSchema>;
+export type ScanRulesPatterns = z.infer<typeof RulesPatternsSchema>;
+
+const GuardRulesSchema = z.object({
+  dangerous_commands:  z.array(z.string()).optional(),
+  dangerous_patterns:  z.array(z.string()).optional(),
+  sensitive_commands:  z.array(z.string()).optional(),
+  system_commands:     z.array(z.string()).optional(),
+  network_commands:    z.array(z.string()).optional(),
+  webhook_domains:     z.array(z.string()).optional(),
+  sensitive_paths:     z.array(z.string()).optional(),
+  secret_patterns:     z.array(z.string()).optional(),
+});
+
+export type GuardRules = z.infer<typeof GuardRulesSchema>;
 
 export const LLMConfigSchema = z.object({
+  enabled: z.boolean().optional(),
   api_key: z.string().optional(),
   model: z.string().optional(),
   max_input_tokens: z.number().positive().optional(),
@@ -56,17 +70,19 @@ export const LLMConfigSchema = z.object({
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>;
 
-export const ExternalScoringConfigSchema = z.object({
+export const ExternalAnalyserConfigSchema = z.object({
+  enabled: z.boolean().optional(),
   endpoint: z.string().optional(),
   api_key: z.string().optional(),
   timeout: z.number().positive().optional(),
 });
 
 export const GuardConfigSchema = z.object({
-  level: z.enum(['strict', 'balanced', 'permissive']).optional(),
-  rules: RulesPatternsSchema.optional(),
-  llm: LLMConfigSchema.optional(),
-  external_scoring: ExternalScoringConfigSchema.optional(),
+  protection_level: z.enum(['strict', 'balanced', 'permissive']).optional(),
+  file_scan_rules: RulesPatternsSchema.optional(),
+  action_guard_rules: GuardRulesSchema.optional(),
+  llm_analyser: LLMConfigSchema.optional(),
+  external_analyser: ExternalAnalyserConfigSchema.optional(),
   allowed_commands: z.array(z.string()).optional(),
   available_tools: z.record(z.string(), z.array(z.string())).optional(),
   blocked_tools: z.record(z.string(), z.array(z.string())).optional(),
@@ -74,7 +90,7 @@ export const GuardConfigSchema = z.object({
     z.string(),
     z.record(z.string(), z.enum(['exec_command', 'write_file', 'network_request', 'read_file'])),
   ).optional(),
-  weights: z.object({
+  scoring_weights: z.object({
     runtime: z.number().optional(),
     static: z.number().optional(),
     behavioural: z.number().optional(),
@@ -113,115 +129,13 @@ export interface ResolvedMetricsConfig {
   enabled: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Backward compatibility — normalizeConfig
-// ---------------------------------------------------------------------------
-
-/**
- * Detect old-format config (top-level `level`, `llm`, `audit`, `rules`,
- * flat `guard.scoring_*`, flat `guard.guarded_tools`) and migrate to the
- * new nested structure before Zod validation.
- */
-export function normalizeConfig(raw: unknown): unknown {
-  if (!raw || typeof raw !== 'object') return raw;
-  const r = raw as Record<string, unknown>;
-
-  // --- Top-level `level` → guard.level ---
-  if (typeof r['level'] === 'string') {
-    const guard = ensureObject(r, 'guard');
-    if (!guard['level']) guard['level'] = r['level'];
-    delete r['level'];
-  }
-
-  // --- Top-level `rules` → guard.rules ---
-  if (r['rules'] && typeof r['rules'] === 'object') {
-    const guard = ensureObject(r, 'guard');
-    if (!guard['rules']) guard['rules'] = r['rules'];
-    delete r['rules'];
-  }
-
-  // --- Top-level `llm` → guard.llm ---
-  if (r['llm'] && typeof r['llm'] === 'object') {
-    const guard = ensureObject(r, 'guard');
-    if (!guard['llm']) guard['llm'] = r['llm'];
-    delete r['llm'];
-  }
-
-  // --- Top-level `audit` → collector.logs ---
-  if (r['audit'] && typeof r['audit'] === 'object') {
-    const audit = r['audit'] as Record<string, unknown>;
-    const collector = ensureObject(r, 'collector');
-    const logs = ensureObject(collector, 'logs');
-    if (audit['otel'] !== undefined && logs['enabled'] === undefined) logs['enabled'] = audit['otel'];
-    if (audit['local'] !== undefined && logs['local'] === undefined) logs['local'] = audit['local'];
-    if (audit['max_size_mb'] !== undefined && logs['max_size_mb'] === undefined) logs['max_size_mb'] = audit['max_size_mb'];
-    delete r['audit'];
-  }
-
-  // --- collector.log → collector.metrics.log ---
-  if (r['collector'] && typeof r['collector'] === 'object') {
-    const collector = r['collector'] as Record<string, unknown>;
-    if (typeof collector['log'] === 'string') {
-      const metrics = ensureObject(collector, 'metrics');
-      if (!metrics['log']) metrics['log'] = collector['log'];
-      delete collector['log'];
-    }
-  }
-
-  // --- guard.scoring_* → guard.external_scoring ---
-  if (r['guard'] && typeof r['guard'] === 'object') {
-    const guard = r['guard'] as Record<string, unknown>;
-    if (guard['scoring_endpoint'] !== undefined || guard['scoring_api_key'] !== undefined || guard['scoring_timeout'] !== undefined) {
-      const es = ensureObject(guard, 'external_scoring');
-      if (guard['scoring_endpoint'] !== undefined && !es['endpoint']) { es['endpoint'] = guard['scoring_endpoint']; delete guard['scoring_endpoint']; }
-      if (guard['scoring_api_key'] !== undefined && !es['api_key']) { es['api_key'] = guard['scoring_api_key']; delete guard['scoring_api_key']; }
-      if (guard['scoring_timeout'] !== undefined && !es['timeout']) { es['timeout'] = guard['scoring_timeout']; delete guard['scoring_timeout']; }
-    }
-
-    // --- guard.extra_allowlist → guard.allowed_commands ---
-    if (guard['extra_allowlist'] !== undefined && guard['allowed_commands'] === undefined) {
-      guard['allowed_commands'] = guard['extra_allowlist'];
-      delete guard['extra_allowlist'];
-    }
-
-    // --- flat available_tools [] → available_tools.claude_code ---
-    if (Array.isArray(guard['available_tools'])) {
-      guard['available_tools'] = { claude_code: guard['available_tools'] };
-    }
-
-    // --- flat blocked_tools [] → blocked_tools.claude_code ---
-    if (Array.isArray(guard['blocked_tools'])) {
-      guard['blocked_tools'] = { claude_code: guard['blocked_tools'] };
-    }
-
-    // --- flat guarded_tools → guarded_tools.claude_code ---
-    if (guard['guarded_tools'] && typeof guard['guarded_tools'] === 'object') {
-      const gt = guard['guarded_tools'] as Record<string, unknown>;
-      // Detect flat format: if any value is a string (not an object), it's old format
-      const firstValue = Object.values(gt)[0];
-      if (typeof firstValue === 'string') {
-        guard['guarded_tools'] = { claude_code: gt };
-      }
-    }
-  }
-
-  return r;
-}
-
-function ensureObject(parent: Record<string, unknown>, key: string): Record<string, unknown> {
-  if (!parent[key] || typeof parent[key] !== 'object') {
-    parent[key] = {};
-  }
-  return parent[key] as Record<string, unknown>;
-}
 
 // ---------------------------------------------------------------------------
 // Validation
 // ---------------------------------------------------------------------------
 
 export function validateConfig(data: unknown, source: string): AgentGuardConfig {
-  const normalized = normalizeConfig(data);
-  const result = AgentGuardConfigSchema.safeParse(normalized);
+  const result = AgentGuardConfigSchema.safeParse(data);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)

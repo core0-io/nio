@@ -77,19 +77,22 @@ export function createAgentGuard(options?: {
   const guard = config.guard;
   const scanner = new SkillScanner({
     useExternalScanner: options?.useExternalScanner ?? true,
-    extraPatterns: guard?.rules,
+    fileScanRules: guard?.file_scan_rules,
   });
 
   const runtimeAnalyser = new RuntimeAnalyser({
-    level: (guard?.level || 'balanced') as ProtectionLevel,
-    weights: guard?.weights,
-    extraAllowlist: guard?.allowed_commands,
-    extraPatterns: guard?.rules,
-    llmApiKey: guard?.llm?.api_key,
-    llmModel: guard?.llm?.model,
-    scoringEndpoint: guard?.external_scoring?.endpoint,
-    scoringApiKey: guard?.external_scoring?.api_key,
-    scoringTimeout: guard?.external_scoring?.timeout,
+    level: (guard?.protection_level || 'balanced') as ProtectionLevel,
+    scoringWeights: guard?.scoring_weights,
+    allowedCommands: guard?.allowed_commands,
+    fileScanRules: guard?.file_scan_rules,
+    actionGuardRules: guard?.action_guard_rules,
+    llmEnabled: guard?.llm_analyser?.enabled ?? false,
+    llmApiKey: guard?.llm_analyser?.api_key,
+    llmModel: guard?.llm_analyser?.model,
+    externalEnabled: guard?.external_analyser?.enabled ?? false,
+    scoringEndpoint: guard?.external_analyser?.endpoint,
+    scoringApiKey: guard?.external_analyser?.api_key,
+    scoringTimeout: guard?.external_analyser?.timeout,
   });
 
   return {

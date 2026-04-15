@@ -87,12 +87,12 @@ export type AllowlistResult =
  * Check if an action matches the allowlist.
  *
  * @param envelope  The action envelope to check
- * @param extraAllowlist  User-injected safe patterns from config
+ * @param allowedCommands  User-injected safe patterns from config
  * @returns AllowlistResult — `allowed: true` to short-circuit, `false` to continue pipeline
  */
 export function checkAllowlist(
   envelope: ActionEnvelope,
-  extraAllowlist: string[] = [],
+  allowedCommands: string[] = [],
 ): AllowlistResult {
   // Only applies to exec_command actions
   if (envelope.action.type !== 'exec_command') {
@@ -117,7 +117,7 @@ export function checkAllowlist(
   }
 
   // Check safe command prefixes
-  const allPrefixes = [...SAFE_COMMAND_PREFIXES, ...extraAllowlist];
+  const allPrefixes = [...SAFE_COMMAND_PREFIXES, ...allowedCommands];
   const isSafe = allPrefixes.some(prefix =>
     lowerCommand === prefix || lowerCommand.startsWith(prefix + ' '),
   );

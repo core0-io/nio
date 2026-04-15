@@ -45,17 +45,18 @@ A template with all options is at `plugins/shared/config.default.yaml` (synced t
 
 ```yaml
 guard:
-  level: balanced
-  rules: {}                 # Extra scan patterns (used by scan + guard Phase 3)
-  llm: { api_key: "" }     # Phase 5 LLM analyser
-  external_scoring: {}      # Phase 6 external scoring API
+  protection_level: balanced
+  file_scan_rules: {}            # Extra scan patterns (Phase 3 + scan command)
+  action_guard_rules: {}         # Extra guard patterns (Phase 2 runtime analysis)
+  llm_analyser: { enabled: false, api_key: "" }       # Phase 5 LLM analyser
+  external_analyser: { enabled: false, endpoint: "" }  # Phase 6 external scoring API
   allowed_commands: []      # Phase 1 safe command prefixes
   available_tools: {}       # Per-platform tool allowlist (Phase 0)
   blocked_tools: {}         # Per-platform tool denylist (Phase 0)
   guarded_tools:            # Per-platform tool → action type mapping
     claude_code: { Bash: exec_command, Write: write_file, Edit: write_file, WebFetch: network_request, WebSearch: network_request }
     openclaw: { exec: exec_command, write: write_file, web_fetch: network_request, browser: network_request }
-  weights: {}               # Phase score aggregation weights
+  scoring_weights: {}       # Phase score aggregation weights
 
 collector:
   endpoint: ""              # OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs)

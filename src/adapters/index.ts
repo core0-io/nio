@@ -21,7 +21,6 @@ export {
 } from './common.js';
 export {
   validateConfig,
-  normalizeConfig,
   AgentGuardConfigSchema,
   CollectorConfigSchema,
 } from './config-schema.js';

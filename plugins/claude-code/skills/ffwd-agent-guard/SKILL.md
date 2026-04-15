@@ -187,10 +187,11 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
 ```json
 {
   "guard": {
-    "level": "balanced",
-    "rules": {},
-    "llm": { "api_key": "" },
-    "external_scoring": { "endpoint": "" },
+    "protection_level": "balanced",
+    "file_scan_rules": {},
+    "action_guard_rules": {},
+    "llm_analyser": { "enabled": false, "api_key": "" },
+    "external_analyser": { "enabled": false, "endpoint": "" },
     "allowed_commands": [],
     "available_tools": {},
     "blocked_tools": {},
@@ -198,7 +199,7 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
       "claude_code": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" },
       "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" }
     },
-    "weights": {}
+    "scoring_weights": {}
   },
   "collector": {
     "endpoint": "",
@@ -214,10 +215,13 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `guard.level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
-| `guard.rules` | object | `{}` | Extra scan patterns (used by scan + guard Phase 3) |
-| `guard.llm.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
-| `guard.external_scoring.endpoint` | string | `""` | Phase 6 external scoring API URL |
+| `guard.protection_level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `guard.file_scan_rules` | object | `{}` | Extra scan patterns (Phase 3 + scan command) |
+| `guard.action_guard_rules` | object | `{}` | Extra guard patterns (Phase 2 runtime analysis) |
+| `guard.llm_analyser.enabled` | boolean | `true` | Enable/disable Phase 5 LLM analysis |
+| `guard.llm_analyser.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
+| `guard.external_analyser.enabled` | boolean | `true` | Enable/disable Phase 6 external scoring |
+| `guard.external_analyser.endpoint` | string | `""` | Phase 6 external scoring API URL |
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
 | `guard.available_tools` | object | `{}` | Per-platform tool allowlist (Phase 0) |
 | `guard.blocked_tools` | object | `{}` | Per-platform tool denylist (Phase 0) |

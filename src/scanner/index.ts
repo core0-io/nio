@@ -29,7 +29,7 @@ export interface ScannerOptions {
   /** Custom rules to add */
   additionalRules?: ScanRule[];
   /** Extra regex pattern strings injected into existing rule modules from config */
-  extraPatterns?: Partial<Record<string, string[]>>;
+  fileScanRules?: Partial<Record<string, string[]>>;
 }
 
 /**
@@ -63,7 +63,7 @@ export class SkillScanner {
 
     // Build scan policy from options
     const policy = mergePolicy(defaultPolicy(), {
-      extra_patterns: this.options.extraPatterns ?? {},
+      extra_patterns: this.options.fileScanRules ?? {},
       // Enable behavioural analysis when deep mode is on
       analysers: {
         static: true,
@@ -74,12 +74,12 @@ export class SkillScanner {
 
     // Load LLM config from config.yaml
     const config = loadConfig();
-    const llmCfg = config.guard?.llm;
+    const llmCfg = config.guard?.llm_analyser;
 
     this.orchestrator = new ScanOrchestrator({
       policy,
       registry: this.registry,
-      llmApiKey: llmCfg?.api_key || undefined,
+      llmApiKey: llmCfg?.enabled ? (llmCfg?.api_key || undefined) : undefined,
       llmModel: llmCfg?.model || undefined,
       llmMaxInputTokens: llmCfg?.max_input_tokens || undefined,
     });

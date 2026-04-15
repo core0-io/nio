@@ -149,7 +149,7 @@ export function registerOpenClawPlugin(
 ): void {
   const config = loadConfig();
   const guard = config.guard;
-  if (options.level && guard) guard.level = options.level as typeof guard.level;
+  if (options.level && guard) guard.protection_level = options.level as typeof guard.protection_level;
 
   const adapter = new OpenClawAdapter({ guardedTools: guard?.guarded_tools?.openclaw });
 
@@ -174,15 +174,18 @@ export function registerOpenClawPlugin(
       } else {
         ffwdAgentGuard = {
           runtimeAnalyser: new RuntimeAnalyser({
-            level: (guard?.level || 'balanced') as ProtectionLevel,
-            extraAllowlist: guard?.allowed_commands,
-            extraPatterns: guard?.rules,
-            weights: guard?.weights,
-            llmApiKey: guard?.llm?.api_key,
-            llmModel: guard?.llm?.model,
-            scoringEndpoint: guard?.external_scoring?.endpoint,
-            scoringApiKey: guard?.external_scoring?.api_key,
-            scoringTimeout: guard?.external_scoring?.timeout,
+            level: (guard?.protection_level || 'balanced') as ProtectionLevel,
+            allowedCommands: guard?.allowed_commands,
+            fileScanRules: guard?.file_scan_rules,
+            actionGuardRules: guard?.action_guard_rules,
+            scoringWeights: guard?.scoring_weights,
+            llmEnabled: guard?.llm_analyser?.enabled ?? false,
+            llmApiKey: guard?.llm_analyser?.api_key,
+            llmModel: guard?.llm_analyser?.model,
+            externalEnabled: guard?.external_analyser?.enabled ?? true,
+            scoringEndpoint: guard?.external_analyser?.endpoint,
+            scoringApiKey: guard?.external_analyser?.api_key,
+            scoringTimeout: guard?.external_analyser?.timeout,
           }),
         };
       }
@@ -459,7 +462,7 @@ export function registerOpenClawPlugin(
     }
   });
 
-  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${guard?.level || 'balanced'})`);
+  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${guard?.protection_level || 'balanced'})`);
 }
 
 /**
