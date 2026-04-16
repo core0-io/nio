@@ -19,7 +19,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { readFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -36,6 +36,7 @@ if (!target || !['claude-code', 'openclaw', 'all'].includes(target)) {
   process.exit(1);
 }
 
+rmSync(RELEASES_DIR, { recursive: true, force: true });
 mkdirSync(RELEASES_DIR, { recursive: true });
 
 const EXCLUDES = '-x "*/.DS_Store" "*/node_modules/.package-lock.json" "*/node_modules/.pnpm-*"';
@@ -46,7 +47,6 @@ const EXCLUDES = '-x "*/.DS_Store" "*/node_modules/.package-lock.json" "*/node_m
  */
 function zipFromDir(outName, sourceDir) {
   const outPath = join(RELEASES_DIR, outName);
-  if (existsSync(outPath)) execSync(`rm "${outPath}"`);
   execSync(
     `cd "${join(ROOT, sourceDir)}" && zip -r "${outPath}" . ${EXCLUDES}`,
     { stdio: 'inherit' }
@@ -59,7 +59,6 @@ function zipFromDir(outName, sourceDir) {
  */
 function zipFromRoot(outName, files) {
   const outPath = join(RELEASES_DIR, outName);
-  if (existsSync(outPath)) execSync(`rm "${outPath}"`);
   execSync(
     `cd "${ROOT}" && zip -r "${outPath}" ${files.join(' ')} ${EXCLUDES}`,
     { stdio: 'inherit' }
