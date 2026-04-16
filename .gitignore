@@ -16,8 +16,6 @@ tmp/
 .pnpm-store/
 plugins/claude-code/skills/ffwd-agent-guard/scripts/*.js
 plugins/claude-code/skills/ffwd-agent-guard/scripts/*.js.map
-plugins/claude-code/skills/ffwd-agent-guard/scripts/lib/*.js
-plugins/claude-code/skills/ffwd-agent-guard/scripts/lib/*.js.map
 plugins/openclaw/plugin.js
 # Synced shared files (build output, source of truth is plugins/shared/)
 plugins/claude-code/config.default.yaml

@@ -10,7 +10,7 @@
     ]
   },
   "scripts": {
-    "build": "rm -rf dist plugins/claude-code/skills/ffwd-agent-guard/scripts && tsc -p tsconfig.lib.json && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=plugins/openclaw/plugin.js --external:node:* --banner:js=\"import { createRequire as __ffwdCreateRequire } from 'module'; const require = __ffwdCreateRequire(import.meta.url);\" && node_modules/.bin/esbuild src/scripts/scanner-hook.ts src/scripts/guard-hook.ts src/scripts/collector-hook.ts src/scripts/action-cli.ts src/scripts/config-cli.ts --bundle --splitting --platform=node --format=esm --outdir=plugins/claude-code/skills/ffwd-agent-guard/scripts --external:node:* --banner:js=\"import { createRequire as __ffwdCreateRequire } from 'module'; const require = __ffwdCreateRequire(import.meta.url);\" && node scripts/sync-shared.js",
+    "build": "rm -rf dist plugins/claude-code/skills/ffwd-agent-guard/scripts && tsc -p tsconfig.lib.json && bun scripts/build.js && node scripts/sync-shared.js",
     "dev": "tsc -w -p tsconfig.lib.json",
     "test": "node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build",
@@ -67,7 +67,7 @@
     "@types/babel__traverse": "^7.28.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.24",
-    "esbuild": "^0.28.0",
+    "bun": "^1.3.12",
     "typescript": "^5.3.3"
   },
   "homepage": "https://github.com/core0-io/ffwd-agent-guard#readme",
@@ -80,5 +80,10 @@
     "plugins/openclaw/openclaw.plugin.json",
     "plugins/claude-code/skills"
   ],
-  "type": "module"
+  "type": "module",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "bun"
+    ]
+  }
 }

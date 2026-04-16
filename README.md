@@ -112,8 +112,11 @@ Both pipelines share the BehaviouralAnalyser, which uses pluggable `LanguageExtr
 ## Quick Start
 
 ```bash
-npm install @core0-io/ffwd-agent-guard
+git clone https://github.com/core0-io/ffwd-agent-guard.git
+cd ffwd-agent-guard && ./setup.sh
 ```
+
+Detects installed platforms and runs the appropriate setup for each. See the expandable sections below for per-platform installs.
 
 <details>
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
@@ -146,34 +149,12 @@ git clone https://github.com/core0-io/ffwd-agent-guard.git
 cd ffwd-agent-guard && ./plugins/openclaw/setup.sh
 ```
 
-Or install via npm:
-
-```bash
-npm install @core0-io/ffwd-agent-guard
-```
-
-Register in your OpenClaw plugin config:
-
-```typescript
-import register from '@core0-io/ffwd-agent-guard/openclaw';
-export default register;
-```
-
-AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
+`setup.sh` registers the plugin with OpenClaw and copies the bundled `plugin.js` into your OpenClaw state directory. AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
 
 </details>
 
 <details>
-<summary><b>All platforms (auto-detect)</b></summary>
-
-```bash
-git clone https://github.com/core0-io/ffwd-agent-guard.git
-cd ffwd-agent-guard && ./setup.sh
-```
-
-Detects installed platforms and runs the appropriate setup for each.
-
-To reset config to defaults after an upgrade:
+<summary><b>Reset config after upgrade</b></summary>
 
 ```bash
 ./setup.sh --reset-config

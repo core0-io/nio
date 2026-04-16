@@ -24,18 +24,22 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ## Build
 
-Scripts in `src/scripts/` compile to `plugins/claude-code/skills/ffwd-agent-guard/scripts/`:
+`pnpm run build` runs three passes in order:
+
+1. `tsc -p tsconfig.lib.json` — emits unbundled `dist/` + `.d.ts` for the npm library export.
+2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/ffwd-agent-guard/scripts/` (5 entries + code-split chunks).
+3. `node scripts/sync-shared.js` — copies `plugins/shared/` into each plugin dir.
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 ## Release
 
 ```bash
-npm run release                    # All platforms
-npm run release:claude-code        # Claude Code only
-npm run release:openclaw           # OpenClaw only
+pnpm run release                   # All platforms
+pnpm run release:claude-code       # Claude Code only
+pnpm run release:openclaw          # OpenClaw only
 ```
 
 ## Configuration
