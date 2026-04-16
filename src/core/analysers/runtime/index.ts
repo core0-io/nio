@@ -238,20 +238,23 @@ export class RuntimeAnalyser {
         scores.external = result.score;
         timings.external = { score: result.score, finding_count: 0, duration_ms: Math.round(t6End - t6) };
 
-        if (shouldShortCircuit(result.score, level)) {
-          // Add a synthetic finding for the external score
+        // Emit a synthetic finding when external score indicates risk (≥ 0.5)
+        if (result.score >= 0.5) {
           allFindings.push({
             id: `EXTERNAL_SCORE:${envelope.action.type}:0`,
             rule_id: 'EXTERNAL_SCORE',
             category: 'policy_violation',
             severity: result.score >= 0.9 ? 'critical' : result.score >= 0.7 ? 'high' : 'medium',
             title: 'External scorer flagged action',
-            description: result.reason || 'External scoring API returned high risk score',
+            description: result.reason || 'External scoring API returned elevated risk score',
             location: { file: envelope.action.type, line: 0 },
             analyser: 'static',
             confidence: result.score,
           });
           timings.external!.finding_count = 1;
+        }
+
+        if (shouldShortCircuit(result.score, level)) {
           return this.buildResult(allFindings, scores, 6, level, timings);
         }
       }
