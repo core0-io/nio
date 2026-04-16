@@ -8,9 +8,52 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
 MIN_NODE_VERSION=18
 
+# ---- Parse args ----
+UNINSTALL=0
+RESET_CONFIG=0
+OPENCLAW_HOME_ARG=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --uninstall|uninstall)
+      UNINSTALL=1; shift ;;
+    --reset-config)
+      RESET_CONFIG=1; shift ;;
+    --openclaw-home)
+      OPENCLAW_HOME_ARG="${2:-}"; shift 2 ;;
+    --openclaw-home=*)
+      OPENCLAW_HOME_ARG="${1#*=}"; shift ;;
+    -h|--help)
+      echo "Usage: $(basename "$0") [--openclaw-home <path>] [--reset-config] [--uninstall]"
+      echo ""
+      echo "  --openclaw-home <path>  Path to .openclaw directory."
+      echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
+      echo "  --reset-config          Overwrite existing ffwd-agent-guard config with defaults."
+      echo "  --uninstall             Remove the plugin and config."
+      exit 0 ;;
+    *)
+      echo "  ERROR: Unknown option: $1"
+      echo "  Run with --help for usage."
+      exit 1 ;;
+  esac
+done
+
+# Resolve OpenClaw home: --openclaw-home > $OPENCLAW_STATE_DIR > $HOME/.openclaw
+if [ -n "$OPENCLAW_HOME_ARG" ]; then
+  OPENCLAW_HOME="$OPENCLAW_HOME_ARG"
+elif [ -n "${OPENCLAW_STATE_DIR:-}" ]; then
+  OPENCLAW_HOME="$OPENCLAW_STATE_DIR"
+else
+  OPENCLAW_HOME="$HOME/.openclaw"
+fi
+
+# Keep `openclaw` CLI aligned with our resolved path
+export OPENCLAW_STATE_DIR="$OPENCLAW_HOME"
+
 echo ""
 echo "  FFWD AgentGuard — OpenClaw Plugin Setup"
 echo "  ============================================="
+echo "  OpenClaw home: $OPENCLAW_HOME"
 echo ""
 
 # ---- Pre-check: Node.js ----
@@ -29,10 +72,10 @@ if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
 fi
 
 # ---- Uninstall mode ----
-if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling FFWD AgentGuard (OpenClaw)..."
-  rm -rf "$HOME/.openclaw/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
-  rm -rf "$HOME/.openclaw/workspace/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed workspace skill" || true
+  rm -rf "$OPENCLAW_HOME/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
+  rm -rf "$OPENCLAW_HOME/workspace/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed workspace skill" || true
   rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
   echo ""
   echo "  FFWD AgentGuard has been uninstalled."
@@ -41,15 +84,16 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
 fi
 
 # ---- Detect OpenClaw install type ----
-if [ -d "$HOME/.openclaw/workspace" ]; then
-  SKILLS_DIR="$HOME/.openclaw/workspace/skills/ffwd-agent-guard"
+if [ -d "$OPENCLAW_HOME/workspace" ]; then
+  SKILLS_DIR="$OPENCLAW_HOME/workspace/skills/ffwd-agent-guard"
   PLATFORM="openclaw-workspace"
-elif [ -d "$HOME/.openclaw" ]; then
-  SKILLS_DIR="$HOME/.openclaw/skills/ffwd-agent-guard"
+elif [ -d "$OPENCLAW_HOME" ]; then
+  SKILLS_DIR="$OPENCLAW_HOME/skills/ffwd-agent-guard"
   PLATFORM="openclaw-managed"
 else
-  echo "  ERROR: OpenClaw is not installed (~/.openclaw not found)."
+  echo "  ERROR: OpenClaw is not installed ($OPENCLAW_HOME not found)."
   echo "  Install OpenClaw first, then re-run this script."
+  echo "  Or pass --openclaw-home <path> if your .openclaw lives elsewhere."
   exit 1
 fi
 
@@ -88,10 +132,6 @@ fi
 # ---- Step 2: Create config directory ----
 echo "[2/2] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
-RESET_CONFIG=0
-if [ "${1:-}" = "--reset-config" ]; then
-  RESET_CONFIG=1
-fi
 if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ] && command -v node &>/dev/null; then
     node -e "

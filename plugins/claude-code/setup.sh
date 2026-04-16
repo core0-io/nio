@@ -9,9 +9,52 @@ SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
 FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
 MIN_NODE_VERSION=18
 
+# ---- Parse args ----
+UNINSTALL=0
+RESET_CONFIG=0
+CC_HOME_ARG=""
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --uninstall|uninstall)
+      UNINSTALL=1; shift ;;
+    --reset-config)
+      RESET_CONFIG=1; shift ;;
+    --cc-home)
+      CC_HOME_ARG="${2:-}"; shift 2 ;;
+    --cc-home=*)
+      CC_HOME_ARG="${1#*=}"; shift ;;
+    -h|--help)
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--reset-config] [--uninstall]"
+      echo ""
+      echo "  --cc-home <path>  Path to .claude directory."
+      echo "                    Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
+      echo "  --reset-config    Overwrite existing ffwd-agent-guard config with defaults."
+      echo "  --uninstall       Remove the plugin and config."
+      exit 0 ;;
+    *)
+      echo "  ERROR: Unknown option: $1"
+      echo "  Run with --help for usage."
+      exit 1 ;;
+  esac
+done
+
+# Resolve Claude Code home: --cc-home > $CLAUDE_CONFIG_DIR > $HOME/.claude
+if [ -n "$CC_HOME_ARG" ]; then
+  CC_HOME="$CC_HOME_ARG"
+elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  CC_HOME="$CLAUDE_CONFIG_DIR"
+else
+  CC_HOME="$HOME/.claude"
+fi
+
+# Keep Claude Code CLI aligned with our resolved path
+export CLAUDE_CONFIG_DIR="$CC_HOME"
+
 echo ""
 echo "  FFWD AgentGuard — Claude Code Plugin Setup"
 echo "  ============================================="
+echo "  Claude Code home: $CC_HOME"
 echo ""
 
 # ---- Pre-check: Node.js ----
@@ -30,9 +73,9 @@ if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
 fi
 
 # ---- Uninstall mode ----
-if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
+if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling FFWD AgentGuard (Claude Code)..."
-  rm -rf "$HOME/.claude/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
+  rm -rf "$CC_HOME/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
   rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
   echo ""
   echo "  FFWD AgentGuard has been uninstalled."
@@ -40,7 +83,7 @@ if [ "${1:-}" = "--uninstall" ] || [ "${1:-}" = "uninstall" ]; then
   exit 0
 fi
 
-SKILLS_DIR="$HOME/.claude/skills/ffwd-agent-guard"
+SKILLS_DIR="$CC_HOME/skills/ffwd-agent-guard"
 
 # ---- Step 1: Install skill files ----
 echo "[1/3] Installing skill files..."
@@ -63,7 +106,7 @@ fi
 echo "  OK: Scripts installed"
 
 # ---- Sync plugin cache (if installed via Claude Code plugin manager) ----
-PLUGIN_CACHE_BASE="$HOME/.claude/plugins/cache/ffwd-agent-guard/ffwd-agent-guard"
+PLUGIN_CACHE_BASE="$CC_HOME/plugins/cache/ffwd-agent-guard/ffwd-agent-guard"
 if [ -d "$PLUGIN_CACHE_BASE" ]; then
   for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
     [ -d "$CACHE_VERSION_DIR" ] || continue
@@ -81,10 +124,6 @@ fi
 # ---- Step 3: Create config directory ----
 echo "[3/3] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
-RESET_CONFIG=0
-if [ "${1:-}" = "--reset-config" ]; then
-  RESET_CONFIG=1
-fi
 if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
   if command -v node &>/dev/null && [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
     node -e "
