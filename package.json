@@ -17,7 +17,11 @@
     "release": "node scripts/release.js all",
     "release:claude-code": "node scripts/release.js claude-code",
     "release:openclaw": "node scripts/release.js openclaw",
-    "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes"
+    "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes --verify-tag",
+    "version-select": "changeset",
+    "version-update": "changeset version && node scripts/sync-versions.js",
+    "tag": "changeset tag",
+    "bump": "pnpm version-select && pnpm version-update"
   },
   "keywords": [
     "claude-code-skill",
@@ -64,6 +68,7 @@
     "zod": "^3.25.32"
   },
   "devDependencies": {
+    "@changesets/cli": "^2.30.0",
     "@types/babel__traverse": "^7.28.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.11.24",

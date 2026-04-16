@@ -36,11 +36,26 @@ pnpm run build
 
 ## Release
 
+Per-platform zip builds:
+
 ```bash
 pnpm run release                   # All platforms
 pnpm run release:claude-code       # Claude Code only
 pnpm run release:openclaw          # OpenClaw only
 ```
+
+Full release workflow (versioned, tagged, published to GitHub):
+
+```bash
+pnpm bump                          # select + apply changesets; bumps version
+                                   # in all 3 manifests (root, openclaw, marketplace)
+git commit -am "release v$(jq -r .version package.json)"
+pnpm tag                           # changeset tag → creates local git tags
+git push --follow-tags
+pnpm release:publish               # build + zip + gh release create (attaches to existing tag)
+```
+
+Contributors author changesets per PR with `pnpm version-select` (interactive: pick bump type + describe the change). Changesets accumulate in `.changeset/`; `pnpm bump` consumes them, updates `CHANGELOG.md`, and bumps versions.
 
 ## Configuration
 
