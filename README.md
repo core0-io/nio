@@ -181,6 +181,30 @@ To reset config to defaults after an upgrade:
 
 </details>
 
+<details>
+<summary><b>Custom install paths (.claude / .openclaw moved elsewhere)</b></summary>
+
+By default, setup looks for `~/.claude` and `~/.openclaw`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `OPENCLAW_STATE_DIR`, or manually), pass the path explicitly:
+
+```bash
+# All-in-one
+./setup.sh --cc-home /path/to/.claude --openclaw-home /path/to/.openclaw
+
+# Per-platform
+./plugins/claude-code/setup.sh --cc-home /path/to/.claude
+./plugins/openclaw/setup.sh --openclaw-home /path/to/.openclaw
+```
+
+Resolution order (first match wins):
+
+1. `--cc-home` / `--openclaw-home` flag
+2. `$CLAUDE_CONFIG_DIR` / `$OPENCLAW_STATE_DIR` environment variable
+3. `$HOME/.claude` / `$HOME/.openclaw` (default)
+
+The AgentGuard config itself lives at `~/.ffwd-agent-guard/` by default, overridable via `$FFWD_AGENT_GUARD_HOME`.
+
+</details>
+
 ## Usage
 
 ```
