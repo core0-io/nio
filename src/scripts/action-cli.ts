@@ -23,12 +23,7 @@ export {};
  *     --path <filepath>
  */
 
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-// ---------------------------------------------------------------------------
-// Types (local declarations to avoid cross-project imports)
-// ---------------------------------------------------------------------------
+import { createAgentGuard } from '../index.js';
 
 type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access';
 
@@ -52,37 +47,6 @@ interface ActionEnvelope {
     time: string;
   };
 }
-
-interface AgentGuardModule {
-  createAgentGuard: (options?: { registryPath?: string }) => {
-    runtimeAnalyser: {
-      evaluate: (envelope: ActionEnvelope) => Promise<unknown>;
-    };
-    [key: string]: unknown;
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Load AgentGuard engine
-// ---------------------------------------------------------------------------
-
-const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', '..', '..', 'dist', 'index.js');
-
-let mod: AgentGuardModule;
-try {
-  mod = await import(agentguardPath) as AgentGuardModule;
-} catch {
-  try {
-    mod = // @ts-expect-error fallback to npm package if relative import fails
-    await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
-  } catch {
-    process.stderr.write('FFWD AgentGuard: unable to load engine\n');
-    process.exit(1);
-  }
-}
-
-const { createAgentGuard } = mod!;
 
 const args = process.argv.slice(2);
 const command = args[0];

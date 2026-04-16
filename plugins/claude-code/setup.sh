@@ -95,14 +95,9 @@ echo "  OK: Skill files installed"
 
 # ---- Step 2: Install scripts ----
 echo "[2/3] Installing scripts..."
-mkdir -p "$SKILLS_DIR/scripts/lib"
+rm -rf "$SKILLS_DIR/scripts"
+mkdir -p "$SKILLS_DIR/scripts"
 cp -r "$SKILL_SRC/scripts/"* "$SKILLS_DIR/scripts/"
-
-# Copy node_modules if present (production dependencies)
-if [ -d "$SKILL_SRC/node_modules" ]; then
-  rm -rf "$SKILLS_DIR/node_modules"
-  cp -r "$SKILL_SRC/node_modules" "$SKILLS_DIR/node_modules"
-fi
 echo "  OK: Scripts installed"
 
 # ---- Sync plugin cache (if installed via Claude Code plugin manager) ----
@@ -111,13 +106,10 @@ if [ -d "$PLUGIN_CACHE_BASE" ]; then
   for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
     [ -d "$CACHE_VERSION_DIR" ] || continue
     echo "  Syncing plugin cache: $CACHE_VERSION_DIR"
+    rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
     mkdir -p "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
     cp -r "$SKILL_SRC/scripts/"* "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts/"
     cp "$SCRIPT_DIR/hooks/hooks.json" "$CACHE_VERSION_DIR/hooks/hooks.json" 2>/dev/null || true
-    if [ -d "$SKILL_SRC/node_modules" ]; then
-      rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/node_modules"
-      cp -r "$SKILL_SRC/node_modules" "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/node_modules"
-    fi
   done
 fi
 

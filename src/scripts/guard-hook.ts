@@ -16,59 +16,10 @@ export {};
  * PostToolUse: appends audit log entry (async, always exits 0)
  */
 
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
-
-// ---------------------------------------------------------------------------
-// Types (local declarations to avoid cross-project imports)
-// ---------------------------------------------------------------------------
-
-interface HookOutput {
-  decision: string;
-  reason?: string;
-  riskLevel?: string;
-  riskScore?: number;
-}
-
-interface AgentGuardModule {
-  createAgentGuard: (options?: { registryPath?: string }) => Record<string, unknown>;
-  ClaudeCodeAdapter: new (opts?: { guardedTools?: Record<string, string> }) => unknown;
-  evaluateHook: (adapter: unknown, rawInput: unknown, options: Record<string, unknown>, auditOpts?: Record<string, unknown>) => Promise<HookOutput>;
-  loadConfig: () => {
-    guard?: {
-      level?: string;
-      guarded_tools?: Record<string, Record<string, string>>;
-    };
-    collector?: {
-      logs?: { enabled?: boolean; local?: boolean; max_size_mb?: number };
-    };
-  };
-}
-
-// ---------------------------------------------------------------------------
-// Load AgentGuard engine + adapters
-// ---------------------------------------------------------------------------
-
-const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', '..', '..', 'dist', 'index.js');
-
-let mod: AgentGuardModule;
-try {
-  mod = await import(agentguardPath) as AgentGuardModule;
-} catch {
-  try {
-    mod = // @ts-expect-error fallback to npm package if relative import fails
-    await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
-  } catch {
-    process.stderr.write('FFWD AgentGuard: unable to load engine, allowing action\n');
-    process.exit(0);
-  }
-}
-
-const { createAgentGuard, ClaudeCodeAdapter, evaluateHook, loadConfig } = mod!;
+import { createAgentGuard, ClaudeCodeAdapter, evaluateHook, loadConfig } from '../index.js';
 
 // ---------------------------------------------------------------------------
 // Read stdin

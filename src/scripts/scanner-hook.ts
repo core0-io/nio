@@ -15,14 +15,13 @@ export {};
  */
 
 import { readdirSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { fileURLToPath } from 'node:url';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createLoggerProvider, emitAuditLog } from './lib/logs-collector.js';
+import { createAgentGuard, ScanCache } from '../index.js';
 
-/** Audit scan entry shape (avoids cross-rootDir import from adapters). */
 interface AuditScanEntry {
   event: 'session_scan';
   timestamp: string;
@@ -34,54 +33,6 @@ interface AuditScanEntry {
   finding_count?: number;
   [key: string]: unknown;
 }
-
-// ---------------------------------------------------------------------------
-// Types (local to avoid cross-project imports in compiled scripts)
-// ---------------------------------------------------------------------------
-
-interface AgentGuardModule {
-  createAgentGuard: () => {
-    scanner: {
-      quickScan: (path: string) => Promise<{ risk_level: string; risk_tags: string[] }>;
-    };
-    [key: string]: unknown;
-  };
-  ScanCache: new (filePath?: string) => {
-    get: (id: string) => { artifact_hash: string } | null;
-    set: (entry: ScanCacheEntry) => void;
-  };
-}
-
-interface ScanCacheEntry {
-  skill_id: string;
-  scan_time: string;
-  artifact_hash: string;
-  risk_level: string;
-  finding_count: number;
-  critical_findings: number;
-  high_findings: number;
-}
-
-// ---------------------------------------------------------------------------
-// Load AgentGuard engine
-// ---------------------------------------------------------------------------
-
-const __filename = fileURLToPath(import.meta.url);
-const agentguardPath = join(dirname(__filename), '..', '..', '..', '..', '..', 'dist', 'index.js');
-
-let mod: AgentGuardModule;
-try {
-  mod = await import(agentguardPath) as AgentGuardModule;
-} catch {
-  try {
-    mod = // @ts-expect-error fallback to npm package if relative import fails
-    await import('@core0-io/ffwd-agent-guard') as AgentGuardModule;
-  } catch {
-    process.exit(0);
-  }
-}
-
-const { createAgentGuard, ScanCache } = mod!;
 
 // ---------------------------------------------------------------------------
 // Config

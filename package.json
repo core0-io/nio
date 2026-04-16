@@ -10,9 +10,8 @@
     ]
   },
   "scripts": {
-    "prebuild": "cp package.json pnpm-lock.yaml plugins/claude-code/skills/ffwd-agent-guard/ && cd plugins/claude-code/skills/ffwd-agent-guard && pnpm install --prod --frozen-lockfile --node-linker=hoisted && rm package.json pnpm-lock.yaml",
-    "build": "rm -rf dist && tsc -p tsconfig.lib.json && tsc -p tsconfig.scripts.json && node scripts/add-banner.js && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=plugins/openclaw/plugin.js --external:node:* && node scripts/sync-shared.js",
-    "dev": "tsc -w -p tsconfig.lib.json & tsc -w -p tsconfig.scripts.json",
+    "build": "rm -rf dist plugins/claude-code/skills/ffwd-agent-guard/scripts && tsc -p tsconfig.lib.json && node_modules/.bin/esbuild dist/adapters/openclaw-plugin.js --bundle --platform=node --format=esm --outfile=plugins/openclaw/plugin.js --external:node:* --banner:js=\"import { createRequire as __ffwdCreateRequire } from 'module'; const require = __ffwdCreateRequire(import.meta.url);\" && node_modules/.bin/esbuild src/scripts/scanner-hook.ts src/scripts/guard-hook.ts src/scripts/collector-hook.ts src/scripts/action-cli.ts src/scripts/config-cli.ts --bundle --splitting --platform=node --format=esm --outdir=plugins/claude-code/skills/ffwd-agent-guard/scripts --external:node:* --banner:js=\"import { createRequire as __ffwdCreateRequire } from 'module'; const require = __ffwdCreateRequire(import.meta.url);\" && node scripts/sync-shared.js",
+    "dev": "tsc -w -p tsconfig.lib.json",
     "test": "node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build",
     "release": "node scripts/release.js all",
