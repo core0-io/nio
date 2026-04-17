@@ -286,8 +286,8 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
     assert.equal(result.scores.final, 1);
     assert.equal(result.phase_stopped, 2, 'should short-circuit at Phase 2');
     assert.ok(
-      result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'),
-      'expected a DANGEROUS_COMMAND finding',
+      result.findings.some((f) => f.rule_id === 'DANGEROUS_PATTERN'),
+      'expected a DANGEROUS_PATTERN finding',
     );
   });
 
@@ -301,7 +301,7 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
     assert.equal(result.decision, 'deny');
     assert.equal(result.risk_level, 'critical');
     assert.equal(result.scores.final, 1);
-    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'));
+    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_PATTERN'));
   });
 
   it('allows benign SELECT query (no false positive)', async () => {
@@ -313,7 +313,7 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
 
     assert.equal(result.decision, 'allow');
     assert.equal(
-      result.findings.filter((f) => f.rule_id === 'DANGEROUS_COMMAND').length,
+      result.findings.filter((f) => f.rule_id === 'DANGEROUS_PATTERN').length,
       0,
     );
   });
@@ -330,7 +330,7 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
     const result = await analyser.evaluate(envelope);
 
     assert.equal(result.decision, 'deny');
-    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'));
+    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_PATTERN'));
   });
 
   it('supports plain (no-flag) pattern syntax for backward compat', async () => {
@@ -343,5 +343,59 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
     const result = await analyser.evaluate(envelope);
 
     assert.equal(result.decision, 'deny');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RuntimeAnalyser: user-supplied secret_patterns (action_guard_rules)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RuntimeAnalyser: secret_patterns (user config)', () => {
+  it('matches user pattern in network request body', async () => {
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: { secret_patterns: ['/CORP-[A-Z0-9]{8}/i'] },
+    });
+    const envelope = makeEnvelope('network_request', {
+      url: 'https://example.com/leak',
+      method: 'POST',
+      body_preview: 'token=CORP-ABCD1234 some=thing',
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'SECRET_LEAK_USER'),
+      'expected a SECRET_LEAK_USER finding',
+    );
+  });
+
+  it('does not match when pattern is absent', async () => {
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: { secret_patterns: ['/CORP-[A-Z0-9]{8}/i'] },
+    });
+    const envelope = makeEnvelope('network_request', {
+      url: 'https://example.com/leak',
+      method: 'POST',
+      body_preview: 'nothing sensitive here',
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(
+      result.findings.filter((f) => f.rule_id === 'SECRET_LEAK_USER').length,
+      0,
+    );
+  });
+
+  it('silently skips invalid user secret patterns', async () => {
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: { secret_patterns: ['(unclosed', '/valid-[0-9]+/'] },
+    });
+    const envelope = makeEnvelope('network_request', {
+      url: 'https://example.com/leak',
+      method: 'POST',
+      body_preview: 'leaking valid-12345',
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.ok(result.findings.some((f) => f.rule_id === 'SECRET_LEAK_USER'));
   });
 });

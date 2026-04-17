@@ -19,7 +19,7 @@ import {
   SECRET_PATTERNS,
   SECRET_PRIORITY,
 } from '../../shared/detection-data.js';
-import { compileUserRegexList } from '../../shared/regex.js';
+import { compileUserRegex } from '../../shared/regex.js';
 import { extractAndDecodeBase64 } from '../../detection-engine.js';
 
 // ── Config-driven extra patterns ────────────────────────────────────────
@@ -96,7 +96,7 @@ function isSensitivePath(filePath: string, extraPaths?: string[]): boolean {
   );
 }
 
-function checkSecretLeak(content: string): Finding[] {
+function checkSecretLeak(content: string, extraPatterns?: string[]): Finding[] {
   const findings: Finding[] = [];
 
   for (const [type, pattern] of Object.entries(SECRET_PATTERNS)) {
@@ -123,6 +123,28 @@ function checkSecretLeak(content: string): Finding[] {
     }
   }
 
+  // User-supplied secret patterns (action_guard_rules.secret_patterns)
+  if (extraPatterns) {
+    for (const source of extraPatterns) {
+      let regex: RegExp;
+      try { regex = compileUserRegex(source); } catch { continue; }
+      if (regex.test(content)) {
+        findings.push({
+          id: findingId('SECRET_LEAK_USER', 'request_body', 0),
+          rule_id: 'SECRET_LEAK_USER',
+          category: 'secrets',
+          severity: 'high',
+          title: `User secret pattern matched: ${source}`,
+          description: `Request body matched user-defined secret pattern: ${source}`,
+          location: { file: 'request_body', line: 0 },
+          remediation: 'Remove sensitive data from HTTP request body',
+          analyser: 'static',
+          confidence: 0.9,
+        });
+      }
+    }
+  }
+
   return findings;
 }
 
@@ -140,9 +162,16 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
   const dangerousStrings = extra?.dangerous_commands
     ? [...DANGEROUS_COMMAND_STRINGS, ...extra.dangerous_commands]
     : DANGEROUS_COMMAND_STRINGS;
-  const dangerousPatterns = extra?.dangerous_patterns
-    ? [...DANGEROUS_COMMAND_PATTERNS, ...compileUserRegexList(extra.dangerous_patterns)]
-    : DANGEROUS_COMMAND_PATTERNS;
+  const userDangerousPatterns: Array<{ source: string; regex: RegExp }> = [];
+  if (extra?.dangerous_patterns) {
+    for (const source of extra.dangerous_patterns) {
+      try {
+        userDangerousPatterns.push({ source, regex: compileUserRegex(source) });
+      } catch {
+        // skip invalid pattern
+      }
+    }
+  }
   const sensitiveCommands = extra?.sensitive_commands
     ? [...SENSITIVE_COMMANDS, ...extra.sensitive_commands]
     : SENSITIVE_COMMANDS;
@@ -189,8 +218,8 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
     }
   }
 
-  // Dangerous commands (regex match, e.g. curl ... | bash)
-  for (const pattern of dangerousPatterns) {
+  // Dangerous commands (built-in regex, e.g. curl ... | bash)
+  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
     if (pattern.test(fullCommand)) {
       findings.push({
         id: findingId('DANGEROUS_COMMAND', 'command', 0),
@@ -199,6 +228,24 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
         severity: 'critical',
         title: 'Dangerous command: pipe to shell',
         description: `Dangerous command pattern detected: pipe to shell interpreter`,
+        location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
+        analyser: 'static',
+        confidence: 1.0,
+      });
+      return findings; // critical
+    }
+  }
+
+  // User-supplied dangerous patterns (action_guard_rules.dangerous_patterns)
+  for (const { source, regex } of userDangerousPatterns) {
+    if (regex.test(fullCommand)) {
+      findings.push({
+        id: findingId('DANGEROUS_PATTERN', 'command', 0),
+        rule_id: 'DANGEROUS_PATTERN',
+        category: 'execution',
+        severity: 'critical',
+        title: `Dangerous pattern: ${source}`,
+        description: `Matched user-defined dangerous pattern: ${source}`,
         location: { file: 'command', line: 0, snippet: fullCommand.slice(0, 200) },
         analyser: 'static',
         confidence: 1.0,
@@ -390,7 +437,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfi
 
   // Secret leak in request body
   if (data.body_preview) {
-    findings.push(...checkSecretLeak(data.body_preview));
+    findings.push(...checkSecretLeak(data.body_preview, extra?.secret_patterns));
   }
 
   return findings;
