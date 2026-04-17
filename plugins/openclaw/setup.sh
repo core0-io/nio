@@ -101,12 +101,14 @@ echo "  Platform: $PLATFORM"
 echo "  Install target: $SKILLS_DIR"
 echo ""
 
+SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
+
 # ---- Step 1: Register OpenClaw plugin ----
-echo "[1/2] Registering OpenClaw plugin..."
+echo "[1/3] Registering OpenClaw plugin..."
 if command -v openclaw &>/dev/null; then
   # Remove stale registration from old path (pre-restructure)
   echo y | openclaw plugins uninstall ffwd-agent-guard 2>/dev/null || true
-  openclaw plugins install -l "$SCRIPT_DIR"
+  openclaw plugins install -l "$SCRIPT_DIR/plugin"
   echo "  OK: Plugin registered (ffwd-agent-guard)"
 
   # Restart gateway so it picks up the new plugin
@@ -129,8 +131,26 @@ else
   echo "        Run manually: openclaw plugins install -l $SCRIPT_DIR"
 fi
 
-# ---- Step 2: Create config directory ----
-echo "[2/2] Setting up configuration..."
+# ---- Step 2: Install skill files ----
+echo "[2/3] Installing skill files..."
+if [ -d "$SKILL_SRC" ]; then
+  mkdir -p "$SKILLS_DIR"
+  for f in SKILL.md SCAN-RULES.md ACTION-POLICIES.md README.md .clawignore; do
+    [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
+  done
+  if [ -d "$SKILL_SRC/scripts" ]; then
+    rm -rf "$SKILLS_DIR/scripts"
+    mkdir -p "$SKILLS_DIR/scripts"
+    cp -r "$SKILL_SRC/scripts/"* "$SKILLS_DIR/scripts/"
+  fi
+  echo "  OK: Skill installed to $SKILLS_DIR"
+else
+  echo "  WARN: Skill source not found at $SKILL_SRC"
+  echo "        Run 'npm run build' first to generate skill files."
+fi
+
+# ---- Step 3: Create config directory ----
+echo "[3/3] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
 if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ] && command -v node &>/dev/null; then

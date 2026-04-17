@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { cpSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,7 +16,7 @@ const shared = {
 const openclaw = await Bun.build({
   ...shared,
   entrypoints: [join(ROOT, 'dist/adapters/openclaw-plugin.js')],
-  outdir: join(ROOT, 'plugins/openclaw'),
+  outdir: join(ROOT, 'plugins/openclaw/plugin'),
   naming: { entry: 'plugin.js' },
 });
 
@@ -23,6 +24,9 @@ if (!openclaw.success) {
   console.error(openclaw.logs);
   process.exit(1);
 }
+
+const CC_SKILL_SCRIPTS = join(ROOT, 'plugins/claude-code/skills/ffwd-agent-guard/scripts');
+const OPENCLAW_SKILL_SCRIPTS = join(ROOT, 'plugins/openclaw/skills/ffwd-agent-guard/scripts');
 
 const cc = await Bun.build({
   ...shared,
@@ -33,7 +37,7 @@ const cc = await Bun.build({
     'action-cli',
     'config-cli',
   ].map((n) => join(ROOT, `src/scripts/${n}.ts`)),
-  outdir: join(ROOT, 'plugins/claude-code/skills/ffwd-agent-guard/scripts'),
+  outdir: CC_SKILL_SCRIPTS,
   splitting: true,
 });
 
@@ -42,6 +46,11 @@ if (!cc.success) {
   process.exit(1);
 }
 
+// Mirror the compiled CC skill scripts to the OpenClaw skill dir so both
+// plugins ship identical scripts.
+rmSync(OPENCLAW_SKILL_SCRIPTS, { recursive: true, force: true });
+cpSync(CC_SKILL_SCRIPTS, OPENCLAW_SKILL_SCRIPTS, { recursive: true });
+
 console.log(
-  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s)`,
+  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s), mirrored to OpenClaw skill`,
 );

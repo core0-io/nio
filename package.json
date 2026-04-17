@@ -82,7 +82,7 @@
   "files": [
     "dist",
     "README.md",
-    "plugins/openclaw/openclaw.plugin.json",
+    "plugins/openclaw/plugin/openclaw.plugin.json",
     "plugins/claude-code/skills"
   ],
   "type": "module",

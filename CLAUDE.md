@@ -15,9 +15,9 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 
 ## Project Structure
 
-- `plugins/shared/` — Shared config files (config.default.yaml, config.schema.json)
-- `plugins/claude-code/` — Claude Code plugin (hooks, skills, setup)
-- `plugins/openclaw/` — OpenClaw plugin (manifest, bundled plugin.js, setup)
+- `plugins/shared/` — Shared config + skill source of truth (`skill/SKILL.md`, `SCAN-RULES.md`, `ACTION-POLICIES.md`, `README.md`)
+- `plugins/claude-code/` — Claude Code plugin (hooks, `skills/ffwd-agent-guard/` synced from shared, setup)
+- `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/ffwd-agent-guard/` synced from shared; setup.sh orchestrates both)
 - `src/` — TypeScript source (scanner, analysers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output (npm library export)
 - `scripts/` — Build and release scripts
@@ -27,8 +27,8 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 `pnpm run build` runs three passes in order:
 
 1. `tsc -p tsconfig.lib.json` — emits unbundled `dist/` + `.d.ts` for the npm library export.
-2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/ffwd-agent-guard/scripts/` (5 entries + code-split chunks).
-3. `node scripts/sync-shared.js` — copies `plugins/shared/` into each plugin dir.
+2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/ffwd-agent-guard/scripts/`, then mirrors the compiled scripts to `plugins/openclaw/skills/ffwd-agent-guard/scripts/`.
+3. `node scripts/sync-shared.js` — copies `plugins/shared/` config + `plugins/shared/skill/*` into each plugin's skill dir.
 
 ```bash
 pnpm run build

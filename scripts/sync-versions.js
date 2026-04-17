@@ -8,7 +8,7 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8')).version;
 
 const targets = [
-  { path: 'plugins/openclaw/package.json', set: (j) => { j.version = version; } },
+  { path: 'plugins/openclaw/plugin/package.json', set: (j) => { j.version = version; } },
   { path: 'plugins/claude-code/.claude-plugin/marketplace.json', set: (j) => { j.metadata.version = version; } },
 ];
 
