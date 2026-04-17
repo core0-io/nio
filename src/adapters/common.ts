@@ -9,8 +9,8 @@ import { validateConfig } from './config-schema.js';
 import type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 export type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
-import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
-export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
+import type { AuditEntry, AuditGuardEntry, AuditConfigErrorEntry, AuditFindingSummary } from './audit-types.js';
+export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
 import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
 import type { Finding } from '../core/models.js';
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
@@ -43,13 +43,41 @@ export function resetConfig(): AgentGuardConfig {
   return { ...CONFIG_DEFAULTS };
 }
 
+// Dedup: only report a given config error once per process.
+let lastReportedConfigError: string | null = null;
+
+function reportConfigError(err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (lastReportedConfigError === message) return;
+  lastReportedConfigError = message;
+
+  console.error(
+    `[AgentGuard] Failed to load ${CONFIG_YAML_PATH}, falling back to defaults:`,
+  );
+  console.error(`  ${message}`);
+
+  try {
+    ensureDir();
+    const entry: AuditConfigErrorEntry = {
+      event: 'config_error',
+      timestamp: new Date().toISOString(),
+      config_path: CONFIG_YAML_PATH,
+      error_message: message,
+    };
+    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+  } catch {
+    // Best-effort — don't let audit write swallow the primary failure
+  }
+}
+
 export function loadConfig(): AgentGuardConfig {
   if (existsSync(CONFIG_YAML_PATH)) {
     try {
       const raw = yamlLoad(readFileSync(CONFIG_YAML_PATH, 'utf-8'));
       const validated = validateConfig(raw, CONFIG_YAML_PATH);
       return { ...CONFIG_DEFAULTS, ...validated };
-    } catch {
+    } catch (err) {
+      reportConfigError(err);
       return { ...CONFIG_DEFAULTS };
     }
   }

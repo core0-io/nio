@@ -85,6 +85,19 @@ export interface AuditLifecycleEntry {
   details?: Record<string, unknown>;
 }
 
+// ── Config error entry ──────────────────────────────────────────────────
+
+export interface AuditConfigErrorEntry {
+  event: 'config_error';
+  timestamp: string;
+  config_path: string;
+  error_message: string;
+}
+
 // ── Union ───────────────────────────────────────────────────────────────
 
-export type AuditEntry = AuditGuardEntry | AuditScanEntry | AuditLifecycleEntry;
+export type AuditEntry =
+  | AuditGuardEntry
+  | AuditScanEntry
+  | AuditLifecycleEntry
+  | AuditConfigErrorEntry;

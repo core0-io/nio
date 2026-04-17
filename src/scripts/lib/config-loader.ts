@@ -7,7 +7,7 @@ export {};
  * without importing the main dist bundle.
  */
 
-import { readFileSync } from 'node:fs';
+import { readFileSync, appendFileSync, mkdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { load as yamlLoad } from 'js-yaml';
@@ -28,14 +28,41 @@ export interface LogsConfig {
   max_size_mb: number;
 }
 
+let lastReportedConfigError: string | null = null;
+
+function reportConfigError(configDir: string, configPath: string, err: unknown): void {
+  const message = err instanceof Error ? err.message : String(err);
+  if (lastReportedConfigError === message) return;
+  lastReportedConfigError = message;
+
+  console.error(`[AgentGuard] Failed to load ${configPath}, falling back to defaults:`);
+  console.error(`  ${message}`);
+
+  try {
+    if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
+    const entry = {
+      event: 'config_error',
+      timestamp: new Date().toISOString(),
+      config_path: configPath,
+      error_message: message,
+    };
+    appendFileSync(join(configDir, 'audit.jsonl'), JSON.stringify(entry) + '\n');
+  } catch {
+    // Best-effort
+  }
+}
+
 function readRawConfig(): Record<string, unknown> {
   const configDir = process.env['FFWD_AGENT_GUARD_HOME']
     ?? join(homedir(), '.ffwd-agent-guard');
   const configPath = join(configDir, 'config.yaml');
 
+  if (!existsSync(configPath)) return {};
+
   try {
     return (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    reportConfigError(configDir, configPath, err);
     return {};
   }
 }
