@@ -78,6 +78,25 @@ matching (e.g. `'/\b(INSERT|UPDATE|DELETE)\b/i'`). Matches produce a
 `DANGEROUS_PATTERN` finding with the matching pattern source echoed in the title.
 Invalid regex entries are silently skipped; remaining valid ones still apply.
 
+### User-Supplied Sensitive Path Patterns (DENY by level, critical)
+
+Sensitive file paths are matched in two layers against `write_file` actions
+(input is normalized first: `~/` → `/HOME/`, `\` → `/`):
+
+1. `guard.action_guard_rules.sensitive_paths` — substring matcher. Each entry
+   is internally tested as `normalized.includes("/" + pattern)` OR
+   `normalized.endsWith(pattern)`. Use **directory fragments without leading
+   slash** (`etc/`, `raw_files/`, `.ssh/`) or **filename suffixes**
+   (`.env.prod`, `id_rsa`). A leading-slash entry like `/etc/` becomes
+   `//etc/` internally and almost never matches — common footgun.
+2. `guard.action_guard_rules.sensitive_path_patterns` — regex matcher. Same
+   `/pattern/flags` syntax as `dangerous_patterns`. Use this for dynamic
+   segments (`/^\/abc\/[^/]+\/def/`), bare-relative paths the substring form
+   can't anchor (`/^raw_files\//`), or flag-based matching
+   (`/\.env\.[a-z]+$/i`). Invalid regex entries are silently skipped.
+
+Both layers feed the same `SENSITIVE_PATH` finding (critical).
+
 ### Sensitive Data Access (high)
 
 | Command | Target |

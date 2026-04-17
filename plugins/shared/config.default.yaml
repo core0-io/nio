@@ -91,17 +91,27 @@ guard:
     # Example: ["webhook.site", "requestbin.net", "ngrok-free.app"]
     webhook_domains: []
 
-    # Sensitive file path fragments (substring match on write_file paths).
-    # Two supported shapes:                                          [critical]
-    #   • Directory prefix — MUST be absolute or start with ~/ (e.g. "/etc/",
-    #     "~/raw_files/"). Relative "raw_files/" will NOT match a write to
-    #     "raw_files/foo.txt"; the matcher looks for "/raw_files/" inside
-    #     the normalized path.
-    #   • Filename suffix — matched via endsWith, absolute/relative both work
-    #     (e.g. ".env", "id_rsa", "credentials.json").
-    # Paths starting with ~/ are normalized to /HOME/ before matching.
-    # For wildcards / dynamic segments, use sensitive_path_patterns below.
-    # Example: ["/var/secrets/", "~/raw_files/", ".env.prod"]
+    # Sensitive file path fragments. Matching is substring-based with a        [critical]
+    # specific convention: the matcher prepends "/" to each pattern and then
+    # tests `normalized_path.includes("/" + pattern) || normalized_path.endsWith(pattern)`.
+    # The input path is normalized first: ~/ is expanded to /HOME/, backslashes
+    # become forward slashes.
+    #
+    # Two supported shapes:
+    #   • Directory fragment — DO NOT include a leading slash; the matcher
+    #     adds one. Use "etc/" (matches "/etc/passwd"), "raw_files/" (matches
+    #     "/anywhere/raw_files/x" and "~/raw_files/x" after normalization),
+    #     ".ssh/" (matches "/home/user/.ssh/key").
+    #     Writing "/etc/" is a common mistake — it becomes "//etc/" internally
+    #     and almost never matches.
+    #   • Filename suffix — matched via endsWith; absolute/relative both work
+    #     (e.g. ".env", "id_rsa", "credentials.json", ".env.prod").
+    #
+    # Known gap: a bare relative path like "raw_files/foo.txt" (no leading /)
+    # does NOT match a "raw_files/" pattern because there's no "/" before it.
+    # Use sensitive_path_patterns below with "/^raw_files\\//" for this case.
+    #
+    # Example: ["var/secrets/", "raw_files/", ".env.prod", "credentials.json"]
     sensitive_paths: []
 
     # Sensitive path regexes — covers dynamic segments, relative paths, and
