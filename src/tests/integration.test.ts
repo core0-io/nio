@@ -284,6 +284,133 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'deny'); // denied by Phase 2, not Phase 0
     assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
   });
+
+  // ── MCP cross-platform gate ──────────────────────────────────────────────
+  it('blocked_tools.mcp matches OpenClaw MCP tool by bare name', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOn'] } } });
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('blocked_tools.mcp matches Claude Code MCP tool by bare name', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOn'] } } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'mcp__hass__HassTurnOn',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('blocked_tools.mcp with server__tool form scopes to one server', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['hass__HassTurnOn'] } } });
+    // Same local name from a different server — must NOT be blocked
+    const otherServer = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'home__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(otherServer.decision, 'allow');
+    // Matching server — blocked
+    const sameServer = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(sameServer.decision, 'deny');
+  });
+
+  it('blocked_tools.mcp matching is case-insensitive', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['hassturnon'] } } });
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('available_tools.mcp allows a listed MCP tool and denies others', async () => {
+    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+    const allowed = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(allowed.decision, 'allow');
+    const denied = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOff',
+      params: {},
+    }, ctx.options);
+    assert.equal(denied.decision, 'deny');
+    assert.ok(denied.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+  });
+
+  it('available_tools.mcp does not restrict native tools', async () => {
+    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+    // Native Bash is not MCP; should pass through (no platform allowlist configured)
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    }, ctx.options);
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('mixed available_tools: platform + mcp lists gate independently', async () => {
+    ctx = createTestContext({
+      guard: {
+        available_tools: {
+          claude_code: ['Bash'],
+          mcp: ['create_issue'],
+        },
+      },
+    });
+    // Native Bash — allowed by platform list
+    const nativeAllow = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+    }, ctx.options);
+    assert.equal(nativeAllow.decision, 'allow');
+    // Native Read — denied (not in platform list, no mcp fallback because not MCP)
+    const nativeDeny = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Read',
+      tool_input: { file_path: '/tmp/x' },
+    }, ctx.options);
+    assert.equal(nativeDeny.decision, 'deny');
+    // MCP create_issue — allowed by mcp list (platform list does NOT apply)
+    const mcpAllow = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'mcp__github__create_issue',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(mcpAllow.decision, 'allow');
+    // MCP other — denied by mcp list
+    const mcpDeny = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'mcp__github__delete_repo',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(mcpDeny.decision, 'deny');
+  });
+
+  it('backward compat: available_tools.<platform> alone gates MCP tools by raw name', async () => {
+    // No `mcp` key → fall back to platform list, raw tool name matching.
+    ctx = createTestContext({ guard: { available_tools: { openclaw: ['hass__HassTurnOn'] } } });
+    const allow = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOn',
+      params: {},
+    }, ctx.options);
+    assert.equal(allow.decision, 'allow');
+    const deny = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'hass__HassTurnOff',
+      params: {},
+    }, ctx.options);
+    assert.equal(deny.decision, 'deny');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

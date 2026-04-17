@@ -71,8 +71,8 @@ guard:
   llm_analyser: { enabled: false, api_key: "" }       # Phase 5 LLM analyser
   external_analyser: { enabled: false, endpoint: "" }  # Phase 6 external scoring API
   allowed_commands: []      # Phase 1 safe command prefixes
-  available_tools: {}       # Per-platform tool allowlist (Phase 0)
-  blocked_tools: {}         # Per-platform tool denylist (Phase 0)
+  available_tools: {}       # Per-platform + `mcp` tool allowlist (Phase 0)
+  blocked_tools: {}         # Per-platform + `mcp` tool denylist (Phase 0)
   guarded_tools:            # Per-platform tool → action type mapping
     claude_code: { Bash: exec_command, Write: write_file, Edit: write_file, WebFetch: network_request, WebSearch: network_request }
     openclaw: { exec: exec_command, write: write_file, web_fetch: network_request, browser: network_request }

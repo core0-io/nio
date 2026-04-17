@@ -72,19 +72,77 @@ function runtimeDecisionToHookOutput(
   };
 }
 
+export interface ParsedMcpToolName {
+  isMcp: boolean;
+  server?: string;
+  local?: string;
+}
+
+/**
+ * Parse a platform-specific tool name into a normalized `{ server, local }`
+ * pair when it refers to an MCP tool.
+ *
+ * - Claude Code exposes MCP tools as `mcp__<server>__<tool>`.
+ * - OpenClaw exposes MCP tools as `<safeServerName>__<tool>` (native tools
+ *   never contain `__`, so the separator is a reliable marker).
+ */
+export function parseMcpToolName(toolName: string, platform: string): ParsedMcpToolName {
+  const name = toolName ?? '';
+
+  if (platform === 'claude-code' && name.startsWith('mcp__')) {
+    const rest = name.slice(5);
+    const idx = rest.indexOf('__');
+    if (idx > 0 && idx < rest.length - 2) {
+      return { isMcp: true, server: rest.slice(0, idx), local: rest.slice(idx + 2) };
+    }
+    return { isMcp: false };
+  }
+
+  if (platform === 'openclaw') {
+    const idx = name.indexOf('__');
+    if (idx > 0 && idx < name.length - 2) {
+      return { isMcp: true, server: name.slice(0, idx), local: name.slice(idx + 2) };
+    }
+    return { isMcp: false };
+  }
+
+  return { isMcp: false };
+}
+
+function matchesCaseInsensitive(list: readonly string[], candidates: readonly string[]): boolean {
+  const lowered = candidates.map(c => c.toLowerCase());
+  return list.some(entry => lowered.includes(entry.toLowerCase()));
+}
+
 /**
  * Phase 0: Tool-level gate.
  *
  * Checks `blocked_tools` and `available_tools` from config before any
  * content-level analysis. Returns a deny HookOutput if the tool is
  * blocked or not in the available list; null to proceed to Phase 1-6.
+ *
+ * The `mcp` namespace under each list applies when the incoming tool is an
+ * MCP tool (detected by platform-specific naming convention). Entries may
+ * be either bare local names (`HassTurnOn`) — match any server — or
+ * server-qualified (`hass__HassTurnOn`) — match that server only.
  */
 function checkToolGate(toolName: string, config: EngineOptions['config'], platform: string): HookOutput | null {
   const platformKey = platform.replace(/-/g, '_');
-  const blocked = config.guard?.blocked_tools?.[platformKey] ?? [];
-  const available = config.guard?.available_tools?.[platformKey] ?? [];
+  const blockedPlatform = config.guard?.blocked_tools?.[platformKey] ?? [];
+  const availablePlatform = config.guard?.available_tools?.[platformKey] ?? [];
+  const blockedMcp = config.guard?.blocked_tools?.['mcp'] ?? [];
+  const availableMcp = config.guard?.available_tools?.['mcp'] ?? [];
 
-  if (blocked.length > 0 && blocked.some(t => t.toLowerCase() === toolName.toLowerCase())) {
+  const parsed = parseMcpToolName(toolName, platform);
+  const mcpCandidates = parsed.isMcp && parsed.local && parsed.server
+    ? [parsed.local, `${parsed.server}__${parsed.local}`]
+    : [];
+
+  // --- Blocked (additive: any hit denies) ---
+  if (
+    (blockedPlatform.length > 0 && matchesCaseInsensitive(blockedPlatform, [toolName])) ||
+    (parsed.isMcp && blockedMcp.length > 0 && matchesCaseInsensitive(blockedMcp, mcpCandidates))
+  ) {
     return {
       decision: 'deny',
       reason: policyHookReason(
@@ -96,19 +154,32 @@ function checkToolGate(toolName: string, config: EngineOptions['config'], platfo
     };
   }
 
-  if (available.length > 0 && !available.some(t => t.toLowerCase() === toolName.toLowerCase())) {
-    return {
-      decision: 'deny',
-      reason: policyHookReason(
-        `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical', 1.0
-      ),
-      riskLevel: 'critical',
-      riskScore: 1.0,
-      riskTags: ['TOOL_GATE_UNAVAILABLE'],
-    };
+  // --- Available (namespaced: mcp and platform lists gate independently) ---
+  if (parsed.isMcp) {
+    if (availableMcp.length > 0) {
+      if (!matchesCaseInsensitive(availableMcp, mcpCandidates)) {
+        return denyUnavailable(toolName);
+      }
+    } else if (availablePlatform.length > 0 && !matchesCaseInsensitive(availablePlatform, [toolName])) {
+      return denyUnavailable(toolName);
+    }
+  } else if (availablePlatform.length > 0 && !matchesCaseInsensitive(availablePlatform, [toolName])) {
+    return denyUnavailable(toolName);
   }
 
   return null;
+}
+
+function denyUnavailable(toolName: string): HookOutput {
+  return {
+    decision: 'deny',
+    reason: policyHookReason(
+      `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical', 1.0
+    ),
+    riskLevel: 'critical',
+    riskScore: 1.0,
+    riskTags: ['TOOL_GATE_UNAVAILABLE'],
+  };
 }
 
 /**

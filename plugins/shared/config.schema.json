@@ -60,8 +60,18 @@
         "scoring_api_key": { "type": "string", "default": "", "description": "Bearer token for scoring endpoint authentication." },
         "scoring_timeout": { "type": "number", "minimum": 1, "default": 3000, "description": "Scoring endpoint timeout in milliseconds." },
         "extra_allowlist": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional safe command prefixes injected into Phase 1 allowlist." },
-        "available_tools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Tool-level allowlist (Phase 0). When non-empty, only listed tools are available to the agent." },
-        "blocked_tools": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Tool-level denylist (Phase 0). Listed tools are unconditionally blocked." },
+        "available_tools": {
+          "type": "object",
+          "description": "Tool-level allowlist (Phase 0), keyed by platform (`claude_code`, `openclaw`, ...) or the reserved `mcp` key for cross-platform MCP tool names. When a list is non-empty, only listed tools are available. MCP entries accept bare local names or `server__tool` form.",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } },
+          "default": {}
+        },
+        "blocked_tools": {
+          "type": "object",
+          "description": "Tool-level denylist (Phase 0), keyed by platform or the reserved `mcp` key. Listed tools are unconditionally blocked.",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } },
+          "default": {}
+        },
         "guarded_tools": {
           "type": "object",
           "description": "Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis. Others pass through Phase 0 only.",

@@ -159,13 +159,19 @@ guard:
 
   # Phase 0 tool gate, per platform. Checked before any content analysis.
   # When non-empty, ONLY listed tools are available to the agent on that platform.
+  # The `mcp` list is platform-agnostic and applies whenever the incoming tool
+  # is an MCP tool. Entries accept either a bare local name (`HassTurnOn` —
+  # matches any MCP server) or a server-qualified name (`hass__HassTurnOn` —
+  # that server only). Matching is case-insensitive.
   available_tools:
     claude_code: []
     openclaw: []
-  # Listed tools are unconditionally blocked on that platform.
+    mcp: []
+  # Listed tools are unconditionally blocked.
   blocked_tools:
     claude_code: []
     openclaw: []
+    mcp: []
 
   # Tool → action type mapping, per platform.
   # Tools listed here enter Phase 1-6 deep analysis.
