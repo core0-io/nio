@@ -260,3 +260,88 @@ describe('RuntimeAnalyser: Phase 5/6 options', () => {
     assert.equal(result.scores.external, undefined, 'Phase 6 score should be undefined when no endpoint');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RuntimeAnalyser: user-supplied dangerous_patterns (action_guard_rules)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
+  const sqlPattern = '/\\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\\b/i';
+
+  function newAnalyser() {
+    return new RuntimeAnalyser({
+      actionGuardRules: { dangerous_patterns: [sqlPattern] },
+    });
+  }
+
+  it('denies uppercase SQL UPDATE via /pattern/i', async () => {
+    const analyser = newAnalyser();
+    const envelope = makeEnvelope('exec_command', {
+      command: `psql -c "UPDATE students SET gpa = 7.09 WHERE first_name = 'Ryan'"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.risk_level, 'critical');
+    assert.equal(result.scores.final, 1);
+    assert.equal(result.phase_stopped, 2, 'should short-circuit at Phase 2');
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'),
+      'expected a DANGEROUS_COMMAND finding',
+    );
+  });
+
+  it('denies lowercase sql update (case-insensitive flag works)', async () => {
+    const analyser = newAnalyser();
+    const envelope = makeEnvelope('exec_command', {
+      command: `psql -c "update students set gpa = 7.09 where first_name = 'Ryan'"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.risk_level, 'critical');
+    assert.equal(result.scores.final, 1);
+    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'));
+  });
+
+  it('allows benign SELECT query (no false positive)', async () => {
+    const analyser = newAnalyser();
+    const envelope = makeEnvelope('exec_command', {
+      command: `psql -c 'SELECT 1'`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'allow');
+    assert.equal(
+      result.findings.filter((f) => f.rule_id === 'DANGEROUS_COMMAND').length,
+      0,
+    );
+  });
+
+  it('tolerates invalid user patterns without disabling valid ones', async () => {
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: {
+        dangerous_patterns: ['(?i)broken_inline_flag', '(unclosed', sqlPattern],
+      },
+    });
+    const envelope = makeEnvelope('exec_command', {
+      command: `psql -c "update x set y=1"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'));
+  });
+
+  it('supports plain (no-flag) pattern syntax for backward compat', async () => {
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: { dangerous_patterns: ['\\bUPDATE\\b'] },
+    });
+    const envelope = makeEnvelope('exec_command', {
+      command: `psql -c "UPDATE x SET y=1"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'deny');
+  });
+});

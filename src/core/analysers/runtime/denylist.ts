@@ -19,6 +19,7 @@ import {
   SECRET_PATTERNS,
   SECRET_PRIORITY,
 } from '../../shared/detection-data.js';
+import { compileUserRegexList } from '../../shared/regex.js';
 import { extractAndDecodeBase64 } from '../../detection-engine.js';
 
 // ── Config-driven extra patterns ────────────────────────────────────────
@@ -140,7 +141,7 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
     ? [...DANGEROUS_COMMAND_STRINGS, ...extra.dangerous_commands]
     : DANGEROUS_COMMAND_STRINGS;
   const dangerousPatterns = extra?.dangerous_patterns
-    ? [...DANGEROUS_COMMAND_PATTERNS, ...extra.dangerous_patterns.map(p => new RegExp(p))]
+    ? [...DANGEROUS_COMMAND_PATTERNS, ...compileUserRegexList(extra.dangerous_patterns)]
     : DANGEROUS_COMMAND_PATTERNS;
   const sensitiveCommands = extra?.sensitive_commands
     ? [...SENSITIVE_COMMANDS, ...extra.sensitive_commands]

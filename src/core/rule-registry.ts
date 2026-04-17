@@ -10,6 +10,7 @@ import type { ScanRule, RiskTag, RiskLevel } from '../types/scanner.js';
 import type { ThreatCategory, Severity } from './models.js';
 import { riskTagToCategory } from './models.js';
 import { ALL_RULES, RULE_TO_MODULE } from '../scanner/rules/index.js';
+import { compileUserRegexList } from './shared/regex.js';
 
 // ── Rule metadata ────────────────────────────────────────────────────────
 
@@ -176,14 +177,7 @@ export class RuleRegistry {
       const strs = extraPatterns[moduleKey];
       if (!strs || strs.length === 0) return rule;
 
-      const compiled: RegExp[] = [];
-      for (const s of strs) {
-        try {
-          compiled.push(new RegExp(s));
-        } catch {
-          // skip invalid pattern
-        }
-      }
+      const compiled = compileUserRegexList(strs);
       if (compiled.length === 0) return rule;
       return { ...rule, patterns: [...rule.patterns, ...compiled] };
     });
