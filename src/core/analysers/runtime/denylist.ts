@@ -31,8 +31,9 @@ export interface GuardRulesConfig {
   system_commands?:      string[];
   network_commands?:     string[];
   webhook_domains?:      string[];
-  sensitive_paths?:      string[];
-  secret_patterns?:      string[];
+  sensitive_paths?:         string[];
+  sensitive_path_patterns?: string[];
+  secret_patterns?:         string[];
 }
 
 // ── Bash Command Patterns ───────────────────────────────────────────────
@@ -82,7 +83,11 @@ const SHELL_INJECTION_PATTERNS = [
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-function isSensitivePath(filePath: string, extraPaths?: string[]): boolean {
+function isSensitivePath(
+  filePath: string,
+  extraPaths?: string[],
+  extraPatterns?: string[],
+): boolean {
   if (!filePath) return false;
   let normalized = filePath.replace(/\\/g, '/');
   if (normalized.startsWith('~/')) {
@@ -91,9 +96,19 @@ function isSensitivePath(filePath: string, extraPaths?: string[]): boolean {
   const paths = extraPaths
     ? [...SENSITIVE_FILE_PATHS, ...extraPaths]
     : SENSITIVE_FILE_PATHS as unknown as string[];
-  return paths.some(
+  const stringMatch = paths.some(
     (p) => normalized.includes(`/${p}`) || normalized.endsWith(p),
   );
+  if (stringMatch) return true;
+
+  if (extraPatterns) {
+    for (const source of extraPatterns) {
+      let regex: RegExp;
+      try { regex = compileUserRegex(source); } catch { continue; }
+      if (regex.test(normalized)) return true;
+    }
+  }
+  return false;
 }
 
 function checkSecretLeak(content: string, extraPatterns?: string[]): Finding[] {
@@ -447,7 +462,7 @@ function analyzeFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig
   const filePath = data.path || '';
 
   // Sensitive path
-  if (isSensitivePath(filePath, extra?.sensitive_paths)) {
+  if (isSensitivePath(filePath, extra?.sensitive_paths, extra?.sensitive_path_patterns)) {
     findings.push({
       id: findingId('SENSITIVE_PATH', filePath, 0),
       rule_id: 'SENSITIVE_PATH',

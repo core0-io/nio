@@ -33,22 +33,93 @@ guard:
     exfiltration: []      # NET_EXFIL_UNRESTRICTED [high], WEBHOOK_EXFIL [critical]
     trojan: []            # TROJAN_DISTRIBUTION [critical], SUSPICIOUS_PASTE_URL [high], SUSPICIOUS_IP/SOCIAL_ENGINEERING [medium]
 
-  # Extra patterns for Phase 2 guard analysis (runtime action evaluation).
-  # These extend the built-in detection lists for each category.
+  # ── Phase 2 guard analysis: extra patterns for runtime action evaluation ──
   #
-  # Example:
+  # Two kinds of fields below:
+  #   String fields   — plain strings, matched as described per field (case-
+  #                     insensitive substring / prefix / domain suffix, etc.).
+  #                     No regex metacharacters, no escaping.
+  #   Regex fields    — names ending in "_patterns". Each entry is either a
+  #                     bare regex string or the "/pattern/flags" form (flags:
+  #                     g i m s u y). YAML requires backslashes to be escaped,
+  #                     so write "\\d", "\\/", "\\." inside quotes.
+  #
+  # All fields EXTEND the built-in detection lists; they never replace them.
+  # Every match produces a Phase 2 finding at the severity shown in [brackets].
+  #
+  # Full example:
   #   action_guard_rules:
-  #     dangerous_commands: ["format c:"]
-  #     webhook_domains: ["evil-webhook.example.com"]
+  #     dangerous_commands: ["format c:", "shutdown -h"]
+  #     dangerous_patterns: ["/rm\\s+-rf\\s+\\//"]
+  #     webhook_domains:    ["evil-webhook.example.com"]
+  #     sensitive_paths:    ["/var/secrets/", ".env.prod"]
   action_guard_rules:
-    dangerous_commands: []   # Dangerous command strings, case-insensitive match   [critical]
-    dangerous_patterns: []   # Dangerous command regexes                           [critical]
-    sensitive_commands: []   # Sensitive data access commands                      [high]
-    system_commands: []      # System modification commands                        [high]
-    network_commands: []     # Network tool commands                               [medium]
-    webhook_domains: []      # Webhook/exfiltration domains                        [high]
-    sensitive_paths: []      # Sensitive file path fragments                       [critical]
-    secret_patterns: []      # Secret detection regexes (request body scanning)   [varies]
+    # Dangerous command strings. Case-insensitive substring match against the
+    # full command line (command + args joined by spaces). Use this for fixed
+    # literal fragments you want to hard-block.                      [critical]
+    # Example: ["format c:", "shutdown -h now", ":(){ :|:& };:"]
+    dangerous_commands: []
+
+    # Dangerous command regexes. Matched against the full command line. Use
+    # when you need alternation, capture groups, anchors, or character classes
+    # the substring form can't express.                              [critical]
+    # Syntax: "pattern" or "/pattern/flags"
+    # Example: ["/rm\\s+-rf\\s+\\//", "/curl\\s+.*\\|\\s*(ba)?sh/i"]
+    dangerous_patterns: []
+
+    # Commands that read sensitive data (keys, secrets, env, dotfiles).
+    # Case-insensitive substring match against the full command line. Built-in
+    # list already covers /etc/passwd, ~/.ssh, ~/.aws, printenv, etc.     [high]
+    # Example: ["cat /vault/", "gpg --decrypt"]
+    sensitive_commands: []
+
+    # System-modifying command names (user mgmt, services, filesystem admin).
+    # Case-insensitive match at the start of the command OR after a space —
+    # i.e. word-boundary match on the program name. Include a trailing space
+    # for short names to prevent false prefix hits (e.g. "su " not "su").  [high]
+    # Example: ["apt-get", "brew install", "launchctl"]
+    system_commands: []
+
+    # Network tool command names. Same word-boundary match rule as
+    # system_commands. Flags any use of these tools regardless of target. [medium]
+    # Example: ["aria2c", "httpie", "wget2"]
+    network_commands: []
+
+    # Webhook / exfiltration domains. Matches when the request URL's hostname
+    # is exactly the entry OR a subdomain of it ("foo.example.com" is covered
+    # by "example.com"). No scheme, no path, no port.                     [high]
+    # Example: ["webhook.site", "requestbin.net", "ngrok-free.app"]
+    webhook_domains: []
+
+    # Sensitive file path fragments (substring match on write_file paths).
+    # Two supported shapes:                                          [critical]
+    #   • Directory prefix — MUST be absolute or start with ~/ (e.g. "/etc/",
+    #     "~/raw_files/"). Relative "raw_files/" will NOT match a write to
+    #     "raw_files/foo.txt"; the matcher looks for "/raw_files/" inside
+    #     the normalized path.
+    #   • Filename suffix — matched via endsWith, absolute/relative both work
+    #     (e.g. ".env", "id_rsa", "credentials.json").
+    # Paths starting with ~/ are normalized to /HOME/ before matching.
+    # For wildcards / dynamic segments, use sensitive_path_patterns below.
+    # Example: ["/var/secrets/", "~/raw_files/", ".env.prod"]
+    sensitive_paths: []
+
+    # Sensitive path regexes — covers dynamic segments, relative paths, and
+    # anything the substring form can't express. Matched against the same
+    # normalized path (~/ expanded to /HOME/).                       [critical]
+    # Syntax: "pattern" or "/pattern/flags"
+    # Examples:
+    #   - "/^\\/abc\\/[^/]+\\/def/"      # /abc/<id>/def (dynamic segment)
+    #   - "/^raw_files\\//"              # relative "raw_files/..." paths
+    #   - "/\\.env\\.[a-z]+$/i"          # .env.prod, .env.staging, ...
+    sensitive_path_patterns: []
+
+    # Secret detection regexes for HTTP request bodies (network_request
+    # actions). Matched against the body preview. Use for internal token
+    # formats the built-in detector doesn't know about.              [high]
+    # Syntax: "pattern" or "/pattern/flags"
+    # Example: ["/ACME_[A-Z0-9]{32}/", "/internal-token:\\s*[\\w-]+/i"]
+    secret_patterns: []
 
   # LLM analyser settings (Phase 5 semantic analysis using Claude).
   # Requires api_key to be set. Disable with enabled: false.

@@ -55,8 +55,9 @@ const GuardRulesSchema = z.object({
   system_commands:     z.array(z.string()).optional(),
   network_commands:    z.array(z.string()).optional(),
   webhook_domains:     z.array(z.string()).optional(),
-  sensitive_paths:     z.array(z.string()).optional(),
-  secret_patterns:     z.array(z.string()).optional(),
+  sensitive_paths:         z.array(z.string()).optional(),
+  sensitive_path_patterns: z.array(z.string()).optional(),
+  secret_patterns:         z.array(z.string()).optional(),
 });
 
 export type GuardRules = z.infer<typeof GuardRulesSchema>;
