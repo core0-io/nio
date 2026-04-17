@@ -40,6 +40,10 @@ Scan request body for sensitive data. Priority determines risk level:
 | DB Connection String (`(postgres|mysql|mongodb)://`) | 50 | medium | CONFIRM |
 | Password in Config (`password\s*[:=]`) | 40 | low | CONFIRM |
 
+User-supplied regexes in `guard.action_guard_rules.secret_patterns` are
+additionally evaluated against the request body. Matches produce a `SECRET_LEAK_USER`
+finding (high) with the matching pattern source echoed in the title.
+
 ### Network Decision Logic
 
 1. Invalid URL -> DENY (high)
@@ -65,6 +69,14 @@ Scan request body for sensitive data. Priority determines risk level:
 | `mv /* ` | Move root contents |
 | `wget\|sh` / `curl\|sh` | Download and execute |
 | `wget\|bash` / `curl\|bash` | Download and execute |
+
+### User-Supplied Dangerous Patterns (always DENY, critical)
+
+Regexes in `guard.action_guard_rules.dangerous_patterns` are evaluated after
+the built-in lists. Use the `/pattern/flags` literal form for case-insensitive
+matching (e.g. `'/\b(INSERT|UPDATE|DELETE)\b/i'`). Matches produce a
+`DANGEROUS_PATTERN` finding with the matching pattern source echoed in the title.
+Invalid regex entries are silently skipped; remaining valid ones still apply.
 
 ### Sensitive Data Access (high)
 
@@ -117,17 +129,22 @@ Commands matching the safe list are allowed without restriction, **unless** they
 
 ### Exec Decision Logic
 
-1. Matches fork bomb (regex) -> DENY (critical)
-2. Matches dangerous command -> DENY (critical)
-3. Matches safe command (no metacharacters, no sensitive paths) -> ALLOW (low)
-4. Exec not allowed in capability model -> CONFIRM (non-critical) — balanced mode prompts user
-5. Matches sensitive data access -> flag HIGH
-6. Matches system command -> flag MEDIUM
-7. Matches network command -> flag MEDIUM
-8. Contains shell injection pattern -> flag MEDIUM
-9. Sensitive env vars passed -> flag evidence
+All rule sets are evaluated on every command; findings accumulate so audit
+logs show every dimension the command touched. The decision is derived from
+the aggregated score, not from which rule fired first.
 
-**Note**: In balanced mode, non-critical blocked commands (step 4) trigger a user prompt instead of a hard block. Only critical threats (steps 1-2) are always denied regardless of protection level.
+1. Fork bomb (regex) -> critical
+2. Dangerous command (built-in strings / built-in pipe-to-shell regexes) -> critical
+3. User-supplied `dangerous_patterns` -> critical
+4. Safe command (no metacharacters, no sensitive paths) -> ALLOW (low) — short-circuits Phase 1
+5. Exec not allowed in capability model -> CONFIRM (non-critical) — balanced mode prompts user
+6. Sensitive data access -> high
+7. System command -> high
+8. Network command -> medium
+9. Shell injection pattern -> medium
+10. Sensitive env vars passed -> evidence
+
+**Note**: In balanced mode, non-critical blocked commands (step 5) trigger a user prompt instead of a hard block. Any critical finding (steps 1-3) always denies regardless of protection level.
 
 ## Default Policies
 

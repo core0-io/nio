@@ -196,7 +196,7 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
         analyser: 'static',
         confidence: 1.0,
       });
-      return findings; // critical — no need to check further
+      break; // one fork bomb finding is enough; keep scanning other rule sets
     }
   }
 
@@ -214,7 +214,6 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
         analyser: 'static',
         confidence: 1.0,
       });
-      return findings; // critical
     }
   }
 
@@ -232,7 +231,7 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
         analyser: 'static',
         confidence: 1.0,
       });
-      return findings; // critical
+      break; // all pipe-to-shell regexes share the same title; avoid duplicates
     }
   }
 
@@ -250,7 +249,6 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
         analyser: 'static',
         confidence: 1.0,
       });
-      return findings; // critical
     }
   }
 
