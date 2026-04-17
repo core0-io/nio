@@ -19,7 +19,7 @@ export {};
  * Completely independent from guard-hook.js — never influences allow/deny
  * decisions. Always exits 0.
  *
- * Configuration: ~/.ffwd-agent-guard/config.json (metrics section).
+ * Configuration: ~/.ffwd-agent-guard/config.yaml (metrics section).
  * At least one of metrics.endpoint or metrics.log must be set, otherwise
  * the hook exits immediately without doing anything.
  */

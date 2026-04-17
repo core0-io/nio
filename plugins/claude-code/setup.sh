@@ -116,14 +116,9 @@ fi
 # ---- Step 3: Create config directory ----
 echo "[3/3] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
-if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.json" ]; then
-  if command -v node &>/dev/null && [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
-    node -e "
-      const yaml = require('js-yaml');
-      const fs = require('fs');
-      const cfg = yaml.load(fs.readFileSync('$SCRIPT_DIR/config.default.yaml', 'utf8'));
-      fs.writeFileSync('$FFWD_AGENT_GUARD_DIR/config.json', JSON.stringify(cfg, null, 2));
-    " 2>/dev/null || cp "$SCRIPT_DIR/config.default.yaml" "$FFWD_AGENT_GUARD_DIR/config.yaml"
+if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.yaml" ]; then
+  if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
+    cp "$SCRIPT_DIR/config.default.yaml" "$FFWD_AGENT_GUARD_DIR/config.yaml"
   fi
   [ "$RESET_CONFIG" -eq 1 ] && echo "  OK: Config reset to defaults" || echo "  OK: Default config written"
 else

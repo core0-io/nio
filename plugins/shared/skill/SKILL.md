@@ -252,7 +252,7 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 
 ## Subcommand: reset
 
-Reset `~/.ffwd-agent-guard/config.json` to factory defaults (from `config.default.yaml`).
+Reset `~/.ffwd-agent-guard/config.yaml` to factory defaults (from `config.default.yaml`).
 
 Run:
 ```bash

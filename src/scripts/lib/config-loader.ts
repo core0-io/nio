@@ -3,13 +3,14 @@ export {};
 /**
  * Lightweight config loader for hook scripts.
  *
- * Reads ~/.ffwd-agent-guard/config.json (or $FFWD_AGENT_GUARD_HOME/config.json)
- * directly without importing the main dist bundle or any heavy dependencies.
+ * Reads ~/.ffwd-agent-guard/config.yaml (or $FFWD_AGENT_GUARD_HOME/config.yaml)
+ * without importing the main dist bundle.
  */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { load as yamlLoad } from 'js-yaml';
 
 export interface CollectorConfig {
   endpoint: string;
@@ -30,10 +31,10 @@ export interface LogsConfig {
 function readRawConfig(): Record<string, unknown> {
   const configDir = process.env['FFWD_AGENT_GUARD_HOME']
     ?? join(homedir(), '.ffwd-agent-guard');
-  const configPath = join(configDir, 'config.json');
+  const configPath = join(configDir, 'config.yaml');
 
   try {
-    return JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    return (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
   } catch {
     return {};
   }

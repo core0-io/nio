@@ -21,7 +21,6 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
 const CONFIG_YAML_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.yaml');
-const CONFIG_JSON_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.json'); // legacy
 const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
@@ -45,22 +44,10 @@ export function resetConfig(): AgentGuardConfig {
 }
 
 export function loadConfig(): AgentGuardConfig {
-  // Prefer user config.yaml at ~/.ffwd-agent-guard/config.yaml
   if (existsSync(CONFIG_YAML_PATH)) {
     try {
       const raw = yamlLoad(readFileSync(CONFIG_YAML_PATH, 'utf-8'));
       const validated = validateConfig(raw, CONFIG_YAML_PATH);
-      return { ...CONFIG_DEFAULTS, ...validated };
-    } catch {
-      return { ...CONFIG_DEFAULTS };
-    }
-  }
-
-  // Legacy fallback: ~/.ffwd-agent-guard/config.json
-  if (existsSync(CONFIG_JSON_PATH)) {
-    try {
-      const raw = JSON.parse(readFileSync(CONFIG_JSON_PATH, 'utf-8'));
-      const validated = validateConfig(raw, CONFIG_JSON_PATH);
       return { ...CONFIG_DEFAULTS, ...validated };
     } catch {
       return { ...CONFIG_DEFAULTS };

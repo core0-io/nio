@@ -680,7 +680,7 @@ src/
 
 ## Configuration
 
-Runtime config: `~/.ffwd-agent-guard/config.json` (or `$FFWD_AGENT_GUARD_HOME/config.json`).
+Runtime config: `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
 Full template: `plugins/shared/config.default.yaml`.
 
 Key sections:
