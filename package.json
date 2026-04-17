@@ -1,6 +1,6 @@
 {
   "name": "@core0-io/ffwd-agent-guard",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "FFWD AgentGuard — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
