@@ -184,7 +184,15 @@ Runs in `engine.ts` before envelope building. Three checks in order:
 2. **available_tools** — if list is non-empty and tool is not listed → DENY
 3. **guarded_tools** — if tool is not mapped → ALLOW (skip Phase 1–6)
 
-Configured under `guard:` in config. Matching is case-insensitive.
+`available_tools` and `blocked_tools` are keyed by platform (`claude_code`,
+`openclaw`, …) with one reserved cross-platform key `mcp`. Incoming MCP tool
+names are parsed into `{server, local}` — OpenClaw uses `<server>__<tool>`,
+Claude Code uses `mcp__<server>__<tool>` — and matched against the `mcp` list
+in either bare (`HassTurnOn` — any server) or server-qualified
+(`hass__HassTurnOn` — that server only) form. Blocked lists across namespaces
+are additive; available lists are independent per namespace, with the
+platform list acting as fallback when `available_tools.mcp` is absent.
+Matching is case-insensitive throughout.
 
 ### Phase 1: Allowlist Gate (<1ms)
 
