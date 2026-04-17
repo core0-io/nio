@@ -6,6 +6,13 @@ guard:
   #   permissive  — only block critical threats
   protection_level: balanced
 
+  # Confirm fallback: what to do when the guard decision is "confirm"
+  # but the platform has no interactive confirmation (e.g. OpenClaw).
+  #   allow — let the action through, log a warning (default)
+  #   deny  — block the action
+  #   ask   — use platform confirm if available, else fall back to allow
+  confirm_action: allow
+
   # Extra regex patterns for scan rules (Phase 3 static analysis + scan command).
   # Keys are rule module names; values are arrays of regex pattern strings.
   # All rules within the named module receive the extra patterns.

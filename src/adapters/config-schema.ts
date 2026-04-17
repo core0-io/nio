@@ -79,6 +79,7 @@ export const ExternalAnalyserConfigSchema = z.object({
 
 export const GuardConfigSchema = z.object({
   protection_level: z.enum(['strict', 'balanced', 'permissive']).optional(),
+  confirm_action: z.enum(['allow', 'deny', 'ask']).optional(),
   file_scan_rules: RulesPatternsSchema.optional(),
   action_guard_rules: GuardRulesSchema.optional(),
   llm_analyser: LLMConfigSchema.optional(),

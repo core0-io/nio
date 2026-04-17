@@ -188,6 +188,7 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
 {
   "guard": {
     "protection_level": "balanced",
+    "confirm_action": "allow",
     "file_scan_rules": {},
     "action_guard_rules": {},
     "llm_analyser": { "enabled": false, "api_key": "" },
@@ -216,6 +217,7 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `guard.protection_level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `guard.confirm_action` | string | `"allow"` | Confirm fallback: `allow` (let through + audit log), `deny` (block), or `ask` (platform confirm if available, else allow) |
 | `guard.file_scan_rules` | object | `{}` | Extra scan patterns (Phase 3 + scan command) |
 | `guard.action_guard_rules` | object | `{}` | Extra guard patterns (Phase 2 runtime analysis) |
 | `guard.llm_analyser.enabled` | boolean | `true` | Enable/disable Phase 5 LLM analysis |

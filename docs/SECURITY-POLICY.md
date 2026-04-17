@@ -54,7 +54,7 @@ Configure via `/ffwd-agent-guard config <level>`:
 |----------|---------|-----------------|
 | **ALLOW** | Safe to proceed | Action executes |
 | **DENY** | Must not proceed | Action blocked (error to agent) |
-| **CONFIRM** | Requires user approval | Prompt user for confirmation |
+| **CONFIRM** | Requires user approval | Behaviour depends on `guard.confirm_action`: `allow` (default) lets through with audit log, `deny` blocks, `ask` uses platform confirm if available (else allows) |
 
 ### Risk Levels
 

@@ -152,6 +152,7 @@ export function registerOpenClawPlugin(
   if (options.level && guard) guard.protection_level = options.level as typeof guard.protection_level;
 
   const adapter = new OpenClawAdapter({ guardedTools: guard?.guarded_tools?.openclaw });
+  const confirmAction = guard?.confirm_action ?? 'allow';
 
   const collectorConfig = loadCollectorConfig();
   const tracerProvider = createTracerProvider(collectorConfig);
@@ -250,27 +251,54 @@ export function registerOpenClawPlugin(
         ).catch(() => {});
       }
 
-      if (result.decision === 'deny' || result.decision === 'ask') {
-        // Close the tool span immediately — after_tool_call won't fire for blocked tools
+      if (result.decision === 'deny') {
         if (tracerProvider) {
           const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
           if (span) {
-            span.setAttribute('agentguard.guard.decision', result.decision);
+            span.setAttribute('agentguard.guard.decision', 'deny');
             span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
             span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
             if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
-            const reason = result.reason || (result.decision === 'deny' ? 'Blocked by FFWD AgentGuard' : 'Requires confirmation (FFWD AgentGuard)');
+            const reason = result.reason || 'Blocked by FFWD AgentGuard';
             span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
             span.recordException(reason);
             span.end();
             activeToolSpans.delete(`${sessionId}:${spanKey}`);
           }
         }
+        return { block: true, blockReason: result.reason || 'Blocked by FFWD AgentGuard' };
+      }
 
-        const blockReason = result.decision === 'deny'
-          ? (result.reason || 'Blocked by FFWD AgentGuard')
-          : (result.reason || 'Requires confirmation (FFWD AgentGuard)');
-        return { block: true, blockReason };
+      if (result.decision === 'ask') {
+        const shouldBlock = confirmAction === 'deny';
+        if (shouldBlock) {
+          if (tracerProvider) {
+            const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+            if (span) {
+              span.setAttribute('agentguard.guard.decision', 'confirm_denied');
+              span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
+              span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
+              if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
+              const reason = result.reason || 'Requires confirmation (FFWD AgentGuard)';
+              span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
+              span.recordException(reason);
+              span.end();
+              activeToolSpans.delete(`${sessionId}:${spanKey}`);
+            }
+          }
+          return { block: true, blockReason: result.reason || 'Requires confirmation (FFWD AgentGuard)' };
+        }
+        // confirm_action is 'allow' or 'ask' — OpenClaw has no interactive confirm, so allow
+        if (tracerProvider) {
+          const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
+          if (span) {
+            span.setAttribute('agentguard.guard.decision', 'confirm_allowed');
+            span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
+            span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
+            if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
+          }
+        }
+        return undefined; // allow
       }
 
       // Allow — record decision on span for observability

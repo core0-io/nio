@@ -113,7 +113,12 @@ async function main(): Promise<void> {
   ]);
 
   if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked');
-  else if (result.decision === 'ask') outputAsk(result.reason || 'Action requires confirmation');
+  else if (result.decision === 'ask') {
+    const confirmAction = config.guard?.confirm_action ?? 'ask';
+    if (confirmAction === 'deny') outputDeny(result.reason || 'Action requires confirmation');
+    else if (confirmAction === 'allow') outputAllow();
+    else outputAsk(result.reason || 'Action requires confirmation');
+  }
   else outputAllow();
 }
 

@@ -291,6 +291,11 @@ Default weights:
 - **balanced**: three-zone with confirm buffer — the default mode
 - **permissive**: binary allow/deny with high tolerance — only blocks near-certain threats
 
+The `guard.confirm_action` config controls what happens when the decision is "confirm":
+- `allow` (default) — let the action through, record in audit log
+- `deny` — block the action (same as deny)
+- `ask` — use platform-native confirm if available (Claude Code), else fall back to allow (OpenClaw)
+
 ---
 
 ## Static Scan: Multi-Engine Pipeline

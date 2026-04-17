@@ -65,6 +65,7 @@ A template with all options is at `plugins/shared/config.default.yaml` (synced t
 ```yaml
 guard:
   protection_level: balanced
+  confirm_action: allow          # What to do on confirm: allow | deny | ask
   file_scan_rules: {}            # Extra scan patterns (Phase 3 + scan command)
   action_guard_rules: {}         # Extra guard patterns (Phase 2 runtime analysis)
   llm_analyser: { enabled: false, api_key: "" }       # Phase 5 LLM analyser

@@ -17,6 +17,16 @@
       "default": "balanced",
       "description": "Protection level. strict: block all risky actions; balanced: block dangerous, confirm risky; permissive: only block critical threats."
     },
+    "confirm_action": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "ask"
+      ],
+      "default": "allow",
+      "description": "Confirm fallback: what to do when the guard decision is 'confirm'. allow: let through with warning log; deny: block; ask: use platform confirm if available, else allow."
+    },
     "rules": {
       "type": "object",
       "description": "Additional regex patterns to inject into built-in scan rules, keyed by rule module name.",

@@ -109,6 +109,8 @@ Both pipelines share the BehaviouralAnalyser, which uses pluggable `LanguageExtr
 | **balanced** (default) | 0 — 0.5 | 0.5 — 0.8 | 0.8 — 1.0 |
 | **permissive** | 0 — 0.9 | _(none)_ | 0.9 — 1.0 |
 
+The `confirm_action` config controls what happens when the decision is "confirm": `allow` (default, let through with audit log), `deny` (block), or `ask` (use platform confirm if available, else allow).
+
 ## Quick Start
 
 ```bash
