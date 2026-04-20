@@ -5,7 +5,6 @@ set -euo pipefail
 # Installs skill files, scripts, and hooks for Claude Code.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
 FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
 MIN_NODE_VERSION=18
 
@@ -75,7 +74,12 @@ fi
 # ---- Uninstall mode ----
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling FFWD AgentGuard (Claude Code)..."
-  rm -rf "$CC_HOME/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
+  if command -v claude >/dev/null 2>&1; then
+    claude plugin uninstall "ffwd-agent-guard@ffwd-agent-guard" >/dev/null 2>&1 \
+      && echo "  Removed plugin" || true
+    claude plugin marketplace remove "ffwd-agent-guard" >/dev/null 2>&1 \
+      && echo "  Removed marketplace" || true
+  fi
   rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
   echo ""
   echo "  FFWD AgentGuard has been uninstalled."
@@ -83,38 +87,118 @@ if [ "$UNINSTALL" -eq 1 ]; then
   exit 0
 fi
 
-SKILLS_DIR="$CC_HOME/skills/ffwd-agent-guard"
+# ---- Step 1: Register Claude Code plugin (marketplace + install) ----
+# Hooks, skill files, and scripts all live in the plugin cache managed by CC.
+# This handles three states:
+#   1. Fresh user — register marketplace + install plugin
+#   2. Stale marketplace path (e.g. pre-restructure repo layout) — fix + reinstall
+#   3. Already installed — sync the plugin cache with local source changes
+echo "[1/2] Registering Claude Code plugin..."
+MARKETPLACE_NAME="ffwd-agent-guard"
+PLUGIN_NAME="ffwd-agent-guard"
+PLUGIN_ID="$PLUGIN_NAME@$MARKETPLACE_NAME"
+MARKETPLACE_MANIFEST="$SCRIPT_DIR/.claude-plugin/marketplace.json"
+KNOWN_MARKETPLACES="$CC_HOME/plugins/known_marketplaces.json"
+INSTALLED_PLUGINS="$CC_HOME/plugins/installed_plugins.json"
 
-# ---- Step 1: Install skill files ----
-echo "[1/3] Installing skill files..."
-mkdir -p "$SKILLS_DIR"
-for f in SKILL.md README.md scan-rules.md action-policies.md .clawignore; do
-  [ -f "$SKILL_SRC/$f" ] && cp "$SKILL_SRC/$f" "$SKILLS_DIR/" 2>/dev/null || true
-done
-echo "  OK: Skill files installed"
-
-# ---- Step 2: Install scripts ----
-echo "[2/3] Installing scripts..."
-rm -rf "$SKILLS_DIR/scripts"
-mkdir -p "$SKILLS_DIR/scripts"
-cp -r "$SKILL_SRC/scripts/"* "$SKILLS_DIR/scripts/"
-echo "  OK: Scripts installed"
-
-# ---- Sync plugin cache (if installed via Claude Code plugin manager) ----
-PLUGIN_CACHE_BASE="$CC_HOME/plugins/cache/ffwd-agent-guard/ffwd-agent-guard"
-if [ -d "$PLUGIN_CACHE_BASE" ]; then
-  for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
-    [ -d "$CACHE_VERSION_DIR" ] || continue
-    echo "  Syncing plugin cache: $CACHE_VERSION_DIR"
-    rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
-    mkdir -p "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
-    cp -r "$SKILL_SRC/scripts/"* "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts/"
-    cp "$SCRIPT_DIR/hooks/hooks.json" "$CACHE_VERSION_DIR/hooks/hooks.json" 2>/dev/null || true
-  done
+if [ ! -f "$MARKETPLACE_MANIFEST" ]; then
+  echo "  ERROR: Marketplace manifest missing at $MARKETPLACE_MANIFEST"
+  exit 1
 fi
 
-# ---- Step 3: Create config directory ----
-echo "[3/3] Setting up configuration..."
+if ! command -v claude >/dev/null 2>&1; then
+  echo "  WARN: 'claude' CLI not in PATH. Skipping plugin registration."
+  echo "        After installing Claude Code CLI, run:"
+  echo "          claude plugin marketplace add '$SCRIPT_DIR'"
+  echo "          claude plugin install $PLUGIN_ID"
+else
+  # Read current marketplace registration (if any).
+  REGISTERED_PATH=""
+  if [ -f "$KNOWN_MARKETPLACES" ]; then
+    REGISTERED_PATH=$(
+      KNOWN_MARKETPLACES="$KNOWN_MARKETPLACES" \
+      MARKETPLACE_NAME="$MARKETPLACE_NAME" \
+      node -e '
+        try {
+          const fs = require("fs");
+          const j = JSON.parse(fs.readFileSync(process.env.KNOWN_MARKETPLACES, "utf8"));
+          const m = j[process.env.MARKETPLACE_NAME];
+          if (m && m.source && m.source.path) process.stdout.write(m.source.path);
+        } catch {}
+      ' 2>/dev/null
+    )
+  fi
+
+  # Fix marketplace if missing or pointing at the wrong path.
+  MARKETPLACE_CHANGED=0
+  if [ "$REGISTERED_PATH" != "$SCRIPT_DIR" ]; then
+    if [ -n "$REGISTERED_PATH" ]; then
+      echo "  Marketplace path is stale ($REGISTERED_PATH), re-registering..."
+      claude plugin marketplace remove "$MARKETPLACE_NAME" >/dev/null 2>&1 || true
+      # A stale marketplace means the cached plugin entry is pointing at the
+      # wrong source too — force a clean reinstall.
+      claude plugin uninstall "$PLUGIN_ID" >/dev/null 2>&1 || true
+    else
+      echo "  Registering marketplace..."
+    fi
+    if claude plugin marketplace add "$SCRIPT_DIR" >/dev/null 2>&1; then
+      echo "  OK: Marketplace registered at $SCRIPT_DIR"
+      MARKETPLACE_CHANGED=1
+    else
+      echo "  WARN: Could not register marketplace. Run manually:"
+      echo "        claude plugin marketplace add '$SCRIPT_DIR'"
+    fi
+  else
+    echo "  OK: Marketplace already registered"
+  fi
+
+  # Check if plugin is installed; install if not (or if marketplace just changed).
+  PLUGIN_INSTALLED=0
+  if [ "$MARKETPLACE_CHANGED" -eq 0 ] && [ -f "$INSTALLED_PLUGINS" ]; then
+    PLUGIN_INSTALLED=$(
+      INSTALLED_PLUGINS="$INSTALLED_PLUGINS" \
+      PLUGIN_ID="$PLUGIN_ID" \
+      node -e '
+        try {
+          const fs = require("fs");
+          const j = JSON.parse(fs.readFileSync(process.env.INSTALLED_PLUGINS, "utf8"));
+          const e = j.plugins[process.env.PLUGIN_ID];
+          process.stdout.write(Array.isArray(e) && e.length ? "1" : "0");
+        } catch { process.stdout.write("0"); }
+      ' 2>/dev/null
+    )
+  fi
+
+  if [ "$PLUGIN_INSTALLED" != "1" ]; then
+    echo "  Installing plugin $PLUGIN_ID..."
+    if claude plugin install "$PLUGIN_ID" >/dev/null 2>&1; then
+      echo "  OK: Plugin installed"
+    else
+      echo "  WARN: Could not install plugin. Run manually:"
+      echo "        claude plugin install $PLUGIN_ID"
+    fi
+  else
+    echo "  OK: Plugin already installed"
+  fi
+
+  # Sync plugin cache with local source (dev iteration: re-running setup.sh
+  # after editing scripts/hooks should take effect without a full reinstall).
+  PLUGIN_CACHE_BASE="$CC_HOME/plugins/cache/$MARKETPLACE_NAME/$PLUGIN_NAME"
+  if [ -d "$PLUGIN_CACHE_BASE" ]; then
+    for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
+      [ -d "$CACHE_VERSION_DIR" ] || continue
+      rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
+      mkdir -p "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
+      cp -r "$SCRIPT_DIR/skills/ffwd-agent-guard/scripts/"* "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts/"
+      mkdir -p "$CACHE_VERSION_DIR/hooks"
+      cp "$SCRIPT_DIR/hooks/hooks.json" "$CACHE_VERSION_DIR/hooks/hooks.json" 2>/dev/null || true
+    done
+    echo "  OK: Plugin cache synced"
+  fi
+fi
+
+# ---- Step 2: Create config directory ----
+echo "[2/2] Setting up configuration..."
 mkdir -p "$FFWD_AGENT_GUARD_DIR"
 if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.yaml" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
@@ -134,8 +218,6 @@ echo ""
 echo "  Open Claude Code and type:"
 echo ""
 echo "    /ffwd-agent-guard scan <path>"
-echo ""
-echo "  Installed to: $SKILLS_DIR"
 echo ""
 echo "  Other commands:"
 echo "    /ffwd-agent-guard scan <path>    Scan code for security risks"

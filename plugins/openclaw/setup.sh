@@ -74,6 +74,10 @@ fi
 # ---- Uninstall mode ----
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling FFWD AgentGuard (OpenClaw)..."
+  if command -v openclaw >/dev/null 2>&1; then
+    echo y | openclaw plugins uninstall ffwd-agent-guard >/dev/null 2>&1 \
+      && echo "  Removed plugin" || true
+  fi
   rm -rf "$OPENCLAW_HOME/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
   rm -rf "$OPENCLAW_HOME/workspace/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed workspace skill" || true
   rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
@@ -106,8 +110,6 @@ SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
 # ---- Step 1: Register OpenClaw plugin ----
 echo "[1/3] Registering OpenClaw plugin..."
 if command -v openclaw &>/dev/null; then
-  # Remove stale registration from old path (pre-restructure)
-  echo y | openclaw plugins uninstall ffwd-agent-guard 2>/dev/null || true
   openclaw plugins install -l "$SCRIPT_DIR/plugin"
   echo "  OK: Plugin registered (ffwd-agent-guard)"
 
