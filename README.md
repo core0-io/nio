@@ -8,6 +8,10 @@
 
 <p align="center">Real-time guard that blocks dangerous commands, prevents data leaks, and protects secrets.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and any agent that supports hooks.</p>
 
+<p align="center">
+  <a href="https://core0-io.github.io/ffwd-agent-guard/"><b>→ View the live Defense Pipeline diagram</b></a>
+</p>
+
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
 ## Architecture
@@ -257,7 +261,6 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 
 ## Documentation
 
-- [Defense Pipeline (live diagram)](https://core0-io.github.io/ffwd-agent-guard/) — Interactive visualization of the Phase 0–6 guard pipeline
 - [Architecture](docs/ARCHITECTURE.md) — Two-pipeline design, 6-phase guard flow, scoring system
 - [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
