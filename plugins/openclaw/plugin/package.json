@@ -1,6 +1,6 @@
 {
   "name": "@core0-io/ffwd-agent-guard",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "FFWD AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets.",
   "type": "module",
   "openclaw": {
