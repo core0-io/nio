@@ -257,6 +257,7 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 
 ## Documentation
 
+- [Defense Pipeline (live diagram)](https://core0-io.github.io/ffwd-agent-guard/) — Interactive visualization of the Phase 0–6 guard pipeline
 - [Architecture](docs/ARCHITECTURE.md) — Two-pipeline design, 6-phase guard flow, scoring system
 - [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
 - [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
