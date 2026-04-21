@@ -105,7 +105,7 @@ if it exceeds the deny threshold for the active protection level.
 │ Phase 3: Static Analysis (<50ms) → `static` score                   │
 │ [Write/Edit only — skip for Bash/WebFetch]                          │
 │                                                                     │
-│   file content ──► 16 regex rules ──► base64 decode pass           │
+│   file content ──► 15 regex rules ──► base64 decode pass           │
 │   (SHELL_EXEC, REMOTE_LOADER, OBFUSCATION, WEBHOOK_EXFIL, ...)    │
 │                                                                     │
 │   Finding[] → static score ──► critical? ──YES──► DENY (exit)      │
@@ -244,7 +244,7 @@ Produces `Finding[]` from action data pattern matching:
 ### Phase 3: Static Analysis (<50ms) → `static`
 
 **Only runs for Write/Edit actions** (file content exists to scan).
-Runs the scan engine's 16 static rules + base64 decode pass against the file
+Runs the scan engine's 15 static rules + base64 decode pass against the file
 content being written.
 
 ### Phase 4: Behavioural Analysis (<200ms) → `behavioural`
@@ -346,7 +346,7 @@ The scanner uses a **two-phase, multi-engine pipeline**:
 
            ┌──────────────────────┐
            │   Static Analyser    │
-           │  (regex, 16 rules)   │──┐
+           │  (regex, 15 rules)   │──┐
            └──────────────────────┘  │
                                      ├─ merge ──► ┌──────────────────────┐
            ┌──────────────────────┐  │            │    LLM Analyser      │
@@ -370,11 +370,11 @@ The scanner uses a **two-phase, multi-engine pipeline**:
 Deterministic pattern-based detection using regex rules. Handles all file types.
 
 **Detection passes:**
-1. **Pattern matching** — 16 rules across 7 modules against file content
+1. **Pattern matching** — 15 rules across 7 modules against file content
 2. **Base64 decoding** — Extract and re-scan encoded payloads
 3. **Markdown extraction** — Only scan fenced code blocks in `.md` files
 
-**16 detection rules:** SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER, READ_ENV_SECRETS,
+**15 detection rules:** SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER, READ_ENV_SECRETS,
 READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN, NET_EXFIL_UNRESTRICTED,
 WEBHOOK_EXFIL, OBFUSCATION, PROMPT_INJECTION, TROJAN_DISTRIBUTION,
 SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING
@@ -697,7 +697,7 @@ src/
 ├── scanner/                           # SkillScanner public API
 │   ├── index.ts                       # Scan entry point
 │   ├── file-walker.ts                # Directory traversal
-│   └── rules/                        # 16 detection rules
+│   └── rules/                        # 15 detection rules
 ├── adapters/                          # Platform integration
 │   ├── engine.ts                     # evaluateHook() — guard entry point
 │   ├── claude-code.ts                # Claude Code adapter

@@ -14,6 +14,8 @@ coverage/
 tmp/
 .npmrc
 .pnpm-store/
+*.tsbuildinfo
+.lsp/
 plugins/claude-code/skills/nio/scripts/*.js
 plugins/claude-code/skills/nio/scripts/*.js.map
 plugins/openclaw/skills/nio/scripts/*.js

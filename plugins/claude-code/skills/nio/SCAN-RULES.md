@@ -1,6 +1,6 @@
 # Scan Detection Rules — Pattern Reference
 
-Detailed Grep patterns for all 16 detection rules. Use this as reference when executing the `scan` subcommand.
+Detailed Grep patterns for all 15 detection rules. Use this as reference when executing the `scan` subcommand.
 
 **Markdown files**: For `.md` files, only scan inside fenced code blocks (between ``` markers). Additionally, decode and re-scan base64-encoded payloads found in any file.
 

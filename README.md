@@ -35,7 +35,7 @@ Nio is a Claude Code / OpenClaw plugin with two core systems:
 │  │  TaskCompleted           │    │  ┌─────────────────────────┐  │  │
 │  │  Stop / SubagentStop     │    │  │    Static Scan          │  │  │
 │  │                          │    │  │    (on-demand)          │  │  │
-│  └──────────────────────────┘    │  │    Static + Behavioural  │  │  │
+│  └──────────────────────────┘    │  │    Static + Behavioural │  │  │
 │                                  │  │    + LLM engines        │  │  │
 │                                  │  └─────────────────────────┘  │  │
 │                                  └───────────────────────────────┘  │
@@ -115,47 +115,27 @@ Both pipelines share the BehaviouralAnalyser, which uses pluggable `LanguageExtr
 
 The `confirm_action` config controls what happens when the decision is "confirm": `allow` (default, let through with audit log), `deny` (block), or `ask` (use platform confirm if available, else allow).
 
-## Quick Start
+## Install
 
-```bash
-git clone https://github.com/core0-io/nio.git
-cd nio && ./setup.sh
-```
+Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io/nio/releases), unzip it, and run the bundled `setup.sh`.
 
-Detects installed platforms and runs the appropriate setup for each. See the expandable sections below for per-platform installs.
+| Platform | Download | Extract & run |
+|----------|----------|---------------|
+| **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
+| **OpenClaw** | `nio-openclaw-v<version>.zip` | `unzip … -d nio-openclaw && cd nio-openclaw && ./setup.sh` |
+| **Both** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
 
-<details>
-<summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
-
-```bash
-git clone https://github.com/core0-io/nio.git
-cd nio && ./plugins/claude-code/setup.sh
-claude plugin add /path/to/nio/plugins/claude-code
-```
-
-This installs the skill, configures hooks, and sets your protection level.
-
-</details>
+`setup.sh` installs the skill, registers hooks, and writes the default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
 
 <details>
-<summary><b>Manual install (skill only)</b></summary>
+<summary><b>Example (Claude Code, one-liner)</b></summary>
 
 ```bash
-git clone https://github.com/core0-io/nio.git
-cp -r nio/plugins/claude-code/skills/nio ~/.claude/skills/nio
+VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4)
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-claude-code-${VERSION}.zip"
+unzip "nio-claude-code-${VERSION}.zip" -d nio-claude-code
+cd nio-claude-code && ./setup.sh
 ```
-
-</details>
-
-<details>
-<summary><b>OpenClaw plugin install</b></summary>
-
-```bash
-git clone https://github.com/core0-io/nio.git
-cd nio && ./plugins/openclaw/setup.sh
-```
-
-`setup.sh` registers the plugin with OpenClaw and copies the bundled `plugin.js` into your OpenClaw state directory. Nio hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
 
 </details>
 
@@ -174,12 +154,12 @@ cd nio && ./plugins/openclaw/setup.sh
 By default, setup looks for `~/.claude` and `~/.openclaw`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `OPENCLAW_STATE_DIR`, or manually), pass the path explicitly:
 
 ```bash
-# All-in-one
+# All-in-one zip
 ./setup.sh --cc-home /path/to/.claude --openclaw-home /path/to/.openclaw
 
-# Per-platform
-./plugins/claude-code/setup.sh --cc-home /path/to/.claude
-./plugins/openclaw/setup.sh --openclaw-home /path/to/.openclaw
+# Platform-specific zip
+./setup.sh --cc-home /path/to/.claude         # inside nio-claude-code/
+./setup.sh --openclaw-home /path/to/.openclaw # inside nio-openclaw/
 ```
 
 Resolution order (first match wins):
@@ -189,6 +169,18 @@ Resolution order (first match wins):
 3. `$HOME/.claude` / `$HOME/.openclaw` (default)
 
 The Nio config itself lives at `~/.nio/` by default, overridable via `$NIO_HOME`.
+
+</details>
+
+<details>
+<summary><b>Install from source</b></summary>
+
+```bash
+git clone https://github.com/core0-io/nio.git
+cd nio && pnpm install && pnpm run build && ./setup.sh
+```
+
+Use this if you want to hack on Nio or track `main`. The release zips ship with everything pre-built, so end users don't need Node/pnpm installed.
 
 </details>
 
@@ -263,14 +255,13 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 
 - [Architecture](docs/ARCHITECTURE.md) — Two-pipeline design, 6-phase guard flow, scoring system
 - [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
-- [Security Policy](docs/SECURITY-POLICY.md) — Unified security rules and policies reference
 
 ## Development
 
 ```bash
 pnpm install
 pnpm run build
-pnpm test          # 370 tests
+pnpm test
 ```
 
 Maintained by [core0-io](https://github.com/core0-io).
