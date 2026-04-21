@@ -286,4 +286,4 @@ pnpm test
 
 ## License
 
-MIT © [core0-io](https://github.com/core0-io) — see [LICENSE](LICENSE).
+Apache-2.0 © [core0-io](https://github.com/core0-io) — see [LICENSE](LICENSE).

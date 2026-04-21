@@ -2,7 +2,7 @@
   "name": "@core0-io/nio",
   "version": "2.0.0",
   "description": "Nio — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "type": "module",
   "openclaw": {
     "extensions": [

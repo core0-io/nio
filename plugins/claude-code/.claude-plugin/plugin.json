@@ -8,6 +8,6 @@
   },
   "homepage": "https://github.com/core0-io/nio",
   "repository": "https://github.com/core0-io/nio",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "keywords": ["security", "agent-protection", "claude-code", "scanner", "otel"]
 }
