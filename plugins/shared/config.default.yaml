@@ -163,6 +163,11 @@ guard:
   # is an MCP tool. Entries accept either a bare local name (`HassTurnOn` —
   # matches any MCP server) or a server-qualified name (`hass__HassTurnOn` —
   # that server only). Matching is case-insensitive.
+  #
+  # The `mcp` list also covers mcporter-style shell invocations: when a
+  # `Bash` / `exec` command contains `mcporter <server>.<tool>` (with or
+  # without the `call` verb, `npx`/`bunx` prefixes, flags, or function-call
+  # syntax), the extracted `server.tool` is matched against this list.
   available_tools:
     claude_code: []
     openclaw: []

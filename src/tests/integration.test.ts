@@ -411,6 +411,83 @@ describe('Integration: Phase 0 Tool Gate', () => {
     }, ctx.options);
     assert.equal(deny.decision, 'deny');
   });
+
+  // ── Shell-embedded MCP (mcporter) ────────────────────────────────────────
+  it('blocked_tools.mcp denies Claude Code Bash running `mcporter call <tool>`', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOff'] } } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'mcporter call hass.HassTurnOff' },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+    assert.match(result.reason ?? '', /via mcporter/);
+    assert.match(result.reason ?? '', /hass__HassTurnOff/);
+  });
+
+  it('blocked_tools.mcp denies OpenClaw exec with command+args payload', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOff'] } } });
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'exec',
+      params: { command: 'mcporter', args: ['call', 'hass.HassTurnOff'] },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('blocked_tools.mcp server-qualified entry scopes mcporter match to one server', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['hass__HassTurnOff'] } } });
+    const sameServer = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'mcporter call hass.HassTurnOff' },
+    }, ctx.options);
+    assert.equal(sameServer.decision, 'deny');
+
+    const otherServer = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'mcporter call other.HassTurnOff' },
+    }, ctx.options);
+    assert.equal(otherServer.decision, 'allow');
+  });
+
+  it('available_tools.mcp applies to mcporter invocations', async () => {
+    ctx = createTestContext({ guard: { available_tools: { mcp: ['hass__HassTurnOn'] } } });
+    const allowed = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'mcporter call hass.HassTurnOn' },
+    }, ctx.options);
+    assert.equal(allowed.decision, 'allow');
+
+    const denied = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'mcporter call hass.HassTurnOff' },
+    }, ctx.options);
+    assert.equal(denied.decision, 'deny');
+    assert.ok(denied.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+
+    // Native Bash without mcporter is unaffected by the mcp allowlist.
+    const native = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls /tmp' },
+    }, ctx.options);
+    assert.equal(native.decision, 'allow');
+  });
+
+  it('blocked_tools.mcp does not touch non-mcporter Bash commands', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOff'] } } });
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'ls /tmp' },
+    }, ctx.options);
+    assert.equal(result.decision, 'allow');
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

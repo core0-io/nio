@@ -3,6 +3,11 @@ import { writeAuditLog, buildGuardAuditEntry } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
+import {
+  extractMcpCallsFromCommand,
+  extractCommandString,
+  type ExtractedMcpCall,
+} from './mcp-shell-detect.js';
 
 function policyHookReason(
   explanation: string,
@@ -125,8 +130,18 @@ function matchesCaseInsensitive(list: readonly string[], candidates: readonly st
  * MCP tool (detected by platform-specific naming convention). Entries may
  * be either bare local names (`HassTurnOn`) — match any server — or
  * server-qualified (`hass__HassTurnOn`) — match that server only.
+ *
+ * The same `mcp` lists also apply to MCP calls invoked via a shell command
+ * (e.g. `Bash` / `exec` calling `mcporter call server.tool`). Shell-
+ * embedded targets are extracted from `toolInput` and matched against the
+ * same `mcp` entries.
  */
-function checkToolGate(toolName: string, config: EngineOptions['config'], platform: string): HookOutput | null {
+function checkToolGate(
+  toolName: string,
+  toolInput: Record<string, unknown> | undefined,
+  config: EngineOptions['config'],
+  platform: string,
+): HookOutput | null {
   const platformKey = platform.replace(/-/g, '_');
   const blockedPlatform = config.guard?.blocked_tools?.[platformKey] ?? [];
   const availablePlatform = config.guard?.available_tools?.[platformKey] ?? [];
@@ -134,20 +149,31 @@ function checkToolGate(toolName: string, config: EngineOptions['config'], platfo
   const availableMcp = config.guard?.available_tools?.['mcp'] ?? [];
 
   const parsed = parseMcpToolName(toolName, platform);
-  const mcpCandidates = parsed.isMcp && parsed.local && parsed.server
+  const nameMcpCandidates = parsed.isMcp && parsed.local && parsed.server
     ? [parsed.local, `${parsed.server}__${parsed.local}`]
     : [];
 
+  const shellHits = extractMcpCallsFromCommand(extractCommandString(toolInput));
+  const shellMcpCandidates = shellHits.flatMap(h => [h.local, `${h.server}__${h.local}`]);
+
+  const allMcpCandidates = [...nameMcpCandidates, ...shellMcpCandidates];
+  const hasMcpContext = parsed.isMcp || shellHits.length > 0;
+
   // --- Blocked (additive: any hit denies) ---
-  if (
-    (blockedPlatform.length > 0 && matchesCaseInsensitive(blockedPlatform, [toolName])) ||
-    (parsed.isMcp && blockedMcp.length > 0 && matchesCaseInsensitive(blockedMcp, mcpCandidates))
-  ) {
+  const nameBlocked = blockedPlatform.length > 0 && matchesCaseInsensitive(blockedPlatform, [toolName]);
+  const nativeMcpBlocked = parsed.isMcp && blockedMcp.length > 0
+    && matchesCaseInsensitive(blockedMcp, nameMcpCandidates);
+  const shellMcpBlockHit: ExtractedMcpCall | undefined = blockedMcp.length > 0 && shellHits.length > 0
+    ? shellHits.find(h => matchesCaseInsensitive(blockedMcp, [h.local, `${h.server}__${h.local}`]))
+    : undefined;
+
+  if (nameBlocked || nativeMcpBlocked || shellMcpBlockHit) {
+    const reason = (shellMcpBlockHit && !nameBlocked && !nativeMcpBlocked)
+      ? `Tool "${shellMcpBlockHit.server}__${shellMcpBlockHit.local}" is blocked (blocked_tools; invoked via mcporter)`
+      : `Tool "${toolName}" is blocked (blocked_tools)`;
     return {
       decision: 'deny',
-      reason: policyHookReason(
-        `Tool "${toolName}" is blocked (blocked_tools)`, '', ['TOOL_GATE_BLOCKED'], 'critical', 1.0
-      ),
+      reason: policyHookReason(reason, '', ['TOOL_GATE_BLOCKED'], 'critical', 1.0),
       riskLevel: 'critical',
       riskScore: 1.0,
       riskTags: ['TOOL_GATE_BLOCKED'],
@@ -155,9 +181,9 @@ function checkToolGate(toolName: string, config: EngineOptions['config'], platfo
   }
 
   // --- Available (namespaced: mcp and platform lists gate independently) ---
-  if (parsed.isMcp) {
+  if (hasMcpContext) {
     if (availableMcp.length > 0) {
-      if (!matchesCaseInsensitive(availableMcp, mcpCandidates)) {
+      if (!matchesCaseInsensitive(availableMcp, allMcpCandidates)) {
         return denyUnavailable(toolName);
       }
     } else if (availablePlatform.length > 0 && !matchesCaseInsensitive(availablePlatform, [toolName])) {
@@ -198,7 +224,7 @@ export async function evaluateHook(
 
   // Phase 0: Tool-level gate
   const t0 = performance.now();
-  const toolGate = checkToolGate(input.toolName, options.config, adapter.name);
+  const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name);
   const t0End = performance.now();
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);

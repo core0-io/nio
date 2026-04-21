@@ -194,6 +194,14 @@ are additive; available lists are independent per namespace, with the
 platform list acting as fallback when `available_tools.mcp` is absent.
 Matching is case-insensitive throughout.
 
+The `mcp` list also covers **mcporter-style shell invocations**: when the
+tool is a shell executor (`Bash` / `exec`), the gate scans the command
+string for `mcporter <server>.<tool>` (with or without the `call` verb,
+`npx` / `bunx` prefixes, flags, `--`, or function-call syntax like
+`'server.tool(args)'`) and matches the extracted target against the same
+`mcp` lists. A denied shell hit shows up in the audit log as
+`Tool "server__tool" is blocked (blocked_tools; invoked via mcporter)`.
+
 ### Phase 1: Allowlist Gate (<1ms)
 
 Check if the action matches a known-safe pattern. If yes, **allow** and stop.
