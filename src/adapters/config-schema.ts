@@ -86,6 +86,7 @@ export const GuardConfigSchema = z.object({
   llm_analyser: LLMConfigSchema.optional(),
   external_analyser: ExternalAnalyserConfigSchema.optional(),
   allowed_commands: z.array(z.string()).optional(),
+  allowlist_mode: z.enum(['exit', 'continue']).optional(),
   available_tools: z.record(z.string(), z.array(z.string())).optional(),
   blocked_tools: z.record(z.string(), z.array(z.string())).optional(),
   guarded_tools: z.record(

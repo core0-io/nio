@@ -84,6 +84,7 @@ export function createAgentGuard(options?: {
     level: (guard?.protection_level || 'balanced') as ProtectionLevel,
     scoringWeights: guard?.scoring_weights,
     allowedCommands: guard?.allowed_commands,
+    allowlistMode: guard?.allowlist_mode,
     fileScanRules: guard?.file_scan_rules,
     actionGuardRules: guard?.action_guard_rules,
     llmEnabled: guard?.llm_analyser?.enabled ?? false,

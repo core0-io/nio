@@ -157,6 +157,16 @@ guard:
   # Example: ["npm run", "pnpm "]
   allowed_commands: []
 
+  # Phase 1 allowlist behavior when a command matches:
+  #   continue — match → hint only, still run Phase 2-6 (default)
+  #   exit     — match → allow + exit immediately (fastest, skips all later phases)
+  #
+  # Default is "continue" so external/LLM policy can't be bypassed by the
+  # built-in SAFE_COMMAND_PREFIXES list (ls, grep, git status, ...). Switch
+  # to "exit" if you want the fast path and don't mind allowlisted commands
+  # skipping Phase 2-6 entirely.
+  allowlist_mode: continue
+
   # Phase 0 tool gate, per platform. Checked before any content analysis.
   # When non-empty, ONLY listed tools are available to the agent on that platform.
   # The `mcp` list is platform-agnostic and applies whenever the incoming tool

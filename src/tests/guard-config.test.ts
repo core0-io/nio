@@ -90,19 +90,24 @@ describe('guard.protection_level', () => {
 // the pipeline at Phase 1.
 
 describe('guard.allowed_commands', () => {
-  it('allows a user-listed prefix and short-circuits at Phase 1', async () => {
+  // These tests pin allowlist_mode: 'exit' to verify the allowed_commands
+  // feature interacts correctly with the short-circuit path. See the
+  // `guard.allowlist_mode` describe block below for the default behavior.
+  it('allows a user-listed prefix and exits at Phase 1 (exit mode)', async () => {
     const analyser = new RuntimeAnalyser({
       allowedCommands: ['mycorp-safe-tool'],
+      allowlistMode: 'exit',
     });
     const result = await analyser.evaluate(makeExecEnvelope('mycorp-safe-tool do thing'));
     assert.equal(result.decision, 'allow');
-    assert.equal(result.phase_stopped, 1, 'should short-circuit at Phase 1');
+    assert.equal(result.phase_stopped, 1, 'should exit at Phase 1 under exit mode');
     assert.equal(result.findings.length, 0);
   });
 
   it('allows an exact command match', async () => {
     const analyser = new RuntimeAnalyser({
       allowedCommands: ['mycorp-exact'],
+      allowlistMode: 'exit',
     });
     const result = await analyser.evaluate(makeExecEnvelope('mycorp-exact'));
     assert.equal(result.decision, 'allow');
@@ -112,6 +117,7 @@ describe('guard.allowed_commands', () => {
   it('does NOT apply when shell metacharacters are present (safety guard)', async () => {
     const analyser = new RuntimeAnalyser({
       allowedCommands: ['mycorp-safe-tool'],
+      allowlistMode: 'exit',
     });
     // Pipe disqualifies from allowlist → continues into Phase 2+
     const result = await analyser.evaluate(
@@ -121,12 +127,66 @@ describe('guard.allowed_commands', () => {
       'shell metachar should prevent Phase 1 bypass');
   });
 
-  it('does not short-circuit when prefix does not match', async () => {
+  it('does not exit when prefix does not match', async () => {
     const analyser = new RuntimeAnalyser({
       allowedCommands: ['mycorp-safe-tool'],
+      allowlistMode: 'exit',
     });
     const result = await analyser.evaluate(makeExecEnvelope('unrelated-cmd'));
     assert.notEqual(result.phase_stopped, 1);
+  });
+});
+
+// ── allowlist_mode ──────────────────────────────────────────────────────
+//
+// Controls Phase 1 behavior on match:
+//   continue (default) — treat as hint, still run Phase 2-6 so external/LLM
+//                        policy is not bypassed
+//   exit               — allow + exit immediately (fast path)
+
+describe('guard.allowlist_mode', () => {
+  it('defaults to continue — allowlist match falls through to Phase 2+', async () => {
+    const analyser = new RuntimeAnalyser({
+      allowedCommands: ['mycorp-safe-tool'],
+    });
+    const result = await analyser.evaluate(makeExecEnvelope('mycorp-safe-tool do thing'));
+    assert.notEqual(result.phase_stopped, 1,
+      'default (continue) should not exit at Phase 1');
+    assert.equal(result.decision, 'allow',
+      'benign command still allowed when no later phase flags it');
+  });
+
+  it('exit — allowlist match exits at Phase 1', async () => {
+    const analyser = new RuntimeAnalyser({
+      allowedCommands: ['mycorp-safe-tool'],
+      allowlistMode: 'exit',
+    });
+    const result = await analyser.evaluate(makeExecEnvelope('mycorp-safe-tool do thing'));
+    assert.equal(result.phase_stopped, 1);
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('continue (default) — lets Phase 2 deny a dangerous allowlisted command', async () => {
+    // SAFE prefix "ls" + dangerous_patterns match → exit mode would skip
+    // Phase 2 and miss the deny. continue mode preserves it.
+    const analyser = new RuntimeAnalyser({
+      actionGuardRules: { dangerous_patterns: ['/ls\\s+--secrets/'] },
+    });
+    const result = await analyser.evaluate(makeExecEnvelope('ls --secrets'));
+    assert.equal(result.decision, 'deny',
+      'dangerous_pattern should fire despite Phase 1 match');
+    assert.notEqual(result.phase_stopped, 1);
+  });
+
+  it('exit — Phase 2 is bypassed for the same dangerous input', async () => {
+    const analyser = new RuntimeAnalyser({
+      allowlistMode: 'exit',
+      actionGuardRules: { dangerous_patterns: ['/ls\\s+--secrets/'] },
+    });
+    const result = await analyser.evaluate(makeExecEnvelope('ls --secrets'));
+    assert.equal(result.decision, 'allow',
+      'exit mode allows the command despite the dangerous_pattern');
+    assert.equal(result.phase_stopped, 1);
   });
 });
 

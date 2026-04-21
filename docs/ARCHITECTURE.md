@@ -63,15 +63,24 @@ if it exceeds the deny threshold for the active protection level.
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 1: Allowlist Gate (<1ms)                                      │
 │                                                                     │
-│   action ──► match safe prefix? ──YES──► ALLOW (exit)              │
-│                    │ NO                                              │
+│   action ──► match safe prefix? ──YES──┐                           │
+│                    │ NO                 ▼                           │
+│                    │            allowlist_mode?                     │
+│                    │           ┌────────┴────────┐                  │
+│                    │           ▼                 ▼                  │
+│                    │       continue             exit                │
+│                    │      (default)                                 │
+│                    │           │                 │                  │
+│                    │           ▼                 ▼                  │
+│                    │      hint only,        ALLOW (exit)            │
+│                    │      continue                                  │
 │                    ▼                                                 │
 │              has shell metachar? ──YES──► skip allowlist, continue  │
 │                    │ NO                                              │
 │                    ▼                                                 │
-│              match extra_allowlist? ──YES──► ALLOW (exit)           │
+│              match extra_allowlist? ──YES──► (same branch as above) │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not matched
+                     │ not matched / continue mode
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 2: Pattern Analysis (<5ms) → `runtime` score                  │
@@ -204,11 +213,25 @@ string for `mcporter <server>.<tool>` (with or without the `call` verb,
 
 ### Phase 1: Allowlist Gate (<1ms)
 
-Check if the action matches a known-safe pattern. If yes, **allow** and stop.
+Check if the action matches a known-safe pattern.
 
-- 200+ safe command prefixes: `git status`, `ls`, `npm test`, etc.
+- 50+ safe command prefixes: `git status`, `ls`, `npm test`, etc.
 - Only applied when command has no shell metacharacters (`;`, `|`, `$()`, etc.)
-- User can inject additional patterns via `config.yaml` → `guard.extra_allowlist`
+- User can inject additional patterns via `config.yaml` → `guard.allowed_commands`
+
+What happens on match is controlled by `guard.allowlist_mode`:
+
+- **`continue`** (default) — treat the match as a hint only and continue
+  running Phase 2–6. This ensures `llm_analyser` / `external_analyser` and
+  `action_guard_rules.dangerous_patterns` always get to inspect the command,
+  so the local allowlist can't silently bypass them. For common read-only
+  commands (`ls`, `git status`, ...) the extra cost is typically <5 ms
+  (Phase 2 only).
+- **`exit`** — allow + exit immediately. Fastest path, zero cost for
+  allowlisted commands. Use when you trust the static allowlist fully
+  and don't run any dynamic/external policy checks. The shell-metacharacter
+  safety guard still applies — commands with `;`, `|`, `$()`, etc. are
+  never treated as allowlist matches.
 
 ### Phase 2: Pattern Analysis (<5ms) → `runtime`
 

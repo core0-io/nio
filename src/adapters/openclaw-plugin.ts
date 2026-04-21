@@ -177,6 +177,7 @@ export function registerOpenClawPlugin(
           runtimeAnalyser: new RuntimeAnalyser({
             level: (guard?.protection_level || 'balanced') as ProtectionLevel,
             allowedCommands: guard?.allowed_commands,
+            allowlistMode: guard?.allowlist_mode,
             fileScanRules: guard?.file_scan_rules,
             actionGuardRules: guard?.action_guard_rules,
             scoringWeights: guard?.scoring_weights,

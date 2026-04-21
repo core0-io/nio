@@ -65,10 +65,19 @@ function scoreToRiskLevel(score: number): RiskLevel {
   return 'low';
 }
 
+export type AllowlistMode = 'exit' | 'continue';
+
 export interface RuntimeAnalyserOptions {
   scoringWeights?: Partial<PhaseWeights>;
   level?: ProtectionLevel;
   allowedCommands?: string[];
+  /**
+   * Behavior when Phase 1 allowlist matches.
+   *   'continue' (default) — treat as hint, continue to Phase 2-6 so
+   *                           external/LLM policy is not bypassed
+   *   'exit'               — allow + exit immediately (fast path)
+   */
+  allowlistMode?: AllowlistMode;
   /** Extra regex patterns for Phase 3 static analysis (from guard.file_scan_rules config). */
   fileScanRules?: Partial<Record<string, string[]>>;
   /** Extra patterns for Phase 2 guard analysis (from guard.action_guard_rules config). */
@@ -90,6 +99,7 @@ export class RuntimeAnalyser {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
   private allowedCommands: string[];
+  private allowlistMode: AllowlistMode;
   private fileScanRules?: Partial<Record<string, string[]>>;
   private actionGuardRules?: GuardRulesConfig;
   private llmEnabled: boolean;
@@ -102,6 +112,7 @@ export class RuntimeAnalyser {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.scoringWeights };
     this.level = opts?.level ?? 'balanced';
     this.allowedCommands = opts?.allowedCommands ?? [];
+    this.allowlistMode = opts?.allowlistMode ?? 'continue';
     this.fileScanRules = opts?.fileScanRules;
     this.actionGuardRules = opts?.actionGuardRules;
     this.llmEnabled = opts?.llmEnabled ?? false;
@@ -133,8 +144,8 @@ export class RuntimeAnalyser {
     const t1 = performance.now();
     const allowlistResult = checkAllowlist(envelope, this.allowedCommands);
     const t1End = performance.now();
-    if (allowlistResult.allowed) {
-      timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
+    timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
+    if (allowlistResult.allowed && this.allowlistMode === 'exit') {
       return {
         decision: 'allow',
         risk_level: allowlistResult.audit ? 'medium' : 'low',
@@ -148,7 +159,6 @@ export class RuntimeAnalyser {
           : 'Matched allowlist',
       };
     }
-    timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
 
     // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
     const t2 = performance.now();

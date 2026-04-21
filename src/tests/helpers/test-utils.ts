@@ -22,6 +22,7 @@ export interface TestContextOptions {
     action_guard_rules?: GuardRulesConfig;
     file_scan_rules?: Partial<Record<string, string[]>>;
     allowed_commands?: string[];
+    allowlist_mode?: 'exit' | 'continue';
     scoring_weights?: Partial<PhaseWeights>;
   };
 }
@@ -37,6 +38,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     runtimeAnalyser: new RuntimeAnalyser({
       level: (opts.level ?? 'balanced') as ProtectionLevel,
       allowedCommands: opts.guard?.allowed_commands,
+      allowlistMode: opts.guard?.allowlist_mode,
       fileScanRules: opts.guard?.file_scan_rules,
       actionGuardRules: opts.guard?.action_guard_rules,
       scoringWeights: opts.guard?.scoring_weights,
