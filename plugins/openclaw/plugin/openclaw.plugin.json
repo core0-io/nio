@@ -2,6 +2,7 @@
   "id": "nio",
   "name": "Nio",
   "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
+  "license": "MIT",
   "configSchema": {
     "type": "object",
     "properties": {

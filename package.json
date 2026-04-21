@@ -36,6 +36,7 @@
     "hooks"
   ],
   "author": "core0-io",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/core0-io/nio.git"

@@ -265,3 +265,7 @@ pnpm test
 ```
 
 Maintained by [core0-io](https://github.com/core0-io).
+
+## License
+
+MIT © core0-io — see [LICENSE](LICENSE).
