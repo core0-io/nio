@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';

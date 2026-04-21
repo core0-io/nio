@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import type { SkillIdentity, CapabilityModel } from './skill.js';
 import type { RiskLevel } from './scanner.js';
 

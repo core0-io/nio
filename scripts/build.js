@@ -1,4 +1,6 @@
 #!/usr/bin/env bun
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
 
 import { cpSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';

@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 export type { HookAdapter, HookInput, HookOutput, EngineOptions, NioInstance } from './types.js';
 export { ClaudeCodeAdapter } from './claude-code.js';
 export { OpenClawAdapter } from './openclaw.js';

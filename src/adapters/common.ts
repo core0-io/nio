@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';

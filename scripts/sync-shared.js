@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
 
 /**
  * Sync shared files to each plugin directory for self-contained distribution.

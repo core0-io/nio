@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Shared detection data — single source of truth for both the static scan
  * engine and the dynamic guard (RuntimeAnalyser).

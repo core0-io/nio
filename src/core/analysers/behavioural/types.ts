@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Shared types for the Behavioural Analyser — language-agnostic interfaces
  * that all language extractors produce and the dataflow tracker consumes.

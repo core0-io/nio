@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Analyser factory — creates analyser instances from a ScanPolicy.
  */

@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import { openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import type { ActionEnvelope, ActionData, ActionType, ExecCommandData, FileOperationData, NetworkRequestData } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';

@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * PHP Extractor — regex-based security extraction for PHP files.
  *

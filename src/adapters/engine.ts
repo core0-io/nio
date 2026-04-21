@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
 import { writeAuditLog, buildGuardAuditEntry } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';

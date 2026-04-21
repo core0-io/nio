@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Scoring — convert Finding[] to a 0-1 score and aggregate weighted scores.
  *

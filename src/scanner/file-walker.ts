@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import { glob } from 'glob';
 import * as fs from 'fs/promises';
 import * as path from 'path';
