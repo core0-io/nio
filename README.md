@@ -128,34 +128,32 @@ Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io
 <details>
 <summary><b>One-liner install</b></summary>
 
-Shared prelude — picks the latest release tag:
-
-```bash
-VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4)
-BASE="https://github.com/core0-io/nio/releases/download/${VERSION}"
-```
+Each block is self-contained — copy, paste, done. `VERSION` is resolved to the latest release tag via the GitHub API.
 
 **Claude Code:**
 
 ```bash
-curl -LO "${BASE}/nio-claude-code-${VERSION}.zip"
-unzip "nio-claude-code-${VERSION}.zip" -d nio-claude-code
+VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-claude-code-${VERSION}.zip" && \
+unzip -o "nio-claude-code-${VERSION}.zip" -d nio-claude-code && \
 cd nio-claude-code && ./setup.sh
 ```
 
 **OpenClaw:**
 
 ```bash
-curl -LO "${BASE}/nio-openclaw-${VERSION}.zip"
-unzip "nio-openclaw-${VERSION}.zip" -d nio-openclaw
+VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-openclaw-${VERSION}.zip" && \
+unzip -o "nio-openclaw-${VERSION}.zip" -d nio-openclaw && \
 cd nio-openclaw && ./setup.sh
 ```
 
 **Both (all-in-one):**
 
 ```bash
-curl -LO "${BASE}/nio-all-${VERSION}.zip"
-unzip "nio-all-${VERSION}.zip" -d nio
+VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-all-${VERSION}.zip" && \
+unzip -o "nio-all-${VERSION}.zip" -d nio && \
 cd nio && ./setup.sh
 ```
 
