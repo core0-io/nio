@@ -1,8 +1,6 @@
-<p align="center">
-  <img src="assets/ffwd-logo.svg" alt="Nio" width="120" />
-</p>
-
-<h1 align="center">Nio</h1>
+<h1 align="center">
+  <img src="assets/nio-wordmark.svg" alt="Nio" width="280" />
+</h1>
 
 <p align="center"><b>Security and observability for AI coding agents.</b></p>
 
@@ -128,13 +126,37 @@ Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io
 `setup.sh` installs the skill, registers hooks, and writes the default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
 
 <details>
-<summary><b>Example (Claude Code, one-liner)</b></summary>
+<summary><b>One-liner install</b></summary>
+
+Shared prelude — picks the latest release tag:
 
 ```bash
 VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4)
-curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-claude-code-${VERSION}.zip"
+BASE="https://github.com/core0-io/nio/releases/download/${VERSION}"
+```
+
+**Claude Code:**
+
+```bash
+curl -LO "${BASE}/nio-claude-code-${VERSION}.zip"
 unzip "nio-claude-code-${VERSION}.zip" -d nio-claude-code
 cd nio-claude-code && ./setup.sh
+```
+
+**OpenClaw:**
+
+```bash
+curl -LO "${BASE}/nio-openclaw-${VERSION}.zip"
+unzip "nio-openclaw-${VERSION}.zip" -d nio-openclaw
+cd nio-openclaw && ./setup.sh
+```
+
+**Both (all-in-one):**
+
+```bash
+curl -LO "${BASE}/nio-all-${VERSION}.zip"
+unzip "nio-all-${VERSION}.zip" -d nio
+cd nio && ./setup.sh
 ```
 
 </details>
