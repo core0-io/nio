@@ -1,5 +1,71 @@
 # @core0-io/nio
 
+## 2.0.0
+
+### Major Changes
+
+- 6ec2068: **Breaking: project renamed from `ffwd-agent-guard` to `nio`.** Hard cutover — no backcompat shims.
+
+  - **npm package**: `@core0-io/ffwd-agent-guard` → `@core0-io/nio`. Existing consumers must update imports.
+  - **Config directory**: `~/.ffwd-agent-guard/` → `~/.nio/`. Old configs are not migrated; re-run `setup.sh` to regenerate.
+  - **Environment variable**: `FFWD_AGENT_GUARD_HOME` → `NIO_HOME`.
+  - **Slash command**: `/ffwd-agent-guard` → `/nio`.
+  - **Plugin IDs**: Claude Code marketplace + plugin name `ffwd-agent-guard` → `nio`. OpenClaw plugin id `ffwd-agent-guard` → `nio`.
+  - **OTEL schema**: service name `agentguard` → `nio`; all `agentguard.*` attributes + metrics (`agentguard.tool_use.count`, `agentguard.turn.count`, `agentguard.decision.count`, `agentguard.risk.score`) renamed to `nio.*`. Existing dashboards and alert rules must update their queries.
+  - **TS exports**: `createAgentGuard` → `createNio`, `AgentGuardConfig` → `NioConfig`, `AgentGuardConfigSchema` → `NioConfigSchema`, `AgentGuardInstance` → `NioInstance`.
+  - **Skill directory**: `plugins/*/skills/ffwd-agent-guard/` renamed to `plugins/*/skills/nio/`.
+  - **Release zips** now named `nio-<target>-v<version>.zip`.
+  - **GitHub repo URL** updated in manifests to `github.com/core0-io/nio` (repo rename handled separately).
+
+- - **Project renamed `ffwd-agent-guard` → `nio`** — hard cutover, no backcompat shims (6ec2068)
+
+    - npm package: `@core0-io/ffwd-agent-guard` → `@core0-io/nio`
+    - Config directory: `~/.ffwd-agent-guard/` → `~/.nio/` (not migrated; re-run `setup.sh`)
+    - Environment variable: `FFWD_AGENT_GUARD_HOME` → `NIO_HOME`
+    - Slash command: `/ffwd-agent-guard` → `/nio`
+    - Plugin IDs (Claude Code marketplace + OpenClaw): `ffwd-agent-guard` → `nio`
+    - OTEL schema: service name `agentguard` → `nio`; all `agentguard.*` attributes
+      and metrics (`agentguard.tool_use.count`, `.turn.count`, `.decision.count`,
+      `.risk.score`) renamed to `nio.*` — **update dashboards and alert rules**
+    - TS exports: `createAgentGuard` → `createNio`, `AgentGuardConfig` → `NioConfig`,
+      `AgentGuardConfigSchema` → `NioConfigSchema`, `AgentGuardInstance` → `NioInstance`
+    - Skill directory: `plugins/*/skills/ffwd-agent-guard/` → `plugins/*/skills/nio/`
+    - Release zips now named `nio-<target>-v<version>.zip`
+
+  - **`guard.allowlist_mode`** (2d9295f) — new `continue` (default) / `exit` modes
+    control what happens on allowlist match. Default `continue` no longer
+    short-circuits Phase 2–6, so `llm_analyser` / `external_analyser` /
+    `dangerous_patterns` can't be silently bypassed by the static allowlist.
+  - **MCP tool gate covers mcporter shell invocations** (3698415) — when a
+    guarded tool is `Bash` / `exec`, the Phase 0 gate scans the command for
+    `mcporter <server>.<tool>` (with or without `call`, `npx`/`bunx`, flags, `--`,
+    or `'server.tool(args)'` syntax) and matches against the same `mcp`
+    allow/block lists. Denied hits log as
+    `Tool "server__tool" is blocked (…; invoked via mcporter)`.
+
+  - **Claude Code `UserPromptSubmit` hook now registered** (1ed1f8b) — collector
+    plugin was missing this hook registration, so turn spans were missing
+    `nio.turn.user_prompt` and started late.
+
+  - **README install flow rewritten** (752750f) — primary path is now
+    "download release zip → unzip → `./setup.sh`". `git clone` moved to
+    "Install from source" for contributors.
+  - **Rule count corrected `16 → 15`** across `ARCHITECTURE.md`, shared
+    `SCAN-RULES.md`, and the excalidraw flow diagram.
+  - **Removed `docs/SECURITY-POLICY.md`** — unreferenced duplicate of
+    ARCHITECTURE / SCAN-RULES / ACTION-POLICIES carrying stale paths.
+  - **GitHub Pages landing** (e2287d0, 6ba5dae, fab9e0e) — defense-pipeline
+    diagram served from `core0-io.github.io/nio/`, linked from the README.
+  - README architecture ASCII diagram: fixed misaligned inner box
+    (`Static + Behavioural` line).
+
+  - **MIT license added** (959589c) — `LICENSE` at repo root; `"license": "MIT"`
+    in root + OpenClaw `package.json` and `openclaw.plugin.json` (matches the
+    existing Claude Code plugin manifest).
+  - `.lsp/` removed; `tsconfig.lib.tsbuildinfo` untracked; `*.tsbuildinfo` and
+    `.lsp/` added to `.gitignore`.
+  - Deleted unused `assets/ag-flow.html`.
+
 ## 1.0.4
 
 ### Patch Changes
