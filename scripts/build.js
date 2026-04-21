@@ -25,8 +25,8 @@ if (!openclaw.success) {
   process.exit(1);
 }
 
-const CC_SKILL_SCRIPTS = join(ROOT, 'plugins/claude-code/skills/ffwd-agent-guard/scripts');
-const OPENCLAW_SKILL_SCRIPTS = join(ROOT, 'plugins/openclaw/skills/ffwd-agent-guard/scripts');
+const CC_SKILL_SCRIPTS = join(ROOT, 'plugins/claude-code/skills/nio/scripts');
+const OPENCLAW_SKILL_SCRIPTS = join(ROOT, 'plugins/openclaw/skills/nio/scripts');
 
 const cc = await Bun.build({
   ...shared,

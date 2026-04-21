@@ -3,7 +3,7 @@
 export {};
 
 /**
- * FFWD AgentGuard PreToolUse / PostToolUse Hook (Claude Code)
+ * Nio PreToolUse / PostToolUse Hook (Claude Code)
  *
  * Uses the common adapter + engine architecture.
  * Reads Claude Code hook input from stdin, delegates to evaluateHook(),
@@ -19,7 +19,7 @@ export {};
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
-import { createAgentGuard, ClaudeCodeAdapter, evaluateHook, loadConfig } from '../index.js';
+import { createNio, ClaudeCodeAdapter, evaluateHook, loadConfig } from '../index.js';
 
 // ---------------------------------------------------------------------------
 // Read stdin
@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const guardedTools = config.guard?.guarded_tools?.claude_code;
   const adapter = new ClaudeCodeAdapter({ guardedTools });
-  const ffwdAgentGuard = createAgentGuard();
+  const nio = createNio();
 
   // Set up OTEL providers for metrics + audit logs
   const collectorConfig = loadCollectorConfig();
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     : null;
 
   const result = await evaluateHook(
-    adapter, input, { config, ffwdAgentGuard },
+    adapter, input, { config, nio },
     { loggerProvider, logsConfig },
   );
 

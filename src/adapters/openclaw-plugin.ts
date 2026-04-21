@@ -1,14 +1,14 @@
 /**
- * FFWD AgentGuard — OpenClaw Plugin
+ * Nio — OpenClaw Plugin
  *
  * Registers before_tool_call, after_tool_call hooks with the OpenClaw
  * plugin API to evaluate tool safety at runtime and collect telemetry.
  *
  * Usage in OpenClaw plugin config:
- *   export { default } from '@core0-io/ffwd-agent-guard/openclaw';
+ *   export { default } from '@core0-io/nio/openclaw';
  *
  * Or register manually:
- *   import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
+ *   import { registerOpenClawPlugin } from '@core0-io/nio';
  *   registerOpenClawPlugin(api);
  */
 
@@ -17,7 +17,7 @@ import { evaluateHook } from './engine.js';
 import { loadConfig, writeAuditLog } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { AuditLifecycleEntry } from './audit-types.js';
-import type { AgentGuardInstance } from './types.js';
+import type { NioInstance } from './types.js';
 import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
@@ -56,15 +56,15 @@ function getOrStartTurn(sessionId: string, platform = 'openclaw', cwd: string | 
   if (t) return t;
   const n = (turnCounters.get(sessionId) ?? 0) + 1;
   turnCounters.set(sessionId, n);
-  const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+  const tracer = trace.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     `turn:${n}`,
     {
       attributes: {
-        'agentguard.session_id': sessionId,
-        'agentguard.turn_number': n,
-        'agentguard.platform': platform,
-        ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        'nio.session_id': sessionId,
+        'nio.turn_number': n,
+        'nio.platform': platform,
+        ...(cwd ? { 'nio.cwd': cwd } : {}),
       },
     },
     ROOT_CONTEXT,
@@ -88,13 +88,13 @@ function finishTurn(sessionId: string): void {
 
   // Attach token usage to turn span
   const u = t.usage;
-  t.span.setAttribute('agentguard.turn.input_tokens', u.input);
-  t.span.setAttribute('agentguard.turn.output_tokens', u.output);
-  t.span.setAttribute('agentguard.turn.cache_creation_input_tokens', u.cacheWrite);
-  t.span.setAttribute('agentguard.turn.cache_read_input_tokens', u.cacheRead);
+  t.span.setAttribute('nio.turn.input_tokens', u.input);
+  t.span.setAttribute('nio.turn.output_tokens', u.output);
+  t.span.setAttribute('nio.turn.cache_creation_input_tokens', u.cacheWrite);
+  t.span.setAttribute('nio.turn.cache_read_input_tokens', u.cacheRead);
   const totalInput = u.input + u.cacheWrite + u.cacheRead;
   const cacheHitRate = totalInput > 0 ? Math.round((u.cacheRead / totalInput) * 1000) / 1000 : 0;
-  t.span.setAttribute('agentguard.turn.cache_hit_rate', cacheHitRate);
+  t.span.setAttribute('nio.turn.cache_hit_rate', cacheHitRate);
 
   t.span.end();
   activeTurns.delete(sessionId);
@@ -132,8 +132,8 @@ interface OpenClawPluginEntry {
 export interface OpenClawPluginOptions {
   /** Protection level (strict/balanced/permissive) */
   level?: string;
-  /** Custom AgentGuard instance factory */
-  ffwdAgentGuardFactory?: () => AgentGuardInstance;
+  /** Custom Nio instance factory */
+  nioFactory?: () => NioInstance;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ export interface OpenClawPluginOptions {
 // ---------------------------------------------------------------------------
 
 /**
- * Register AgentGuard hooks with OpenClaw plugin API
+ * Register Nio hooks with OpenClaw plugin API
  */
 export function registerOpenClawPlugin(
   api: OpenClawRegisterApi,
@@ -166,14 +166,14 @@ export function registerOpenClawPlugin(
   const logger = (msg: string) => console.log(msg);
 
   // Lazy-initialize engine instance
-  let ffwdAgentGuard: AgentGuardInstance | null = null;
+  let nio: NioInstance | null = null;
 
-  function getFfwdAgentGuard(): AgentGuardInstance {
-    if (!ffwdAgentGuard) {
-      if (options.ffwdAgentGuardFactory) {
-        ffwdAgentGuard = options.ffwdAgentGuardFactory();
+  function getNio(): NioInstance {
+    if (!nio) {
+      if (options.nioFactory) {
+        nio = options.nioFactory();
       } else {
-        ffwdAgentGuard = {
+        nio = {
           runtimeAnalyser: new RuntimeAnalyser({
             level: (guard?.protection_level || 'balanced') as ProtectionLevel,
             allowedCommands: guard?.allowed_commands,
@@ -192,7 +192,7 @@ export function registerOpenClawPlugin(
         };
       }
     }
-    return ffwdAgentGuard!;
+    return nio!;
   }
 
   // before_tool_call → evaluate and optionally block
@@ -213,17 +213,17 @@ export function registerOpenClawPlugin(
       if (tracerProvider) {
         try {
           const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-          const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+          const tracer = trace.getTracer('nio-collector', '1.0.0');
           const span = tracer.startSpan(
             `tool:${toolName}`,
             {
               attributes: {
-                'agentguard.tool_name': toolName,
-                'agentguard.platform': 'openclaw',
-                'agentguard.session_id': sessionId,
-                'agentguard.tool.input': redactAndTruncate(toolEvent.params ?? {}),
-                ...(toolEvent.toolCallId ? { 'agentguard.tool.call_id': toolEvent.toolCallId } : {}),
-                ...(toolEvent.runId ? { 'agentguard.tool.run_id': toolEvent.runId } : {}),
+                'nio.tool_name': toolName,
+                'nio.platform': 'openclaw',
+                'nio.session_id': sessionId,
+                'nio.tool.input': redactAndTruncate(toolEvent.params ?? {}),
+                ...(toolEvent.toolCallId ? { 'nio.tool.call_id': toolEvent.toolCallId } : {}),
+                ...(toolEvent.runId ? { 'nio.tool.run_id': toolEvent.runId } : {}),
               },
             },
             turn.ctx,
@@ -237,7 +237,7 @@ export function registerOpenClawPlugin(
 
       const result = await evaluateHook(adapter, event, {
         config,
-        ffwdAgentGuard: getFfwdAgentGuard(),
+        nio: getNio(),
       }, auditOpts);
 
       // Record guard decision metrics
@@ -256,18 +256,18 @@ export function registerOpenClawPlugin(
         if (tracerProvider) {
           const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
           if (span) {
-            span.setAttribute('agentguard.guard.decision', 'deny');
-            span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
-            span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
-            if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
-            const reason = result.reason || 'Blocked by FFWD AgentGuard';
+            span.setAttribute('nio.guard.decision', 'deny');
+            span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
+            span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
+            if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
+            const reason = result.reason || 'Blocked by Nio';
             span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
             span.recordException(reason);
             span.end();
             activeToolSpans.delete(`${sessionId}:${spanKey}`);
           }
         }
-        return { block: true, blockReason: result.reason || 'Blocked by FFWD AgentGuard' };
+        return { block: true, blockReason: result.reason || 'Blocked by Nio' };
       }
 
       if (result.decision === 'ask') {
@@ -276,27 +276,27 @@ export function registerOpenClawPlugin(
           if (tracerProvider) {
             const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
             if (span) {
-              span.setAttribute('agentguard.guard.decision', 'confirm_denied');
-              span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
-              span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
-              if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
-              const reason = result.reason || 'Requires confirmation (FFWD AgentGuard)';
+              span.setAttribute('nio.guard.decision', 'confirm_denied');
+              span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
+              span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
+              if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
+              const reason = result.reason || 'Requires confirmation (Nio)';
               span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
               span.recordException(reason);
               span.end();
               activeToolSpans.delete(`${sessionId}:${spanKey}`);
             }
           }
-          return { block: true, blockReason: result.reason || 'Requires confirmation (FFWD AgentGuard)' };
+          return { block: true, blockReason: result.reason || 'Requires confirmation (Nio)' };
         }
         // confirm_action is 'allow' or 'ask' — OpenClaw has no interactive confirm, so allow
         if (tracerProvider) {
           const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
           if (span) {
-            span.setAttribute('agentguard.guard.decision', 'confirm_allowed');
-            span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'unknown');
-            span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
-            if (result.riskTags?.length) span.setAttribute('agentguard.guard.risk_tags', result.riskTags.join(','));
+            span.setAttribute('nio.guard.decision', 'confirm_allowed');
+            span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
+            span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
+            if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
           }
         }
         return undefined; // allow
@@ -306,9 +306,9 @@ export function registerOpenClawPlugin(
       if (tracerProvider) {
         const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
         if (span) {
-          span.setAttribute('agentguard.guard.decision', 'allow');
-          span.setAttribute('agentguard.guard.risk_level', result.riskLevel || 'low');
-          span.setAttribute('agentguard.guard.risk_score', result.riskScore ?? 0);
+          span.setAttribute('nio.guard.decision', 'allow');
+          span.setAttribute('nio.guard.risk_level', result.riskLevel || 'low');
+          span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
         }
       }
 
@@ -339,9 +339,9 @@ export function registerOpenClawPlugin(
       if (tracerProvider) {
         const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
         if (span) {
-          if (toolEvent.result !== undefined) span.setAttribute('agentguard.tool.output', redactAndTruncate(toolEvent.result));
-          if (toolEvent.error) span.setAttribute('agentguard.tool.error', redactAndTruncate(toolEvent.error));
-          if (typeof toolEvent.durationMs === 'number') span.setAttribute('agentguard.tool.duration_ms', toolEvent.durationMs);
+          if (toolEvent.result !== undefined) span.setAttribute('nio.tool.output', redactAndTruncate(toolEvent.result));
+          if (toolEvent.error) span.setAttribute('nio.tool.error', redactAndTruncate(toolEvent.error));
+          if (typeof toolEvent.durationMs === 'number') span.setAttribute('nio.tool.duration_ms', toolEvent.durationMs);
           if (toolEvent.error) {
             span.setStatus({ code: SpanStatusCode.ERROR, message: toolEvent.error });
             span.recordException(toolEvent.error);
@@ -376,14 +376,14 @@ export function registerOpenClawPlugin(
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
         const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-        const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+        const tracer = trace.getTracer('nio-collector', '1.0.0');
         const span = tracer.startSpan(
           'task:execute',
           {
             attributes: {
-              'agentguard.task_id': taskId,
-              'agentguard.platform': 'openclaw',
-              'agentguard.session_id': sessionId,
+              'nio.task_id': taskId,
+              'nio.platform': 'openclaw',
+              'nio.session_id': sessionId,
             },
           },
           turn.ctx,
@@ -437,7 +437,7 @@ export function registerOpenClawPlugin(
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       if (tracerProvider && e.cleanedBody) {
         const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-        turn.span.setAttribute('agentguard.turn.user_prompt', redactAndTruncate(e.cleanedBody));
+        turn.span.setAttribute('nio.turn.user_prompt', redactAndTruncate(e.cleanedBody));
       }
     } catch { /* non-critical */ }
   });
@@ -460,7 +460,7 @@ export function registerOpenClawPlugin(
 
       if (tracerProvider && e.assistantTexts?.length) {
         const turn = activeTurns.get(sessionId);
-        if (turn) turn.span.setAttribute('agentguard.turn.assistant_reply', redactAndTruncate(e.assistantTexts.join('\n')));
+        if (turn) turn.span.setAttribute('nio.turn.assistant_reply', redactAndTruncate(e.assistantTexts.join('\n')));
       }
     } catch { /* non-critical */ }
   });
@@ -493,17 +493,17 @@ export function registerOpenClawPlugin(
     }
   });
 
-  logger(`[AgentGuard] Registered with OpenClaw (protection level: ${guard?.protection_level || 'balanced'})`);
+  logger(`[Nio] Registered with OpenClaw (protection level: ${guard?.protection_level || 'balanced'})`);
 }
 
 /**
  * Default export — OpenClaw plugin entry object.
  *
- * Usage: export { default } from '@core0-io/ffwd-agent-guard/openclaw'
+ * Usage: export { default } from '@core0-io/nio/openclaw'
  */
 const pluginEntry: OpenClawPluginEntry = {
-  id: 'ffwd-agent-guard',
-  name: 'FFWD AgentGuard',
+  id: 'nio',
+  name: 'Nio',
   register(api: OpenClawRegisterApi): void {
     registerOpenClawPlugin(api);
   },

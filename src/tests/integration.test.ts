@@ -113,7 +113,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
+      nioFactory: () => ctx.nio as never,
     });
     assert.ok(handlers['before_tool_call'], 'Should register before_tool_call');
     assert.ok(handlers['after_tool_call'], 'Should register after_tool_call');
@@ -123,7 +123,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
+      nioFactory: () => ctx.nio as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -137,7 +137,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
+      nioFactory: () => ctx.nio as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -147,14 +147,14 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 
     assert.ok(result, 'Should return a result object');
     assert.equal(result!.block, true, 'Should block dangerous command');
-    assert.ok(result!.blockReason?.includes('AgentGuard'), 'Reason should mention AgentGuard');
+    assert.ok(result!.blockReason?.includes('Nio'), 'Reason should mention Nio');
   });
 
   it('should block write to .env via OpenClaw', async () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
+      nioFactory: () => ctx.nio as never,
     });
 
     const result = await handlers['before_tool_call']({
@@ -169,7 +169,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
     ctx = createTestContext();
     const { api, handlers } = createMockApi();
     registerOpenClawPlugin(api as never, {
-      ffwdAgentGuardFactory: () => ctx.ffwdAgentGuard as never,
+      nioFactory: () => ctx.nio as never,
     });
 
     await handlers['after_tool_call']({

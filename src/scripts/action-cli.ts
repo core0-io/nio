@@ -3,7 +3,7 @@
 export {};
 
 /**
- * FFWD AgentGuard Action CLI — lightweight wrapper for RuntimeAnalyser.
+ * Nio Action CLI — lightweight wrapper for RuntimeAnalyser.
  *
  * Usage:
  *   node action-cli.js evaluate --type <action_type> [action-specific args]
@@ -23,7 +23,7 @@ export {};
  *     --path <filepath>
  */
 
-import { createAgentGuard } from '../index.js';
+import { createNio } from '../index.js';
 
 type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access';
 
@@ -164,7 +164,7 @@ async function main(): Promise<void> {
     printUsage();
   }
 
-  const { runtimeAnalyser } = createAgentGuard({});
+  const { runtimeAnalyser } = createNio({});
 
   // Support both "evaluate" and legacy "decide" command
   if (command !== 'evaluate' && command !== 'decide') {

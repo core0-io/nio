@@ -22,7 +22,7 @@ export interface ClaudeCodeAdapterOptions {
  * Claude Code hook adapter
  *
  * Bridges Claude Code's PreToolUse/PostToolUse stdin/stdout protocol
- * to the common AgentGuard decision engine.
+ * to the common Nio decision engine.
  */
 export class ClaudeCodeAdapter implements HookAdapter {
   readonly name = 'claude-code';

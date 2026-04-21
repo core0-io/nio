@@ -1,16 +1,16 @@
 # Vulnerable Skill Demo
 
-This directory contains intentionally vulnerable code for testing FFWD AgentGuard security scanning.
+This directory contains intentionally vulnerable code for testing Nio security scanning.
 
 **DO NOT use any code from this directory in production.**
 
 ## Usage
 
 ```bash
-/ffwd-agent-guard scan examples/vulnerable-skill
+/nio scan examples/vulnerable-skill
 ```
 
-## What FFWD AgentGuard Should Detect
+## What Nio Should Detect
 
 ### JavaScript (`malicious-helper.js`)
 - `SHELL_EXEC` — child_process exec

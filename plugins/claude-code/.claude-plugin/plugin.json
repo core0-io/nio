@@ -1,13 +1,13 @@
 {
-  "name": "ffwd-agent-guard",
+  "name": "nio",
   "version": "1.0.0",
-  "description": "FFWD AgentGuard — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
+  "description": "Nio — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
   "author": {
     "name": "core0-io",
     "url": "https://github.com/core0-io"
   },
-  "homepage": "https://github.com/core0-io/ffwd-agent-guard",
-  "repository": "https://github.com/core0-io/ffwd-agent-guard",
+  "homepage": "https://github.com/core0-io/nio",
+  "repository": "https://github.com/core0-io/nio",
   "license": "MIT",
   "keywords": ["security", "agent-protection", "claude-code", "scanner", "otel"]
 }

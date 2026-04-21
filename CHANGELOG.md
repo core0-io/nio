@@ -1,4 +1,4 @@
-# @core0-io/ffwd-agent-guard
+# @core0-io/nio
 
 ## 1.0.4
 

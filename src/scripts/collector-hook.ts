@@ -3,7 +3,7 @@
 export {};
 
 /**
- * FFWD AgentGuard — Collector Hook
+ * Nio — Collector Hook
  *
  * Async hook that captures telemetry from Claude Code hook events and exports
  * it via two separate pipelines:
@@ -19,7 +19,7 @@ export {};
  * Completely independent from guard-hook.js — never influences allow/deny
  * decisions. Always exits 0.
  *
- * Configuration: ~/.ffwd-agent-guard/config.yaml (metrics section).
+ * Configuration: ~/.nio/config.yaml (metrics section).
  * At least one of metrics.endpoint or metrics.log must be set, otherwise
  * the hook exits immediately without doing anything.
  */
@@ -176,7 +176,7 @@ async function main(): Promise<void> {
       if (tracerProvider && input.prompt) {
         const state = ensureTurn(config, sessionId);
         setTurnAttributes(config, state, {
-          'agentguard.turn.user_prompt': redactAndTruncate(input.prompt),
+          'nio.turn.user_prompt': redactAndTruncate(input.prompt),
         });
       }
 
@@ -187,9 +187,9 @@ async function main(): Promise<void> {
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
         const preAttrs: Record<string, unknown> = {
-          'agentguard.tool.input': redactAndTruncate(toolInput),
+          'nio.tool.input': redactAndTruncate(toolInput),
         };
-        if (input.tool_use_id) preAttrs['agentguard.tool.call_id'] = input.tool_use_id;
+        if (input.tool_use_id) preAttrs['nio.tool.call_id'] = input.tool_use_id;
         recordPreToolUse(config, state, key, toolName, summary, preAttrs);
       }
 
@@ -207,10 +207,10 @@ async function main(): Promise<void> {
         // capture something; extract error for span status when present.
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const postAttrs: Record<string, unknown> = {
-          'agentguard.tool.output': redactAndTruncate(resp),
+          'nio.tool.output': redactAndTruncate(resp),
         };
         const err = (resp.error ?? resp.stderr) as string | undefined;
-        if (err) postAttrs['agentguard.tool.error'] = redactAndTruncate(err);
+        if (err) postAttrs['nio.tool.error'] = redactAndTruncate(err);
         await recordPostToolUse(config, tracerProvider, state, key, platform, cwd, postAttrs, err ?? null);
       }
 
@@ -277,7 +277,7 @@ async function main(): Promise<void> {
       }
     }
   } catch (err) {
-    console.error('[agentguard] collector-hook error:', err);
+    console.error('[nio] collector-hook error:', err);
   }
 
   process.exit(0);

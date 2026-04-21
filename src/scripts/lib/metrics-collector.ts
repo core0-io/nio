@@ -7,8 +7,8 @@ export {};
 
 export const METRICS_SCHEMA = {
   toolUseCount: {
-    name: 'agentguard.tool_use.count',
-    description: 'Number of tool invocations captured by AgentGuard (includes Task events)',
+    name: 'nio.tool_use.count',
+    description: 'Number of tool invocations captured by Nio (includes Task events)',
     unit: '{invocations}',
     labels: {
       tool_name: 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, Task, etc.)',
@@ -17,7 +17,7 @@ export const METRICS_SCHEMA = {
     },
   },
   turnCount: {
-    name: 'agentguard.turn.count',
+    name: 'nio.turn.count',
     description: 'Number of conversation turns completed (Stop or SubagentStop events)',
     unit: '{turns}',
     labels: {
@@ -25,7 +25,7 @@ export const METRICS_SCHEMA = {
     },
   },
   decisionCount: {
-    name: 'agentguard.decision.count',
+    name: 'nio.decision.count',
     description: 'Number of guard decisions by outcome',
     unit: '{decisions}',
     labels: {
@@ -36,7 +36,7 @@ export const METRICS_SCHEMA = {
     },
   },
   riskScore: {
-    name: 'agentguard.risk.score',
+    name: 'nio.risk.score',
     description: 'Risk score distribution for guard evaluations (0–1)',
     unit: '{score}',
     labels: {
@@ -110,15 +110,15 @@ export async function recordToolUse(
   event: string,
   platform: string,
 ): Promise<void> {
-  const meter = provider.getMeter('agentguard-collector', '1.0.0');
+  const meter = provider.getMeter('nio-collector', '1.0.0');
   const counter = meter.createCounter(METRICS_SCHEMA.toolUseCount.name, {
     description: METRICS_SCHEMA.toolUseCount.description,
     unit: METRICS_SCHEMA.toolUseCount.unit,
   });
   counter.add(1, {
-    'agentguard.tool_name': toolName,
-    'agentguard.event': event,
-    'agentguard.platform': platform,
+    'nio.tool_name': toolName,
+    'nio.event': event,
+    'nio.platform': platform,
   });
   await provider.forceFlush();
 }
@@ -132,17 +132,17 @@ export async function recordGuardDecision(
   toolName: string,
   platform: string,
 ): Promise<void> {
-  const meter = provider.getMeter('agentguard-collector', '1.0.0');
+  const meter = provider.getMeter('nio-collector', '1.0.0');
 
   const counter = meter.createCounter(METRICS_SCHEMA.decisionCount.name, {
     description: METRICS_SCHEMA.decisionCount.description,
     unit: METRICS_SCHEMA.decisionCount.unit,
   });
   counter.add(1, {
-    'agentguard.decision': decision,
-    'agentguard.risk_level': riskLevel,
-    'agentguard.tool_name': toolName,
-    'agentguard.platform': platform,
+    'nio.decision': decision,
+    'nio.risk_level': riskLevel,
+    'nio.tool_name': toolName,
+    'nio.platform': platform,
   });
 
   const histogram = meter.createHistogram(METRICS_SCHEMA.riskScore.name, {
@@ -150,8 +150,8 @@ export async function recordGuardDecision(
     unit: METRICS_SCHEMA.riskScore.unit,
   });
   histogram.record(riskScore, {
-    'agentguard.tool_name': toolName,
-    'agentguard.platform': platform,
+    'nio.tool_name': toolName,
+    'nio.platform': platform,
   });
 
   await provider.forceFlush();
@@ -162,13 +162,13 @@ export async function recordTurn(
   provider: MeterProvider,
   platform: string,
 ): Promise<void> {
-  const meter = provider.getMeter('agentguard-collector', '1.0.0');
+  const meter = provider.getMeter('nio-collector', '1.0.0');
   const counter = meter.createCounter(METRICS_SCHEMA.turnCount.name, {
     description: METRICS_SCHEMA.turnCount.description,
     unit: METRICS_SCHEMA.turnCount.unit,
   });
   counter.add(1, {
-    'agentguard.platform': platform,
+    'nio.platform': platform,
   });
   await provider.forceFlush();
 }

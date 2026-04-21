@@ -108,7 +108,7 @@ export type GuardConfig = z.infer<typeof GuardConfigSchema>;
 // Root schema
 // ---------------------------------------------------------------------------
 
-export const AgentGuardConfigSchema = z.object({
+export const NioConfigSchema = z.object({
   guard: GuardConfigSchema.optional(),
   collector: CollectorConfigSchema.optional(),
 });
@@ -120,7 +120,7 @@ export const AgentGuardConfigSchema = z.object({
 export type CollectorConfig = z.infer<typeof CollectorConfigSchema>;
 export type CollectorLogsConfig = z.infer<typeof CollectorLogsConfigSchema>;
 export type CollectorMetricsConfig = z.infer<typeof CollectorMetricsConfigSchema>;
-export type AgentGuardConfig = z.infer<typeof AgentGuardConfigSchema>;
+export type NioConfig = z.infer<typeof NioConfigSchema>;
 
 /** Resolved metrics config with defaults applied. */
 export interface ResolvedMetricsConfig {
@@ -137,8 +137,8 @@ export interface ResolvedMetricsConfig {
 // Validation
 // ---------------------------------------------------------------------------
 
-export function validateConfig(data: unknown, source: string): AgentGuardConfig {
-  const result = AgentGuardConfigSchema.safeParse(data);
+export function validateConfig(data: unknown, source: string): NioConfig {
+  const result = NioConfigSchema.safeParse(data);
   if (!result.success) {
     const issues = result.error.issues
       .map((i) => `  - ${i.path.join('.')}: ${i.message}`)

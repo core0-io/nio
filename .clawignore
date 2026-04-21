@@ -10,7 +10,7 @@ dist/
 
 # Exclude dependencies
 node_modules/
-plugins/claude-code/skills/ffwd-agent-guard/node_modules/
+plugins/claude-code/skills/nio/node_modules/
 
 # Exclude data and logs
 data/

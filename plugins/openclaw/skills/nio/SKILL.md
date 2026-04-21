@@ -1,6 +1,6 @@
 ---
-name: ffwd-agent-guard
-description: FFWD AgentGuard — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, and evaluating action safety.
+name: nio
+description: Nio — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, and evaluating action safety.
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
@@ -9,21 +9,21 @@ user-invocable: true
 argument-hint: "[scan|action|report|config|reset] [args...]"
 ---
 
-# FFWD AgentGuard — AI Agent Security Framework
+# Nio — AI Agent Security Framework
 
-You are a security auditor powered by the FFWD AgentGuard framework. Route the user's request based on the first argument.
+You are a security auditor powered by the Nio framework. Route the user's request based on the first argument.
 
 ## Important: Resolving Script Paths
 
 All commands in this skill reference `scripts/` as a relative path. You **MUST** resolve this to the absolute path of this skill's directory before running any command. To find the skill directory:
 
 1. This SKILL.md file's parent directory **is** the skill directory
-2. If this file is at `/path/to/ffwd-agent-guard/SKILL.md`, then scripts are at `/path/to/ffwd-agent-guard/scripts/`
+2. If this file is at `/path/to/nio/SKILL.md`, then scripts are at `/path/to/nio/scripts/`
 3. Before running any `node scripts/...` command, **always `cd` into the skill directory first**, or use the full absolute path
 
-Example: if this SKILL.md is at `~/.openclaw/skills/ffwd-agent-guard/SKILL.md`, run:
+Example: if this SKILL.md is at `~/.openclaw/skills/nio/SKILL.md`, run:
 ```bash
-cd ~/.openclaw/skills/ffwd-agent-guard && node scripts/action-cli.js decide --type exec_command --command "ls"
+cd ~/.openclaw/skills/nio && node scripts/action-cli.js decide --type exec_command --command "ls"
 ```
 
 ## Command Routing
@@ -87,7 +87,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 ### Output Format
 
 ```
-## FFWD AgentGuard Security Scan Report
+## Nio Security Scan Report
 
 **Target**: <scanned path>
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
@@ -137,7 +137,7 @@ Parse the user's action description and apply the appropriate detector:
 
 ### Action CLI (`action-cli.js`)
 
-For structured decisions, use AgentGuard's bundled `action-cli.js` (in this skill's `scripts/` directory). It returns JSON.
+For structured decisions, use Nio's bundled `action-cli.js` (in this skill's `scripts/` directory). It returns JSON.
 
 ```
 node scripts/action-cli.js decide --type exec_command --command "<cmd>"
@@ -148,7 +148,7 @@ Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the retu
 ### Output Format
 
 ```
-## FFWD AgentGuard Action Evaluation
+## Nio Action Evaluation
 
 **Action**: <action type and description>
 **Decision**: ALLOW | DENY | CONFIRM
@@ -168,18 +168,18 @@ Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the retu
 
 ## Subcommand: config
 
-View or update the FFWD AgentGuard configuration.
+View or update the Nio configuration.
 
 ### Routing
 
 | Input | Action |
 |-------|--------|
 | `config` or `config show` | Run `node scripts/config-cli.js show` |
-| `config <level>` (strict/balanced/permissive) | Read `~/.ffwd-agent-guard/config.yaml`, update only the `guard.level` field (preserve all other settings), write back, confirm to user |
+| `config <level>` (strict/balanced/permissive) | Read `~/.nio/config.yaml`, update only the `guard.level` field (preserve all other settings), write back, confirm to user |
 
 ### Config File
 
-All configuration is stored in `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
+All configuration is stored in `~/.nio/config.yaml` (or `$NIO_HOME/config.yaml`).
 A template with all options is available at `config.default.yaml` in the plugin directory.
 
 Two top-level sections: `guard` (security settings) and `collector` (telemetry settings).
@@ -238,7 +238,7 @@ Two top-level sections: `guard` (security settings) and `collector` (telemetry s
 | `collector.logs.local` | boolean | `true` | Write audit logs to local JSONL |
 | `collector.logs.max_size_mb` | number | `100` | Rotate local audit log when exceeded |
 
-Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory (default: `~/.ffwd-agent-guard`).
+Set `NIO_HOME` environment variable to change the config directory (default: `~/.nio`).
 
 ### Protection Levels
 
@@ -252,7 +252,7 @@ Set `FFWD_AGENT_GUARD_HOME` environment variable to change the config directory 
 
 ## Subcommand: reset
 
-Reset `~/.ffwd-agent-guard/config.yaml` to factory defaults (from `config.default.yaml`).
+Reset `~/.nio/config.yaml` to factory defaults (from `config.default.yaml`).
 
 Run:
 ```bash
@@ -265,11 +265,11 @@ node scripts/config-cli.js reset
 
 ## Subcommand: report
 
-Display recent security events from the FFWD AgentGuard audit log.
+Display recent security events from the Nio audit log.
 
 ### Log Location
 
-The audit log is stored at `~/.ffwd-agent-guard/audit.jsonl`. Each line is a JSON object with an `event` discriminator field:
+The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with an `event` discriminator field:
 
 **Guard entry** (`event: "guard"`) — one per tool call evaluation:
 
@@ -293,7 +293,7 @@ Old-format lines (without `event` field) are also valid — treat them as guard 
 
 ### How to Display
 
-1. Read `~/.ffwd-agent-guard/audit.jsonl` using the Read tool
+1. Read `~/.nio/audit.jsonl` using the Read tool
 2. Parse each line as JSON
 3. Filter by `event` type — show guard entries in the main table, scan entries in a separate section
 4. Format as a table showing recent events (last 50 by default)
@@ -302,7 +302,7 @@ Old-format lines (without `event` field) are also valid — treat them as guard 
 ### Output Format
 
 ```
-## FFWD AgentGuard Security Report
+## Nio Security Report
 
 **Events**: <total count>
 **Blocked**: <deny count>

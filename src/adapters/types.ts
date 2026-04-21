@@ -41,7 +41,7 @@ export interface HookOutput {
  * Platform adapter interface
  *
  * Each platform (Claude Code, OpenClaw, etc.) implements this interface
- * to bridge its hook protocol to the common AgentGuard decision engine.
+ * to bridge its hook protocol to the common Nio decision engine.
  */
 export interface HookAdapter {
   /** Platform identifier */
@@ -61,9 +61,9 @@ export interface HookAdapter {
 }
 
 /**
- * Agentguard instance interface (subset used by engine)
+ * Nio instance interface (subset used by engine)
  */
-export interface AgentGuardInstance {
+export interface NioInstance {
   runtimeAnalyser: RuntimeAnalyser;
 }
 
@@ -78,6 +78,6 @@ export interface EngineOptions {
       blocked_tools?: Record<string, string[]>;
     };
   };
-  /** Runtime AgentGuard engine (scanner + registry facade) */
-  ffwdAgentGuard: AgentGuardInstance;
+  /** Runtime Nio engine (scanner + registry facade) */
+  nio: NioInstance;
 }

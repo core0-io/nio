@@ -2,7 +2,7 @@
 
 ## Overview
 
-AgentGuard is a two-pipeline security framework for AI agents:
+Nio is a two-pipeline security framework for AI agents:
 
 1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioural + LLM)
 2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyser pipeline
@@ -10,7 +10,7 @@ AgentGuard is a two-pipeline security framework for AI agents:
 ```
 ┌─────────────────────────────────────────────────────────┐
 │ Static Scan (on-demand, triggered by user)              │
-│   /ffwd-agent-guard scan <path>                         │
+│   /nio scan <path>                         │
 │   → ScanOrchestrator → Static + Behavioural + LLM       │
 │   → Finding[] → ScanResult                              │
 │   → writes scan-cache for dynamic guard to read         │
@@ -519,7 +519,7 @@ Controls scan analysis behaviour. Three presets:
 
 ### ScanCache
 
-File-backed cache (`~/.ffwd-agent-guard/scan-cache.json`) with 24h TTL.
+File-backed cache (`~/.nio/scan-cache.json`) with 24h TTL.
 Written by `ScanOrchestrator` after scans. Entries track skill ID, risk level,
 and finding counts for use as context by the guard pipeline.
 
@@ -570,10 +570,10 @@ Captures agent activity as **OpenTelemetry** metrics and traces. Runs independen
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `agentguard.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `agentguard.turn.count` | Counter | `platform` |
-| `agentguard.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
-| `agentguard.risk.score` | Histogram | `tool_name`, `platform` |
+| `nio.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
+| `nio.turn.count` | Counter | `platform` |
+| `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
+| `nio.risk.score` | Histogram | `tool_name`, `platform` |
 
 - `decision.count` — recorded by guard-hook (Claude Code) / openclaw-plugin after each `evaluateHook()` call
 - `risk.score` — histogram of 0–1 risk scores, enables avg/p50/p99 queries
@@ -594,15 +594,15 @@ Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
 
 | Attribute | Source |
 |-----------|--------|
-| `agentguard.session_id` | Hook stdin `session_id` |
-| `agentguard.turn_number` | Auto-incrementing per session |
-| `agentguard.platform` | `claude-code` or `openclaw` |
-| `agentguard.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
-| `agentguard.turn.input_tokens` | Sum of API call input tokens for this turn |
-| `agentguard.turn.output_tokens` | Sum of API call output tokens for this turn |
-| `agentguard.turn.cache_creation_input_tokens` | Tokens written to prompt cache |
-| `agentguard.turn.cache_read_input_tokens` | Tokens read from prompt cache |
-| `agentguard.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
+| `nio.session_id` | Hook stdin `session_id` |
+| `nio.turn_number` | Auto-incrementing per session |
+| `nio.platform` | `claude-code` or `openclaw` |
+| `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
+| `nio.turn.input_tokens` | Sum of API call input tokens for this turn |
+| `nio.turn.output_tokens` | Sum of API call output tokens for this turn |
+| `nio.turn.cache_creation_input_tokens` | Tokens written to prompt cache |
+| `nio.turn.cache_read_input_tokens` | Tokens read from prompt cache |
+| `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start
@@ -620,7 +620,7 @@ Claude Code hooks run as separate processes per event. To correlate spans:
 2. `PostToolUse` → reads pending span, emits with correct start/end time
 3. `Stop` → emits turn root span, clears state
 
-State file location: derived from `collector.log` config path or `~/.ffwd-agent-guard/`.
+State file location: derived from `collector.log` config path or `~/.nio/`.
 
 ### Local JSONL Log
 
@@ -719,7 +719,7 @@ src/
 
 ## Configuration
 
-Runtime config: `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
+Runtime config: `~/.nio/config.yaml` (or `$NIO_HOME/config.yaml`).
 Full template: `plugins/shared/config.default.yaml`.
 
 Key sections:

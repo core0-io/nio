@@ -22,7 +22,7 @@ export interface OpenClawAdapterOptions {
  * OpenClaw hook adapter
  *
  * Bridges OpenClaw's before_tool_call / after_tool_call plugin hooks
- * to the common AgentGuard decision engine.
+ * to the common Nio decision engine.
  *
  * OpenClaw plugin hooks receive an event object:
  *   { toolName: string, params: Record<string, any>, toolCallId?: string }

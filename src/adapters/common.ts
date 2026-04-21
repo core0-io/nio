@@ -6,8 +6,8 @@ import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
 import { validateConfig } from './config-schema.js';
-import type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
-export type { AgentGuardConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
+import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
+export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditConfigErrorEntry, AuditFindingSummary } from './audit-types.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
@@ -19,25 +19,25 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 // Paths
 // ---------------------------------------------------------------------------
 
-const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
-const CONFIG_YAML_PATH = join(FFWD_AGENT_GUARD_DIR, 'config.yaml');
-const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
+const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
+const CONFIG_YAML_PATH = join(NIO_DIR, 'config.yaml');
+const AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
-  if (!existsSync(FFWD_AGENT_GUARD_DIR)) {
-    mkdirSync(FFWD_AGENT_GUARD_DIR, { recursive: true });
+  if (!existsSync(NIO_DIR)) {
+    mkdirSync(NIO_DIR, { recursive: true });
   }
 }
 
 // Inline built-in defaults. Does NOT read any file, so the plugin can be
 // safely bundled and loaded from any cwd.
-const CONFIG_DEFAULTS: AgentGuardConfig = validateConfig({ guard: { level: 'balanced' } }, 'inline-defaults');
+const CONFIG_DEFAULTS: NioConfig = validateConfig({ guard: { level: 'balanced' } }, 'inline-defaults');
 
 // ---------------------------------------------------------------------------
 // Config loading
 // ---------------------------------------------------------------------------
 
-export function resetConfig(): AgentGuardConfig {
+export function resetConfig(): NioConfig {
   ensureDir();
   writeFileSync(CONFIG_YAML_PATH, yamlDump(CONFIG_DEFAULTS));
   return { ...CONFIG_DEFAULTS };
@@ -52,7 +52,7 @@ function reportConfigError(err: unknown): void {
   lastReportedConfigError = message;
 
   console.error(
-    `[AgentGuard] Failed to load ${CONFIG_YAML_PATH}, falling back to defaults:`,
+    `[Nio] Failed to load ${CONFIG_YAML_PATH}, falling back to defaults:`,
   );
   console.error(`  ${message}`);
 
@@ -70,7 +70,7 @@ function reportConfigError(err: unknown): void {
   }
 }
 
-export function loadConfig(): AgentGuardConfig {
+export function loadConfig(): NioConfig {
   if (existsSync(CONFIG_YAML_PATH)) {
     try {
       const raw = yamlLoad(readFileSync(CONFIG_YAML_PATH, 'utf-8'));

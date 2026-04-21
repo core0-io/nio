@@ -3,7 +3,7 @@ export {};
 /**
  * Lightweight config loader for hook scripts.
  *
- * Reads ~/.ffwd-agent-guard/config.yaml (or $FFWD_AGENT_GUARD_HOME/config.yaml)
+ * Reads ~/.nio/config.yaml (or $NIO_HOME/config.yaml)
  * without importing the main dist bundle.
  */
 
@@ -35,7 +35,7 @@ function reportConfigError(configDir: string, configPath: string, err: unknown):
   if (lastReportedConfigError === message) return;
   lastReportedConfigError = message;
 
-  console.error(`[AgentGuard] Failed to load ${configPath}, falling back to defaults:`);
+  console.error(`[Nio] Failed to load ${configPath}, falling back to defaults:`);
   console.error(`  ${message}`);
 
   try {
@@ -53,8 +53,8 @@ function reportConfigError(configDir: string, configPath: string, err: unknown):
 }
 
 function readRawConfig(): Record<string, unknown> {
-  const configDir = process.env['FFWD_AGENT_GUARD_HOME']
-    ?? join(homedir(), '.ffwd-agent-guard');
+  const configDir = process.env['NIO_HOME']
+    ?? join(homedir(), '.nio');
   const configPath = join(configDir, 'config.yaml');
 
   if (!existsSync(configPath)) return {};
@@ -103,7 +103,7 @@ export function loadLogsConfig(): LogsConfig {
   return {
     enabled: (logs['enabled'] as boolean) ?? true,
     local: (logs['local'] as boolean) ?? true,
-    path: expandHome((logs['path'] as string) ?? '~/.ffwd-agent-guard/audit.jsonl'),
+    path: expandHome((logs['path'] as string) ?? '~/.nio/audit.jsonl'),
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
   };
 }

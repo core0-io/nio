@@ -1,5 +1,5 @@
 /**
- * FFWD AgentGuard — Security guard for AI agents
+ * Nio — Security guard for AI agents
  *
  * Two-pipeline security framework:
  * - Static Scan: On-demand code analysis (ScanOrchestrator → Static + Behavioural + LLM)
@@ -52,12 +52,12 @@ export {
   type HookInput,
   type HookOutput,
   type EngineOptions,
-  type AgentGuardConfig,
+  type NioConfig,
   type CollectorConfig,
   type CollectorLogsConfig,
   type ResolvedMetricsConfig,
   validateConfig,
-  AgentGuardConfigSchema,
+  NioConfigSchema,
   CollectorConfigSchema,
 } from './adapters/index.js';
 
@@ -68,9 +68,9 @@ import { RuntimeAnalyser } from './core/analysers/runtime/index.js';
 import type { ProtectionLevel } from './core/analysers/runtime/decision.js';
 
 /**
- * Create a complete AgentGuard instance with all modules
+ * Create a complete Nio instance with all modules
  */
-export function createAgentGuard(options?: {
+export function createNio(options?: {
   useExternalScanner?: boolean;
 }) {
   const config = loadConfig();
@@ -103,4 +103,4 @@ export function createAgentGuard(options?: {
 }
 
 // Default export
-export default createAgentGuard;
+export default createNio;

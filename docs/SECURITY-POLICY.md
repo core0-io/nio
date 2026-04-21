@@ -1,4 +1,4 @@
-# FFWD AgentGuard Security Policy
+# Nio Security Policy
 
 Unified security policy reference for all platforms (Claude Code, OpenClaw, and future integrations).
 
@@ -17,14 +17,14 @@ Unified security policy reference for all platforms (Claude Code, OpenClaw, and 
 
 | Pipeline | Purpose | When Invoked |
 |----------|---------|--------------|
-| **Static Scan** | Detect malicious patterns in code/prompts | On-demand (`/ffwd-agent-guard scan`) |
+| **Static Scan** | Detect malicious patterns in code/prompts | On-demand (`/nio scan`) |
 | **Dynamic Guard** | Runtime policy decisions on agent actions | On every tool call (hooks) |
 
 ---
 
 ## 2. Protection Levels
 
-Configure via `/ffwd-agent-guard config <level>`:
+Configure via `/nio config <level>`:
 
 | Level | Description | DENY Behaviour | CONFIRM Behaviour |
 |-------|-------------|---------------|------------------|
@@ -269,7 +269,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
     "PreToolUse": [
       {
         "matcher": { "tool_name": "*" },
-        "hooks": ["ffwd-agent-guard-hook"]
+        "hooks": ["nio-hook"]
       }
     ]
   }
@@ -293,7 +293,7 @@ Commands matching the safe list are allowed without restriction, **unless** they
 **Configuration** (Plugin registration):
 
 ```typescript
-import { registerOpenClawPlugin } from '@core0-io/ffwd-agent-guard';
+import { registerOpenClawPlugin } from '@core0-io/nio';
 
 // Basic registration
 registerOpenClawPlugin(api);
@@ -381,4 +381,4 @@ file:
 
 ---
 
-*This document consolidates security policies from `plugins/claude-code/skills/ffwd-agent-guard/ACTION-POLICIES.md`, `plugins/claude-code/skills/ffwd-agent-guard/SCAN-RULES.md`, and implementation in `src/action/detectors/`.*
+*This document consolidates security policies from `plugins/claude-code/skills/nio/ACTION-POLICIES.md`, `plugins/claude-code/skills/nio/SCAN-RULES.md`, and implementation in `src/action/detectors/`.*

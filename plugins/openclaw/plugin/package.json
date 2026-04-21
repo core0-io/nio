@@ -1,7 +1,7 @@
 {
-  "name": "@core0-io/ffwd-agent-guard",
+  "name": "@core0-io/nio",
   "version": "1.0.4",
-  "description": "FFWD AgentGuard — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets.",
+  "description": "Nio — Security guard for AI agents. Blocks dangerous commands, prevents data leaks, protects secrets.",
   "type": "module",
   "openclaw": {
     "extensions": [

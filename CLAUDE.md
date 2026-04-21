@@ -1,23 +1,23 @@
-# FFWD AgentGuard
+# Nio
 
 Security and observability for AI coding agents. Provides code scanning, runtime guard, and OTEL collector.
 
 ## Skill
 
-This project provides a unified Claude Code skill: `/ffwd-agent-guard`
+This project provides a unified Claude Code skill: `/nio`
 
 ```
-/ffwd-agent-guard scan <path>          — Scan code for security risks (15 static + 7 behavioural rules)
-/ffwd-agent-guard action <description> — Evaluate runtime action safety (allow/deny/confirm)
-/ffwd-agent-guard report               — View security event audit log
-/ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
+/nio scan <path>          — Scan code for security risks (15 static + 7 behavioural rules)
+/nio action <description> — Evaluate runtime action safety (allow/deny/confirm)
+/nio report               — View security event audit log
+/nio config <level>       — Set protection level (strict/balanced/permissive)
 ```
 
 ## Project Structure
 
 - `plugins/shared/` — Shared config + skill source of truth (`skill/SKILL.md`, `SCAN-RULES.md`, `ACTION-POLICIES.md`, `README.md`)
-- `plugins/claude-code/` — Claude Code plugin (hooks, `skills/ffwd-agent-guard/` synced from shared, setup)
-- `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/ffwd-agent-guard/` synced from shared; setup.sh orchestrates both)
+- `plugins/claude-code/` — Claude Code plugin (hooks, `skills/nio/` synced from shared, setup)
+- `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/nio/` synced from shared; setup.sh orchestrates both)
 - `src/` — TypeScript source (scanner, analysers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output (npm library export)
 - `scripts/` — Build and release scripts
@@ -27,7 +27,7 @@ This project provides a unified Claude Code skill: `/ffwd-agent-guard`
 `pnpm run build` runs three passes in order:
 
 1. `tsc -p tsconfig.lib.json` — emits unbundled `dist/` + `.d.ts` for the npm library export.
-2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/ffwd-agent-guard/scripts/`, then mirrors the compiled scripts to `plugins/openclaw/skills/ffwd-agent-guard/scripts/`.
+2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/nio/scripts/`, then mirrors the compiled scripts to `plugins/openclaw/skills/nio/scripts/`.
 3. `node scripts/sync-shared.js` — copies `plugins/shared/` config + `plugins/shared/skill/*` into each plugin's skill dir.
 
 ```bash
@@ -59,7 +59,7 @@ Contributors author changesets per PR with `pnpm version-select` (interactive: p
 
 ## Configuration
 
-Runtime config lives at `~/.ffwd-agent-guard/config.yaml` (or `$FFWD_AGENT_GUARD_HOME/config.yaml`).
+Runtime config lives at `~/.nio/config.yaml` (or `$NIO_HOME/config.yaml`).
 A template with all options is at `plugins/shared/config.default.yaml` (synced to each plugin dir during build). Two top-level sections:
 
 ```yaml
@@ -83,9 +83,9 @@ collector:
   api_key: ""
   timeout: 5000
   protocol: http            # http | grpc
-  metrics: { enabled: true, local: true, log: "~/.ffwd-agent-guard/metrics.jsonl", max_size_mb: 100 }
+  metrics: { enabled: true, local: true, log: "~/.nio/metrics.jsonl", max_size_mb: 100 }
   traces: { enabled: true }
-  logs: { enabled: true, local: true, path: "~/.ffwd-agent-guard/audit.jsonl", max_size_mb: 100 }
+  logs: { enabled: true, local: true, path: "~/.nio/audit.jsonl", max_size_mb: 100 }
 ```
 
-Set `FFWD_AGENT_GUARD_HOME` to change the config directory (default: `~/.ffwd-agent-guard`).
+Set `NIO_HOME` to change the config directory (default: `~/.nio`).

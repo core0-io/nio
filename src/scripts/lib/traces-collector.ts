@@ -105,7 +105,7 @@ function stateFilePath(config: CollectorConfig): string {
   // Derive state directory from the log path or use default
   const base = config.log
     ? dirname(config.log)
-    : `${process.env['HOME'] ?? '~'}/.ffwd-agent-guard`;
+    : `${process.env['HOME'] ?? '~'}/.nio`;
   return `${base}/collector-state.json`;
 }
 
@@ -173,7 +173,7 @@ export function createTracerProvider(config: CollectorConfig): NodeTracerProvide
   }
 
   const provider = new NodeTracerProvider({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'agentguard' }),
+    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'nio' }),
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
   provider.register();
@@ -285,18 +285,18 @@ export async function recordPostTaskToolUse(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+  const tracer = trace.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     'task:execute',
     {
       startTime: startMs,
       attributes: {
-        'agentguard.task_id': taskId,
-        'agentguard.task_summary': pending.task_summary,
-        'agentguard.platform': platform,
-        'agentguard.session_id': state.session_id,
-        'agentguard.turn_number': state.turn_number,
-        ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        'nio.task_id': taskId,
+        'nio.task_summary': pending.task_summary,
+        'nio.platform': platform,
+        'nio.session_id': state.session_id,
+        'nio.turn_number': state.turn_number,
+        ...(cwd ? { 'nio.cwd': cwd } : {}),
       },
     },
     parentCtx,
@@ -341,18 +341,18 @@ export async function recordPostToolUse(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+  const tracer = trace.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     `tool:${pending.tool_name}`,
     {
       startTime: startMs,
       attributes: {
-        'agentguard.tool_name': pending.tool_name,
-        'agentguard.tool_summary': pending.tool_summary,
-        'agentguard.platform': platform,
-        'agentguard.session_id': state.session_id,
-        'agentguard.turn_number': state.turn_number,
-        ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        'nio.tool_name': pending.tool_name,
+        'nio.tool_summary': pending.tool_summary,
+        'nio.platform': platform,
+        'nio.session_id': state.session_id,
+        'nio.turn_number': state.turn_number,
+        ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(pending.attributes ?? {}),
         ...(postAttributes ?? {}),
       } as Record<string, string | number | boolean>,
@@ -482,16 +482,16 @@ export async function endTurn(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('agentguard-collector', '1.0.0');
+  const tracer = trace.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     `turn:${state.turn_number}`,
     {
       startTime: state.turn_start_ms,
       attributes: {
-        'agentguard.session_id': state.session_id,
-        'agentguard.turn_number': state.turn_number,
-        'agentguard.platform': platform,
-        ...(cwd ? { 'agentguard.cwd': cwd } : {}),
+        'nio.session_id': state.session_id,
+        'nio.turn_number': state.turn_number,
+        'nio.platform': platform,
+        ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(state.turn_attributes ?? {}),
       } as Record<string, string | number | boolean>,
     },
@@ -501,11 +501,11 @@ export async function endTurn(
   if (transcriptPath) {
     const usage = parseTranscriptUsage(transcriptPath, state.turn_start_ms);
     if (usage) {
-      span.setAttribute('agentguard.turn.input_tokens', usage.input_tokens);
-      span.setAttribute('agentguard.turn.output_tokens', usage.output_tokens);
-      span.setAttribute('agentguard.turn.cache_creation_input_tokens', usage.cache_creation_input_tokens);
-      span.setAttribute('agentguard.turn.cache_read_input_tokens', usage.cache_read_input_tokens);
-      span.setAttribute('agentguard.turn.cache_hit_rate', usage.cache_hit_rate);
+      span.setAttribute('nio.turn.input_tokens', usage.input_tokens);
+      span.setAttribute('nio.turn.output_tokens', usage.output_tokens);
+      span.setAttribute('nio.turn.cache_creation_input_tokens', usage.cache_creation_input_tokens);
+      span.setAttribute('nio.turn.cache_read_input_tokens', usage.cache_read_input_tokens);
+      span.setAttribute('nio.turn.cache_hit_rate', usage.cache_hit_rate);
     }
   }
 

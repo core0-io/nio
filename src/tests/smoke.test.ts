@@ -14,7 +14,7 @@ import { SkillScanner } from '../scanner/index.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = resolve(__dirname, '..', '..');
-const GUARD_HOOK_PATH = join(projectRoot, 'plugins', 'claude-code', 'skills', 'ffwd-agent-guard', 'scripts', 'guard-hook.js');
+const GUARD_HOOK_PATH = join(projectRoot, 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'guard-hook.js');
 
 function runGuardHook(input: Record<string, unknown>): Promise<{
   exitCode: number;
@@ -22,8 +22,8 @@ function runGuardHook(input: Record<string, unknown>): Promise<{
   stderr: string;
 }> {
   return new Promise((resolvePromise) => {
-    // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.ffwd-agent-guard/
-    const tempHome = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-smoke-'));
+    // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.nio/
+    const tempHome = mkdtempSync(join(tmpdir(), 'nio-smoke-'));
     const child = spawn('node', [GUARD_HOOK_PATH], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: tempHome },
@@ -66,7 +66,7 @@ describe('Smoke: guard-hook.js E2E', () => {
       tool_input: { command: 'rm -rf /' },
     });
     assert.equal(exitCode, 2);
-    assert.ok(stderr.includes('AgentGuard'), 'stderr should mention AgentGuard');
+    assert.ok(stderr.includes('Nio'), 'stderr should mention Nio');
   });
 
   it('should deny write to .env (exit 2)', async () => {

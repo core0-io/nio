@@ -70,7 +70,7 @@ export function createLoggerProvider(config: CollectorConfig): LoggerProvider | 
   }
 
   return new LoggerProvider({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'agentguard' }),
+    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'nio' }),
     processors: [new SimpleLogRecordProcessor(exporter)],
   });
 }
@@ -80,53 +80,53 @@ export function createLoggerProvider(config: CollectorConfig): LoggerProvider | 
 // ---------------------------------------------------------------------------
 
 export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void {
-  const logger = provider.getLogger('agentguard-audit', '1.0.0');
+  const logger = provider.getLogger('nio-audit', '1.0.0');
   const severityLevel = ('risk_level' in entry ? entry.risk_level : 'low') as string;
 
   const attributes: Record<string, string | number> = {
-    'agentguard.event': entry.event,
-    'agentguard.platform': entry.platform,
+    'nio.event': entry.event,
+    'nio.platform': entry.platform,
   };
 
   const decision = entry['decision'];
-  if (typeof decision === 'string') attributes['agentguard.decision'] = decision;
+  if (typeof decision === 'string') attributes['nio.decision'] = decision;
 
   const riskLevel = entry['risk_level'];
-  if (typeof riskLevel === 'string') attributes['agentguard.risk_level'] = riskLevel;
+  if (typeof riskLevel === 'string') attributes['nio.risk_level'] = riskLevel;
 
   const maxFindingSeverity = entry['max_finding_severity'];
-  if (typeof maxFindingSeverity === 'string') attributes['agentguard.max_finding_severity'] = maxFindingSeverity;
+  if (typeof maxFindingSeverity === 'string') attributes['nio.max_finding_severity'] = maxFindingSeverity;
 
   const riskScore = entry['risk_score'];
-  if (typeof riskScore === 'number') attributes['agentguard.risk_score'] = riskScore;
+  if (typeof riskScore === 'number') attributes['nio.risk_score'] = riskScore;
 
   const toolName = entry['tool_name'];
-  if (typeof toolName === 'string') attributes['agentguard.tool_name'] = toolName;
+  if (typeof toolName === 'string') attributes['nio.tool_name'] = toolName;
 
-  if (entry.session_id) attributes['agentguard.session_id'] = entry.session_id;
+  if (entry.session_id) attributes['nio.session_id'] = entry.session_id;
 
   const phaseStopped = entry['phase_stopped'];
-  if (typeof phaseStopped === 'number') attributes['agentguard.phase_stopped'] = phaseStopped;
+  if (typeof phaseStopped === 'number') attributes['nio.phase_stopped'] = phaseStopped;
 
   const actionType = entry['action_type'];
-  if (typeof actionType === 'string') attributes['agentguard.action_type'] = actionType;
+  if (typeof actionType === 'string') attributes['nio.action_type'] = actionType;
 
   const eventType = entry['event_type'];
-  if (typeof eventType === 'string') attributes['agentguard.event_type'] = eventType;
+  if (typeof eventType === 'string') attributes['nio.event_type'] = eventType;
 
   const riskTags = entry['risk_tags'];
-  if (Array.isArray(riskTags) && riskTags.length > 0) attributes['agentguard.risk_tags'] = riskTags.join(',');
+  if (Array.isArray(riskTags) && riskTags.length > 0) attributes['nio.risk_tags'] = riskTags.join(',');
 
   const explanation = entry['explanation'];
-  if (typeof explanation === 'string') attributes['agentguard.explanation'] = explanation;
+  if (typeof explanation === 'string') attributes['nio.explanation'] = explanation;
 
   const phases = entry['phases'];
   if (phases && typeof phases === 'object') {
     for (const [k, v] of Object.entries(phases as Record<string, { score: number; finding_count: number; duration_ms: number }>)) {
       if (v && typeof v === 'object') {
-        attributes[`agentguard.phases.${k}.score`] = Math.round(v.score * 1000) / 1000;
-        attributes[`agentguard.phases.${k}.finding_count`] = v.finding_count;
-        attributes[`agentguard.phases.${k}.duration_ms`] = v.duration_ms;
+        attributes[`nio.phases.${k}.score`] = Math.round(v.score * 1000) / 1000;
+        attributes[`nio.phases.${k}.finding_count`] = v.finding_count;
+        attributes[`nio.phases.${k}.duration_ms`] = v.duration_ms;
       }
     }
   }

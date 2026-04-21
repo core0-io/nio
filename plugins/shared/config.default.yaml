@@ -232,7 +232,7 @@ collector:
     enabled: true
     local: true
     # Path to local JSONL file for metric payloads. Supports ~/ prefix.
-    log: "~/.ffwd-agent-guard/metrics.jsonl"
+    log: "~/.nio/metrics.jsonl"
     # Maximum local file size in MB before rotation (0 = no rotation).
     max_size_mb: 100
 
@@ -247,6 +247,6 @@ collector:
     # Enable local JSONL backup at the path below.
     local: true
     # Path to local JSONL audit log. Supports ~/ prefix.
-    path: "~/.ffwd-agent-guard/audit.jsonl"
+    path: "~/.nio/audit.jsonl"
     # Maximum local file size in MB before rotation (0 = no rotation).
     max_size_mb: 100

@@ -1,7 +1,7 @@
 {
-  "name": "@core0-io/ffwd-agent-guard",
+  "name": "@core0-io/nio",
   "version": "1.0.4",
-  "description": "FFWD AgentGuard — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
+  "description": "Nio — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "openclaw": {
@@ -10,7 +10,7 @@
     ]
   },
   "scripts": {
-    "build": "rm -rf dist plugins/claude-code/skills/ffwd-agent-guard/scripts && tsc -p tsconfig.lib.json && bun scripts/build.js && node scripts/sync-shared.js",
+    "build": "rm -rf dist plugins/claude-code/skills/nio/scripts && tsc -p tsconfig.lib.json && bun scripts/build.js && node scripts/sync-shared.js",
     "dev": "tsc -w -p tsconfig.lib.json",
     "test": "node --test dist/tests/*.test.js",
     "prepublishOnly": "npm run build",
@@ -28,7 +28,7 @@
     "agent-skills",
     "security",
     "ai-agent",
-    "ffwd-agent-guard",
+    "nio",
     "claude-code",
     "codex",
     "scanner",
@@ -38,7 +38,7 @@
   "author": "core0-io",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/core0-io/ffwd-agent-guard.git"
+    "url": "git+https://github.com/core0-io/nio.git"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -75,9 +75,9 @@
     "bun": "^1.3.12",
     "typescript": "^5.3.3"
   },
-  "homepage": "https://github.com/core0-io/ffwd-agent-guard#readme",
+  "homepage": "https://github.com/core0-io/nio#readme",
   "bugs": {
-    "url": "https://github.com/core0-io/ffwd-agent-guard/issues"
+    "url": "https://github.com/core0-io/nio/issues"
   },
   "files": [
     "dist",

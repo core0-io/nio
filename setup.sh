@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# FFWD AgentGuard — All-in-one setup
+# Nio — All-in-one setup
 # Detects platform and runs the appropriate plugin setup script(s).
 # Supports: Claude Code, OpenClaw, ClawHub
 
@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
       echo "  --openclaw-home <path>  Path to .openclaw directory."
       echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
-      echo "  --reset-config          Overwrite existing ffwd-agent-guard config with defaults."
+      echo "  --reset-config          Overwrite existing nio config with defaults."
       echo "  --uninstall             Remove the plugin and config."
       echo ""
       echo "  INSTALL_ALL=1           Force install for all platforms (env var)."
@@ -76,17 +76,17 @@ else
 fi
 
 echo ""
-echo "  FFWD AgentGuard — AI Agent Security Guard"
+echo "  Nio — AI Agent Security Guard"
 echo "  ============================================="
 echo ""
 
 # ---- Uninstall mode ----
 if [ "$UNINSTALL" -eq 1 ]; then
-  echo "  Uninstalling FFWD AgentGuard (all platforms)..."
+  echo "  Uninstalling Nio (all platforms)..."
   [ -f "$SCRIPT_DIR/plugins/claude-code/setup.sh" ] && bash "$SCRIPT_DIR/plugins/claude-code/setup.sh" "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
   [ -f "$SCRIPT_DIR/plugins/openclaw/setup.sh" ] && bash "$SCRIPT_DIR/plugins/openclaw/setup.sh" "${OC_ARGS[@]+"${OC_ARGS[@]}"}"
   echo ""
-  echo "  FFWD AgentGuard has been uninstalled from all platforms."
+  echo "  Nio has been uninstalled from all platforms."
   echo ""
   exit 0
 fi

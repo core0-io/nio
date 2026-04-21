@@ -1,4 +1,4 @@
-# FFWD AgentGuard
+# Nio
 
 Security and observability for AI coding agents.
 
@@ -12,10 +12,10 @@ Security and observability for AI coding agents.
 ## Usage
 
 ```
-/ffwd-agent-guard scan <path>          — Scan code for security risks
-/ffwd-agent-guard action <description> — Evaluate runtime action safety
-/ffwd-agent-guard report               — View security event audit log
-/ffwd-agent-guard config <level>       — Set protection level (strict/balanced/permissive)
+/nio scan <path>          — Scan code for security risks
+/nio action <description> — Evaluate runtime action safety
+/nio report               — View security event audit log
+/nio config <level>       — Set protection level (strict/balanced/permissive)
 ```
 
 ## Requirements

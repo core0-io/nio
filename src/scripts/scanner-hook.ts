@@ -3,7 +3,7 @@
 export {};
 
 /**
- * FFWD AgentGuard — SessionStart Scanner Hook
+ * Nio — SessionStart Scanner Hook
  *
  * Async hook that runs on session startup. Discovers other installed skills
  * in ~/.claude/skills/ and ~/.openclaw/skills/, scans each with the
@@ -20,7 +20,7 @@ import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createLoggerProvider, emitAuditLog } from './lib/logs-collector.js';
-import { createAgentGuard, ScanCache } from '../index.js';
+import { createNio, ScanCache } from '../index.js';
 
 interface AuditScanEntry {
   event: 'session_scan';
@@ -42,12 +42,12 @@ const SKILLS_DIRS = [
   join(homedir(), '.claude', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
-const FFWD_AGENT_GUARD_DIR = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
-const AUDIT_PATH = join(FFWD_AGENT_GUARD_DIR, 'audit.jsonl');
+const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
+const AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
 
 function ensureDir(): void {
-  if (!existsSync(FFWD_AGENT_GUARD_DIR)) {
-    mkdirSync(FFWD_AGENT_GUARD_DIR, { recursive: true });
+  if (!existsSync(NIO_DIR)) {
+    mkdirSync(NIO_DIR, { recursive: true });
   }
 }
 
@@ -145,7 +145,7 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const { scanner } = createAgentGuard();
+  const { scanner } = createNio();
   const cache = new ScanCache();
 
   let scanned = 0;
@@ -154,7 +154,7 @@ async function main(): Promise<void> {
 
   for (const skill of skills) {
     // Never scan ourselves
-    if (skill.name === 'ffwd-agent-guard') continue;
+    if (skill.name === 'nio') continue;
 
     const artifactHash = hashSkillDir(skill.path);
 
@@ -207,7 +207,7 @@ async function main(): Promise<void> {
     const parts = [];
     if (scanned > 0) parts.push(`scanned ${scanned}`);
     if (skipped > 0) parts.push(`${skipped} cached`);
-    process.stderr.write(`FFWD AgentGuard: ${parts.join(', ')} skill(s)\n`);
+    process.stderr.write(`Nio: ${parts.join(', ')} skill(s)\n`);
     if (lines.length > 0) {
       process.stderr.write(lines.join('\n') + '\n');
     }

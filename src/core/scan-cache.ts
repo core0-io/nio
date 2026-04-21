@@ -4,7 +4,7 @@
  * Written by ScanOrchestrator after each scan. Read by RuntimeAnalyser
  * to incorporate prior scan intelligence into guard decisions.
  *
- * Cache file: ~/.ffwd-agent-guard/scan-cache.json
+ * Cache file: ~/.nio/scan-cache.json
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -45,7 +45,7 @@ export class ScanCache {
   private filePath: string;
 
   constructor(filePath?: string) {
-    const dir = process.env.FFWD_AGENT_GUARD_HOME || join(homedir(), '.ffwd-agent-guard');
+    const dir = process.env.NIO_HOME || join(homedir(), '.nio');
     this.filePath = filePath || join(dir, 'scan-cache.json');
     this.data = this.load();
   }

@@ -11,7 +11,7 @@ import type { ProtectionLevel } from '../../core/analysers/runtime/decision.js';
 
 /**
  * Create an isolated test context with injectable config level.
- * No real ~/.ffwd-agent-guard/ pollution.
+ * No real ~/.nio/ pollution.
  */
 export interface TestContextOptions {
   level?: string;
@@ -32,9 +32,9 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     ? { level: levelOrOpts }
     : levelOrOpts;
 
-  const tempDir = mkdtempSync(join(tmpdir(), 'ffwd-agent-guard-integ-'));
+  const tempDir = mkdtempSync(join(tmpdir(), 'nio-integ-'));
   // Create an isolated RuntimeAnalyser — no external services, no loadConfig() side effects
-  const ffwdAgentGuard = {
+  const nio = {
     runtimeAnalyser: new RuntimeAnalyser({
       level: (opts.level ?? 'balanced') as ProtectionLevel,
       allowedCommands: opts.guard?.allowed_commands,
@@ -54,12 +54,12 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
   };
   const options: EngineOptions = {
     config,
-    ffwdAgentGuard: ffwdAgentGuard as unknown as EngineOptions['ffwdAgentGuard'],
+    nio: nio as unknown as EngineOptions['nio'],
   };
 
   return {
     tempDir,
-    ffwdAgentGuard,
+    nio,
     config,
     options,
     claudeAdapter: new ClaudeCodeAdapter({ guardedTools: opts.guard?.guarded_tools }),

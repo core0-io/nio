@@ -10,7 +10,7 @@
       "y": -26.526127076545038,
       "width": 814.7618316329256,
       "height": 90,
-      "text": "FFWD AgentGuard\nDynamic Guard: 6-Phase Pipeline",
+      "text": "Nio\nDynamic Guard: 6-Phase Pipeline",
       "fontSize": 32,
       "fontFamily": 3,
       "textAlign": "center",
@@ -36,7 +36,7 @@
       "index": "a0",
       "strokeStyle": "solid",
       "containerId": null,
-      "originalText": "FFWD AgentGuard\nDynamic Guard: 6-Phase Pipeline",
+      "originalText": "Nio\nDynamic Guard: 6-Phase Pipeline",
       "autoResize": false,
       "lineHeight": 1.40625
     },

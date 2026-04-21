@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# FFWD AgentGuard — Claude Code plugin setup
+# Nio — Claude Code plugin setup
 # Installs skill files, scripts, and hooks for Claude Code.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
+NIO_DIR="$HOME/.nio"
 MIN_NODE_VERSION=18
 
 # ---- Parse args ----
@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
       echo ""
       echo "  --cc-home <path>  Path to .claude directory."
       echo "                    Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
-      echo "  --reset-config    Overwrite existing ffwd-agent-guard config with defaults."
+      echo "  --reset-config    Overwrite existing nio config with defaults."
       echo "  --uninstall       Remove the plugin and config."
       exit 0 ;;
     *)
@@ -51,7 +51,7 @@ fi
 export CLAUDE_CONFIG_DIR="$CC_HOME"
 
 echo ""
-echo "  FFWD AgentGuard — Claude Code Plugin Setup"
+echo "  Nio — Claude Code Plugin Setup"
 echo "  ============================================="
 echo "  Claude Code home: $CC_HOME"
 echo ""
@@ -59,7 +59,7 @@ echo ""
 # ---- Pre-check: Node.js ----
 if ! command -v node &>/dev/null; then
   echo "  ERROR: Node.js is not installed."
-  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Nio requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -67,22 +67,22 @@ fi
 NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
   echo "  ERROR: Node.js v$(node -v) is too old."
-  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Nio requires Node.js >= $MIN_NODE_VERSION."
   exit 1
 fi
 
 # ---- Uninstall mode ----
 if [ "$UNINSTALL" -eq 1 ]; then
-  echo "  Uninstalling FFWD AgentGuard (Claude Code)..."
+  echo "  Uninstalling Nio (Claude Code)..."
   if command -v claude >/dev/null 2>&1; then
-    claude plugin uninstall "ffwd-agent-guard@ffwd-agent-guard" >/dev/null 2>&1 \
+    claude plugin uninstall "nio@nio" >/dev/null 2>&1 \
       && echo "  Removed plugin" || true
-    claude plugin marketplace remove "ffwd-agent-guard" >/dev/null 2>&1 \
+    claude plugin marketplace remove "nio" >/dev/null 2>&1 \
       && echo "  Removed marketplace" || true
   fi
-  rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
+  rm -rf "$NIO_DIR" 2>/dev/null && echo "  Removed config" || true
   echo ""
-  echo "  FFWD AgentGuard has been uninstalled."
+  echo "  Nio has been uninstalled."
   echo ""
   exit 0
 fi
@@ -94,8 +94,8 @@ fi
 #   2. Stale marketplace path (e.g. pre-restructure repo layout) — fix + reinstall
 #   3. Already installed — sync the plugin cache with local source changes
 echo "[1/2] Registering Claude Code plugin..."
-MARKETPLACE_NAME="ffwd-agent-guard"
-PLUGIN_NAME="ffwd-agent-guard"
+MARKETPLACE_NAME="nio"
+PLUGIN_NAME="nio"
 PLUGIN_ID="$PLUGIN_NAME@$MARKETPLACE_NAME"
 MARKETPLACE_MANIFEST="$SCRIPT_DIR/.claude-plugin/marketplace.json"
 KNOWN_MARKETPLACES="$CC_HOME/plugins/known_marketplaces.json"
@@ -187,9 +187,9 @@ else
   if [ -d "$PLUGIN_CACHE_BASE" ]; then
     for CACHE_VERSION_DIR in "$PLUGIN_CACHE_BASE"/*/; do
       [ -d "$CACHE_VERSION_DIR" ] || continue
-      rm -rf "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
-      mkdir -p "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts"
-      cp -r "$SCRIPT_DIR/skills/ffwd-agent-guard/scripts/"* "$CACHE_VERSION_DIR/skills/ffwd-agent-guard/scripts/"
+      rm -rf "$CACHE_VERSION_DIR/skills/nio/scripts"
+      mkdir -p "$CACHE_VERSION_DIR/skills/nio/scripts"
+      cp -r "$SCRIPT_DIR/skills/nio/scripts/"* "$CACHE_VERSION_DIR/skills/nio/scripts/"
       mkdir -p "$CACHE_VERSION_DIR/hooks"
       cp "$SCRIPT_DIR/hooks/hooks.json" "$CACHE_VERSION_DIR/hooks/hooks.json" 2>/dev/null || true
     done
@@ -199,10 +199,10 @@ fi
 
 # ---- Step 2: Create config directory ----
 echo "[2/2] Setting up configuration..."
-mkdir -p "$FFWD_AGENT_GUARD_DIR"
-if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.yaml" ]; then
+mkdir -p "$NIO_DIR"
+if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
-    cp "$SCRIPT_DIR/config.default.yaml" "$FFWD_AGENT_GUARD_DIR/config.yaml"
+    cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
   fi
   [ "$RESET_CONFIG" -eq 1 ] && echo "  OK: Config reset to defaults" || echo "  OK: Default config written"
 else
@@ -211,18 +211,18 @@ fi
 
 # ---- Done ----
 echo ""
-echo "  FFWD AgentGuard (Claude Code) is installed!"
+echo "  Nio (Claude Code) is installed!"
 echo ""
 echo "  Hooks take effect on the next Claude Code session."
 echo ""
 echo "  Open Claude Code and type:"
 echo ""
-echo "    /ffwd-agent-guard scan <path>"
+echo "    /nio scan <path>"
 echo ""
 echo "  Other commands:"
-echo "    /ffwd-agent-guard scan <path>    Scan code for security risks"
-echo "    /ffwd-agent-guard action <desc>  Evaluate action safety"
-echo "    /ffwd-agent-guard report         View security event log"
+echo "    /nio scan <path>    Scan code for security risks"
+echo "    /nio action <desc>  Evaluate action safety"
+echo "    /nio report         View security event log"
 echo ""
 echo "  To uninstall: $(basename "$0") --uninstall"
 echo ""

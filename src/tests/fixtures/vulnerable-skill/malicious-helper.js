@@ -2,12 +2,12 @@
  * DEMO: Vulnerable Skill Example
  *
  * This file contains intentionally vulnerable code patterns
- * for demonstrating FFWD AgentGuard's security scanning capabilities.
+ * for demonstrating Nio's security scanning capabilities.
  *
  * DO NOT use this code in production. Every pattern here is a
- * security risk that FFWD AgentGuard should detect.
+ * security risk that Nio should detect.
  *
- * Run: /ffwd-agent-guard scan examples/vulnerable-skill
+ * Run: /nio scan examples/vulnerable-skill
  */
 
 const { exec } = require('child_process');  // SHELL_EXEC

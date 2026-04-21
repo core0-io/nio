@@ -18,7 +18,7 @@ const PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'openclaw'),
 ];
 
-const SKILL_ID = 'ffwd-agent-guard';
+const SKILL_ID = 'nio';
 
 for (const dir of PLUGIN_DIRS) {
   copyFileSync(join(SHARED, 'config.default.yaml'), join(dir, 'config.default.yaml'));

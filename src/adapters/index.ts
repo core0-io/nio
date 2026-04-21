@@ -1,4 +1,4 @@
-export type { HookAdapter, HookInput, HookOutput, EngineOptions, AgentGuardInstance } from './types.js';
+export type { HookAdapter, HookInput, HookOutput, EngineOptions, NioInstance } from './types.js';
 export { ClaudeCodeAdapter } from './claude-code.js';
 export { OpenClawAdapter } from './openclaw.js';
 export { evaluateHook } from './engine.js';
@@ -14,13 +14,13 @@ export {
   shouldDenyAtLevel,
   shouldAskAtLevel,
   writeAuditLog,
-  type AgentGuardConfig,
+  type NioConfig,
   type CollectorConfig,
   type CollectorLogsConfig,
   type ResolvedMetricsConfig,
 } from './common.js';
 export {
   validateConfig,
-  AgentGuardConfigSchema,
+  NioConfigSchema,
   CollectorConfigSchema,
 } from './config-schema.js';

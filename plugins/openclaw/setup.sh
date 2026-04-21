@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# FFWD AgentGuard — OpenClaw plugin setup
+# Nio — OpenClaw plugin setup
 # Registers the plugin and installs hooks for OpenClaw / ClawHub.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FFWD_AGENT_GUARD_DIR="$HOME/.ffwd-agent-guard"
+NIO_DIR="$HOME/.nio"
 MIN_NODE_VERSION=18
 
 # ---- Parse args ----
@@ -28,7 +28,7 @@ while [ $# -gt 0 ]; do
       echo ""
       echo "  --openclaw-home <path>  Path to .openclaw directory."
       echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
-      echo "  --reset-config          Overwrite existing ffwd-agent-guard config with defaults."
+      echo "  --reset-config          Overwrite existing nio config with defaults."
       echo "  --uninstall             Remove the plugin and config."
       exit 0 ;;
     *)
@@ -51,7 +51,7 @@ fi
 export OPENCLAW_STATE_DIR="$OPENCLAW_HOME"
 
 echo ""
-echo "  FFWD AgentGuard — OpenClaw Plugin Setup"
+echo "  Nio — OpenClaw Plugin Setup"
 echo "  ============================================="
 echo "  OpenClaw home: $OPENCLAW_HOME"
 echo ""
@@ -59,7 +59,7 @@ echo ""
 # ---- Pre-check: Node.js ----
 if ! command -v node &>/dev/null; then
   echo "  ERROR: Node.js is not installed."
-  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Nio requires Node.js >= $MIN_NODE_VERSION."
   echo "  Install from: https://nodejs.org"
   exit 1
 fi
@@ -67,32 +67,32 @@ fi
 NODE_MAJOR=$(node -e "console.log(process.versions.node.split('.')[0])")
 if [ "$NODE_MAJOR" -lt "$MIN_NODE_VERSION" ]; then
   echo "  ERROR: Node.js v$(node -v) is too old."
-  echo "  FFWD AgentGuard requires Node.js >= $MIN_NODE_VERSION."
+  echo "  Nio requires Node.js >= $MIN_NODE_VERSION."
   exit 1
 fi
 
 # ---- Uninstall mode ----
 if [ "$UNINSTALL" -eq 1 ]; then
-  echo "  Uninstalling FFWD AgentGuard (OpenClaw)..."
+  echo "  Uninstalling Nio (OpenClaw)..."
   if command -v openclaw >/dev/null 2>&1; then
-    echo y | openclaw plugins uninstall ffwd-agent-guard >/dev/null 2>&1 \
+    echo y | openclaw plugins uninstall nio >/dev/null 2>&1 \
       && echo "  Removed plugin" || true
   fi
-  rm -rf "$OPENCLAW_HOME/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed skill" || true
-  rm -rf "$OPENCLAW_HOME/workspace/skills/ffwd-agent-guard" 2>/dev/null && echo "  Removed workspace skill" || true
-  rm -rf "$FFWD_AGENT_GUARD_DIR" 2>/dev/null && echo "  Removed config" || true
+  rm -rf "$OPENCLAW_HOME/skills/nio" 2>/dev/null && echo "  Removed skill" || true
+  rm -rf "$OPENCLAW_HOME/workspace/skills/nio" 2>/dev/null && echo "  Removed workspace skill" || true
+  rm -rf "$NIO_DIR" 2>/dev/null && echo "  Removed config" || true
   echo ""
-  echo "  FFWD AgentGuard has been uninstalled."
+  echo "  Nio has been uninstalled."
   echo ""
   exit 0
 fi
 
 # ---- Detect OpenClaw install type ----
 if [ -d "$OPENCLAW_HOME/workspace" ]; then
-  SKILLS_DIR="$OPENCLAW_HOME/workspace/skills/ffwd-agent-guard"
+  SKILLS_DIR="$OPENCLAW_HOME/workspace/skills/nio"
   PLATFORM="openclaw-workspace"
 elif [ -d "$OPENCLAW_HOME" ]; then
-  SKILLS_DIR="$OPENCLAW_HOME/skills/ffwd-agent-guard"
+  SKILLS_DIR="$OPENCLAW_HOME/skills/nio"
   PLATFORM="openclaw-managed"
 else
   echo "  ERROR: OpenClaw is not installed ($OPENCLAW_HOME not found)."
@@ -105,13 +105,13 @@ echo "  Platform: $PLATFORM"
 echo "  Install target: $SKILLS_DIR"
 echo ""
 
-SKILL_SRC="$SCRIPT_DIR/skills/ffwd-agent-guard"
+SKILL_SRC="$SCRIPT_DIR/skills/nio"
 
 # ---- Step 1: Register OpenClaw plugin ----
 echo "[1/3] Registering OpenClaw plugin..."
 if command -v openclaw &>/dev/null; then
   openclaw plugins install -l "$SCRIPT_DIR/plugin"
-  echo "  OK: Plugin registered (ffwd-agent-guard)"
+  echo "  OK: Plugin registered (nio)"
 
   # Restart gateway so it picks up the new plugin
   GW_PID=$(pgrep -x openclaw-gateway 2>/dev/null || true)
@@ -153,10 +153,10 @@ fi
 
 # ---- Step 3: Create config directory ----
 echo "[3/3] Setting up configuration..."
-mkdir -p "$FFWD_AGENT_GUARD_DIR"
-if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$FFWD_AGENT_GUARD_DIR/config.yaml" ]; then
+mkdir -p "$NIO_DIR"
+if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
-    cp "$SCRIPT_DIR/config.default.yaml" "$FFWD_AGENT_GUARD_DIR/config.yaml"
+    cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
   fi
   [ "$RESET_CONFIG" -eq 1 ] && echo "  OK: Config reset to defaults" || echo "  OK: Default config written"
 else
@@ -165,13 +165,13 @@ fi
 
 # ---- Done ----
 echo ""
-echo "  FFWD AgentGuard (OpenClaw) is installed!"
+echo "  Nio (OpenClaw) is installed!"
 echo ""
 echo "  Hooks take effect on the next OpenClaw task."
 echo ""
 echo "  Send your OpenClaw bot:"
 echo ""
-echo "    /ffwd-agent-guard scan <path>"
+echo "    /nio scan <path>"
 echo ""
 echo "  To uninstall: $(basename "$0") --uninstall"
 echo ""

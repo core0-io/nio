@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 
 /**
- * FFWD AgentGuard — Release packaging script
+ * Nio — Release packaging script
  *
  * Usage:
  *   node scripts/release.js claude-code   # Claude Code plugin zip
  *   node scripts/release.js openclaw      # OpenClaw plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
  *
- * Output: releases/ffwd-agent-guard-{target}-v{version}.zip
+ * Output: releases/nio-{target}-v{version}.zip
  *
  * Single-platform zips extract as a self-contained plugin directory:
  *   claude-code.zip → .claude-plugin/, hooks/, skills/, setup.sh, ...
@@ -69,7 +69,7 @@ function zipFromRoot(outName, files) {
 const targets = target === 'all' ? ['claude-code', 'openclaw', 'all'] : [target];
 
 for (const t of targets) {
-  const name = `ffwd-agent-guard-${t}-v${version}.zip`;
+  const name = `nio-${t}-v${version}.zip`;
   console.log(`\n  Packaging: ${t} → ${name}`);
 
   switch (t) {
