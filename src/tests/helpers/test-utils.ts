@@ -8,7 +8,7 @@ import { ClaudeCodeAdapter } from '../../adapters/claude-code.js';
 import { OpenClawAdapter } from '../../adapters/openclaw.js';
 import { ActionOrchestrator } from '../../core/action-orchestrator.js';
 import type { EngineOptions } from '../../adapters/types.js';
-import type { GuardRulesConfig } from '../../core/analysers/runtime.js';
+import type { GuardRulesConfig } from '../../core/analysers/runtime/index.js';
 import type { PhaseWeights } from '../../core/scoring.js';
 import type { ProtectionLevel } from '../../core/action-decision.js';
 

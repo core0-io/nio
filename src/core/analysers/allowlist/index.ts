@@ -10,8 +10,8 @@
  * Only applies to Bash commands with no shell metacharacters.
  */
 
-import type { ActionEnvelope } from '../../types/action.js';
-import { SENSITIVE_FILE_PATHS } from '../shared/detection-data.js';
+import type { ActionEnvelope } from '../../../types/action.js';
+import { SENSITIVE_FILE_PATHS } from '../../shared/detection-data.js';
 
 // ── Safe Command Prefixes ───────────────────────────────────────────────
 

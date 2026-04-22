@@ -20,8 +20,8 @@ export { SkillScanner, type ScannerOptions } from './scanner/index.js';
 
 // Export ActionOrchestrator (6-phase guard pipeline) + Phase 2 RuntimeAnalyser
 export { ActionOrchestrator, type ActionDecision, type ActionOrchestratorOptions } from './core/action-orchestrator.js';
-export { RuntimeAnalyser, type RuntimeAnalyserOptions, type GuardRulesConfig } from './core/analysers/runtime.js';
-export { AllowlistAnalyser, type AllowlistAnalyserOptions, type AllowlistResult } from './core/analysers/allowlist.js';
+export { RuntimeAnalyser, type RuntimeAnalyserOptions, type GuardRulesConfig } from './core/analysers/runtime/index.js';
+export { AllowlistAnalyser, type AllowlistAnalyserOptions, type AllowlistResult } from './core/analysers/allowlist/index.js';
 
 // Export ExternalAnalyser (pluggable HTTP scorer for both pipelines)
 export { ExternalAnalyser, type ExternalAnalyserOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analysers/external/index.js';

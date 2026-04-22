@@ -22,8 +22,8 @@ import type { ActionEnvelope } from '../types/action.js';
 import type { RiskLevel } from '../types/scanner.js';
 import type { Finding } from './models.js';
 import { aggregateRiskLevel } from './models.js';
-import { AllowlistAnalyser } from './analysers/allowlist.js';
-import { RuntimeAnalyser, type GuardRulesConfig } from './analysers/runtime.js';
+import { AllowlistAnalyser } from './analysers/allowlist/index.js';
+import { RuntimeAnalyser, type GuardRulesConfig } from './analysers/runtime/index.js';
 import {
   findingsToScore,
   aggregateScores,

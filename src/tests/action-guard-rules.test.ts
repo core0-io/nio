@@ -21,8 +21,8 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RuntimeAnalyser } from '../core/analysers/runtime.js';
-import type { GuardRulesConfig } from '../core/analysers/runtime.js';
+import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
+import type { GuardRulesConfig } from '../core/analysers/runtime/index.js';
 import type { ActionEnvelope } from '../types/action.js';
 import type { Finding } from '../core/models.js';
 import {

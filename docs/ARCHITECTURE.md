@@ -689,8 +689,10 @@ src/
 │       │   └── taxonomy.ts           # Threat category mapping
 │       ├── external/                  # ExternalAnalyser (HTTP scorer)
 │       │   └── index.ts              # Dual-pipeline: scoreAction + scoreScan
-│       ├── allowlist.ts              # AllowlistAnalyser — Phase 1: safe command prefixes
-│       └── runtime.ts                # RuntimeAnalyser — Phase 2: dangerous patterns
+│       ├── allowlist/                 # AllowlistAnalyser — Phase 1: safe command prefixes
+│       │   └── index.ts
+│       └── runtime/                   # RuntimeAnalyser — Phase 2: dangerous patterns
+│           └── index.ts
 ├── action-orchestrator.ts            # ActionOrchestrator — 6-phase orchestration (guard pipeline)
 ├── action-decision.ts                # ActionDecision + GuardDecision + ProtectionLevel helpers
 ├── scanner/                           # SkillScanner public API
