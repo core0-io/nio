@@ -18,8 +18,10 @@ export * from './core/index.js';
 // Export modules
 export { SkillScanner, type ScannerOptions } from './scanner/index.js';
 
-// Export RuntimeAnalyser (guard pipeline)
-export { RuntimeAnalyser, type RuntimeDecision, type RuntimeAnalyserOptions } from './core/analysers/runtime/index.js';
+// Export ActionOrchestrator (6-phase guard pipeline) + Phase 2 RuntimeAnalyser
+export { ActionOrchestrator, type ActionDecision, type ActionOrchestratorOptions } from './core/action-orchestrator.js';
+export { RuntimeAnalyser, type RuntimeAnalyserOptions, type GuardRulesConfig } from './core/analysers/runtime.js';
+export { AllowlistAnalyser, type AllowlistAnalyserOptions, type AllowlistResult } from './core/analysers/allowlist.js';
 
 // Export ExternalAnalyser (pluggable HTTP scorer for both pipelines)
 export { ExternalAnalyser, type ExternalAnalyserOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analysers/external/index.js';
@@ -67,8 +69,8 @@ export {
 // Convenience factory functions
 import { SkillScanner } from './scanner/index.js';
 import { loadConfig } from './adapters/index.js';
-import { RuntimeAnalyser } from './core/analysers/runtime/index.js';
-import type { ProtectionLevel } from './core/analysers/runtime/decision.js';
+import { ActionOrchestrator } from './core/action-orchestrator.js';
+import type { ProtectionLevel } from './core/action-decision.js';
 
 /**
  * Create a complete Nio instance with all modules
@@ -83,7 +85,7 @@ export function createNio(options?: {
     fileScanRules: guard?.file_scan_rules,
   });
 
-  const runtimeAnalyser = new RuntimeAnalyser({
+  const orchestrator = new ActionOrchestrator({
     level: (guard?.protection_level || 'balanced') as ProtectionLevel,
     scoringWeights: guard?.scoring_weights,
     allowedCommands: guard?.allowed_commands,
@@ -101,7 +103,7 @@ export function createNio(options?: {
 
   return {
     scanner,
-    runtimeAnalyser,
+    orchestrator,
   };
 }
 

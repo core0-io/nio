@@ -15,7 +15,7 @@ import { join } from 'node:path';
 import { dump as yamlDump } from 'js-yaml';
 import { loadConfig, resetConfig } from './common.js';
 import type { NioConfig } from './config-schema.js';
-import type { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
+import type { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { SkillScanner } from '../scanner/index.js';
 import type { ActionEnvelope, ActionType, ActionData } from '../types/action.js';
 
@@ -34,7 +34,7 @@ const VALID_LEVELS = ['strict', 'balanced', 'permissive'] as const;
 type Level = (typeof VALID_LEVELS)[number];
 
 export interface DispatchDeps {
-  runtimeAnalyser: RuntimeAnalyser;
+  orchestrator: ActionOrchestrator;
   scanner: SkillScanner;
 }
 
@@ -50,7 +50,7 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
     case 'reset':
       return handleConfig('reset');
     case 'action':
-      return handleAction(restStr, deps.runtimeAnalyser);
+      return handleAction(restStr, deps.orchestrator);
     case 'scan':
       return handleScan(restStr, deps.scanner);
     case 'report':
@@ -112,10 +112,10 @@ function setProtectionLevel(level: Level): NioConfig {
 
 // ── action ───────────────────────────────────────────────────────────────────
 
-async function handleAction(rest: string, runtimeAnalyser: RuntimeAnalyser): Promise<string> {
+async function handleAction(rest: string, orchestrator: ActionOrchestrator): Promise<string> {
   const parsed = parseActionEnvelope(rest);
   if (!parsed.ok) return parsed.error;
-  const result = await runtimeAnalyser.evaluate(parsed.value);
+  const result = await orchestrator.evaluate(parsed.value);
   return JSON.stringify(result, null, 2);
 }
 

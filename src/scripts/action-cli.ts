@@ -26,6 +26,7 @@ export {};
  */
 
 import { createNio } from '../index.js';
+import type { ActionEnvelope as TypedActionEnvelope } from '../types/action.js';
 
 type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access';
 
@@ -166,7 +167,7 @@ async function main(): Promise<void> {
     printUsage();
   }
 
-  const { runtimeAnalyser } = createNio({});
+  const { orchestrator } = createNio({});
 
   // Support both "evaluate" and legacy "decide" command
   if (command !== 'evaluate' && command !== 'decide') {
@@ -175,7 +176,10 @@ async function main(): Promise<void> {
   }
 
   const envelope = buildEnvelope();
-  const result = await runtimeAnalyser.evaluate(envelope);
+  // Local ActionEnvelope uses Record<string, unknown> for data; cast to the
+  // strict discriminated-union form that orchestrator.evaluate expects. Safe —
+  // buildEnvelope fills type-appropriate fields per action type.
+  const result = await orchestrator.evaluate(envelope as unknown as TypedActionEnvelope);
   console.log(JSON.stringify(result, null, 2));
 }
 

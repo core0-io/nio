@@ -14,7 +14,7 @@ export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsCo
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditConfigErrorEntry, AuditFindingSummary } from './audit-types.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
-import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
+import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { Finding } from '../core/models.js';
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
@@ -256,7 +256,7 @@ export function compactFindings(findings: Finding[], limit = 5): AuditFindingSum
 
 export function buildGuardAuditEntry(
   input: HookInput,
-  rd: RuntimeDecision | null,
+  rd: ActionDecision | null,
   initiatingSkill: string | null | undefined,
   platform: string | null | undefined,
   actionType?: string,

@@ -16,13 +16,13 @@
  */
 
 import { OpenClawAdapter } from './openclaw.js';
-import { evaluateHook } from './engine.js';
+import { evaluateHook } from './hook-engine.js';
 import { loadConfig, writeAuditLog } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { AuditLifecycleEntry } from './audit-types.js';
 import type { NioInstance } from './types.js';
-import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
-import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
+import { ActionOrchestrator } from '../core/action-orchestrator.js';
+import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
@@ -190,7 +190,7 @@ export function registerOpenClawPlugin(
         nio = options.nioFactory();
       } else {
         nio = {
-          runtimeAnalyser: new RuntimeAnalyser({
+          orchestrator: new ActionOrchestrator({
             level: (guard?.protection_level || 'balanced') as ProtectionLevel,
             allowedCommands: guard?.allowed_commands,
             allowlistMode: guard?.allowlist_mode,
@@ -529,7 +529,7 @@ export function registerOpenClawPlugin(
       async execute(_id, params) {
         try {
           const text = await dispatchNioCommand(params.command ?? '', {
-            runtimeAnalyser: getNio().runtimeAnalyser,
+            orchestrator: getNio().orchestrator,
             scanner,
           });
           return { content: [{ type: 'text', text }] };

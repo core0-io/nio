@@ -259,7 +259,7 @@ export async function evaluateHook(
   // Run RuntimeAnalyser pipeline
   try {
     const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
-    const rd: ActionDecision = await options.nio.runtimeAnalyser.evaluate(envelope, level);
+    const rd: ActionDecision = await options.nio.orchestrator.evaluate(envelope, level);
 
     const entry = buildGuardAuditEntry(
       input, rd, initiatingSkill, adapter.name, envelope.action.type,
