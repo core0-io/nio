@@ -185,7 +185,7 @@ export function aggregateContext(files: FileAnalysis[]): SecurityProfile {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /**
- * Try to resolve a relative import to one of the analyzed files.
+ * Try to resolve a relative import to one of the analysed files.
  * This is a best-effort heuristic — it handles ./foo, ../foo, and
  * extension resolution (.ts, .js, /index.ts).
  */

@@ -53,7 +53,7 @@
     },
     "guard": {
       "type": "object",
-      "description": "Dynamic guard pipeline settings (RuntimeAnalyser, phases 0-6).",
+      "description": "Dynamic guard pipeline settings (ActionOrchestrator, phases 0-6).",
       "additionalProperties": false,
       "properties": {
         "scoring_endpoint": { "type": "string", "default": "", "description": "External scoring API endpoint (Phase 6). Disabled when empty." },

@@ -4,7 +4,7 @@
 /**
  * ScanCache — lightweight in-memory + file-backed cache of scan results.
  *
- * Written by ScanOrchestrator after each scan. Read by RuntimeAnalyser
+ * Written by ScanOrchestrator after each scan. Read by ActionOrchestrator
  * to incorporate prior scan intelligence into guard decisions.
  *
  * Cache file: ~/.nio/scan-cache.json

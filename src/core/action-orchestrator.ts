@@ -2,16 +2,19 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * RuntimeAnalyser — 6-phase dynamic guard pipeline.
+ * ActionOrchestrator — 6-phase dynamic guard pipeline.
  *
- * Executes phases sequentially with short-circuit evaluation:
+ * Orchestrates six phase analysers against an ActionEnvelope, short-
+ * circuiting on critical findings per protection level. "Action" because
+ * inputs are normalized action envelopes (platform-agnostic); each phase
+ * is a distinct analyser sub-class with a uniform .analyse() interface.
  *
- *   Phase 1: Allowlist gate (<1ms)          → allow? exit
- *   Phase 2: RuntimeAnalyser patterns (<5ms) → score a → critical? exit
- *   Phase 3: StaticAnalyser on file (<50ms)  → score b → critical? exit (Write/Edit only)
+ *   Phase 1: AllowlistAnalyser (<1ms)         → allow? exit
+ *   Phase 2: RuntimeAnalyser patterns (<5ms)  → score a → critical? exit
+ *   Phase 3: StaticAnalyser on file (<50ms)   → score b → critical? exit (Write/Edit only)
  *   Phase 4: BehaviouralAnalyser (<200ms)     → score c → critical? exit (Write/Edit .ts/.js only)
- *   Phase 5: LLM (2-10s, optional)          → score d → critical? exit
- *   Phase 6: External API (optional)         → score e
+ *   Phase 5: LLMAnalyser (2-10s, optional)    → score d → critical? exit
+ *   Phase 6: ExternalAnalyser (optional)      → score e
  *   Final:   Weighted aggregate → allow/deny/confirm
  */
 

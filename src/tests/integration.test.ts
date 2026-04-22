@@ -514,7 +514,7 @@ describe('Integration: Configurable guarded_tools', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('should still analyze tools that remain in guarded_tools', async () => {
+  it('should still analyse tools that remain in guarded_tools', async () => {
     ctx = createTestContext({
       guard: {
         guarded_tools: { Bash: 'exec_command', Write: 'write_file' },

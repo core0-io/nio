@@ -5,7 +5,7 @@
  * Prompt templates for the LLM analyser.
  *
  * Uses random delimiters to protect against prompt injection from the
- * analyzed skill code — the same technique used by Cisco skill-scanner.
+ * analysed skill code — the same technique used by Cisco skill-scanner.
  */
 
 import * as crypto from 'crypto';

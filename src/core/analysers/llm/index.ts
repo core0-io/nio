@@ -65,7 +65,7 @@ export class LLMAnalyser extends BaseAnalyser {
 
     const priorFindings = ctx.priorFindings ?? [];
 
-    // Select files to analyze (prioritize files with Phase 1 findings)
+    // Select files to analyse (prioritize files with Phase 1 findings)
     const allFiles = ctx.files.map((f) => ({
       path: f.relativePath,
       content: f.content,

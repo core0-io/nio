@@ -5,7 +5,15 @@
 export {};
 
 /**
- * Nio Action CLI — lightweight wrapper for RuntimeAnalyser.
+ * Nio Action CLI — thin CLI wrapper over ActionOrchestrator.evaluate (Phase 1–6).
+ *
+ * ActionOrchestrator orchestrates multiple analyser sub-classes internally:
+ * AllowlistAnalyser (Phase 1), RuntimeAnalyser (Phase 2), StaticAnalyser
+ * (Phase 3), BehaviouralAnalyser (Phase 4), LLMAnalyser (Phase 5),
+ * ExternalAnalyser (Phase 6). This CLI does NOT run Phase 0 (tool gate) —
+ * Phase 0 lives in hook-engine.ts::evaluateHook, where tool_name +
+ * platform are available. For tool-call-level interception (Phase 0 +
+ * audit logging), use hook-cli instead.
  *
  * Usage:
  *   node action-cli.js evaluate --type <action_type> [action-specific args]

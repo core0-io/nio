@@ -212,7 +212,7 @@ function denyUnavailable(toolName: string): HookOutput {
 }
 
 /**
- * Evaluate a hook event using the RuntimeAnalyser pipeline.
+ * Evaluate a hook event using the ActionOrchestrator pipeline.
  *
  * This is the platform-agnostic core — adapters handle I/O protocol,
  * this function handles security logic via the Phase 0–6 pipeline.
@@ -256,7 +256,7 @@ export async function evaluateHook(
     return { decision: 'allow' };
   }
 
-  // Run RuntimeAnalyser pipeline
+  // Run ActionOrchestrator pipeline (Phase 1-6)
   try {
     const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
     const rd: ActionDecision = await options.nio.orchestrator.evaluate(envelope, level);

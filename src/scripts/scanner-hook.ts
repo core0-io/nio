@@ -9,7 +9,7 @@ export {};
  *
  * Async hook that runs on session startup. Discovers other installed skills
  * in ~/.claude/skills/ and ~/.openclaw/skills/, scans each with the
- * ScanOrchestrator, and writes results to scan-cache for the RuntimeAnalyser
+ * ScanOrchestrator, and writes results to scan-cache for the ActionOrchestrator
  * guard pipeline to consume.
  *
  * Skips skills that are already cached and fresh (< 24h, same hash).

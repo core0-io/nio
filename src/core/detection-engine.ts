@@ -5,7 +5,7 @@
  * Detection Engine — shared pure functions for regex-based pattern matching.
  *
  * Extracted from StaticAnalyser.runPatternPass() so both the static scan
- * pipeline and the dynamic guard (RuntimeAnalyser) can reuse the same logic.
+ * pipeline and the dynamic guard (ActionOrchestrator) can reuse the same logic.
  *
  * Pure functions — no class state, no side effects.
  */
@@ -21,7 +21,7 @@ import { RuleRegistry } from './rule-registry.js';
  * Run regex rules against content and return findings.
  *
  * This is the core detection loop shared by StaticAnalyser (scan) and
- * RuntimeAnalyser (guard). Each rule's patterns are tested line-by-line.
+ * ActionOrchestrator (guard). Each rule's patterns are tested line-by-line.
  */
 export function runRules(
   content: string,

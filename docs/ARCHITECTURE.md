@@ -5,7 +5,7 @@
 Nio is a two-pipeline execution assurance framework for autonomous AI agents:
 
 1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioural + LLM)
-2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyser pipeline
+2. **Dynamic Guard** — Real-time hook protection via 6-phase ActionOrchestrator pipeline
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -18,7 +18,7 @@ Nio is a two-pipeline execution assurance framework for autonomous AI agents:
 
 ┌─────────────────────────────────────────────────────────┐
 │ Dynamic Guard (real-time, every PreToolUse hook)        │
-│   guard-hook → evaluateHook() → RuntimeAnalyser         │
+│   guard-hook → evaluateHook() → ActionOrchestrator      │
 │   → 6-phase pipeline → allow / deny / confirm           │
 └─────────────────────────────────────────────────────────┘
 ```
@@ -28,8 +28,8 @@ Nio is a two-pipeline execution assurance framework for autonomous AI agents:
 ## Dynamic Guard: Phase 0–6 Pipeline
 
 Every `PreToolUse` hook event flows through the guard pipeline.
-Phase 0 is a tool-level gate (in `engine.ts`). Phases 1–6 run in the
-RuntimeAnalyser, each producing a 0–1 score that can short-circuit
+Phase 0 is a tool-level gate (in `hook-engine.ts`). Phases 1–6 run in
+the ActionOrchestrator, each producing a 0–1 score that can short-circuit
 if it exceeds the deny threshold for the active protection level.
 
 ### High-Level Flow
@@ -277,7 +277,7 @@ and functions, then runs language-aware dataflow tracking.
 ### Phase 5: LLM Analysis (2–10s, optional) → `llm`
 
 **Gated on `llm.api_key` in config.** Sends action context to Claude for
-semantic analysis. For Write/Edit, analyzes the file content. For Bash, wraps
+semantic analysis. For Write/Edit, analyses the file content. For Bash, wraps
 the command as a shell script. Reuses the existing `LLMAnalyser` from the scan pipeline.
 
 ### Phase 6: External Scoring API (optional) → `external`
@@ -287,7 +287,7 @@ scores/findings to a user-configured HTTP endpoint. Returns a 0–1 score.
 
 The `ExternalAnalyser` is a standalone module (`src/core/analysers/external/`)
 usable by both pipelines:
-- `scoreAction()` — guard pipeline (RuntimeAnalyser Phase 6)
+- `scoreAction()` — guard pipeline (ActionOrchestrator Phase 6)
 - `scoreScan()` — scan pipeline (ScanOrchestrator post-phase)
 
 ```yaml
@@ -502,7 +502,7 @@ type Language = 'javascript' | 'python' | 'shell' | 'ruby' | 'php' | 'go';
 abstract class BaseAnalyser {
   abstract readonly name: 'static' | 'behavioural' | 'llm';
   abstract readonly phase: 1 | 2;
-  abstract analyze(ctx: AnalysisContext): Promise<Finding[]>;
+  abstract analyse(ctx: AnalysisContext): Promise<Finding[]>;
   isEnabled(policy: ScanPolicy): boolean;
 }
 ```
@@ -689,17 +689,16 @@ src/
 │       │   └── taxonomy.ts           # Threat category mapping
 │       ├── external/                  # ExternalAnalyser (HTTP scorer)
 │       │   └── index.ts              # Dual-pipeline: scoreAction + scoreScan
-│       └── runtime/                   # RuntimeAnalyser (guard pipeline)
-│           ├── index.ts              # 6-phase orchestration
-│           ├── allowlist.ts          # Phase 1: safe command prefixes
-│           ├── denylist.ts           # Phase 2: dangerous patterns
-│           └── decision.ts           # Score → decision (per protection level)
+│       ├── allowlist.ts              # AllowlistAnalyser — Phase 1: safe command prefixes
+│       └── runtime.ts                # RuntimeAnalyser — Phase 2: dangerous patterns
+├── action-orchestrator.ts            # ActionOrchestrator — 6-phase orchestration (guard pipeline)
+├── action-decision.ts                # ActionDecision + GuardDecision + ProtectionLevel helpers
 ├── scanner/                           # SkillScanner public API
 │   ├── index.ts                       # Scan entry point
 │   ├── file-walker.ts                # Directory traversal
 │   └── rules/                        # 15 detection rules
 ├── adapters/                          # Platform integration
-│   ├── engine.ts                     # evaluateHook() — guard entry point
+│   ├── hook-engine.ts                # evaluateHook() — guard entry point (Phase 0 + dispatch)
 │   ├── claude-code.ts                # Claude Code adapter
 │   ├── openclaw.ts                   # OpenClaw adapter
 │   ├── openclaw-plugin.ts            # OpenClaw plugin registration
@@ -712,7 +711,7 @@ src/
 └── scripts/                           # CLI entry points
     ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
     ├── scanner-hook.ts                # SessionStart: scan installed skills
-    ├── action-cli.ts                  # CLI for RuntimeAnalyser
+    ├── action-cli.ts                  # CLI over ActionOrchestrator.evaluate (Phase 1–6)
     ├── config-cli.ts                  # Protection level CLI
     └── collector-hook.ts              # Telemetry collector hook
 ```
@@ -778,7 +777,7 @@ When the slash command is registered this way and the plugin provides a matching
   └─► gateway sends raw text to channel
 ```
 
-The tool handler lives at [src/adapters/openclaw-dispatch.ts](../src/adapters/openclaw-dispatch.ts) and is registered from [src/adapters/openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). It reuses the same APIs as the CLIs (`loadConfig`, `resetConfig`, `RuntimeAnalyser.evaluate`, `SkillScanner.quickScan`, audit-log reader) — there is no duplicated business logic.
+The tool handler lives at [src/adapters/openclaw-dispatch.ts](../src/adapters/openclaw-dispatch.ts) and is registered from [src/adapters/openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). It reuses the same APIs as the CLIs (`loadConfig`, `resetConfig`, `ActionOrchestrator.evaluate`, `SkillScanner.quickScan`, audit-log reader) — there is no duplicated business logic.
 
 Typical latency: **~50 ms**. Output is **structured** (raw JSON or markdown tables) — whatever `dispatchNioCommand` returns is what the channel sees. Zero model tokens consumed.
 

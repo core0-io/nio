@@ -7,7 +7,7 @@
  * A generalized scorer that sends context to a user-configured API and
  * receives a 0-1 score + optional findings. Usable by both pipelines:
  *
- *   - Dynamic Guard (RuntimeAnalyser Phase 6): action context + prior scores
+ *   - Dynamic Guard (ActionOrchestrator Phase 6): action context + prior scores
  *   - Static Scan (ScanOrchestrator): file content + prior findings
  */
 
@@ -23,7 +23,7 @@ export interface ExternalAnalyserOptions {
 
 /** Payload sent to the external endpoint. */
 export interface ExternalScoreRequest {
-  /** What is being analyzed: "action" or "scan" */
+  /** What is being analysed: "action" or "scan" */
   mode: 'action' | 'scan';
   /** Action context (guard pipeline) */
   tool_name?: string;
@@ -62,7 +62,7 @@ export class ExternalAnalyser {
   }
 
   /**
-   * Score an action (guard pipeline — RuntimeAnalyser Phase 6).
+   * Score an action (guard pipeline — ActionOrchestrator Phase 6).
    */
   async scoreAction(
     toolName: string,

@@ -6,7 +6,7 @@
  *
  * Two-pipeline security framework:
  * - Static Scan: On-demand code analysis (ScanOrchestrator → Static + Behavioural + LLM)
- * - Dynamic Guard: Real-time hook protection (RuntimeAnalyser → 6-phase pipeline)
+ * - Dynamic Guard: Real-time hook protection (ActionOrchestrator → 6-phase pipeline)
  */
 
 // Export types
