@@ -21,12 +21,13 @@ import type { LanguageExtractor, ASTExtraction, TaintSource, TaintSink } from '.
 // Re-export shared types for backward compatibility
 export type { TaintSource, TaintSink, ImportInfo, FunctionInfo, ASTExtraction } from './types.js';
 
-// @babel/traverse ships as CJS with a default export.
-// We use createRequire for reliable interop in ESM.
-import { createRequire } from 'module';
-const _require = createRequire(import.meta.url);
+// @babel/traverse ships as CJS. Under different ESM interop modes the default
+// export may be the function itself or an object with a `.default` property.
+// A static import lets the bundler trace and inline it; the `?? defaultImport`
+// fallback handles both shapes at runtime.
+import traverseDefault from '@babel/traverse';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const traverse = _require('@babel/traverse').default as any;
+const traverse = ((traverseDefault as any).default ?? traverseDefault) as any;
 
 // ── Security patterns ────────────────────────────────────────────────────
 
