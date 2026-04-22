@@ -20,7 +20,7 @@ import type { RiskLevel } from '../types/scanner.js';
 import type { Finding } from './models.js';
 import { aggregateRiskLevel } from './models.js';
 import { AllowlistAnalyser } from './analysers/allowlist.js';
-import { analyzeAction, type GuardRulesConfig } from './analysers/runtime.js';
+import { RuntimeAnalyser, type GuardRulesConfig } from './analysers/runtime.js';
 import {
   findingsToScore,
   aggregateScores,
@@ -103,8 +103,8 @@ export class ActionOrchestrator {
   private level: ProtectionLevel;
   private allowlistAnalyser: AllowlistAnalyser;
   private allowlistMode: AllowlistMode;
+  private runtimeAnalyser: RuntimeAnalyser;
   private fileScanRules?: Partial<Record<string, string[]>>;
-  private actionGuardRules?: GuardRulesConfig;
   private llmEnabled: boolean;
   private llmApiKey?: string;
   private llmModel?: string;
@@ -116,8 +116,8 @@ export class ActionOrchestrator {
     this.level = opts?.level ?? 'balanced';
     this.allowlistAnalyser = new AllowlistAnalyser({ allowedCommands: opts?.allowedCommands });
     this.allowlistMode = opts?.allowlistMode ?? 'continue';
+    this.runtimeAnalyser = new RuntimeAnalyser({ actionGuardRules: opts?.actionGuardRules });
     this.fileScanRules = opts?.fileScanRules;
-    this.actionGuardRules = opts?.actionGuardRules;
     this.llmEnabled = opts?.llmEnabled ?? false;
     this.llmApiKey = opts?.llmApiKey;
     this.llmModel = opts?.llmModel;
@@ -165,7 +165,7 @@ export class ActionOrchestrator {
 
     // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
     const t2 = performance.now();
-    const phase2Findings = analyzeAction(envelope, this.actionGuardRules);
+    const phase2Findings = this.runtimeAnalyser.analyse(envelope);
     const t2End = performance.now();
     allFindings.push(...phase2Findings);
     const scoreA = findingsToScore(phase2Findings);

@@ -168,7 +168,7 @@ function checkSecretLeak(content: string, extraPatterns?: string[]): Finding[] {
 
 // ── Main Analysis Functions ─────────────────────────────────────────────
 
-function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
+function analyseBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { command: string; args?: string[]; env?: Record<string, string> };
   const fullCommand = data.args
@@ -385,7 +385,7 @@ function analyzeBashCommand(envelope: ActionEnvelope, extra?: GuardRulesConfig):
   return findings;
 }
 
-function analyzeNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
+function analyseNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { url?: string; method?: string; body_preview?: string };
 
@@ -459,7 +459,7 @@ function analyzeNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfi
   return findings;
 }
 
-function analyzeFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
+function analyseFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
   const data = envelope.action.data as { path?: string; content_preview?: string };
   const filePath = data.path || '';
@@ -497,23 +497,44 @@ function analyzeFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig
   return findings;
 }
 
-// ── Public API ──────────────────────────────────────────────────────────
+// ── RuntimeAnalyser ─────────────────────────────────────────────────────
+
+export interface RuntimeAnalyserOptions {
+  /** User-injected guard rules from config (guard.action_guard_rules). */
+  actionGuardRules?: GuardRulesConfig;
+}
 
 /**
- * Run Phase 2 pattern analysis on an action envelope.
- * Returns Finding[] — empty means no issues found.
+ * Phase 2 analyser: pattern-based action analysis.
+ *
+ * Covers three action types:
+ *   - Bash commands: dangerous commands, fork bombs, metacharacters, base64 decode
+ *   - Network requests: webhook domains, high-risk TLDs, secret leak in body
+ *   - Write/Edit: path traversal, sensitive path detection
+ *
+ * Read operations are passed through (returning no findings) since they
+ * are generally safe at this layer.
  */
-export function analyzeAction(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
-  switch (envelope.action.type) {
-    case 'exec_command':
-      return analyzeBashCommand(envelope, extra);
-    case 'network_request':
-      return analyzeNetworkRequest(envelope, extra);
-    case 'write_file':
-      return analyzeFileOperation(envelope, extra);
-    case 'read_file':
-      return []; // Read operations are generally safe
-    default:
-      return [];
+export class RuntimeAnalyser {
+  private actionGuardRules?: GuardRulesConfig;
+
+  constructor(opts?: RuntimeAnalyserOptions) {
+    this.actionGuardRules = opts?.actionGuardRules;
+  }
+
+  /** Run Phase 2 pattern analysis. Returns Finding[] — empty means no issues. */
+  analyse(envelope: ActionEnvelope): Finding[] {
+    switch (envelope.action.type) {
+      case 'exec_command':
+        return analyseBashCommand(envelope, this.actionGuardRules);
+      case 'network_request':
+        return analyseNetworkRequest(envelope, this.actionGuardRules);
+      case 'write_file':
+        return analyseFileOperation(envelope, this.actionGuardRules);
+      case 'read_file':
+        return []; // Read operations are generally safe
+      default:
+        return [];
+    }
   }
 }
