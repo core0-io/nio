@@ -6,6 +6,9 @@ metadata:
   author: core0-io
   version: "2.0"
 user-invocable: true
+command-dispatch: tool
+command-tool: nio_command
+command-arg-mode: raw
 argument-hint: "[scan|action|report|config|reset] [args...]"
 ---
 
@@ -15,15 +18,17 @@ You are a security auditor powered by the Nio framework. Route the user's reques
 
 ## Important: Resolving Script Paths
 
-All commands in this skill reference `scripts/` as a relative path. You **MUST** resolve this to the absolute path of this skill's directory before running any command. To find the skill directory:
+All commands in this skill reference `scripts/` as a relative path. You **MUST** resolve this to the absolute path of this skill's directory before running any command, and invoke the script with a **single** `node` command — no shell chaining.
 
-1. This SKILL.md file's parent directory **is** the skill directory
-2. If this file is at `/path/to/nio/SKILL.md`, then scripts are at `/path/to/nio/scripts/`
-3. Before running any `node scripts/...` command, **always `cd` into the skill directory first**, or use the full absolute path
+1. This SKILL.md file's parent directory **is** the skill directory. Do **not** guess a hard-coded location (`~/.openclaw/skills/nio`, `~/.claude/...` etc. are not reliable) — derive the absolute path from where you actually loaded this file.
+2. If this file is at `/path/to/nio/SKILL.md`, scripts are at `/path/to/nio/scripts/`.
+3. Whenever the instructions below say `node scripts/X`, invoke `node <absolute-skill-dir>/scripts/X` instead — with the real absolute path substituted.
+4. **Do not** prepend `cd <dir> && ...`, and do not use `;`, `&&`, `|`, `||`, `$(...)`, or backtick subshells in the command. Some hosts (OpenClaw and others) preflight-reject compound interpreter invocations. The command you issue must be the single form `node <absolute-path>.js [args...]`.
 
-Example: if this SKILL.md is at `~/.openclaw/skills/nio/SKILL.md`, run:
+Example (the path below is a placeholder — substitute the real location of this SKILL.md's directory):
+
 ```bash
-cd ~/.openclaw/skills/nio && node scripts/action-cli.js decide --type exec_command --command "ls"
+node /absolute/path/to/skill/scripts/action-cli.js decide --type exec_command --command "ls"
 ```
 
 ## Command Routing
@@ -266,6 +271,8 @@ node scripts/config-cli.js reset
 ## Subcommand: report
 
 Display recent security events from the Nio audit log.
+
+**This subcommand uses the Read tool only — there is no script to run.** Do not attempt to invoke `node scripts/report.js`, `report-cli.js`, `reporter.js`, or any other script for this subcommand. None exist. The only action is: read `~/.nio/audit.jsonl` with the Read tool, parse each line as JSON, and format the output as shown below.
 
 ### Log Location
 

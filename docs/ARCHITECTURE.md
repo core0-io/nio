@@ -734,3 +734,73 @@ Key sections:
 ```bash
 npm install && npm run build && npm test
 ```
+
+## Skill Invocation Models
+
+The same `SKILL.md` file behaves very differently depending on the host. Two distinct invocation contracts exist today.
+
+### LLM-driven (Claude Code)
+
+Claude Code interprets `/nio` by loading `SKILL.md` into the LLM context and letting the model follow the instructions step-by-step.
+
+```text
+/nio config show (Claude Code)
+  │
+  ├─► Claude Code injects SKILL.md into prompt
+  ├─► LLM reasons: "instructions say run node scripts/config-cli.js show"
+  ├─► LLM issues Bash tool call
+  ├─► Claude Code spawns node subprocess, captures stdout (JSON)
+  ├─► LLM reads stdout, composes a human-friendly summary
+  └─► streamed assistant reply
+```
+
+Typical latency: **2–5 seconds**. Output is **narrated** — the LLM rewrites the script's JSON into prose. Every invocation costs tokens (SKILL.md load + reasoning + summary).
+
+### Tool-dispatch (OpenClaw)
+
+OpenClaw supports a frontmatter contract that bypasses the model entirely:
+
+```yaml
+user-invocable: true
+command-dispatch: tool
+command-tool: nio_command
+command-arg-mode: raw
+```
+
+When the slash command is registered this way and the plugin provides a matching tool, the gateway routes the raw args directly to that tool's `execute()` handler and relays its output back to the channel verbatim.
+
+```text
+/nio config show (OpenClaw)
+  │
+  ├─► gateway sees command-dispatch: tool
+  ├─► gateway calls nio_command.execute({ command: "config show", ... })
+  ├─► in-process dispatcher: loadConfig() → JSON.stringify
+  └─► gateway sends raw text to channel
+```
+
+The tool handler lives at [src/adapters/openclaw-dispatch.ts](../src/adapters/openclaw-dispatch.ts) and is registered from [src/adapters/openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). It reuses the same APIs as the CLIs (`loadConfig`, `resetConfig`, `RuntimeAnalyser.evaluate`, `SkillScanner.quickScan`, audit-log reader) — there is no duplicated business logic.
+
+Typical latency: **~50 ms**. Output is **structured** (raw JSON or markdown tables) — whatever `dispatchNioCommand` returns is what the channel sees. Zero model tokens consumed.
+
+### Comparison
+
+|                  | Claude Code (LLM-driven)                                         | OpenClaw (tool-dispatch)             |
+|------------------|------------------------------------------------------------------|--------------------------------------|
+| Latency          | 2–5 s                                                            | ~50 ms                               |
+| Model tokens     | Every call (SKILL.md + reasoning)                                | 0                                    |
+| Output shape     | Narrative summary                                                | Raw JSON / markdown                  |
+| Determinism      | Model may hallucinate paths, skip instructions                   | Deterministic; errors are exceptions |
+| Flexibility      | Model can combine context, answer follow-ups                     | Fixed subcommand router              |
+| Context overflow | Possible on long-running sessions                                | Irrelevant (model not in the loop)   |
+| Preflight issues | LLM may emit compound shell commands that host preflights reject | N/A (no shell)                       |
+
+### When each is right
+
+- **Tool-dispatch** for structured, deterministic commands where the user wants the raw truth: `/nio config show`, `/nio scan <path>`, `/nio report`, `/nio action <...>`. These have clean subcommand grammars and known output shapes.
+- **LLM-driven** for tasks that require interpretation, clarification, or follow-up: "explain what this webhook-exfil finding means and how to mitigate it". Claude Code's path excels here — the model can combine skill output with broader context.
+
+### Co-existence
+
+Both contracts share **one** `SKILL.md`. The tool-dispatch frontmatter keys (`command-dispatch`, `command-tool`, `command-arg-mode`) are additive: hosts that do not implement them (Claude Code today) simply ignore them and fall back to LLM-driven behaviour. Conversely, a host that does implement them (OpenClaw) will only route to `nio_command` if the plugin actually registers a tool of that name — if not, the dispatch fails open to the LLM-driven fallback.
+
+This means we can ship one skill folder to both hosts with no per-host forking, and opt each host into whichever contract it supports.

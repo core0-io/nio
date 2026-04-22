@@ -23,6 +23,8 @@ import type { AuditLifecycleEntry } from './audit-types.js';
 import type { NioInstance } from './types.js';
 import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
 import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
+import { SkillScanner } from '../scanner/index.js';
+import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider, recordToolUse, recordTurn, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
@@ -117,6 +119,17 @@ interface OpenClawRegisterApi {
     handler: (event: unknown, ctx?: unknown) => Promise<unknown> | unknown,
     opts?: { priority?: number }
   ): void;
+  registerTool?(tool: OpenClawToolDefinition): void;
+}
+
+interface OpenClawToolDefinition {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  execute(
+    id: string,
+    params: { command: string; commandName: string; skillName: string },
+  ): Promise<{ content: Array<{ type: 'text'; text: string }> }>;
 }
 
 /**
@@ -495,6 +508,38 @@ export function registerOpenClawPlugin(
       // Non-critical
     }
   });
+
+  // Register the `/nio` slash-command tool (dispatched directly, bypassing the LLM
+  // via SKILL.md's `command-dispatch: tool`).
+  if (typeof api.registerTool === 'function') {
+    const scanner = new SkillScanner({ fileScanRules: guard?.file_scan_rules });
+    api.registerTool({
+      name: 'nio_command',
+      description:
+        'Dispatcher for the /nio slash command. Forwards raw args to the in-process Nio subcommand router (config, action, scan, report, reset).',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: { type: 'string', description: 'Raw args string after /nio' },
+          commandName: { type: 'string' },
+          skillName: { type: 'string' },
+        },
+        required: ['command', 'commandName', 'skillName'],
+      },
+      async execute(_id, params) {
+        try {
+          const text = await dispatchNioCommand(params.command ?? '', {
+            runtimeAnalyser: getNio().runtimeAnalyser,
+            scanner,
+          });
+          return { content: [{ type: 'text', text }] };
+        } catch (err) {
+          const msg = err instanceof Error ? err.stack || err.message : String(err);
+          return { content: [{ type: 'text', text: `[nio_command error] ${msg}` }] };
+        }
+      },
+    });
+  }
 
   logger(`[Nio] Registered with OpenClaw (protection level: ${guard?.protection_level || 'balanced'})`);
 }
