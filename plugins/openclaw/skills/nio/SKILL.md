@@ -1,6 +1,6 @@
 ---
 name: nio
-description: Nio — AI agent security guard. Use for scanning third-party code, blocking dangerous commands, preventing data leaks, and evaluating action safety.
+description: Nio — AI agent execution assurance. Use for evaluating action safety before execution, scanning code for execution risks, and reviewing the agent execution audit log.
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
@@ -12,9 +12,9 @@ command-arg-mode: raw
 argument-hint: "[scan|action|report|config|reset] [args...]"
 ---
 
-# Nio — AI Agent Security Framework
+# Nio — AI Agent Execution Assurance Framework
 
-You are a security auditor powered by the Nio framework. Route the user's request based on the first argument.
+You are an execution assurance evaluator powered by the Nio framework. Route the user's request based on the first argument.
 
 ## Important: Resolving Script Paths
 
@@ -35,9 +35,9 @@ node /absolute/path/to/skill/scripts/action-cli.js decide --type exec_command --
 
 Parse `$ARGUMENTS` to determine the subcommand:
 
-- **`scan <path>`** — Scan a skill or codebase for security risks
-- **`action <description>`** — Evaluate whether a runtime action is safe
-- **`report`** — View recent security events from the audit log
+- **`scan <path>`** — Scan a skill or codebase for execution risks
+- **`action <description>`** — Evaluate whether a runtime action is safe to execute
+- **`report`** — View recent agent execution events from the audit log
 - **`config [show|<level>]`** — View or set protection level
 - **`reset`** — Reset config to defaults
 
@@ -45,11 +45,11 @@ If no subcommand is given, or the first argument is a path, default to **scan**.
 
 ---
 
-# Security Operations
+# Execution Assurance Operations
 
 ## Subcommand: scan
 
-Scan the target path for security risks using all detection rules.
+Scan the target path for execution risks using all detection rules.
 
 ### File Discovery
 
@@ -92,7 +92,7 @@ For each rule, use Grep to search the relevant file types. Record every match wi
 ### Output Format
 
 ```
-## Nio Security Scan Report
+## Nio Execution Risk Scan Report
 
 **Target**: <scanned path>
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
@@ -164,7 +164,7 @@ Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the retu
 - <description of each risk factor found>
 
 ### Recommendation
-<What the user should do and why>
+<What should happen and why — allow the action to proceed, block it, or escalate for human confirmation>
 ```
 
 ---
@@ -187,7 +187,7 @@ View or update the Nio configuration.
 All configuration is stored in `~/.nio/config.yaml` (or `$NIO_HOME/config.yaml`).
 A template with all options is available at `config.default.yaml` in the plugin directory.
 
-Two top-level sections: `guard` (security settings) and `collector` (telemetry settings).
+Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry settings).
 
 ```json
 {
@@ -270,7 +270,7 @@ node scripts/config-cli.js reset
 
 ## Subcommand: report
 
-Display recent security events from the Nio audit log.
+Display recent agent execution events from the Nio audit log.
 
 **This subcommand uses the Read tool only — there is no script to run.** Do not attempt to invoke `node scripts/report.js`, `report-cli.js`, `reporter.js`, or any other script for this subcommand. None exist. The only action is: read `~/.nio/audit.jsonl` with the Read tool, parse each line as JSON, and format the output as shown below.
 
@@ -309,7 +309,7 @@ Old-format lines (without `event` field) are also valid — treat them as guard 
 ### Output Format
 
 ```
-## Nio Security Report
+## Nio Execution Report
 
 **Events**: <total count>
 **Blocked**: <deny count>
@@ -341,8 +341,8 @@ If any events were triggered by skills, group them here:
 | some-skill | 5 | 2 | DANGEROUS_COMMAND, EXFIL_RISK |
 
 ### Summary
-<Brief analysis of security posture and any patterns of concern>
+<Brief analysis of agent execution behaviour and any patterns of concern>
 ```
 
-If the log file doesn't exist, inform the user that no security events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
+If the log file doesn't exist, inform the user that no execution events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
 

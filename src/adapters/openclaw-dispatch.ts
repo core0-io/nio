@@ -229,7 +229,7 @@ async function handleScan(rest: string, scanner: SkillScanner): Promise<string> 
 
 function handleReport(): string {
   if (!existsSync(AUDIT_PATH)) {
-    return `No security events recorded yet.\n\nAudit log: ${AUDIT_PATH}`;
+    return `No execution events recorded yet.\n\nAudit log: ${AUDIT_PATH}`;
   }
 
   let lines: string[];
@@ -239,7 +239,7 @@ function handleReport(): string {
     return `Failed to read audit log: ${err instanceof Error ? err.message : String(err)}`;
   }
 
-  if (lines.length === 0) return 'No security events recorded yet.';
+  if (lines.length === 0) return 'No execution events recorded yet.';
 
   const entries = lines
     .slice(-50)

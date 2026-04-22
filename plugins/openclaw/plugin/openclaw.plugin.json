@@ -1,7 +1,7 @@
 {
   "id": "nio",
   "name": "Nio",
-  "description": "AI agent security framework — blocks dangerous commands, prevents data leaks, and protects secrets",
+  "description": "Execution assurance and observability for autonomous AI agents — real-time evaluation of every agent action before it executes, with full OpenTelemetry telemetry capture.",
   "license": "Apache-2.0",
   "configSchema": {
     "type": "object",

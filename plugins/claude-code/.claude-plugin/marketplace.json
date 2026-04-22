@@ -5,13 +5,13 @@
     "url": "https://github.com/core0-io"
   },
   "metadata": {
-    "description": "Nio — AI agent security framework",
+    "description": "Nio — AI agent execution assurance framework",
     "version": "2.0.0"
   },
   "plugins": [
     {
       "name": "nio",
-      "description": "AI agent security guard. Blocks dangerous commands, prevents data leaks, protects secrets.",
+      "description": "Execution assurance for autonomous AI agents. Real-time evaluation before every action executes.",
       "source": "./",
       "strict": true
     }

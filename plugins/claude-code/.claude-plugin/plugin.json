@@ -1,7 +1,7 @@
 {
   "name": "nio",
   "version": "1.0.0",
-  "description": "Nio — Security and observability for AI coding agents. Dynamic guard, static scan, OTEL collector.",
+  "description": "Nio — Execution assurance and observability for autonomous AI agents. Dynamic guard, static scan, OTEL collector.",
   "author": {
     "name": "core0-io",
     "url": "https://github.com/core0-io"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/core0-io/nio",
   "repository": "https://github.com/core0-io/nio",
   "license": "Apache-2.0",
-  "keywords": ["security", "agent-protection", "claude-code", "scanner", "otel"]
+  "keywords": ["execution-assurance", "agent-observability", "security", "agent-protection", "claude-code", "scanner", "otel"]
 }

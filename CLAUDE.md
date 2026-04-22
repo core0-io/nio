@@ -1,15 +1,15 @@
 # Nio
 
-Security and observability for AI coding agents. Provides code scanning, runtime guard, and OTEL collector.
+Execution assurance and observability for autonomous AI agents. Provides code scanning, runtime guard, and OTEL collector.
 
 ## Skill
 
 This project provides a unified Claude Code skill: `/nio`
 
 ```
-/nio scan <path>          — Scan code for security risks (15 static + 7 behavioural rules)
+/nio scan <path>          — Scan code for execution risks (15 static + 7 behavioural rules)
 /nio action <description> — Evaluate runtime action safety (allow/deny/confirm)
-/nio report               — View security event audit log
+/nio report               — View agent execution audit log
 /nio config <level>       — Set protection level (strict/balanced/permissive)
 ```
 

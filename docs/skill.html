@@ -47,7 +47,7 @@
 /nio &lt;path&gt;                   # shorthand for `scan &lt;path&gt;`</code></pre>
 
         <h2 id="scan"><code>scan &lt;path&gt;</code></h2>
-        <p>Scan a directory or a single file for security risks. Applies 15 static rules + base64 decode pass across all supported file types.</p>
+        <p>Scan a directory or a single file for execution risks. Applies 15 static rules + base64 decode pass across all supported file types.</p>
 
         <h3>Example</h3>
         <pre><code>/nio scan ./src
@@ -86,7 +86,7 @@
         <p>The overall risk level rolls up to the highest severity in any finding: any CRITICAL → <strong>CRITICAL</strong>, else any HIGH → <strong>HIGH</strong>, else any MEDIUM → <strong>MEDIUM</strong>, else <strong>LOW</strong>.</p>
 
         <h3>Output</h3>
-        <pre><code>## Nio Security Scan Report
+        <pre><code>## Nio Execution Risk Scan Report
 
 **Target**: &lt;scanned path&gt;
 **Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
@@ -164,7 +164,7 @@
         </ul>
 
         <h3>Output</h3>
-        <pre><code>## Nio Security Report
+        <pre><code>## Nio Execution Report
 
 **Events**: &lt;count&gt;
 **Blocked**: &lt;deny count&gt;

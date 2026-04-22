@@ -2,7 +2,7 @@
 
 ## Overview
 
-Nio is a two-pipeline security framework for AI agents:
+Nio is a two-pipeline execution assurance framework for autonomous AI agents:
 
 1. **Static Scan** — On-demand multi-engine code analysis (Static + Behavioural + LLM)
 2. **Dynamic Guard** — Real-time hook protection via 6-phase RuntimeAnalyser pipeline

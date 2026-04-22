@@ -44,7 +44,7 @@ export function buildAnalysisPrompt(opts: {
         .join('\n')
     : 'None';
 
-  return `You are a security analyser reviewing AI agent skill code for threats.
+  return `You are an execution risk analyser reviewing AI agent skill code for threats.
 
 ## Instructions
 

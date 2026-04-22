@@ -76,7 +76,7 @@ else
 fi
 
 echo ""
-echo "  Nio — AI Agent Security Guard"
+echo "  Nio — Execution Assurance for AI Agents"
 echo "  ============================================="
 echo ""
 
