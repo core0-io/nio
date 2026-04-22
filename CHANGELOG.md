@@ -1,5 +1,56 @@
 # @core0-io/nio
 
+## 2.0.1
+
+### Patch Changes
+
+- - **GitHub Pages docs site** (78a9bb9) — new `/docs/` tree (getting-started,
+    install guides, skill reference, configuration, pipeline overview + scoring +
+    Phase 0–6 = 15 pages), sticky frosted topbar with GitHub pill, collapsible
+    sidebar driven by a single nav config, mobile hamburger, back-to-top. The
+    home page's protection-level pill becomes a rotating-neon dropdown that
+    re-runs the Phase 0–6 simulation under the selected mode.
+  - **Direct `/nio` slash-command dispatch on OpenClaw** (16636f4) — the OpenClaw
+    adapter now routes `/nio <args>` straight into an in-process subcommand
+    router (`config`, `action`, `scan`, `report`, `reset`), bypassing the LLM
+    so results are immediate and deterministic.
+  - **Version badge auto-sync** (f075c66) — topbar pill + footer version on
+    every GitHub Pages page are now `<a>` links to the matching GitHub release
+    tag, regenerated at build time from `package.json` via
+    `scripts/sync-site-version.js`. `pnpm run build` / `pnpm bump` keep the site
+    in sync without hand edits.
+
+  - **Positioning: execution assurance, not security** (77c1088) — reframed
+    Nio across all user-facing surfaces (README, `skills/nio/{README,SKILL}.md`,
+    `openclaw.plugin.json`, CLAUDE.md, plugin manifests, setup banners, GitHub
+    Pages site, LLM self-prompt, audit-log empty-state strings) from "Security
+    and observability for AI coding agents" to "Execution assurance and
+    observability for autonomous AI agents." The Skill's scan/report/action
+    output headers now read "Nio Execution Risk Scan Report" / "Nio Execution
+    Report". "Defense Pipeline" renamed to "Execution Pipeline" on the docs
+    site. Compatibility table tightened: full hook support is Claude Code +
+    OpenClaw only, other platforms are skill-only.
+  - **Licence: Apache-2.0** (5c07be9, cfc5cc2) — switched from MIT to Apache-2.0
+    and added per-file SPDX headers across the source tree.
+  - **README: self-contained one-liner install blocks** (e0763de) — each
+    platform's install block now stands alone (copy-paste-done), and the
+    redundant "Maintained by" footer was dropped (3c2aa3e).
+  - **Branding: Nio wordmark replaces FFWD logo** (17cede9).
+
+  - **Bundled scanner runs outside the repo** (66b11a9) — inlined
+    `@babel/traverse` into the release bundles so skills/plugins scripts load
+    correctly when extracted to `~/.claude` / `~/.openclaw`, not just in the
+    source checkout.
+
+  - **GitHub Pages font loading** (f1c7973) — fonts externalized out of
+    `index.html` into `assets/` so pages share the same font set without
+    inlining.
+
+  - **E2E skill smoke test split from guard honeypot task** (125e783) — the
+    smoke test now verifies only that each `/nio` subcommand routes and
+    returns a structured response, independent of what the scan/action
+    detectors find.
+
 ## 2.0.0
 
 ### Major Changes
