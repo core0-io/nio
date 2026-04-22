@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { pyExtractor } from '../core/analysers/behavioural/py-extractor.js';
-import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { analyseDataflows } from '../core/analysers/behavioural/dataflow.js';
 import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
@@ -228,7 +228,7 @@ describe('Python Dataflow', () => {
     ].join('\n');
 
     const extraction = pyExtractor.extract(code, 'exfil.py')!;
-    const flows = analyzeDataflows(extraction, code, 'python');
+    const flows = analyseDataflows(extraction, code, 'python');
 
     assert.ok(flows.length > 0, 'Should detect at least one flow');
     const exfil = flows.find(f =>
@@ -246,7 +246,7 @@ describe('Python Dataflow', () => {
     ].join('\n');
 
     const extraction = pyExtractor.extract(code, 'inject.py')!;
-    const flows = analyzeDataflows(extraction, code, 'python');
+    const flows = analyseDataflows(extraction, code, 'python');
 
     assert.ok(flows.length > 0, 'Should detect at least one flow');
     const inject = flows.find(f =>
@@ -264,7 +264,7 @@ describe('Python Dataflow', () => {
     ].join('\n');
 
     const extraction = pyExtractor.extract(code, 'read-send.py')!;
-    const flows = analyzeDataflows(extraction, code, 'python');
+    const flows = analyseDataflows(extraction, code, 'python');
 
     assert.ok(flows.length > 0, 'Should detect file read → network flow');
   });
@@ -280,7 +280,7 @@ describe('Python Dataflow', () => {
     ].join('\n');
 
     const extraction = pyExtractor.extract(code, 'propagate.py')!;
-    const flows = analyzeDataflows(extraction, code, 'python');
+    const flows = analyseDataflows(extraction, code, 'python');
 
     assert.ok(flows.length > 0, 'Should detect flow through assignment chain');
   });
@@ -300,7 +300,7 @@ describe('BehaviouralAnalyser (Python)', () => {
 
     const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('malicious.py', code)],
       policy,
@@ -317,7 +317,7 @@ describe('BehaviouralAnalyser (Python)', () => {
 
     const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [
         makeFile('app.ts', jsCode),
@@ -341,7 +341,7 @@ describe('BehaviouralAnalyser (Python)', () => {
 
     const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('clean.py', code)],
       policy,

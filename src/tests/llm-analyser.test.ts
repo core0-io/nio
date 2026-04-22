@@ -200,7 +200,7 @@ describe('LLMAnalyser', () => {
   it('should return empty findings without API key', async () => {
     const analyser = new LLMAnalyser({ apiKey: undefined });
     const policy = defaultPolicy();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/test',
       files: [{ path: '/test/a.ts', relativePath: 'a.ts', content: 'code', extension: '.ts' }],
       policy,

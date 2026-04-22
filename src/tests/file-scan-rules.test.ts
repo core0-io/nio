@@ -48,7 +48,7 @@ async function scan(
 ): Promise<Finding[]> {
   const analyser = new StaticAnalyser();
   const policy = { ...defaultPolicy(), extra_patterns: extraPatterns };
-  return analyser.analyze({ rootDir: '/scan-root', files, policy });
+  return analyser.analyse({ rootDir: '/scan-root', files, policy });
 }
 
 function hasModuleFinding(findings: Finding[], module: keyof typeof MODULE_RULE_IDS, snippet: string): boolean {

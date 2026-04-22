@@ -21,7 +21,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
+import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import {
   aggregateScores,
   DEFAULT_WEIGHTS,
@@ -29,7 +29,7 @@ import {
 import {
   scoreToDecision,
   shouldShortCircuit,
-} from '../core/analysers/runtime/decision.js';
+} from '../core/action-decision.js';
 import { makeExecEnvelope } from './helpers/envelope.js';
 
 // ── protection_level ────────────────────────────────────────────────────
@@ -49,20 +49,20 @@ describe('guard.protection_level', () => {
   const rules = { system_commands: ['mycorp-sysctl'] };
 
   it('strict blocks a high-severity borderline action (score ~0.675 ≥ 0.5)', async () => {
-    const analyser = new RuntimeAnalyser({ level: 'strict', actionGuardRules: rules });
+    const analyser = new ActionOrchestrator({ level: 'strict', actionGuardRules: rules });
     const result = await analyser.evaluate(systemCmdEnv);
     assert.equal(result.decision, 'deny');
     assert.equal(result.phase_stopped, 2, 'should short-circuit at Phase 2 under strict');
   });
 
   it('balanced asks for confirmation on the same action (0.5 ≤ score < 0.8)', async () => {
-    const analyser = new RuntimeAnalyser({ level: 'balanced', actionGuardRules: rules });
+    const analyser = new ActionOrchestrator({ level: 'balanced', actionGuardRules: rules });
     const result = await analyser.evaluate(systemCmdEnv);
     assert.equal(result.decision, 'confirm');
   });
 
   it('permissive allows the same action (score < 0.9)', async () => {
-    const analyser = new RuntimeAnalyser({ level: 'permissive', actionGuardRules: rules });
+    const analyser = new ActionOrchestrator({ level: 'permissive', actionGuardRules: rules });
     const result = await analyser.evaluate(systemCmdEnv);
     assert.equal(result.decision, 'allow');
   });
@@ -94,7 +94,7 @@ describe('guard.allowed_commands', () => {
   // feature interacts correctly with the short-circuit path. See the
   // `guard.allowlist_mode` describe block below for the default behavior.
   it('allows a user-listed prefix and exits at Phase 1 (exit mode)', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-safe-tool'],
       allowlistMode: 'exit',
     });
@@ -105,7 +105,7 @@ describe('guard.allowed_commands', () => {
   });
 
   it('allows an exact command match', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-exact'],
       allowlistMode: 'exit',
     });
@@ -115,7 +115,7 @@ describe('guard.allowed_commands', () => {
   });
 
   it('does NOT apply when shell metacharacters are present (safety guard)', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-safe-tool'],
       allowlistMode: 'exit',
     });
@@ -128,7 +128,7 @@ describe('guard.allowed_commands', () => {
   });
 
   it('does not exit when prefix does not match', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-safe-tool'],
       allowlistMode: 'exit',
     });
@@ -146,7 +146,7 @@ describe('guard.allowed_commands', () => {
 
 describe('guard.allowlist_mode', () => {
   it('defaults to continue — allowlist match falls through to Phase 2+', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-safe-tool'],
     });
     const result = await analyser.evaluate(makeExecEnvelope('mycorp-safe-tool do thing'));
@@ -157,7 +157,7 @@ describe('guard.allowlist_mode', () => {
   });
 
   it('exit — allowlist match exits at Phase 1', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowedCommands: ['mycorp-safe-tool'],
       allowlistMode: 'exit',
     });
@@ -169,7 +169,7 @@ describe('guard.allowlist_mode', () => {
   it('continue (default) — lets Phase 2 deny a dangerous allowlisted command', async () => {
     // SAFE prefix "ls" + dangerous_patterns match → exit mode would skip
     // Phase 2 and miss the deny. continue mode preserves it.
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: { dangerous_patterns: ['/ls\\s+--secrets/'] },
     });
     const result = await analyser.evaluate(makeExecEnvelope('ls --secrets'));
@@ -179,7 +179,7 @@ describe('guard.allowlist_mode', () => {
   });
 
   it('exit — Phase 2 is bypassed for the same dangerous input', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       allowlistMode: 'exit',
       actionGuardRules: { dangerous_patterns: ['/ls\\s+--secrets/'] },
     });

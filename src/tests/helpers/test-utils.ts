@@ -6,11 +6,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeCodeAdapter } from '../../adapters/claude-code.js';
 import { OpenClawAdapter } from '../../adapters/openclaw.js';
-import { RuntimeAnalyser } from '../../core/analysers/runtime/index.js';
+import { ActionOrchestrator } from '../../core/action-orchestrator.js';
 import type { EngineOptions } from '../../adapters/types.js';
-import type { GuardRulesConfig } from '../../core/analysers/runtime/denylist.js';
+import type { GuardRulesConfig } from '../../core/analysers/runtime.js';
 import type { PhaseWeights } from '../../core/scoring.js';
-import type { ProtectionLevel } from '../../core/analysers/runtime/decision.js';
+import type { ProtectionLevel } from '../../core/action-decision.js';
 
 /**
  * Create an isolated test context with injectable config level.
@@ -36,9 +36,9 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     : levelOrOpts;
 
   const tempDir = mkdtempSync(join(tmpdir(), 'nio-integ-'));
-  // Create an isolated RuntimeAnalyser — no external services, no loadConfig() side effects
+  // Create an isolated ActionOrchestrator — no external services, no loadConfig() side effects
   const nio = {
-    runtimeAnalyser: new RuntimeAnalyser({
+    orchestrator: new ActionOrchestrator({
       level: (opts.level ?? 'balanced') as ProtectionLevel,
       allowedCommands: opts.guard?.allowed_commands,
       allowlistMode: opts.guard?.allowlist_mode,

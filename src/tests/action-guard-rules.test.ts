@@ -21,15 +21,25 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeAction } from '../core/analysers/runtime/denylist.js';
-import type { GuardRulesConfig } from '../core/analysers/runtime/denylist.js';
+import { RuntimeAnalyser } from '../core/analysers/runtime.js';
+import type { GuardRulesConfig } from '../core/analysers/runtime.js';
+import type { ActionEnvelope } from '../types/action.js';
+import type { Finding } from '../core/models.js';
 import {
   makeExecEnvelope,
   makeNetworkEnvelope,
   makeWriteEnvelope,
 } from './helpers/envelope.js';
 
-function hasRule(findings: ReturnType<typeof analyzeAction>, ruleId: string): boolean {
+/**
+ * Helper: instantiate the Phase 2 RuntimeAnalyser with the given user
+ * config and run it. Returns the resulting findings.
+ */
+function analyseAction(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
+  return new RuntimeAnalyser({ actionGuardRules: extra }).analyse(envelope);
+}
+
+function hasRule(findings: Finding[], ruleId: string): boolean {
   return findings.some((f) => f.rule_id === ruleId);
 }
 
@@ -38,17 +48,17 @@ describe('action_guard_rules.dangerous_commands', () => {
   const extra: GuardRulesConfig = { dangerous_commands: ['format c:', 'SHUTDOWN -h'] };
 
   it('matches a user-supplied literal (positive)', () => {
-    const findings = analyzeAction(makeExecEnvelope('format c:'), extra);
+    const findings = analyseAction(makeExecEnvelope('format c:'), extra);
     assert.ok(hasRule(findings, 'DANGEROUS_COMMAND'));
   });
 
   it('is case-insensitive against the command line', () => {
-    const findings = analyzeAction(makeExecEnvelope('Shutdown -h now'), extra);
+    const findings = analyseAction(makeExecEnvelope('Shutdown -h now'), extra);
     assert.ok(hasRule(findings, 'DANGEROUS_COMMAND'));
   });
 
   it('does not match unrelated commands (negative)', () => {
-    const findings = analyzeAction(makeExecEnvelope('echo hello'), extra);
+    const findings = analyseAction(makeExecEnvelope('echo hello'), extra);
     assert.ok(!hasRule(findings, 'DANGEROUS_COMMAND'));
   });
 });
@@ -58,17 +68,17 @@ describe('action_guard_rules.sensitive_commands', () => {
   const extra: GuardRulesConfig = { sensitive_commands: ['cat /vault/', 'gpg --decrypt'] };
 
   it('matches a user-supplied substring (positive)', () => {
-    const findings = analyzeAction(makeExecEnvelope('cat /vault/db-master.key'), extra);
+    const findings = analyseAction(makeExecEnvelope('cat /vault/db-master.key'), extra);
     assert.ok(hasRule(findings, 'SENSITIVE_DATA_ACCESS'));
   });
 
   it('is case-insensitive', () => {
-    const findings = analyzeAction(makeExecEnvelope('GPG --DECRYPT secret.gpg'), extra);
+    const findings = analyseAction(makeExecEnvelope('GPG --DECRYPT secret.gpg'), extra);
     assert.ok(hasRule(findings, 'SENSITIVE_DATA_ACCESS'));
   });
 
   it('does not match unrelated commands (negative)', () => {
-    const findings = analyzeAction(makeExecEnvelope('ls /tmp'), extra);
+    const findings = analyseAction(makeExecEnvelope('ls /tmp'), extra);
     assert.ok(!hasRule(findings, 'SENSITIVE_DATA_ACCESS'));
   });
 });
@@ -78,23 +88,23 @@ describe('action_guard_rules.system_commands', () => {
   const extra: GuardRulesConfig = { system_commands: ['apt-get', 'launchctl'] };
 
   it('matches when entry appears at the start of the command', () => {
-    const findings = analyzeAction(makeExecEnvelope('apt-get install nginx'), extra);
+    const findings = analyseAction(makeExecEnvelope('apt-get install nginx'), extra);
     assert.ok(hasRule(findings, 'SYSTEM_COMMAND'));
   });
 
   it('matches when entry appears after a space (word boundary)', () => {
-    const findings = analyzeAction(makeExecEnvelope('sudo apt-get update'), extra);
+    const findings = analyseAction(makeExecEnvelope('sudo apt-get update'), extra);
     assert.ok(hasRule(findings, 'SYSTEM_COMMAND'));
   });
 
   it('does not match when entry is embedded in a word (negative)', () => {
     // "launchctl" is in config; "foolaunchctl" is not a word-boundary match
-    const findings = analyzeAction(makeExecEnvelope('echo foolaunchctl'), extra);
+    const findings = analyseAction(makeExecEnvelope('echo foolaunchctl'), extra);
     assert.ok(!hasRule(findings, 'SYSTEM_COMMAND'));
   });
 
   it('does not match unrelated commands (negative)', () => {
-    const findings = analyzeAction(makeExecEnvelope('echo hello'), extra);
+    const findings = analyseAction(makeExecEnvelope('echo hello'), extra);
     assert.ok(!hasRule(findings, 'SYSTEM_COMMAND'));
   });
 });
@@ -104,17 +114,17 @@ describe('action_guard_rules.network_commands', () => {
   const extra: GuardRulesConfig = { network_commands: ['aria2c', 'httpie'] };
 
   it('matches when entry appears at the start', () => {
-    const findings = analyzeAction(makeExecEnvelope('aria2c https://example.com/x'), extra);
+    const findings = analyseAction(makeExecEnvelope('aria2c https://example.com/x'), extra);
     assert.ok(hasRule(findings, 'NETWORK_COMMAND'));
   });
 
   it('matches when entry appears after a space', () => {
-    const findings = analyzeAction(makeExecEnvelope('timeout 5 httpie GET example.com'), extra);
+    const findings = analyseAction(makeExecEnvelope('timeout 5 httpie GET example.com'), extra);
     assert.ok(hasRule(findings, 'NETWORK_COMMAND'));
   });
 
   it('does not match when entry is embedded in a word (negative)', () => {
-    const findings = analyzeAction(makeExecEnvelope('echo xaria2cy'), extra);
+    const findings = analyseAction(makeExecEnvelope('echo xaria2cy'), extra);
     assert.ok(!hasRule(findings, 'NETWORK_COMMAND'));
   });
 });
@@ -124,7 +134,7 @@ describe('action_guard_rules.webhook_domains', () => {
   const extra: GuardRulesConfig = { webhook_domains: ['evil.example.com'] };
 
   it('matches the exact hostname', () => {
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeNetworkEnvelope('https://evil.example.com/drop'),
       extra,
     );
@@ -132,7 +142,7 @@ describe('action_guard_rules.webhook_domains', () => {
   });
 
   it('matches any subdomain of the entry', () => {
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeNetworkEnvelope('https://bucket.evil.example.com/drop'),
       extra,
     );
@@ -141,7 +151,7 @@ describe('action_guard_rules.webhook_domains', () => {
 
   it('does not match a sibling domain sharing a suffix (negative)', () => {
     // "notevil.example.com" is NOT a subdomain of "evil.example.com"
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeNetworkEnvelope('https://notevil.example.com/drop'),
       extra,
     );
@@ -149,7 +159,7 @@ describe('action_guard_rules.webhook_domains', () => {
   });
 
   it('does not match unrelated hosts (negative)', () => {
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeNetworkEnvelope('https://safe.example.org/hi'),
       extra,
     );
@@ -163,7 +173,7 @@ describe('action_guard_rules.sensitive_paths', () => {
     // Matcher prepends "/" to the pattern and substring-checks; so "var/secrets/"
     // matches "/var/secrets/master.key" via the "/var/secrets/" fragment.
     const extra: GuardRulesConfig = { sensitive_paths: ['var/secrets/'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/var/secrets/master.key'),
       extra,
     );
@@ -175,7 +185,7 @@ describe('action_guard_rules.sensitive_paths', () => {
     // includes branch, and as an endsWith which almost never hits. Captured
     // here so the footgun is visible in tests.
     const extra: GuardRulesConfig = { sensitive_paths: ['/var/secrets/'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/var/secrets/master.key'),
       extra,
     );
@@ -184,7 +194,7 @@ describe('action_guard_rules.sensitive_paths', () => {
 
   it('matches a ~/-prefix directory (expanded to /HOME/)', () => {
     const extra: GuardRulesConfig = { sensitive_paths: ['raw_files/'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('~/raw_files/tesla_summary.txt'),
       extra,
     );
@@ -193,7 +203,7 @@ describe('action_guard_rules.sensitive_paths', () => {
 
   it('matches a filename suffix via endsWith', () => {
     const extra: GuardRulesConfig = { sensitive_paths: ['.env.prod'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('config/.env.prod'),
       extra,
     );
@@ -205,7 +215,7 @@ describe('action_guard_rules.sensitive_paths', () => {
     // to anchor a directory prefix. Captured here so any future fix to
     // isSensitivePath flips this test intentionally.
     const extra: GuardRulesConfig = { sensitive_paths: ['raw_files/'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('raw_files/foo.txt'),
       extra,
     );
@@ -214,7 +224,7 @@ describe('action_guard_rules.sensitive_paths', () => {
 
   it('does not match unrelated paths (negative)', () => {
     const extra: GuardRulesConfig = { sensitive_paths: ['var/secrets/'] };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/tmp/notes.txt'),
       extra,
     );
@@ -228,7 +238,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['/^\\/abc\\/[^/]+\\/fff/'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/abc/tenant-42/fff'),
       extra,
     );
@@ -239,7 +249,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['/^raw_files\\//'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('raw_files/foo.txt'),
       extra,
     );
@@ -250,7 +260,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['^raw_files/'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('raw_files/foo.txt'),
       extra,
     );
@@ -261,7 +271,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['/\\.env\\.[a-z]+$/i'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/app/.ENV.PROD'),
       extra,
     );
@@ -272,7 +282,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['(unclosed', '/^raw_files\\//'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('raw_files/foo.txt'),
       extra,
     );
@@ -284,7 +294,7 @@ describe('action_guard_rules.sensitive_path_patterns', () => {
     const extra: GuardRulesConfig = {
       sensitive_path_patterns: ['/^\\/abc\\/[^/]+\\/fff/'],
     };
-    const findings = analyzeAction(
+    const findings = analyseAction(
       makeWriteEnvelope('/xyz/tenant-42/data.json'),
       extra,
     );

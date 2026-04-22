@@ -1,6 +1,6 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluateHook } from '../adapters/engine.js';
+import { evaluateHook } from '../adapters/hook-engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { createTestContext } from './helpers/test-utils.js';
 

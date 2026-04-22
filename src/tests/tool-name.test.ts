@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseMcpToolName } from '../adapters/engine.js';
+import { parseMcpToolName } from '../adapters/hook-engine.js';
 
 describe('parseMcpToolName: Claude Code', () => {
   it('parses mcp__server__tool', () => {
