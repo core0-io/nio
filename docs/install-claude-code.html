@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Install · Claude Code — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/claude-code/README.md, plugins/claude-code/setup.sh, root setup.sh -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Install · Claude Code</div>
+        <h1>Install Nio for <em>Claude Code</em>.</h1>
+        <p class="lead">Download the platform zip, run <code>setup.sh</code>, and Nio registers a marketplace + plugin with Claude Code, installs <code>PreToolUse</code> / <code>SessionStart</code> hooks, and writes default config to <code>~/.nio/</code>.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>Requirements</h2>
+        <ul>
+          <li>Claude Code CLI installed and <code>claude</code> on <code>PATH</code></li>
+          <li>Node.js <strong>≥ 18</strong> on <code>PATH</code> (the guard scripts are Node)</li>
+          <li>macOS, Linux, or WSL</li>
+        </ul>
+
+        <h2>Install</h2>
+
+        <h3>One-liner</h3>
+        <pre><code>VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-claude-code-${VERSION}.zip" && \
+unzip -o "nio-claude-code-${VERSION}.zip" -d nio-claude-code && \
+cd nio-claude-code && ./setup.sh</code></pre>
+
+        <h3>Manual</h3>
+        <ol>
+          <li>Grab <code>nio-claude-code-v&lt;version&gt;.zip</code> from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>.</li>
+          <li><code>unzip nio-claude-code-v&lt;version&gt;.zip -d nio-claude-code</code></li>
+          <li><code>cd nio-claude-code &amp;&amp; ./setup.sh</code></li>
+        </ol>
+
+        <p>If you use <strong>both</strong> Claude Code and OpenClaw, grab <code>nio-all-v&lt;version&gt;.zip</code> instead — the bundled <code>setup.sh</code> auto-detects which agents you have and sets up both.</p>
+
+        <h2>What setup.sh does</h2>
+        <ol>
+          <li>Verifies Node.js ≥ 18 is on <code>PATH</code>.</li>
+          <li>Registers the <code>nio</code> marketplace with Claude Code: <code>claude plugin marketplace add &lt;script-dir&gt;</code></li>
+          <li>Installs the plugin: <code>claude plugin install nio@nio</code></li>
+          <li>Syncs scripts + hooks into the CC plugin cache (so re-running the script picks up local edits).</li>
+          <li>Creates <code>~/.nio/</code> and writes <code>config.yaml</code> from the defaults (kept if it already exists, unless you pass <code>--reset-config</code>).</li>
+        </ol>
+
+        <h2>Flags</h2>
+        <table>
+          <thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>--cc-home &lt;path&gt;</code></td><td>Override the Claude Code config dir (default <code>$CLAUDE_CONFIG_DIR</code>, else <code>~/.claude</code>).</td></tr>
+            <tr><td><code>--reset-config</code></td><td>Overwrite <code>~/.nio/config.yaml</code> with the bundled defaults. Use after upgrades that changed the schema.</td></tr>
+            <tr><td><code>--uninstall</code></td><td>Remove the plugin, marketplace entry, and <code>~/.nio/</code> directory.</td></tr>
+            <tr><td><code>-h</code>, <code>--help</code></td><td>Print usage.</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Where things live</h2>
+        <table>
+          <thead><tr><th>Path</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td><code>~/.nio/config.yaml</code></td><td>Guard + collector config. See <a href="configuration.html">Config reference</a>.</td></tr>
+            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL log of guard decisions, scans, and lifecycle events. Read via <code>/nio report</code>.</td></tr>
+            <tr><td><code>~/.nio/metrics.jsonl</code></td><td>Local OTEL metrics dump (when <code>collector.metrics.local = true</code>).</td></tr>
+            <tr><td><code>~/.claude/plugins/…</code></td><td>Plugin cache — managed by Claude Code; don't edit directly.</td></tr>
+          </tbody>
+        </table>
+
+        <p>Set <code>NIO_HOME</code> to move the config/audit/metrics elsewhere (e.g. <code>NIO_HOME=~/Projects/nio-state</code>).</p>
+
+        <h2>Verify</h2>
+        <ol>
+          <li>Open a fresh Claude Code session (hooks take effect on the next session, not the one in flight).</li>
+          <li>In chat, type <code>/nio config show</code> — the current protection level and config path print.</li>
+          <li>Try a scan: <code>/nio scan .</code></li>
+          <li>Make the agent run something benign (<code>ls</code>), then <code>/nio report</code> — the event is there.</li>
+        </ol>
+
+        <div class="callout ok">
+          <div class="title">If <code>/nio</code> isn't available</div>
+          <p>Re-register the marketplace manually:</p>
+          <pre><code>claude plugin marketplace add "$(pwd)"    # inside nio-claude-code/
+claude plugin install nio@nio</code></pre>
+          <p>If the marketplace path is stale (e.g. you moved the unzip folder), <code>setup.sh</code> detects and re-registers it automatically on next run.</p>
+        </div>
+
+        <h2>Upgrade</h2>
+        <p>Download the new zip, run <code>./setup.sh</code>. Existing config is preserved. If the new version changed the schema, add <code>--reset-config</code>.</p>
+
+        <h2>Uninstall</h2>
+        <pre><code>./setup.sh --uninstall</code></pre>
+        <p>Removes the plugin, marketplace entry, and <code>~/.nio/</code>. Safe to re-run.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="getting-started.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Getting Started</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="install-openclaw.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Install · OpenClaw</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

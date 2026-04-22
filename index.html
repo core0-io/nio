@@ -3,6 +3,7 @@
 <meta charset="utf-8">
 <title>Nio — Defense Pipeline</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="assets/shared.css">
 <style>/* cyrillic-ext */
 @font-face {
   font-family: 'Inter';
@@ -507,10 +508,10 @@
     font-family: var(--font-sans);
     font-feature-settings: 'ss01', 'cv11';
     min-height: 100vh;
-    overflow-x: hidden;
+    overflow-x: clip;
   }
 
-  /* subtle grid backdrop */
+  /* subtle grid backdrop — same as shared.css; sits behind all content */
   body::before {
     content: '';
     position: fixed; inset: 0;
@@ -520,24 +521,24 @@
     background-size: 48px 48px;
     mask-image: radial-gradient(ellipse 90% 80% at 50% 40%, black 40%, transparent 100%);
     pointer-events: none;
-    z-index: 0;
+    z-index: -1;
   }
   body.no-grid::before { display: none; }
 
   .app {
-    position: relative; z-index: 1;
-    max-width: 1440px;
+    /* no stacking context — overlay/sidebar must stack at root.
+       padding lives on .topbar / .body-grid (in shared.css). */
+    max-width: 1720px;
     margin: 0 auto;
-    padding: 28px 40px 80px;
+    padding: 0;
   }
 
-  /* top bar */
-  .topbar {
-    display: flex; align-items: center; justify-content: space-between;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--line-soft);
-    margin-bottom: 44px;
-  }
+  /* home-page tweak: stage takes the full main area beside the sidebar */
+  .main { min-width: 0; }
+  /* (the 1660px stage-collapse media query lives at the very end of this
+     style block so it wins over the default `.stage { 2 cols }` rule.) */
+
+  /* top bar — base styles come from shared.css; only keep overrides specific to this page below */
   .brand {
     display: flex; align-items: center; gap: 12px;
     font-family: var(--font-mono);
@@ -562,16 +563,105 @@
     color: var(--fg-2);
   }
   .pill {
-    padding: 4px 10px;
+    height: 24px;
+    padding: 0 10px;
     border: 1px solid var(--line);
     border-radius: 999px;
     background: var(--bg-1);
     display: inline-flex; align-items: center; gap: 6px;
+    line-height: 1;
   }
   .pill .dot {
     width: 6px; height: 6px; border-radius: 50%;
     background: var(--sev-0);
     box-shadow: 0 0 6px var(--sev-0);
+  }
+  /* dropdown styled as a pill — used for the topbar protection selector */
+  .pill-select {
+    appearance: none;
+    -webkit-appearance: none;
+    color: var(--fg-2);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    /* height + line-height inherited from .pill so all pills match */
+    padding: 0 22px 0 10px;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M1 1l3 3 3-3' stroke='%239aa1ad' stroke-width='1.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    transition: border-color .15s ease, color .15s ease, background-color .15s ease;
+  }
+  .pill-select:hover { border-color: var(--fg-3); color: var(--fg-0); background-color: var(--bg-card); }
+  .pill-select:focus { outline: none; border-color: var(--fg-2); }
+  .pill-select option { background: var(--bg-1); color: var(--fg-0); }
+
+  /* Neon-style rotating border around the protection selector.
+     Pattern: wrap has a rotating conic-gradient ::before sitting behind
+     the select; ::after is an opaque inner mask that hides everything
+     except a thin halo of the rotating gradient. Works without @property
+     by simply transform-rotating the ::before. */
+  .pill-select-wrap {
+    position: relative;
+    display: inline-flex;
+    border-radius: 999px;
+    isolation: isolate;
+    overflow: hidden; /* clip the rotating ::before to the pill's rounded shape */
+    --shine-color: var(--sev-2); /* default: balanced (amber) */
+  }
+  /* halo colour follows the selected protection mode */
+  .pill-select-wrap:has(option[value="strict"]:checked)     { --shine-color: var(--sev-6); }
+  .pill-select-wrap:has(option[value="balanced"]:checked)   { --shine-color: var(--sev-2); }
+  .pill-select-wrap:has(option[value="permissive"]:checked) { --shine-color: var(--sev-0); }
+
+  .pill-select-wrap::before {
+    content: '';
+    position: absolute;
+    /* extend well beyond the wrap so a rotating square covers the whole
+       pill — w/h must be >> the pill's dimensions to avoid corner gaps */
+    top: 50%; left: 50%;
+    width: 240%; aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      color-mix(in oklch, var(--shine-color) 60%, transparent) 30deg,
+      var(--shine-color) 60deg,
+      color-mix(in oklch, var(--shine-color) 60%, transparent) 90deg,
+      transparent 130deg,
+      transparent 360deg
+    );
+    animation: pill-shine-spin 3.6s linear infinite;
+    z-index: -2;
+    pointer-events: none;
+    transition: filter .3s ease;
+  }
+  .pill-select-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 1.5px;
+    border-radius: inherit;
+    background: var(--bg-1);
+    z-index: -1;
+    pointer-events: none;
+  }
+  .pill-select-wrap > .pill-select {
+    background-color: transparent;
+    border-color: transparent;
+  }
+  .pill-select-wrap > .pill-select:hover,
+  .pill-select-wrap > .pill-select:focus { background-color: transparent; border-color: transparent; }
+
+  /* selected mode colours the label: strict=red, balanced=amber, permissive=green */
+  #topbar-protection:has(option[value="strict"]:checked)     { color: var(--sev-6); }
+  #topbar-protection:has(option[value="balanced"]:checked)   { color: var(--sev-2); }
+  #topbar-protection:has(option[value="permissive"]:checked) { color: var(--sev-0); }
+
+  @keyframes pill-shine-spin {
+    to { transform: translate(-50%, -50%) rotate(360deg); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .pill-select-wrap::before { animation: none; }
   }
 
   /* hero */
@@ -957,8 +1047,6 @@
 
   /* === right column: detail === */
   .detail {
-    position: sticky;
-    top: 24px;
     border: 1px solid var(--line);
     border-radius: 12px;
     background: var(--bg-1);
@@ -1100,9 +1188,12 @@
 
   /* === scenarios === */
   .scenarios {
+    /* sits at the top of the right column now; no top divider/margin */
+  }
+  /* divider + spacing between scenarios (above) and detail panel (below) */
+  .scenarios + .detail {
     margin-top: 36px;
     border-top: 1px solid var(--line-soft);
-    padding-top: 28px;
   }
   .scenarios h2 {
     margin: 0 0 14px;
@@ -1249,6 +1340,15 @@
     background: var(--sev-0);
   }
 
+  /* The .stage two-col layout needs ~600px per column to fit the pipe
+     (260px tooltip rail + 28px gap + ≥250px layer stack). Below 1660px
+     viewport the right column gets crushed and the pipe layer cards
+     overlap the scenarios/detail panel, so collapse to single col. */
+  @media (max-width: 1660px) {
+    .stage { grid-template-columns: minmax(0, 1fr); }
+    .detail { position: static; }
+  }
+
   @media (max-width: 1100px) {
     .stage { grid-template-columns: 1fr; }
     .hero { grid-template-columns: 1fr; }
@@ -1264,21 +1364,36 @@
 
   <!-- topbar -->
   <div class="topbar">
-    <div class="brand">
-      <div class="brand-mark">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-          <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
-          <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-      </div>
-      <span><b>FFWD</b> <span class="sep">/</span> Nio</span>
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
     </div>
     <div class="topbar-right">
-      <span class="pill"><span class="dot"></span>guard.status: active</span>
-      <span class="pill">protection: balanced</span>
-      <span class="pill">v1.0</span>
+      <span class="pill-select-wrap">
+        <select class="pill pill-select" id="topbar-protection" aria-label="Protection level">
+          <option value="strict">protection: strict</option>
+          <option value="balanced" selected>protection: balanced</option>
+          <option value="permissive">protection: permissive</option>
+        </select>
+      </span>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
     </div>
   </div>
+
+  <div class="body-grid">
+  <aside class="sidebar" data-sidebar></aside>
+  <main class="main">
 
   <!-- hero -->
   <div class="hero">
@@ -1346,19 +1461,22 @@
       </div>
     </div>
 
-    <!-- RIGHT — detail panel + scenarios -->
+    <!-- RIGHT — scenarios on top, phase detail panel below -->
     <div>
-      <div class="detail" id="detail"></div>
       <div class="scenarios">
         <h2>Scenarios — pick a command to simulate</h2>
         <div class="scenario-grid" id="scenarios"></div>
       </div>
+      <div class="detail" id="detail"></div>
     </div>
   </div>
 
   <div class="footer">
-    <span>FFWD.AGENTGUARD // DEFENSE-PIPELINE // PRE_TOOL_USE</span>
+    <span>NIO · DEFENSE-PIPELINE</span>
     <span>weighted avg · runtime 1.0 · static 1.0 · behavioural 2.0 · llm 1.0 · external 2.0</span>
+  </div>
+
+  </main>
   </div>
 </div>
 
@@ -1387,6 +1505,7 @@
   </div>
 </div>
 
+<script src="assets/shared.js"></script>
 <script>
 const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
   "autoplay": true,
@@ -1536,6 +1655,34 @@ const SCENARIOS = [
 ];
 
 const WEIGHTS = { 2: 1.0, 3: 1.0, 4: 2.0, 5: 1.0, 6: 2.0 };
+
+// Protection-level thresholds for the final score.
+//   strict     — deny ≥ 0.5 (no confirm zone)
+//   balanced   — allow < 0.5 · confirm 0.5–0.8 · deny ≥ 0.8
+//   permissive — deny ≥ 0.9 (no confirm zone)
+const THRESHOLDS = {
+  strict:     { allow: 0.5, deny: 0.5 },
+  balanced:   { allow: 0.5, deny: 0.8 },
+  permissive: { allow: 0.9, deny: 0.9 },
+};
+
+function verdictFor(score, protection) {
+  const t = THRESHOLDS[protection] || THRESHOLDS.balanced;
+  if (score < t.allow) return 'allow';
+  if (score >= t.deny) return 'deny';
+  return 'confirm';
+}
+
+// The verdict actually shown for a scenario under the current protection level.
+//   - Short-circuit allow/deny (Phase 0/1 gate, or any phase with a critical
+//     finding) is level-independent — the hardcoded scenario.verdict wins.
+//   - Otherwise (full pipeline ran), derive the verdict from the final
+//     weighted score using THRESHOLDS for the active protection level.
+function actualVerdict(scenario, protection) {
+  if (scenario.shortCircuit) return scenario.verdict;
+  const final = computeFinal(scenario, scenario.verdictAt);
+  return verdictFor(final.value, protection);
+}
 
 function computeFinal(scenario, uptoPhase) {
   const entries = Object.entries(scenario.scores)
@@ -1745,16 +1892,21 @@ function setCalc(scenario, uptoPhase, final) {
 }
 
 // ——— score → color mapping (drives every chromatic cue) ———
-function scoreColor(score) {
-  // score 0 (safe) → sev-0, score 1 (critical) → sev-6
+// Colour is derived from where the score lands relative to the active
+// protection mode's thresholds, so a 0.6 under permissive (allow ≥ 0 < 0.9)
+// reads green while the same 0.6 under strict (deny ≥ 0.5) reads red.
+// Within each verdict band a sub-step adds intensity (light vs deep).
+function scoreColor(score, protection) {
+  const t = THRESHOLDS[protection || (typeof state !== 'undefined' ? state.protection : 'balanced')]
+         || THRESHOLDS.balanced;
   let idx;
-  if (score <= 0.15)      idx = 0;
-  else if (score <= 0.30) idx = 1;
-  else if (score <= 0.45) idx = 2;
-  else if (score <= 0.60) idx = 3;
-  else if (score <= 0.75) idx = 4;
-  else if (score <= 0.90) idx = 5;
-  else                    idx = 6;
+  if (score < t.allow) {
+    idx = score < t.allow * 0.5 ? 0 : 1;        // allow → green ramp
+  } else if (score < t.deny) {
+    idx = score < (t.allow + t.deny) * 0.5 ? 2 : 3; // confirm → amber ramp
+  } else {
+    idx = score < (t.deny + 1) * 0.5 ? 5 : 6;       // deny → red ramp
+  }
   return getComputedStyle(document.documentElement)
     .getPropertyValue('--sev-' + idx).trim();
 }
@@ -1767,16 +1919,23 @@ const DENY_COLOR    = () => getComputedStyle(document.documentElement)
 
 // Resolve the visual color to use for a given phase during the current scenario.
 function phaseVisualColor(scenario, phase) {
-  // if this phase has a score, colour by it
+  // The phase where the verdict is delivered — colour it by the actual
+  // verdict (allow=green, confirm=amber, deny=red), even if it has a
+  // per-phase score. This way the final layer reflects the decision under
+  // the active protection mode, not the engine's per-phase score.
+  if (phase === scenario.verdictAt) {
+    const v = actualVerdict(scenario, state.protection);
+    if (v === 'deny')  return DENY_COLOR();
+    if (v === 'allow') return ALLOW_COLOR();
+    // confirm: keep per-phase score colour if available, else amber via sev-2
+    if (scenario.scores && scenario.scores[phase] != null) {
+      return scoreColor(scenario.scores[phase]);
+    }
+    return getComputedStyle(document.documentElement).getPropertyValue('--sev-2').trim();
+  }
+  // earlier phases — colour by their own per-phase score (or neutral)
   if (scenario.scores && scenario.scores[phase] != null) {
     return scoreColor(scenario.scores[phase]);
-  }
-  // gate phase (no score). If the verdict lands here, use allow/deny colour,
-  // otherwise neutral (gate passed through).
-  if (phase === scenario.verdictAt) {
-    return scenario.verdict === 'deny' ? DENY_COLOR()
-         : scenario.verdict === 'allow' ? ALLOW_COLOR()
-         : NEUTRAL_COLOR();
   }
   return NEUTRAL_COLOR();
 }
@@ -1789,6 +1948,7 @@ function clearTimers() { timers.forEach(t => clearTimeout(t)); timers = []; }
 function resetAnim() {
   clearTimers();
   running = false;
+  lastEval = null;
   document.querySelectorAll('.layer').forEach(el => {
     el.classList.remove('active', 'blocking', 'skipped', 'done');
     el.style.removeProperty('--layer-color');
@@ -1879,17 +2039,25 @@ function getComputedColor(colorVar) {
   return getComputedStyle(document.documentElement).getPropertyValue('--' + m[0].slice(2)).trim();
 }
 
-function finishAnim(dom, layer) {
-  dom.classList.remove('done');
-  dom.classList.add('blocking');
-  const v = currentScenario.verdict;
-  const final = computeFinal(currentScenario, layer.phase);
+// Last finished evaluation — kept so a protection-level change can re-render
+// the verdict box + the final-layer colour without replaying the animation.
+let lastEval = null;
 
-  // allow → verdict phase itself also looks 'done' (green), not a red block
-  if (v === 'allow') {
-    dom.classList.remove('blocking');
-    dom.classList.add('done');
-  }
+function finishAnim(dom, layer) {
+  lastEval = { scenario: currentScenario, dom, layer };
+  applyVerdict();
+  running = false;
+}
+
+function applyVerdict() {
+  if (!lastEval) return;
+  const { scenario, dom, layer } = lastEval;
+  const v = actualVerdict(scenario, state.protection);
+  const final = computeFinal(scenario, layer.phase);
+
+  dom.classList.remove('done', 'blocking');
+  dom.classList.add(v === 'allow' ? 'done' : 'blocking');
+  dom.style.setProperty('--layer-color', phaseVisualColor(scenario, layer.phase));
 
   verdictBox.className = 'verdict-box ' + v;
   if (final.method === 'none') {
@@ -1903,19 +2071,20 @@ function finishAnim(dom, layer) {
     vTitle.textContent = `DENY · blocked at phase ${layer.phase}`;
     vSub.textContent = final.method === 'short-circuit'
       ? `short-circuit · critical finding = max score`
-      : `short-circuit · ${final.method}`;
+      : `${state.protection} · score ≥ ${THRESHOLDS[state.protection].deny}`;
   } else if (v === 'allow') {
     vIcon.textContent = '→';
-    vTitle.textContent = `ALLOW · fast-path at phase ${layer.phase}`;
-    vSub.textContent = 'gate pass · score = 0.00';
+    vTitle.textContent = `ALLOW · pass at phase ${layer.phase}`;
+    vSub.textContent = scenario.shortCircuit
+      ? 'gate pass · score = 0.00'
+      : `${state.protection} · score < ${THRESHOLDS[state.protection].allow}`;
   } else {
     vIcon.textContent = '?';
     vTitle.textContent = `CONFIRM · user decision at phase ${layer.phase}`;
-    vSub.textContent = `full pipeline · weighted avg`;
+    vSub.textContent = `${state.protection} · ${THRESHOLDS[state.protection].allow} ≤ score < ${THRESHOLDS[state.protection].deny}`;
   }
   ttTagEl.textContent = v.toUpperCase();
   statusEl.textContent = `verdict · ${v.toUpperCase()}`;
-  running = false;
 }
 
 // ——— controls ———
@@ -1926,12 +2095,20 @@ document.getElementById('btn-reset').addEventListener('click', resetAnim);
 const state = { ...TWEAK_DEFAULTS };
 function applyState() {
   document.body.classList.toggle('no-grid', !state.showGrid);
-  const protPill = document.querySelector('.topbar-right .pill:nth-child(2)');
-  if (protPill) protPill.textContent = 'protection: ' + state.protection;
+  const topProt = document.getElementById('topbar-protection');
+  if (topProt) topProt.value = state.protection;
   document.getElementById('tw-autoplay').classList.toggle('on', state.autoplay);
   document.getElementById('tw-grid').classList.toggle('on', state.showGrid);
   document.getElementById('tw-speed').value = state.animSpeed;
   document.getElementById('tw-protection').value = state.protection;
+}
+
+// Switching protection mode → restart the simulation so the animation
+// re-plays under the new thresholds.
+function changeProtection(value) {
+  setState({ protection: value });
+  resetAnim();
+  play();
 }
 function setState(patch) {
   Object.assign(state, patch);
@@ -1941,7 +2118,8 @@ function setState(patch) {
 document.getElementById('tw-autoplay').addEventListener('click', () => setState({ autoplay: !state.autoplay }));
 document.getElementById('tw-grid').addEventListener('click', () => setState({ showGrid: !state.showGrid }));
 document.getElementById('tw-speed').addEventListener('input', e => setState({ animSpeed: Number(e.target.value) }));
-document.getElementById('tw-protection').addEventListener('change', e => setState({ protection: e.target.value }));
+document.getElementById('tw-protection').addEventListener('change', e => changeProtection(e.target.value));
+document.getElementById('topbar-protection').addEventListener('change', e => changeProtection(e.target.value));
 document.getElementById('tweaks-close').addEventListener('click', () => {
   document.getElementById('tweaks').classList.remove('open');
 });

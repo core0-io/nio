@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Phase 1 — Allowlist Gate — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../assets/shared.css">
+</head>
+<body>
+<!-- source: index.html LAYERS[1], plugins/shared/skill/ACTION-POLICIES.md (Safe Command Allowlist), plugins/shared/config.default.yaml (allowed_commands, allowlist_mode) -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Pipeline · Phase 1</div>
+        <h1><em>Allowlist Gate</em> — known-safe commands pass instantly.</h1>
+        <p class="lead">Read-only, navigation, and project-scoped commands (<code>git status</code>, <code>ls</code>, <code>npm test</code>, …) match a built-in trie and a user-defined extension list. The match itself is free; what happens next depends on <code>allowlist_mode</code>.</p>
+      </div>
+
+      <div class="doc">
+
+        <table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Latency</td><td>&lt;1ms</td></tr>
+            <tr><td>Scope</td><td>Guarded tools only</td></tr>
+            <tr><td>Type</td><td>Gate (no score emitted)</td></tr>
+            <tr><td>Weight</td><td>—</td></tr>
+            <tr><td>Short-circuit</td><td>match + <code>allowlist_mode: exit</code> → allow · else continue to Phase 2</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Built-in safe commands</h2>
+        <table>
+          <thead><tr><th>Category</th><th>Commands</th></tr></thead>
+          <tbody>
+            <tr><td>Basic</td><td><code>ls</code>, <code>echo</code>, <code>pwd</code>, <code>whoami</code>, <code>date</code>, <code>hostname</code>, <code>uname</code>, <code>tree</code>, <code>du</code>, <code>df</code>, <code>sort</code>, <code>uniq</code>, <code>diff</code>, <code>cd</code></td></tr>
+            <tr><td>Read</td><td><code>cat</code>, <code>head</code>, <code>tail</code>, <code>wc</code>, <code>grep</code>, <code>find</code>, <code>which</code>, <code>type</code></td></tr>
+            <tr><td>File ops</td><td><code>mkdir</code>, <code>cp</code>, <code>mv</code>, <code>touch</code></td></tr>
+            <tr><td>Git</td><td><code>git status</code>, <code>log</code>, <code>diff</code>, <code>branch</code>, <code>show</code>, <code>remote</code>, <code>clone</code>, <code>checkout</code>, <code>pull</code>, <code>fetch</code>, <code>merge</code>, <code>add</code>, <code>commit</code>, <code>push</code></td></tr>
+            <tr><td>Package managers</td><td><code>npm install</code>, <code>npm run</code>, <code>npm test</code>, <code>npm ci</code>, <code>npm start</code>, <code>npx</code>, <code>yarn</code>, <code>pnpm</code>, <code>pip install</code>, <code>pip3 install</code></td></tr>
+            <tr><td>Build &amp; run</td><td><code>node</code>, <code>python</code>, <code>tsc</code>, <code>go build</code>, <code>go run</code>, <code>cargo build</code>, <code>cargo run</code>, <code>cargo test</code>, <code>make</code>, …</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="title">Allowlist is bypassed when shell metacharacters appear</div>
+          <p>An entry in the safe list is allowed <strong>only if</strong> the command contains no shell metacharacters (<code>;</code>, <code>|</code>, <code>&amp;</code>, <code>`</code>, <code>$</code>, <code>(</code>, <code>)</code>, <code>{</code>, <code>}</code>) and accesses no sensitive paths. <code>git status; rm -rf /</code> does NOT match — Phase 2 still runs.</p>
+        </div>
+
+        <h2>Configuration</h2>
+        <ul>
+          <li><a href="../configuration.html#guard.allowed_commands"><code>guard.allowed_commands</code></a> — extra command prefixes treated as safe (additional to the built-ins).</li>
+          <li><a href="../configuration.html#guard.allowlist_mode"><code>guard.allowlist_mode</code></a> — <code>continue</code> (default; record a hint, still run Phases 2–6) or <code>exit</code> (instant allow, skip later phases).</li>
+        </ul>
+
+        <h3>Why <code>continue</code> is the default</h3>
+        <p>So that external/LLM policy in Phases 5–6 can't be bypassed by the built-in safe list. If you don't run external policy and want maximum speed on common commands, switch to <code>exit</code>:</p>
+        <pre><code>guard:
+  allowed_commands: ["pnpm ", "bun "]
+  allowlist_mode: exit</code></pre>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="phase-0-tool-gate.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Phase 0 — Tool Gate</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="phase-2-pattern.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Phase 2 — Pattern</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../../assets/shared.js"></script>
+</body></html>

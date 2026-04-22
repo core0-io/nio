@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Config reference — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/shared/config.default.yaml, plugins/shared/skill/SKILL.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Configuration · Reference</div>
+        <h1>Every field in <em>config.yaml</em>.</h1>
+        <p class="lead">Nio reads <code>~/.nio/config.yaml</code> (or <code>$NIO_HOME/config.yaml</code>). Two top-level sections: <code>guard</code> for the runtime pipeline + scan rules, <code>collector</code> for OTLP telemetry. The bundled template at <code>config.default.yaml</code> has inline comments for every field.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>Where it lives</h2>
+        <ul>
+          <li>Default path: <code>~/.nio/config.yaml</code></li>
+          <li>Override directory: set <code>NIO_HOME</code> environment variable</li>
+          <li>Reset to defaults: <code>/nio reset</code> or <code>setup.sh --reset-config</code></li>
+        </ul>
+        <p>You can edit the file directly or use <code>/nio config &lt;level&gt;</code> to change the protection level without opening an editor.</p>
+
+        <h2>guard</h2>
+
+        <h3 id="guard.protection_level"><code>guard.protection_level</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>balanced</code> · <strong>Values:</strong> <code>strict</code> | <code>balanced</code> | <code>permissive</code></p>
+        <p>Decision aggressiveness. Determines the score thresholds for allow/confirm/deny. See <a href="phases/scoring.html#thresholds">Scoring → thresholds</a> for the full matrix.</p>
+        <pre><code>guard:
+  protection_level: balanced</code></pre>
+
+        <h3 id="guard.confirm_action"><code>guard.confirm_action</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>allow</code> · <strong>Values:</strong> <code>allow</code> | <code>deny</code> | <code>ask</code></p>
+        <p>What to do when the guard's decision is <strong>confirm</strong> but the platform has no interactive prompt (e.g. OpenClaw). <code>allow</code> lets it through and writes a warning to the audit log; <code>deny</code> blocks; <code>ask</code> uses the platform confirm if available, else falls back to <code>allow</code>.</p>
+
+        <h3 id="guard.file_scan_rules"><code>guard.file_scan_rules</code></h3>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> all empty arrays</p>
+        <p>Extra regex patterns added to the named scan module. Keys are module names; values are arrays of regex pattern strings. Modules:</p>
+        <ul>
+          <li><code>shell_exec</code> — feeds <code>SHELL_EXEC</code> [high] and <code>AUTO_UPDATE</code> [critical]</li>
+          <li><code>remote_loader</code> — feeds <code>REMOTE_LOADER</code> [critical]</li>
+          <li><code>secrets</code> — feeds <code>READ_ENV_SECRETS</code> [med], <code>READ_SSH_KEYS</code>/<code>READ_KEYCHAIN</code>/<code>PRIVATE_KEY_PATTERN</code> [critical]</li>
+          <li><code>obfuscation</code> — feeds <code>OBFUSCATION</code> [high]</li>
+          <li><code>prompt_injection</code> — feeds <code>PROMPT_INJECTION</code> [critical]</li>
+          <li><code>exfiltration</code> — feeds <code>NET_EXFIL_UNRESTRICTED</code> [high], <code>WEBHOOK_EXFIL</code> [critical]</li>
+          <li><code>trojan</code> — feeds <code>TROJAN_DISTRIBUTION</code> [critical], <code>SUSPICIOUS_PASTE_URL</code> [high], <code>SUSPICIOUS_IP</code>/<code>SOCIAL_ENGINEERING</code> [med]</li>
+        </ul>
+        <pre><code>guard:
+  file_scan_rules:
+    shell_exec:
+      - "my_unsafe_exec\\("
+    remote_loader:
+      - "loadFromCDN\\("</code></pre>
+
+        <h3 id="guard.action_guard_rules"><code>guard.action_guard_rules</code></h3>
+        <p><strong>Type:</strong> object</p>
+        <p>Extra patterns for Phase 2 runtime action analysis. Two field shapes:</p>
+        <ul>
+          <li><strong>String fields</strong> — plain strings, matched as described per field (case-insensitive substring / prefix / domain suffix). No regex metacharacters, no escaping.</li>
+          <li><strong>Regex fields</strong> — names ending in <code>_patterns</code>. Each entry is either a bare regex string or the <code>/pattern/flags</code> form (flags: g i m s u y). YAML requires backslashes to be escaped — write <code>\\d</code>, <code>\\/</code>, <code>\\.</code> inside quotes.</li>
+        </ul>
+        <p>All fields <strong>extend</strong> the built-in detection lists; they never replace them. Every match produces a Phase 2 finding at the severity shown in [brackets].</p>
+
+        <h4 id="guard.action_guard_rules.dangerous_commands"><code>dangerous_commands</code> [critical]</h4>
+        <p>Case-insensitive substring match against the full command line. Use for fixed literal fragments to hard-block.</p>
+        <pre><code>action_guard_rules:
+  dangerous_commands: ["format c:", "shutdown -h now"]</code></pre>
+
+        <h4 id="guard.action_guard_rules.dangerous_patterns"><code>dangerous_patterns</code> [critical]</h4>
+        <p>Regex against the full command line. Use when you need alternation, anchors, or character classes.</p>
+        <pre><code>action_guard_rules:
+  dangerous_patterns:
+    - "/rm\\s+-rf\\s+\\//"
+    - "/curl\\s+.*\\|\\s*(ba)?sh/i"</code></pre>
+
+        <h4 id="guard.action_guard_rules.sensitive_commands"><code>sensitive_commands</code> [high]</h4>
+        <p>Commands that read sensitive data. Case-insensitive substring match. Built-ins already cover <code>/etc/passwd</code>, <code>~/.ssh</code>, <code>~/.aws</code>, <code>printenv</code>, etc.</p>
+
+        <h4 id="guard.action_guard_rules.system_commands"><code>system_commands</code> [high]</h4>
+        <p>Word-boundary match on the program name (start of line or after a space). Add a trailing space for short names to prevent prefix hits (e.g. <code>"su "</code> not <code>"su"</code>).</p>
+
+        <h4 id="guard.action_guard_rules.network_commands"><code>network_commands</code> [medium]</h4>
+        <p>Same word-boundary rule. Flags any use regardless of target.</p>
+
+        <h4 id="guard.action_guard_rules.webhook_domains"><code>webhook_domains</code> [high]</h4>
+        <p>Hostnames matched exactly OR as suffix (<code>foo.example.com</code> is covered by <code>example.com</code>). No scheme, no path, no port.</p>
+        <pre><code>webhook_domains: ["webhook.site", "requestbin.net", "ngrok-free.app"]</code></pre>
+
+        <h4 id="guard.action_guard_rules.sensitive_paths"><code>sensitive_paths</code> [critical]</h4>
+        <p>Substring match with a specific convention: the matcher prepends <code>/</code> to each pattern and tests <code>normalized.includes("/" + pattern) || normalized.endsWith(pattern)</code>. Input is normalized first: <code>~/</code> expands to <code>/HOME/</code>, backslashes become forward slashes.</p>
+        <p>Two supported shapes:</p>
+        <ul>
+          <li><strong>Directory fragment</strong> — DO NOT include a leading slash; the matcher adds one. Use <code>etc/</code>, <code>raw_files/</code>, <code>.ssh/</code>. Writing <code>/etc/</code> is a common mistake — it becomes <code>//etc/</code> internally and almost never matches.</li>
+          <li><strong>Filename suffix</strong> — matched via <code>endsWith</code> (e.g. <code>.env</code>, <code>id_rsa</code>, <code>credentials.json</code>, <code>.env.prod</code>).</li>
+        </ul>
+        <div class="callout warn">
+          <div class="title">Known gap</div>
+          <p>A bare relative path like <code>raw_files/foo.txt</code> (no leading <code>/</code>) does NOT match a <code>raw_files/</code> pattern. Use <code>sensitive_path_patterns</code> with <code>"/^raw_files\\//"</code> for that.</p>
+        </div>
+
+        <h4 id="guard.action_guard_rules.sensitive_path_patterns"><code>sensitive_path_patterns</code> [critical]</h4>
+        <p>Regex against the same normalized path. Use for dynamic segments, relative paths, or flag-based matching.</p>
+        <pre><code>sensitive_path_patterns:
+  - "/^\\/abc\\/[^/]+\\/def/"   # /abc/&lt;id&gt;/def
+  - "/^raw_files\\//"           # bare relative paths
+  - "/\\.env\\.[a-z]+$/i"       # .env.prod, .env.staging</code></pre>
+
+        <h4 id="guard.action_guard_rules.secret_patterns"><code>secret_patterns</code> [high]</h4>
+        <p>Regex against HTTP request body previews on <code>network_request</code> actions. Use for internal token formats the built-in detector doesn't know about.</p>
+        <pre><code>secret_patterns:
+  - "/ACME_[A-Z0-9]{32}/"
+  - "/internal-token:\\s*[\\w-]+/i"</code></pre>
+
+        <h3 id="guard.llm_analyser"><code>guard.llm_analyser</code></h3>
+        <p><strong>Type:</strong> object</p>
+        <p>Phase 5 — semantic analysis using Claude. Disabled by default. Requires an Anthropic API key.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Master switch.</td></tr>
+            <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Anthropic API key.</td></tr>
+            <tr><td><code>model</code></td><td>string</td><td><code>"claude-sonnet-4-20250514"</code></td><td>Model identifier.</td></tr>
+            <tr><td><code>max_input_tokens</code></td><td>number</td><td><code>50000</code></td><td>Per-scan input budget.</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="guard.external_analyser"><code>guard.external_analyser</code></h3>
+        <p><strong>Type:</strong> object</p>
+        <p>Phase 6 — external scoring API. Disabled by default. Requires an endpoint.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Master switch.</td></tr>
+            <tr><td><code>endpoint</code></td><td>string</td><td><code>""</code></td><td>HTTP URL. Use <code>http://localhost:9090</code> for the bundled mock.</td></tr>
+            <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Bearer token (optional).</td></tr>
+            <tr><td><code>timeout</code></td><td>number</td><td><code>3000</code></td><td>Request timeout (ms).</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="guard.allowed_commands"><code>guard.allowed_commands</code></h3>
+        <p><strong>Type:</strong> string[] · <strong>Default:</strong> <code>[]</code></p>
+        <p>Phase 1 allowlist. Command prefixes treated as safe — additional to the built-in list (<code>ls</code>, <code>git status</code>, <code>npm test</code>, etc.).</p>
+        <pre><code>allowed_commands: ["npm run", "pnpm "]</code></pre>
+
+        <h3 id="guard.allowlist_mode"><code>guard.allowlist_mode</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>continue</code> · <strong>Values:</strong> <code>continue</code> | <code>exit</code></p>
+        <p>What happens when a command matches an allowlist entry. <code>continue</code> records a hint but still runs Phases 2–6 (so external/LLM policy can't be bypassed). <code>exit</code> returns immediately — fastest path, skips later phases.</p>
+
+        <h3 id="guard.available_tools"><code>guard.available_tools</code></h3>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], mcp: [] }</code></p>
+        <p>Phase 0 allowlist, per platform. When non-empty for a platform, ONLY listed tools are available to the agent. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
+        <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive. The <code>mcp</code> list also catches <code>mcporter</code>-style shell invocations (<code>Bash</code>/<code>exec</code> commands containing <code>mcporter &lt;server&gt;.&lt;tool&gt;</code>, with or without the <code>call</code> verb, <code>npx</code>/<code>bunx</code> prefixes, flags, or function-call syntax).</p>
+
+        <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], mcp: [] }</code></p>
+        <p>Same shape as <code>available_tools</code>; listed tools are unconditionally blocked. <code>mcp</code> covers MCP tools on every platform in one place.</p>
+
+        <h3 id="guard.guarded_tools"><code>guard.guarded_tools</code></h3>
+        <p><strong>Type:</strong> object</p>
+        <p>Per-platform tool → action type mapping. Tools listed here enter Phases 1–6 deep analysis. Other tools pass through Phase 0 only (if allowed) and are auto-approved.</p>
+        <pre><code>guarded_tools:
+  claude_code:
+    Bash: exec_command
+    Write: write_file
+    Edit: write_file
+    WebFetch: network_request
+    WebSearch: network_request
+  openclaw:
+    exec: exec_command
+    write: write_file
+    web_fetch: network_request
+    browser: network_request</code></pre>
+
+        <h3 id="guard.scoring_weights"><code>guard.scoring_weights</code></h3>
+        <p><strong>Type:</strong> object</p>
+        <p>Per-phase weights for the final score aggregation. <code>final = Σ(wi × si) / Σ(wi)</code> across phases that ran.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Default</th><th>Phase</th></tr></thead>
+          <tbody>
+            <tr><td><code>runtime</code></td><td><code>1.0</code></td><td>Phase 2 — pattern matching</td></tr>
+            <tr><td><code>static</code></td><td><code>1.0</code></td><td>Phase 3 — static rules on file content</td></tr>
+            <tr><td><code>behavioural</code></td><td><code>2.0</code></td><td>Phase 4 — AST dataflow</td></tr>
+            <tr><td><code>llm</code></td><td><code>1.0</code></td><td>Phase 5 — LLM semantic</td></tr>
+            <tr><td><code>external</code></td><td><code>2.0</code></td><td>Phase 6 — external scoring API</td></tr>
+          </tbody>
+        </table>
+
+        <hr>
+
+        <h2>collector</h2>
+        <p>Telemetry. Disabled when <code>endpoint</code> is empty AND all local options are off.</p>
+
+        <h3 id="collector.endpoint"><code>collector.endpoint</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>"http://localhost:4318"</code></p>
+        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal.</p>
+
+        <h3 id="collector.api_key"><code>collector.api_key</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code></p>
+        <p>Bearer token for OTLP endpoint authentication.</p>
+
+        <h3 id="collector.timeout"><code>collector.timeout</code></h3>
+        <p><strong>Type:</strong> number · <strong>Default:</strong> <code>5000</code></p>
+        <p>OTLP export timeout in milliseconds.</p>
+
+        <h3 id="collector.protocol"><code>collector.protocol</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>http</code> · <strong>Values:</strong> <code>http</code> | <code>grpc</code></p>
+        <p>Transport. <code>http</code> uses HTTP/JSON on port 4318; <code>grpc</code> uses gRPC on port 4317.</p>
+
+        <h3 id="collector.metrics"><code>collector.metrics</code></h3>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>OTLP metrics export.</td></tr>
+            <tr><td><code>local</code></td><td>boolean</td><td><code>true</code></td><td>Also write to local JSONL.</td></tr>
+            <tr><td><code>log</code></td><td>string</td><td><code>"~/.nio/metrics.jsonl"</code></td><td>Local file path. Supports <code>~/</code>.</td></tr>
+            <tr><td><code>max_size_mb</code></td><td>number</td><td><code>100</code></td><td>Rotation threshold; <code>0</code> disables rotation.</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="collector.traces"><code>collector.traces</code></h3>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Spans for tool calls, turns, tasks.</td></tr>
+          </tbody>
+        </table>
+
+        <h3 id="collector.logs"><code>collector.logs</code></h3>
+        <table>
+          <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>OTEL Logs export.</td></tr>
+            <tr><td><code>local</code></td><td>boolean</td><td><code>true</code></td><td>Local JSONL backup.</td></tr>
+            <tr><td><code>path</code></td><td>string</td><td><code>"~/.nio/audit.jsonl"</code></td><td>The file <code>/nio report</code> reads.</td></tr>
+            <tr><td><code>max_size_mb</code></td><td>number</td><td><code>100</code></td><td>Rotation threshold.</td></tr>
+          </tbody>
+        </table>
+
+        <hr>
+
+        <h2 id="env">Environment variables</h2>
+        <table>
+          <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td><code>NIO_HOME</code></td><td><code>~/.nio</code></td><td>Where Nio reads <code>config.yaml</code>, writes audit log + metrics.</td></tr>
+            <tr><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>~/.claude</code></td><td>Used by <code>setup.sh --cc-home</code> resolution.</td></tr>
+            <tr><td><code>OPENCLAW_STATE_DIR</code></td><td><code>~/.openclaw</code></td><td>Used by <code>setup.sh --openclaw-home</code> resolution.</td></tr>
+          </tbody>
+        </table>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="skill.html">
+          <span class="dir">← Prev</span>
+          <span class="label">/nio commands</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="phases/" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Pipeline overview</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

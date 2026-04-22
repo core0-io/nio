@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Pipeline — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../assets/shared.css">
+</head>
+<body>
+<!-- source: index.html LAYERS constant, docs/ARCHITECTURE.md, plugins/shared/skill/SKILL.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Pipeline · Overview</div>
+        <h1>Seven phases decide the fate of every <em>tool call</em>.</h1>
+        <p class="lead">Every <code>PreToolUse</code> event enters at Phase 0 and descends through gates and scoring engines. Phases 0–1 are fast gates; 2–6 are scoring engines. The pipeline short-circuits the moment any phase lands a critical finding; otherwise the final score is a <a href="scoring.html">weighted average</a> across every engine that ran.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>The phases</h2>
+        <ul>
+          <li><strong>Gates</strong> (<a href="phase-0-tool-gate.html">0</a>, <a href="phase-1-allowlist.html">1</a>) — match / no-match, no score. Short-circuit with <em>allow</em> or <em>deny</em>.</li>
+          <li><strong>Scoring engines</strong> (<a href="phase-2-pattern.html">2</a>, <a href="phase-3-static.html">3</a>, <a href="phase-4-behavioural.html">4</a>, <a href="phase-5-llm.html">5</a>, <a href="phase-6-external.html">6</a>) — produce a 0–1 score. A critical finding in any of them short-circuits the pipeline with <em>deny</em>.</li>
+        </ul>
+
+        <table>
+          <thead><tr><th>Phase</th><th>Name</th><th>Latency</th><th>Runs on</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td><a href="phase-0-tool-gate.html">Tool Gate</a></td><td>&lt;1ms</td><td>All tools</td></tr>
+            <tr><td>1</td><td><a href="phase-1-allowlist.html">Allowlist Gate</a></td><td>&lt;1ms</td><td>Guarded tools</td></tr>
+            <tr><td>2</td><td><a href="phase-2-pattern.html">Pattern Analysis</a></td><td>&lt;5ms</td><td>Guarded tools</td></tr>
+            <tr><td>3</td><td><a href="phase-3-static.html">Static Analysis</a></td><td>&lt;50ms</td><td>Write/Edit only</td></tr>
+            <tr><td>4</td><td><a href="phase-4-behavioural.html">Behavioural</a></td><td>&lt;200ms</td><td>Write/Edit (JS/TS/Py/Sh/Rb/PHP/Go)</td></tr>
+            <tr><td>5</td><td><a href="phase-5-llm.html">LLM</a></td><td>2–10s</td><td>Optional (needs API key)</td></tr>
+            <tr><td>6</td><td><a href="phase-6-external.html">External Scoring</a></td><td>configurable</td><td>Optional (needs endpoint)</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Scope narrows as latency rises</h2>
+        <p>Phases 3 and 4 only run on <code>Write</code> / <code>Edit</code> actions because they need file content to analyse. Phases 5 and 6 are off by default — turn them on for extra coverage at the cost of a synchronous Claude API call or an HTTP hop to your policy service.</p>
+
+        <h2>Short-circuit rules</h2>
+        <ul>
+          <li><strong>Phase 0</strong>: blocked → deny; available (no guard) → allow; guarded → fall through to Phase 1.</li>
+          <li><strong>Phase 1</strong>: matched AND <code>allowlist_mode: exit</code> → allow. <code>allowlist_mode: continue</code> (default) records a hint but still runs 2–6.</li>
+          <li><strong>Phases 2–6</strong>: any CRITICAL finding → deny immediately. Otherwise each phase contributes a score.</li>
+          <li>If no phase short-circuits, the <strong>weighted average</strong> of scored phases determines the decision.</li>
+        </ul>
+
+        <h2>Visualize it</h2>
+        <p>The <a href="../../index.html">home page</a> is an interactive demo of the pipeline — pick a scenario (safe, critical, risky) and watch the packet descend through each phase, with tooltips, scores, and the final verdict.</p>
+
+        <h2>Next</h2>
+        <ul>
+          <li><a href="scoring.html">Scoring →</a> how per-phase scores combine into an allow / confirm / deny decision.</li>
+          <li><a href="phase-0-tool-gate.html">Phase 0 — Tool Gate →</a></li>
+        </ul>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="../configuration.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Config reference</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="scoring.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Scoring</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../../assets/shared.js"></script>
+</body></html>

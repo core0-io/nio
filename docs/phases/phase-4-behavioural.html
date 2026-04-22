@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Phase 4 — Behavioural Analysis — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../assets/shared.css">
+</head>
+<body>
+<!-- source: index.html LAYERS[4], plugins/claude-code/README.md (Behavioural Rules + Multi-Language) -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Pipeline · Phase 4</div>
+        <h1><em>Behavioural Analysis</em> — source → sink dataflow.</h1>
+        <p class="lead">Phase 4 parses the file (Babel AST for JS/TS, regex extractors for the rest) and tracks how data flows from sources (env vars, file reads, network responses) to sinks (network sends, command exec, eval). Catches what regex misses — like a secret read in one statement that's exfiltrated in another.</p>
+      </div>
+
+      <div class="doc">
+
+        <table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Latency</td><td>&lt;200ms</td></tr>
+            <tr><td>Scope</td><td>Write / Edit · 6 languages</td></tr>
+            <tr><td>Engine</td><td>BehaviouralAnalyser · 7 dataflow rules</td></tr>
+            <tr><td>Score weight</td><td><code>scoring_weights.behavioural</code> — default <strong>2.0</strong> (heaviest)</td></tr>
+            <tr><td>Short-circuit</td><td>any CRITICAL finding → deny immediately</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Languages</h2>
+        <table>
+          <thead><tr><th>Language</th><th>Parser</th><th>Extensions</th></tr></thead>
+          <tbody>
+            <tr><td>JavaScript / TypeScript</td><td>Babel AST</td><td>.js .ts .jsx .tsx .mjs .cjs</td></tr>
+            <tr><td>Python</td><td>Regex</td><td>.py .pyw</td></tr>
+            <tr><td>Shell</td><td>Regex</td><td>.sh .bash .zsh .fish .ksh</td></tr>
+            <tr><td>Ruby</td><td>Regex</td><td>.rb .rake .gemspec</td></tr>
+            <tr><td>PHP</td><td>Regex</td><td>.php .phtml</td></tr>
+            <tr><td>Go</td><td>Regex</td><td>.go</td></tr>
+          </tbody>
+        </table>
+
+        <h2>The 7 dataflow rules</h2>
+        <table>
+          <thead><tr><th>Rule</th><th>Severity</th><th>Detection</th></tr></thead>
+          <tbody>
+            <tr><td><code>DATAFLOW_EXFIL</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Secret or credential flows to a network sink</td></tr>
+            <tr><td><code>DATAFLOW_RCE</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Network response flows to <code>eval</code> / <code>exec</code></td></tr>
+            <tr><td><code>DATAFLOW_CMD_INJECT</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>User input flows to a command execution sink</td></tr>
+            <tr><td><code>DATAFLOW_EVAL</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Data flows to <code>eval</code> / <code>Function</code> constructor</td></tr>
+            <tr><td><code>CAPABILITY_C2</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Skill/file has both exec + network capabilities</td></tr>
+            <tr><td><code>CAPABILITY_EVAL</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Skill/file uses dynamic code evaluation</td></tr>
+            <tr><td><code>CROSS_FILE_FLOW</code></td><td><span class="card-head"><span class="tag sev-med">MED</span></span></td><td>Data crosses file boundaries</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Why it's the heaviest weight</h2>
+        <p>Dataflow tracking has very low false-positive rates compared to regex — a match means there's actually a path from a sensitive source to a dangerous sink in the parsed AST. That's why <a href="../configuration.html#guard.scoring_weights"><code>scoring_weights.behavioural</code></a> defaults to <strong>2.0</strong> (vs 1.0 for runtime/static/llm). Turn it down only if you trust your code reviewers more than the analyser.</p>
+
+        <h2>Example</h2>
+        <pre><code># leak.py
+key = os.environ["API_KEY"]              # source
+requests.post(url, data=key)             # sink
+
+DATAFLOW_EXFIL · 0.88</code></pre>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="phase-3-static.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Phase 3 — Static</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="phase-5-llm.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Phase 5 — LLM</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../../assets/shared.js"></script>
+</body></html>

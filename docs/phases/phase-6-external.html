@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Phase 6 — External Scoring API — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../../assets/shared.css">
+</head>
+<body>
+<!-- source: index.html LAYERS[6], plugins/shared/config.default.yaml (external_analyser) -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Pipeline · Phase 6</div>
+        <h1><em>External Scoring</em> — your enterprise policy gets the final word.</h1>
+        <p class="lead">Optional. When enabled, Nio POSTs the action context to your HTTP endpoint and uses the returned score in the weighted average. Use this for compliance routing (HIPAA, SOC2), DLP integration, or any policy specific to your org that doesn't belong in shared rules.</p>
+      </div>
+
+      <div class="doc">
+
+        <table>
+          <thead><tr><th>Property</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td>Latency</td><td>configurable (HTTP timeout)</td></tr>
+            <tr><td>Scope</td><td>All guarded actions (when enabled)</td></tr>
+            <tr><td>Score weight</td><td><code>scoring_weights.external</code> — default <strong>2.0</strong> (tie-breaker)</td></tr>
+            <tr><td>Default state</td><td><strong>disabled</strong> — needs explicit enable + endpoint</td></tr>
+            <tr><td>Short-circuit</td><td>any CRITICAL finding → deny immediately</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Enable</h2>
+        <pre><code>guard:
+  external_analyser:
+    enabled: true
+    endpoint: "https://policy.internal.example.com/score"
+    api_key: "..."           # optional Bearer token
+    timeout: 3000            # ms</code></pre>
+
+        <p>See <a href="../configuration.html#guard.external_analyser"><code>guard.external_analyser</code></a>.</p>
+
+        <p>For local development, the repo bundles a mock scorer at <code>http://localhost:9090</code>.</p>
+
+        <h2>Wire format</h2>
+        <p>Nio sends a <code>POST</code> to <code>endpoint</code> with the action context and expects a JSON response with at least a <code>score</code> field in [0, 1]. Response example:</p>
+        <pre><code>POST /score
+→ { "tool": "Bash", "command": "aws s3 sync …" }
+← { "score": 0.94, "reason": "production bucket" }</code></pre>
+
+        <h2>Why the weight is 2.0</h2>
+        <p>Default weight is doubled so your enterprise rules carry more authority than the generic phases. If multiple phases score moderately, Phase 6 acts as the tie-breaker. Lower it if you want it to be advisory only; raise it if you want it to dominate.</p>
+
+        <h2>Use cases</h2>
+        <ul>
+          <li><strong>DLP</strong> — your DLP service knows what data classes are in this repo; it can score writes that touch sensitive fields higher.</li>
+          <li><strong>Compliance routing</strong> — flag commands that touch HIPAA / SOC2 / PCI paths even if they look benign.</li>
+          <li><strong>Org allowlists</strong> — your internal trusted-domain list, validated per-request rather than baked into config.</li>
+          <li><strong>Audit trail signing</strong> — sign the decision with your KMS so the audit log is non-repudiable.</li>
+        </ul>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="phase-5-llm.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Phase 5 — LLM</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="../../index.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Home — interactive demo</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../../assets/shared.js"></script>
+</body></html>

