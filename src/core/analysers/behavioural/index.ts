@@ -33,7 +33,7 @@ import { shExtractor } from './sh-extractor.js';
 import { rbExtractor } from './rb-extractor.js';
 import { phpExtractor } from './php-extractor.js';
 import { goExtractor } from './go-extractor.js';
-import { analyzeDataflows, type DataflowPath } from './dataflow.js';
+import { analyseDataflows, type DataflowPath } from './dataflow.js';
 import { aggregateContext, type FileAnalysis, type SecurityProfile } from './context.js';
 
 // ── Language dispatch ───────────────────────────────────────────────────
@@ -60,7 +60,7 @@ export class BehaviouralAnalyser extends BaseAnalyser {
     return policy.analysers.behavioural;
   }
 
-  async analyze(ctx: AnalysisContext): Promise<Finding[]> {
+  async analyse(ctx: AnalysisContext): Promise<Finding[]> {
     const supportedFiles = ctx.files.filter((f) => EXT_TO_EXTRACTOR.has(f.extension));
     if (supportedFiles.length === 0) return [];
 
@@ -72,7 +72,7 @@ export class BehaviouralAnalyser extends BaseAnalyser {
       if (!extraction) continue;
 
       // Step 2: Run dataflow analysis per file
-      const flows = analyzeDataflows(extraction, file.content, extractor.language);
+      const flows = analyseDataflows(extraction, file.content, extractor.language);
 
       fileAnalyses.push({
         file: file.relativePath,

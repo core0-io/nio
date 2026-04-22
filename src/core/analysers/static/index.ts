@@ -40,7 +40,7 @@ export class StaticAnalyser extends BaseAnalyser {
     this.registry = registry ?? ruleRegistry;
   }
 
-  async analyze(ctx: AnalysisContext): Promise<Finding[]> {
+  async analyse(ctx: AnalysisContext): Promise<Finding[]> {
     const findings: Finding[] = [];
 
     for (const file of ctx.files) {

@@ -60,7 +60,7 @@ export class LLMAnalyser extends BaseAnalyser {
     return policy.analysers.llm && !!this.apiKey;
   }
 
-  async analyze(ctx: AnalysisContext): Promise<Finding[]> {
+  async analyse(ctx: AnalysisContext): Promise<Finding[]> {
     if (!this.apiKey) return [];
 
     const priorFindings = ctx.priorFindings ?? [];

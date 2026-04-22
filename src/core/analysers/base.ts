@@ -43,7 +43,7 @@ export abstract class BaseAnalyser {
    * Implementations must be safe to call concurrently with other Phase 1
    * analysers — do not mutate shared state.
    */
-  abstract analyze(ctx: AnalysisContext): Promise<Finding[]>;
+  abstract analyse(ctx: AnalysisContext): Promise<Finding[]>;
 
   /**
    * Whether this analyser should run given the current policy.

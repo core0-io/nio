@@ -315,7 +315,7 @@ export class ActionOrchestrator {
       extension: ext,
     };
 
-    return analyser.analyze({
+    return analyser.analyse({
       rootDir: '.',
       files: [fakeFileInfo],
       policy,
@@ -360,7 +360,7 @@ export class ActionOrchestrator {
     if (!content) return [];
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
-    return analyser.analyze({
+    return analyser.analyse({
       rootDir: '.',
       files: [{
         path: filePath,

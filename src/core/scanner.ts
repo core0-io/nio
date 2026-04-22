@@ -84,7 +84,7 @@ export class ScanOrchestrator {
     // ── Phase 1: Run analysers in parallel ──────────────────────────
     const phase1Results = await Promise.all(
       phase1.map(async (analyser) => {
-        const findings = await analyser.analyze(ctx);
+        const findings = await analyser.analyse(ctx);
         analysersUsed.add(analyser.name);
         return findings;
       }),
@@ -100,7 +100,7 @@ export class ScanOrchestrator {
       };
 
       for (const analyser of phase2) {
-        const findings = await analyser.analyze(phase2Ctx);
+        const findings = await analyser.analyse(phase2Ctx);
         analysersUsed.add(analyser.name);
         allFindings = [...allFindings, ...findings];
       }

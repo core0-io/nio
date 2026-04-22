@@ -43,7 +43,7 @@ export interface DataflowPath {
  * This is intentionally over-approximate (some false positives are
  * acceptable for security scanning).
  */
-export function analyzeDataflows(
+export function analyseDataflows(
   extraction: ASTExtraction,
   fileContent: string,
   language: Language = 'javascript',
