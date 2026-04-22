@@ -9,9 +9,9 @@ import {
 import {
   scoreToDecision,
   shouldShortCircuit,
-} from '../core/analysers/runtime/decision.js';
+} from '../core/action-decision.js';
 import { ExternalAnalyser } from '../core/analysers/external/index.js';
-import { RuntimeAnalyser } from '../core/analysers/runtime/index.js';
+import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { Finding } from '../core/models.js';
 import type { ActionEnvelope, ActionContext } from '../types/action.js';
 
@@ -228,12 +228,12 @@ describe('ExternalAnalyser', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuntimeAnalyser: Phase 5/6 wiring
+// ActionOrchestrator: Phase 5/6 wiring
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('RuntimeAnalyser: Phase 5/6 options', () => {
+describe('ActionOrchestrator: Phase 5/6 options', () => {
   it('should accept llmApiKey and scoringEndpoint options', () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       llmApiKey: 'test-key',
       llmModel: 'claude-sonnet-4-20250514',
       scoringEndpoint: 'https://example.com/score',
@@ -244,7 +244,7 @@ describe('RuntimeAnalyser: Phase 5/6 options', () => {
   });
 
   it('should skip Phase 5 when no llmApiKey', async () => {
-    const analyser = new RuntimeAnalyser({}); // no llmApiKey
+    const analyser = new ActionOrchestrator({}); // no llmApiKey
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
     const result = await analyser.evaluate(envelope);
@@ -253,7 +253,7 @@ describe('RuntimeAnalyser: Phase 5/6 options', () => {
   });
 
   it('should skip Phase 6 when no scoringEndpoint', async () => {
-    const analyser = new RuntimeAnalyser({}); // no scoringEndpoint
+    const analyser = new ActionOrchestrator({}); // no scoringEndpoint
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
     const result = await analyser.evaluate(envelope);
@@ -262,14 +262,14 @@ describe('RuntimeAnalyser: Phase 5/6 options', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuntimeAnalyser: user-supplied dangerous_patterns (action_guard_rules)
+// ActionOrchestrator: user-supplied dangerous_patterns (action_guard_rules)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
+describe('ActionOrchestrator: dangerous_patterns (user config)', () => {
   const sqlPattern = '/\\b(INSERT|UPDATE|DELETE|DROP|ALTER|TRUNCATE)\\b/i';
 
   function newAnalyser() {
-    return new RuntimeAnalyser({
+    return new ActionOrchestrator({
       actionGuardRules: { dangerous_patterns: [sqlPattern] },
     });
   }
@@ -319,7 +319,7 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
   });
 
   it('tolerates invalid user patterns without disabling valid ones', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: {
         dangerous_patterns: ['(?i)broken_inline_flag', '(unclosed', sqlPattern],
       },
@@ -334,7 +334,7 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
   });
 
   it('supports plain (no-flag) pattern syntax for backward compat', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: { dangerous_patterns: ['\\bUPDATE\\b'] },
     });
     const envelope = makeEnvelope('exec_command', {
@@ -347,12 +347,12 @@ describe('RuntimeAnalyser: dangerous_patterns (user config)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RuntimeAnalyser: user-supplied secret_patterns (action_guard_rules)
+// ActionOrchestrator: user-supplied secret_patterns (action_guard_rules)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('RuntimeAnalyser: secret_patterns (user config)', () => {
+describe('ActionOrchestrator: secret_patterns (user config)', () => {
   it('matches user pattern in network request body', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: { secret_patterns: ['/CORP-[A-Z0-9]{8}/i'] },
     });
     const envelope = makeEnvelope('network_request', {
@@ -369,7 +369,7 @@ describe('RuntimeAnalyser: secret_patterns (user config)', () => {
   });
 
   it('does not match when pattern is absent', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: { secret_patterns: ['/CORP-[A-Z0-9]{8}/i'] },
     });
     const envelope = makeEnvelope('network_request', {
@@ -386,7 +386,7 @@ describe('RuntimeAnalyser: secret_patterns (user config)', () => {
   });
 
   it('silently skips invalid user secret patterns', async () => {
-    const analyser = new RuntimeAnalyser({
+    const analyser = new ActionOrchestrator({
       actionGuardRules: { secret_patterns: ['(unclosed', '/valid-[0-9]+/'] },
     });
     const envelope = makeEnvelope('network_request', {

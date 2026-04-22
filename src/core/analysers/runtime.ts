@@ -12,18 +12,18 @@
  * Migrated from src/action/detectors/ (exec.ts, network.ts, secret-leak.ts).
  */
 
-import type { ActionEnvelope } from '../../../types/action.js';
-import type { Finding } from '../../models.js';
-import { findingId } from '../../models.js';
+import type { ActionEnvelope } from '../../types/action.js';
+import type { Finding } from '../models.js';
+import { findingId } from '../models.js';
 import {
   WEBHOOK_EXFIL_DOMAINS,
   HIGH_RISK_TLDS,
   SENSITIVE_FILE_PATHS,
   SECRET_PATTERNS,
   SECRET_PRIORITY,
-} from '../../shared/detection-data.js';
-import { compileUserRegex } from '../../shared/regex.js';
-import { extractAndDecodeBase64 } from '../../detection-engine.js';
+} from '../shared/detection-data.js';
+import { compileUserRegex } from '../shared/regex.js';
+import { extractAndDecodeBase64 } from '../detection-engine.js';
 
 // ── Config-driven extra patterns ────────────────────────────────────────
 

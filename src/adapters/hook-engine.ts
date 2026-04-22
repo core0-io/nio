@@ -4,8 +4,8 @@
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
 import { writeAuditLog, buildGuardAuditEntry } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
-import type { RuntimeDecision } from '../core/analysers/runtime/index.js';
-import type { ProtectionLevel } from '../core/analysers/runtime/decision.js';
+import type { ActionDecision } from '../core/action-orchestrator.js';
+import type { ProtectionLevel } from '../core/action-decision.js';
 import {
   extractMcpCallsFromCommand,
   extractCommandString,
@@ -26,10 +26,10 @@ function policyHookReason(
 }
 
 /**
- * Map RuntimeDecision to HookOutput using the new score-based system.
+ * Map ActionDecision to HookOutput using the new score-based system.
  */
 function runtimeDecisionToHookOutput(
-  rd: RuntimeDecision,
+  rd: ActionDecision,
   initiatingSkill: string | null,
 ): HookOutput {
   const skillTag = initiatingSkill ? ` (via skill: ${initiatingSkill})` : '';
@@ -259,7 +259,7 @@ export async function evaluateHook(
   // Run RuntimeAnalyser pipeline
   try {
     const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
-    const rd: RuntimeDecision = await options.nio.runtimeAnalyser.evaluate(envelope, level);
+    const rd: ActionDecision = await options.nio.runtimeAnalyser.evaluate(envelope, level);
 
     const entry = buildGuardAuditEntry(
       input, rd, initiatingSkill, adapter.name, envelope.action.type,

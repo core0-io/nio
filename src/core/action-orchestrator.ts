@@ -15,26 +15,26 @@
  *   Final:   Weighted aggregate → allow/deny/confirm
  */
 
-import type { ActionEnvelope } from '../../../types/action.js';
-import type { RiskLevel } from '../../../types/scanner.js';
-import type { Finding } from '../../models.js';
-import { aggregateRiskLevel } from '../../models.js';
-import { checkAllowlist } from './allowlist.js';
-import { analyzeAction, type GuardRulesConfig } from './denylist.js';
+import type { ActionEnvelope } from '../types/action.js';
+import type { RiskLevel } from '../types/scanner.js';
+import type { Finding } from './models.js';
+import { aggregateRiskLevel } from './models.js';
+import { checkAllowlist } from './analysers/allowlist.js';
+import { analyzeAction, type GuardRulesConfig } from './analysers/runtime.js';
 import {
   findingsToScore,
   aggregateScores,
   DEFAULT_WEIGHTS,
   type PhaseWeights,
   type PhaseScores,
-} from '../../scoring.js';
+} from './scoring.js';
 import {
   scoreToDecision,
   shouldShortCircuit,
   type ProtectionLevel,
   type GuardDecision,
-} from './decision.js';
-import { ExternalAnalyser } from '../external/index.js';
+} from './action-decision.js';
+import { ExternalAnalyser } from './analysers/external/index.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -48,7 +48,7 @@ export type PhaseTimings = Partial<
   Record<'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', PhaseTimingEntry>
 >;
 
-export interface RuntimeDecision {
+export interface ActionDecision {
   decision: GuardDecision;
   risk_level: RiskLevel;
   /** Highest severity among all findings (independent of score). */
@@ -70,7 +70,7 @@ function scoreToRiskLevel(score: number): RiskLevel {
 
 export type AllowlistMode = 'exit' | 'continue';
 
-export interface RuntimeAnalyserOptions {
+export interface ActionOrchestratorOptions {
   scoringWeights?: Partial<PhaseWeights>;
   level?: ProtectionLevel;
   allowedCommands?: string[];
@@ -96,9 +96,9 @@ export interface RuntimeAnalyserOptions {
   scoringTimeout?: number;
 }
 
-// ── RuntimeAnalyser ─────────────────────────────────────────────────────
+// ── ActionOrchestrator ─────────────────────────────────────────────────
 
-export class RuntimeAnalyser {
+export class ActionOrchestrator {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
   private allowedCommands: string[];
@@ -111,7 +111,7 @@ export class RuntimeAnalyser {
   private externalEnabled: boolean;
   private externalScorer?: ExternalAnalyser;
 
-  constructor(opts?: RuntimeAnalyserOptions) {
+  constructor(opts?: ActionOrchestratorOptions) {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.scoringWeights };
     this.level = opts?.level ?? 'balanced';
     this.allowedCommands = opts?.allowedCommands ?? [];
@@ -137,7 +137,7 @@ export class RuntimeAnalyser {
    * @param envelope  The action to evaluate
    * @param levelOverride  Optional protection level override (e.g. from config)
    */
-  async evaluate(envelope: ActionEnvelope, levelOverride?: ProtectionLevel): Promise<RuntimeDecision> {
+  async evaluate(envelope: ActionEnvelope, levelOverride?: ProtectionLevel): Promise<ActionDecision> {
     const level = levelOverride ?? this.level;
     const allFindings: Finding[] = [];
     const scores: PhaseScores = {};
@@ -281,8 +281,8 @@ export class RuntimeAnalyser {
 
   private async runStaticOnContent(content: string, filePath: string): Promise<Finding[]> {
     // Lazy import to avoid circular dependency and keep lightweight
-    const { runRules, runBase64Pass } = await import('../../detection-engine.js');
-    const { ruleRegistry } = await import('../../rule-registry.js');
+    const { runRules, runBase64Pass } = await import('./detection-engine.js');
+    const { ruleRegistry } = await import('./rule-registry.js');
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
     const rules = ruleRegistry.getRulesForExtension(ext, this.fileScanRules);
@@ -300,8 +300,8 @@ export class RuntimeAnalyser {
 
   private async runBehaviouralOnContent(content: string, filePath: string): Promise<Finding[]> {
     // Lazy import
-    const { BehaviouralAnalyser } = await import('../behavioural/index.js');
-    const { defaultPolicy } = await import('../../scan-policy.js');
+    const { BehaviouralAnalyser } = await import('./analysers/behavioural/index.js');
+    const { defaultPolicy } = await import('./scan-policy.js');
 
     const analyser = new BehaviouralAnalyser();
     const policy = defaultPolicy();
@@ -326,8 +326,8 @@ export class RuntimeAnalyser {
 
   private async runLLMOnAction(envelope: ActionEnvelope): Promise<Finding[]> {
     // Lazy import to avoid loading Anthropic SDK when not needed
-    const { LLMAnalyser } = await import('../llm/index.js');
-    const { defaultPolicy } = await import('../../scan-policy.js');
+    const { LLMAnalyser } = await import('./analysers/llm/index.js');
+    const { defaultPolicy } = await import('./scan-policy.js');
 
     const analyser = new LLMAnalyser({
       apiKey: this.llmApiKey,
@@ -380,7 +380,7 @@ export class RuntimeAnalyser {
     phaseStopped: 1 | 2 | 3 | 4 | 5 | 6,
     level: ProtectionLevel = this.level,
     phaseTimings?: PhaseTimings,
-  ): RuntimeDecision {
+  ): ActionDecision {
     const finalScore = aggregateScores(scores, this.weights);
     const decision = scoreToDecision(finalScore, level);
     const riskLevel = scoreToRiskLevel(finalScore);
