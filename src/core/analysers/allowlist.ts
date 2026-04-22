@@ -86,61 +86,76 @@ export type AllowlistResult =
   | { allowed: true; audit?: boolean; auditReason?: string }
   | { allowed: false };
 
+// ── AllowlistAnalyser ───────────────────────────────────────────────────
+
+export interface AllowlistAnalyserOptions {
+  /** User-injected safe command prefixes from config (guard.allowed_commands). */
+  allowedCommands?: string[];
+}
+
 /**
- * Check if an action matches the allowlist.
+ * Phase 1 analyser: allowlist gate.
  *
- * @param envelope  The action envelope to check
- * @param allowedCommands  User-injected safe patterns from config
- * @returns AllowlistResult — `allowed: true` to short-circuit, `false` to continue pipeline
+ * Checks if an action matches a built-in safe prefix list plus any
+ * user-configured `allowed_commands`. When matched, the pipeline can
+ * short-circuit without running scoring phases (orchestrator controls
+ * this via `allowlistMode`).
+ *
+ * Only applies to exec_command actions with no shell metacharacters.
  */
-export function checkAllowlist(
-  envelope: ActionEnvelope,
-  allowedCommands: string[] = [],
-): AllowlistResult {
-  // Only applies to exec_command actions
-  if (envelope.action.type !== 'exec_command') {
+export class AllowlistAnalyser {
+  private allowedCommands: string[];
+
+  constructor(opts?: AllowlistAnalyserOptions) {
+    this.allowedCommands = opts?.allowedCommands ?? [];
+  }
+
+  analyse(envelope: ActionEnvelope): AllowlistResult {
+    // Only applies to exec_command actions
+    if (envelope.action.type !== 'exec_command') {
+      return { allowed: false };
+    }
+
+    const data = envelope.action.data as { command: string; args?: string[] };
+    const fullCommand = data.args
+      ? `${data.command} ${data.args.join(' ')}`
+      : data.command;
+    const lowerCommand = fullCommand.toLowerCase();
+
+    // Shell metacharacters disqualify from allowlist
+    if (SHELL_METACHAR_PATTERN.test(fullCommand)) {
+      return { allowed: false };
+    }
+
+    // Check for sensitive path targets (mv, cp, etc.)
+    const targetPaths = extractCommandTargetPaths(fullCommand);
+    if (targetPaths.some(p => isSensitivePath(p))) {
+      return { allowed: false };
+    }
+
+    // Check safe command prefixes
+    const allPrefixes = [...SAFE_COMMAND_PREFIXES, ...this.allowedCommands];
+    const isSafe = allPrefixes.some(prefix =>
+      lowerCommand === prefix || lowerCommand.startsWith(prefix + ' '),
+    );
+
+    if (isSafe) {
+      return { allowed: true };
+    }
+
+    // Check audit commands (allow but flag)
+    const isAudit = AUDIT_COMMAND_PREFIXES.some(prefix =>
+      lowerCommand === prefix || lowerCommand.startsWith(prefix + ' '),
+    );
+
+    if (isAudit) {
+      return {
+        allowed: true,
+        audit: true,
+        auditReason: 'Package install or clone command can execute arbitrary code via hooks',
+      };
+    }
+
     return { allowed: false };
   }
-
-  const data = envelope.action.data as { command: string; args?: string[] };
-  const fullCommand = data.args
-    ? `${data.command} ${data.args.join(' ')}`
-    : data.command;
-  const lowerCommand = fullCommand.toLowerCase();
-
-  // Shell metacharacters disqualify from allowlist
-  if (SHELL_METACHAR_PATTERN.test(fullCommand)) {
-    return { allowed: false };
-  }
-
-  // Check for sensitive path targets (mv, cp, etc.)
-  const targetPaths = extractCommandTargetPaths(fullCommand);
-  if (targetPaths.some(p => isSensitivePath(p))) {
-    return { allowed: false };
-  }
-
-  // Check safe command prefixes
-  const allPrefixes = [...SAFE_COMMAND_PREFIXES, ...allowedCommands];
-  const isSafe = allPrefixes.some(prefix =>
-    lowerCommand === prefix || lowerCommand.startsWith(prefix + ' '),
-  );
-
-  if (isSafe) {
-    return { allowed: true };
-  }
-
-  // Check audit commands (allow but flag)
-  const isAudit = AUDIT_COMMAND_PREFIXES.some(prefix =>
-    lowerCommand === prefix || lowerCommand.startsWith(prefix + ' '),
-  );
-
-  if (isAudit) {
-    return {
-      allowed: true,
-      audit: true,
-      auditReason: 'Package install or clone command can execute arbitrary code via hooks',
-    };
-  }
-
-  return { allowed: false };
 }

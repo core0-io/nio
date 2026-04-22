@@ -19,7 +19,7 @@ import type { ActionEnvelope } from '../types/action.js';
 import type { RiskLevel } from '../types/scanner.js';
 import type { Finding } from './models.js';
 import { aggregateRiskLevel } from './models.js';
-import { checkAllowlist } from './analysers/allowlist.js';
+import { AllowlistAnalyser } from './analysers/allowlist.js';
 import { analyzeAction, type GuardRulesConfig } from './analysers/runtime.js';
 import {
   findingsToScore,
@@ -101,7 +101,7 @@ export interface ActionOrchestratorOptions {
 export class ActionOrchestrator {
   private weights: PhaseWeights;
   private level: ProtectionLevel;
-  private allowedCommands: string[];
+  private allowlistAnalyser: AllowlistAnalyser;
   private allowlistMode: AllowlistMode;
   private fileScanRules?: Partial<Record<string, string[]>>;
   private actionGuardRules?: GuardRulesConfig;
@@ -114,7 +114,7 @@ export class ActionOrchestrator {
   constructor(opts?: ActionOrchestratorOptions) {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.scoringWeights };
     this.level = opts?.level ?? 'balanced';
-    this.allowedCommands = opts?.allowedCommands ?? [];
+    this.allowlistAnalyser = new AllowlistAnalyser({ allowedCommands: opts?.allowedCommands });
     this.allowlistMode = opts?.allowlistMode ?? 'continue';
     this.fileScanRules = opts?.fileScanRules;
     this.actionGuardRules = opts?.actionGuardRules;
@@ -145,7 +145,7 @@ export class ActionOrchestrator {
 
     // ── Phase 1: Allowlist Gate ───────────────────────────────────────
     const t1 = performance.now();
-    const allowlistResult = checkAllowlist(envelope, this.allowedCommands);
+    const allowlistResult = this.allowlistAnalyser.analyse(envelope);
     const t1End = performance.now();
     timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
     if (allowlistResult.allowed && this.allowlistMode === 'exit') {
