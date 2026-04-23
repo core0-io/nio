@@ -1,8 +1,7 @@
 <h1 align="center">
   <img src="assets/nio-wordmark.svg" alt="Nio" width="280" />
 </h1>
-
-<p align="center"><b>Execution assurance and observability for autonomous AI agents.</b></p>
+<p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
 <p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code and OpenClaw. More frameworks coming.</p>
 
