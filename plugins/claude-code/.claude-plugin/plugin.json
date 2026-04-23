@@ -9,5 +9,5 @@
   "homepage": "https://github.com/core0-io/nio",
   "repository": "https://github.com/core0-io/nio",
   "license": "Apache-2.0",
-  "keywords": ["nio", "nio-agent-guard", "agent-guard", "ai-agent-security", "llm-agent-safety", "prompt-injection-defense", "mcp-security", "runtime-protection", "execution-assurance", "agent-observability", "agent-protection", "claude-code", "scanner", "otel"]
+  "keywords": ["nio", "nio-agent-guard", "agent-guard", "nio-agent-harness", "agent-harness", "ai-agent-harness", "ai-agent-security", "llm-agent-safety", "prompt-injection-defense", "mcp-security", "runtime-protection", "execution-assurance", "agent-observability", "agent-protection", "claude-code", "scanner", "otel"]
 }
