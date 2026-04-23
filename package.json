@@ -19,7 +19,7 @@
     "release:openclaw": "node scripts/release.js openclaw",
     "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes --verify-tag",
     "version-select": "changeset",
-    "version-update": "changeset version && node scripts/sync-versions.js",
+    "version-update": "changeset version && node scripts/sync-versions.js && node scripts/sync-site-version.js",
     "tag": "changeset tag",
     "bump": "pnpm version-select && pnpm version-update",
     "prepare": "husky"
