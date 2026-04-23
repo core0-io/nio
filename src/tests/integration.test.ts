@@ -603,3 +603,138 @@ describe('Integration: Protection Level Matrix', () => {
     assert.equal(result.decision, 'deny');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// F: Nio self-invocation short-circuit
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// When a skill or E2E flow runs Nio's action-cli via Bash, the outer guard
+// hook must not double-analyse the Bash command string. Phase 0 still runs
+// (blocked_tools stays authoritative). Phase 1-6 is skipped; action-cli
+// performs the single authoritative content analysis inside its subprocess.
+
+describe('Integration: Nio self-invocation short-circuit', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const NIO_CLI_BASE =
+    '/Users/test/.claude/plugins/nio/skills/nio/scripts';
+
+  it('ALLOW: skill query with a dangerous command payload does not trigger Phase 1-6', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.claudeAdapter,
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: {
+          command: `node ${NIO_CLI_BASE}/action-cli.js evaluate --type exec_command --command "rm -rf /"`,
+        },
+      },
+      ctx.options,
+    );
+    // If Phase 1-6 had run on this command string, DANGEROUS_COMMAND would
+    // have matched the literal 'rm -rf' in the arg and denied. Short-circuit
+    // gives allow + no riskTags.
+    assert.equal(result.decision, 'allow');
+    assert.equal(result.riskTags, undefined);
+  });
+
+  it('ALLOW: each of the six bundled Nio scripts', async () => {
+    ctx = createTestContext('balanced');
+    const scripts = [
+      'action-cli',
+      'hook-cli',
+      'scanner-hook',
+      'guard-hook',
+      'config-cli',
+      'collector-hook',
+    ];
+    for (const name of scripts) {
+      const result = await evaluateHook(
+        ctx.claudeAdapter,
+        {
+          hook_event_name: 'PreToolUse',
+          tool_name: 'Bash',
+          tool_input: { command: `node ${NIO_CLI_BASE}/${name}.js` },
+        },
+        ctx.options,
+      );
+      assert.equal(result.decision, 'allow', `expected ${name}.js to short-circuit`);
+    }
+  });
+
+  it('DENY: blocked_tools.claude_code still blocks Bash via Phase 0', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { blocked_tools: { claude_code: ['Bash'] } },
+    });
+    const result = await evaluateHook(
+      ctx.claudeAdapter,
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: {
+          command: `node ${NIO_CLI_BASE}/action-cli.js evaluate --type exec_command --command "ls"`,
+        },
+      },
+      ctx.options,
+    );
+    // Phase 0 runs before the short-circuit and must still deny.
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('DENY: trailing && rm -rf / injection defeats the short-circuit', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.claudeAdapter,
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: {
+          command: `node ${NIO_CLI_BASE}/action-cli.js && rm -rf /`,
+        },
+      },
+      ctx.options,
+    );
+    // Regex has to reject on shell metacharacters; Phase 1-6 then runs on
+    // the raw Bash string and hits DANGEROUS_COMMAND.
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  it('DENY: non-Nio exec_command still runs full Phase 1-6', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.claudeAdapter,
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'rm -rf /' },
+      },
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  it('DENY: bash -c wrapper around a Nio path does NOT short-circuit', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.claudeAdapter,
+      {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: {
+          command: `bash -c 'node ${NIO_CLI_BASE}/action-cli.js evaluate --type exec_command --command "rm -rf /"'`,
+        },
+      },
+      ctx.options,
+    );
+    // The outer shell is not a bare `node`; regex fails to match and Phase
+    // 1-6 runs. Bash command contains `rm -rf` literal → deny.
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+});

@@ -11,6 +11,7 @@ import {
   extractCommandString,
   type ExtractedMcpCall,
 } from './mcp-shell-detect.js';
+import { isNioSelfInvocation } from './self-invocation.js';
 
 function policyHookReason(
   explanation: string,
@@ -253,6 +254,20 @@ export async function evaluateHook(
   const envelope = adapter.buildEnvelope(input, initiatingSkill);
 
   if (!envelope) {
+    return { decision: 'allow' };
+  }
+
+  // Nio self-invocation short-circuit: when the skill/E2E/debug flow
+  // runs Nio's own action-cli via a shell-exec tool (e.g. Claude Code's
+  // Bash), the outer hook must not double-analyse. action-cli itself
+  // runs the full Phase 1-6 pipeline on the real envelope inside its
+  // subprocess, so one analysis is enough. Phase 0 has already passed
+  // above, so blocked_tools still applies. Silent (no audit entry) to
+  // keep skill queries from polluting ~/.nio/audit.jsonl.
+  if (
+    envelope.action.type === 'exec_command' &&
+    isNioSelfInvocation((envelope.action.data as { command?: string }).command)
+  ) {
     return { decision: 'allow' };
   }
 
