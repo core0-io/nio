@@ -1,5 +1,46 @@
 # @core0-io/nio
 
+## 2.0.2
+
+### Patch Changes
+
+- - **`/nio action` no longer self-denies on Claude Code** ([`8e7fa60`](../../commit/8e7fa60), [`2a49651`](../../commit/2a49651)) — the outer guard hook could previously deny the skill's own `Bash` invocation of `action-cli.js` because the Bash command string literally contained the user-typed payload (`rm -rf /` etc.). Now Phase 0 still runs (`blocked_tools` is authoritative), but Phase 1–6 is skipped for strictly-matched Nio self-calls; `action-cli` performs the single authoritative content analysis in its subprocess. Adds `src/adapters/self-invocation.ts` with 22 unit + 6 integration tests.
+  - **Docs drift after earlier rename** ([`2a49651`](../../commit/2a49651), [`549f7ef`](../../commit/549f7ef)) — leftover `engine.ts` / `RuntimeDecision` references in `docs/ARCHITECTURE.md` cleaned up.
+
+  - **4 CVE patches, 0 vulnerabilities in `pnpm audit`** ([`dcd29d6`](../../commit/dcd29d6)):
+
+    - `protobufjs` forced to **≥7.5.5** (resolves to 8.0.1) via `pnpm.overrides` — patches [GHSA-xq3m-2v4x-88gg](https://github.com/advisories/GHSA-xq3m-2v4x-88gg) (**critical**, arbitrary code execution; reached through `@grpc/grpc-js` and OTEL `otlp-transformer`).
+    - `axios` bumped from `^1.6.7` to `^1.15.0` — patches [GHSA-3p68-rc4w-qgx5](https://github.com/advisories/GHSA-3p68-rc4w-qgx5) (NO_PROXY bypass → SSRF) and [GHSA-fvcv-3m26-pcqx](https://github.com/advisories/GHSA-fvcv-3m26-pcqx) (cloud-metadata exfiltration via header injection).
+    - `follow-redirects` forced to **≥1.16.0** via `pnpm.overrides` (axios 1.15.2 still pins the vulnerable 1.15.11) — patches [GHSA-r4q5-vmmm-2653](https://github.com/advisories/GHSA-r4q5-vmmm-2653) (custom auth headers leak across cross-domain redirects).
+
+  - **Terminology refactor — all 6 phases now `XxxAnalyser` classes with uniform `.analyse()`** ([`75821f4..255b8ab`](../../compare/75821f4..255b8ab)). The word "runtime" was overloaded (class name, phase alias, directory name). Restored intent:
+
+    | Before                                            | After                                                                                                                      |
+    | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+    | `RuntimeAnalyser` (orchestrator class)            | `ActionOrchestrator`                                                                                                       |
+    | `RuntimeAnalyserOptions`                          | `ActionOrchestratorOptions`                                                                                                |
+    | `RuntimeDecision`                                 | `ActionDecision`                                                                                                           |
+    | `checkAllowlist` (function)                       | `AllowlistAnalyser` class                                                                                                  |
+    | `analyzeAction` (function)                        | `RuntimeAnalyser` class (Phase 2)                                                                                          |
+    | `NioInstance.runtimeAnalyser` field               | `.orchestrator`                                                                                                            |
+    | `createNio()` return `{scanner, runtimeAnalyser}` | `{scanner, orchestrator}`                                                                                                  |
+    | `.analyze(ctx)` method (US)                       | `.analyse(ctx)` (UK, matches `Analyser`)                                                                                   |
+    | `analyzeDataflows`                                | `analyseDataflows`                                                                                                         |
+    | `src/adapters/engine.ts`                          | `src/adapters/hook-engine.ts`                                                                                              |
+    | `src/core/analysers/runtime/index.ts`             | `src/core/action-orchestrator.ts`                                                                                          |
+    | `src/core/analysers/runtime/decision.ts`          | `src/core/action-decision.ts`                                                                                              |
+    | Flat `allowlist.ts` / `runtime.ts`                | `allowlist/index.ts` / `runtime/index.ts` (directory form, consistent with `static/`, `behavioural/`, `llm/`, `external/`) |
+
+    No behaviour change; 491 → 519 tests, all green.
+
+  - **Directory consistency** ([`255b8ab`](../../commit/255b8ab)) — all phase analysers now live in sub-directories with `index.ts`, matching the existing `static/` / `behavioural/` / `llm/` / `external/` pattern.
+  - **`pnpm bump` now propagates to GitHub Pages** ([`3875352`](../../commit/3875352)) — `sync-site-version.js` chained into `version-update`; topbar badge + footer release-tag links across 15 HTML pages update at bump time, not only at build time.
+  - **Search discoverability** ([`549f7ef`](../../commit/549f7ef)) — `nio-agent-guard` added as primary alias across `package.json`, `plugin.json`, and `marketplace.json` keywords; all 15 HTML pages gained `<meta name="description">` + `<meta name="keywords">`.
+
+  - **`NOTICE` + `LICENSES/agentguard-MIT.txt`** ([`89db2f7`](../../commit/89db2f7)) — Apache-2.0 §4(d) NOTICE listing upstream attributions (including the MIT copyright of GoPlusSecurity/agentguard, from which early code was drawn). Preserved verbatim in `LICENSES/`; both files ship with npm tarball.
+  - **Community health files** ([`224947a`](../../commit/224947a)) — `SECURITY.md` (private disclosure flow, scope, supported versions), `CONTRIBUTING.md` (dev setup, Conventional Commits, changeset workflow, PR checklist), `.github/ISSUE_TEMPLATE/` (bug, feature, config routing security reports to GitHub Advisories), PR template.
+  - **Public library exports** ([`cceecd1`](../../commit/cceecd1)) — `AllowlistAnalyser`, `RuntimeAnalyser` (Phase 2), `GuardRulesConfig`, plus the renamed orchestrator types.
+
 ## 2.0.1
 
 ### Patch Changes
