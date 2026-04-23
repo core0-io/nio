@@ -87,6 +87,8 @@
   "files": [
     "dist",
     "README.md",
+    "NOTICE",
+    "LICENSES",
     "plugins/openclaw/plugin/openclaw.plugin.json",
     "plugins/claude-code/skills"
   ],

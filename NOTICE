@@ -1,0 +1,48 @@
+Nio
+Copyright 2026 core0-io
+
+This product includes software developed by core0-io
+(https://github.com/core0-io).
+
+Licensed under the Apache License, Version 2.0 (the "License"); see
+the LICENSE file in the root of this project for the full text.
+
+===============================================================================
+Third-party attributions
+===============================================================================
+
+This project derives, in part, from the following upstream works. The
+original code has been substantially refactored, restructured, and
+extended under the Apache License 2.0, but portions may remain
+recognisable and the upstream copyright notices are retained here in
+accordance with the respective original licenses.
+
+-------------------------------------------------------------------------------
+GoPlusSecurity/agentguard  (https://github.com/GoPlusSecurity/agentguard)
+-------------------------------------------------------------------------------
+
+Early development of Nio drew code directly from GoPlusSecurity's
+`agentguard` project; significant refactoring has occurred since, but
+portions of this software are derivative of it.
+
+Original copyright and license:
+
+    MIT License
+    Copyright (c) 2025 GoPlusSecurity
+
+The full text of the MIT License under which the upstream work is
+distributed is preserved verbatim at `LICENSES/agentguard-MIT.txt` in
+this repository.
+
+-------------------------------------------------------------------------------
+Cisco AI Defense skill-scanner  (architectural inspiration)
+-------------------------------------------------------------------------------
+
+Several analyser architectures (the StaticAnalyser multi-pass layout,
+the BehaviouralAnalyser dataflow pipeline, random-delimiter LLM
+prompt-injection protection, and the threat-taxonomy categories)
+follow patterns established by Cisco's AI Defense skill-scanner and
+have been adapted to TypeScript. No code is directly copied;
+acknowledged here for architectural provenance. See file-level
+comments in `src/core/analysers/static/`, `src/core/analysers/behavioural/`,
+`src/core/analysers/llm/`, and `src/core/models.ts`.
