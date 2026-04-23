@@ -479,22 +479,23 @@ interface Finding {
 }
 ```
 
-### RuntimeDecision
+### ActionDecision
 
-Output of the dynamic guard pipeline:
+Output of the dynamic guard pipeline (returned by
+`ActionOrchestrator.evaluate()`):
 
 ```typescript
-interface RuntimeDecision {
+interface ActionDecision {
   decision: 'allow' | 'deny' | 'confirm';
   risk_level: RiskLevel;
   findings: Finding[];
   scores: {
-    runtime?: number;
-    static?: number;
-    behavioural?: number;
-    llm?: number;
-    external?: number;
-    final?: number;
+    runtime?: number;      // Phase 2 RuntimeAnalyser
+    static?: number;       // Phase 3 StaticAnalyser
+    behavioural?: number;  // Phase 4 BehaviouralAnalyser
+    llm?: number;          // Phase 5 LLMAnalyser
+    external?: number;     // Phase 6 ExternalAnalyser
+    final?: number;        // weighted aggregate
   };
   phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
   explanation?: string;
