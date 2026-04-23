@@ -42,7 +42,7 @@ if it exceeds the deny threshold for the active protection level.
                                 │
                                 ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 0: Tool Gate (<1ms)  [engine.ts, before envelope building]    │
+│ Phase 0: Tool Gate (<1ms)  [hook-engine.ts, before envelope build]  │
 │                                                                     │
 │   tool_name ──► in blocked_tools? ──YES──► DENY (exit)             │
 │                    │ NO                                              │
@@ -56,7 +56,14 @@ if it exceeds the deny threshold for the active protection level.
 │              tool_name in guarded_tools? ──NO──► ALLOW (exit)      │
 │                    │ YES                                             │
 │                    ▼                                                 │
-│              Build ActionEnvelope → proceed to Phase 1              │
+│              Build ActionEnvelope                                    │
+│                    │                                                 │
+│                    ▼                                                 │
+│              Nio self-invocation? ──YES──► ALLOW silent (exit)     │
+│                    │ NO                   [action-cli subprocess    │
+│                    │                       runs Phase 1-6 itself]   │
+│                    ▼                                                 │
+│              proceed to Phase 1                                      │
 └────────────────────┬────────────────────────────────────────────────┘
                      │ passed gate
                      ▼
@@ -187,11 +194,23 @@ Tools not in `guarded_tools` pass Phase 0 but skip Phases 1–6 (auto-allow).
 
 ### Phase 0: Tool Gate (<1ms)
 
-Runs in `engine.ts` before envelope building. Three checks in order:
+Runs in `hook-engine.ts` before envelope building. Three checks in order:
 
 1. **blocked_tools** — if tool is listed → DENY
 2. **available_tools** — if list is non-empty and tool is not listed → DENY
 3. **guarded_tools** — if tool is not mapped → ALLOW (skip Phase 1–6)
+
+After Phase 0 and envelope construction (but before Phase 1), a further
+short-circuit fires when the incoming `exec_command` is Nio invoking its
+own bundled CLI — e.g. the skill's `/nio action ...` flow running
+`node <skills-dir>/nio/scripts/action-cli.js …` via `Bash`. Such calls
+pass silently (no audit entry); the spawned `action-cli` subprocess then
+runs its own full Phase 1–6 on the real envelope. This avoids a double
+content analysis and prevents the outer hook from denying a skill query
+just because the Bash command string embeds a literal dangerous token.
+Detection is a strict regex on the command shape
+(`isNioSelfInvocation` in [src/adapters/self-invocation.ts](../src/adapters/self-invocation.ts));
+any shell metacharacter in the command disqualifies the match.
 
 `available_tools` and `blocked_tools` are keyed by platform (`claude_code`,
 `openclaw`, …) with one reserved cross-platform key `mcp`. Incoming MCP tool
