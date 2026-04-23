@@ -1,0 +1,110 @@
+name: Bug report
+description: Something isn't behaving as documented
+title: "bug: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Thanks for filing a bug.** Please fill in as much of the
+        structure below as you reasonably can — reports that let us
+        reproduce the issue typically get fixed faster.
+
+        > ⚠️ If this is a **security vulnerability** (guard bypass,
+        > scanner false negative on a published rule, audit tampering),
+        > please close this tab and use GitHub's private
+        > [**Report a vulnerability**](../../security/advisories/new)
+        > flow instead — see [SECURITY.md](../blob/main/SECURITY.md).
+
+  - type: input
+    id: nio-version
+    attributes:
+      label: Nio version
+      description: Output of `node -e "import('@core0-io/nio').then(m => console.log(m.createNio().orchestrator ? require('@core0-io/nio/package.json').version : 'unknown'))"` or the `version` field of `~/.claude/plugins/nio/package.json`.
+      placeholder: "2.0.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Host platform
+      options:
+        - Claude Code
+        - OpenClaw
+        - Hermes (experimental)
+        - Node.js library (`@core0-io/nio` directly)
+        - Other (please describe in reproduction)
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "macOS 14.5 arm64 / Ubuntu 22.04 x86_64 / Windows 11"
+    validations:
+      required: true
+
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      placeholder: "20.12.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did you run and what did you observe?
+      placeholder: |
+        I ran `/nio action exec_command: ls /tmp` in Claude Code and got
+        `decision: deny` with no findings. I expected `allow`.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      placeholder: A safe read-only command should have been allowed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: |
+        Ideally a snippet we can paste into a fresh checkout and run.
+        For guard / skill bugs, include the exact command or tool input,
+        the relevant `~/.nio/config.yaml` if you changed it, and the
+        resulting audit entry from `~/.nio/audit.jsonl`.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste anything useful from `~/.nio/audit.jsonl` or
+        `~/.nio/metrics.jsonl`. Redact secrets before pasting.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and didn't find a duplicate.
+          required: true
+        - label: I am on a supported version (see SECURITY.md).
+          required: true
+        - label: I am NOT reporting a security vulnerability (those go through private advisories).
+          required: true
