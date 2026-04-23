@@ -3,7 +3,7 @@
 </h1>
 <p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code and OpenClaw. More frameworks coming.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code and OpenClaw. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
 
 <p align="center">
   <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
@@ -309,4 +309,4 @@ pnpm test
 
 ## License
 
-Apache-2.0 © [core0-io](https://github.com/core0-io) — see [LICENSE](LICENSE).
+Apache-2.0 © [Core0](https://core0.io) ([core0-io](https://github.com/core0-io)) — see [LICENSE](LICENSE).
