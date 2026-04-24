@@ -3,7 +3,7 @@
 </h1>
 <p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code and OpenClaw. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and Hermes. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
 
 <p align="center">
   <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
@@ -140,7 +140,7 @@ Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io
 
 `setup.sh` installs the skill, registers hooks, and writes the default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
 
-**More frameworks coming.** Nio currently supports Claude Code and OpenClaw. Support for additional agent frameworks is progressively being added.
+**More frameworks coming.** Nio currently supports Claude Code, OpenClaw, and Hermes. Support for additional agent frameworks is progressively being added.
 
 <details>
 <summary><b>One-liner install</b></summary>

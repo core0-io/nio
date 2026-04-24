@@ -181,12 +181,12 @@
         <p>What happens when a command matches an allowlist entry. <code>continue</code> records a hint but still runs Phases 2–6 (so external/LLM policy can't be bypassed). <code>exit</code> returns immediately — fastest path, skips later phases.</p>
 
         <h3 id="guard.available_tools"><code>guard.available_tools</code></h3>
-        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], mcp: [] }</code></p>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Phase 0 allowlist, per platform. When non-empty for a platform, ONLY listed tools are available to the agent. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
         <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive. The <code>mcp</code> list also catches <code>mcporter</code>-style shell invocations (<code>Bash</code>/<code>exec</code> commands containing <code>mcporter &lt;server&gt;.&lt;tool&gt;</code>, with or without the <code>call</code> verb, <code>npx</code>/<code>bunx</code> prefixes, flags, or function-call syntax).</p>
 
         <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
-        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], mcp: [] }</code></p>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Same shape as <code>available_tools</code>; listed tools are unconditionally blocked. <code>mcp</code> covers MCP tools on every platform in one place.</p>
 
         <h3 id="guard.guarded_tools"><code>guard.guarded_tools</code></h3>

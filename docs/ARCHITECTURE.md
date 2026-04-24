@@ -724,6 +724,8 @@ src/
 │   ├── claude-code.ts                # Claude Code adapter
 │   ├── openclaw.ts                   # OpenClaw adapter
 │   ├── openclaw-plugin.ts            # OpenClaw plugin registration
+│   ├── hermes.ts                     # Hermes adapter (shell-hook JSON protocol)
+│   ├── self-invocation.ts            # Nio self-call short-circuit detector
 │   ├── config-schema.ts              # Zod config schema
 │   ├── common.ts                     # Shared utilities
 │   └── types.ts                      # HookInput/HookOutput/HookAdapter
@@ -734,6 +736,7 @@ src/
     ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
     ├── scanner-hook.ts                # SessionStart: scan installed skills
     ├── action-cli.ts                  # CLI over ActionOrchestrator.evaluate (Phase 1–6)
+    ├── hook-cli.ts                    # CLI over evaluateHook (Phase 0–6) — cross-process hook consumers (Hermes)
     ├── config-cli.ts                  # Protection level CLI
     └── collector-hook.ts              # Telemetry collector hook
 ```
