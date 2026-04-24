@@ -54,6 +54,25 @@ if (!cc.success) {
 rmSync(OPENCLAW_SKILL_SCRIPTS, { recursive: true, force: true });
 cpSync(CC_SKILL_SCRIPTS, OPENCLAW_SKILL_SCRIPTS, { recursive: true });
 
+// Hermes plugin needs a self-contained hook-cli.js at a plugin-local
+// path so a release zip of plugins/hermes/ works standalone (without
+// reaching into plugins/claude-code/). Build hook-cli as a single
+// non-split bundle — no shared chunks means the output is one file
+// with no file-level dependencies, small enough to ship in a
+// Hermes-only distribution.
+const HERMES_SCRIPTS = join(ROOT, 'plugins/hermes/scripts');
+const hermes = await Bun.build({
+  ...shared,
+  entrypoints: [join(ROOT, 'src/scripts/hook-cli.ts')],
+  outdir: HERMES_SCRIPTS,
+  splitting: false,
+});
+
+if (!hermes.success) {
+  console.error(hermes.logs);
+  process.exit(1);
+}
+
 console.log(
-  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s), mirrored to OpenClaw skill`,
+  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw skill), ${hermes.outputs.length} Hermes output(s)`,
 );

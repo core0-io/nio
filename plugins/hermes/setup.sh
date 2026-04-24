@@ -22,7 +22,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-HOOK_CLI="$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js"
+# Resolve hook-cli.js path. Two layouts to support:
+#
+#   1. Release zip `nio-hermes-vX.zip` extracts as a self-contained
+#      directory — hook-cli.js ships inside as scripts/hook-cli.js.
+#   2. Monorepo dev (and the `nio-all` zip) shares the bundled build
+#      output at plugins/claude-code/skills/nio/scripts/hook-cli.js.
+#
+# Prefer the plugin-local copy so a standalone Hermes install has no
+# hidden dependency on the claude-code plugin being present.
+if [[ -f "$SCRIPT_DIR/scripts/hook-cli.js" ]]; then
+  HOOK_CLI="$SCRIPT_DIR/scripts/hook-cli.js"
+else
+  HOOK_CLI="$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js"
+fi
 SNIPPET="$SCRIPT_DIR/config-snippet.yaml"
 HERMES_CONFIG="${HERMES_CONFIG_PATH:-$HOME/.hermes/config.yaml}"
 

@@ -188,7 +188,7 @@ def merge_with_yaml(
         our_entry = our_entries[0]
         statuses[event_name] = merge_event(hooks, event_name, our_entry)
 
-    new_text = yaml.safe_dump(existing, default_flow_style=False, sort_keys=False)
+    new_text = yaml.safe_dump(existing, default_flow_style=False, sort_keys=False, width=10_000)
     return new_text, statuses
 
 
@@ -292,7 +292,7 @@ def uninstall(config_path: Path, hook_cli_abs: str) -> int:
         del data["hooks"]
 
     backup(config_path)
-    new_text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
+    new_text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False, width=10_000)
     config_path.write_text(new_text, encoding="utf-8")
     log(f"removed Nio hook-cli entries from {config_path}")
     return 0
