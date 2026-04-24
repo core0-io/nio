@@ -1,0 +1,29 @@
+# Nio — Hermes shell-hook reference snippet.
+#
+# plugins/hermes/setup.sh writes a path-resolved copy of this block
+# into ~/.hermes/config.yaml (Hermes's runtime config file — not the
+# cli-config.yaml.example template that ships in the Hermes repo).
+#
+# If you prefer to install manually, merge the hooks: block below into
+# the top-level of ~/.hermes/config.yaml. The __NIO_HOOK_CLI_PATH__
+# sentinel must be replaced with the absolute path to
+# plugins/claude-code/skills/nio/scripts/hook-cli.js in your Nio
+# install (that path lives inside the Claude Code skill's build
+# output; the same bundle is reused by Hermes — no separate Nio
+# install required).
+#
+# The snippet deliberately omits `matcher`: every pre_tool_call on
+# every tool flows through hook-cli.js, and Nio's own
+# guarded_tools.hermes config decides which tools run the full
+# Phase 1-6 pipeline vs. pass-through at Phase 0.
+#
+# Consent: the first time Hermes sees this command it prompts for
+# approval (cached in ~/.hermes/shell-hooks-allowlist.json). For
+# non-TTY runs (gateway, cron, CI) set HERMES_ACCEPT_HOOKS=1, pass
+# --accept-hooks to the CLI, or add `hooks_auto_accept: true` to
+# ~/.hermes/config.yaml alongside the hooks block.
+
+hooks:
+  pre_tool_call:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 60
