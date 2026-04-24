@@ -12,18 +12,38 @@
 # output; the same bundle is reused by Hermes — no separate Nio
 # install required).
 #
-# The snippet deliberately omits `matcher`: every pre_tool_call on
-# every tool flows through hook-cli.js, and Nio's own
-# guarded_tools.hermes config decides which tools run the full
-# Phase 1-6 pipeline vs. pass-through at Phase 0.
+# Every entry below points at the same hook-cli.js. The CLI dispatches
+# internally based on the stdin payload's `hook_event_name` field:
+#   pre_tool_call → guard pipeline (Phase 0–6, can deny/confirm)
+#   everything else → collector pipeline (OTEL traces + metrics + audit)
 #
-# Consent: the first time Hermes sees this command it prompts for
-# approval (cached in ~/.hermes/shell-hooks-allowlist.json). For
-# non-TTY runs (gateway, cron, CI) set HERMES_ACCEPT_HOOKS=1, pass
-# --accept-hooks to the CLI, or add `hooks_auto_accept: true` to
-# ~/.hermes/config.yaml alongside the hooks block.
+# Consent: the first time Hermes sees each unique command string it
+# prompts for approval (cached in ~/.hermes/shell-hooks-allowlist.json).
+# Since every event uses the same command string, one approval covers
+# them all. For non-TTY runs (gateway, cron, CI) set
+# HERMES_ACCEPT_HOOKS=1, pass --accept-hooks to the CLI, or add
+# `hooks_auto_accept: true` to ~/.hermes/config.yaml alongside the
+# hooks block.
 
 hooks:
   pre_tool_call:
     - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
       timeout: 60
+  post_tool_call:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10
+  pre_llm_call:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10
+  post_llm_call:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10
+  on_session_start:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10
+  on_session_end:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10
+  subagent_stop:
+    - command: "node __NIO_HOOK_CLI_PATH__ --platform hermes --stdin"
+      timeout: 10

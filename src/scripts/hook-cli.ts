@@ -5,38 +5,44 @@
 export {};
 
 /**
- * Nio Hook CLI — thin CLI wrapper over evaluateHook (Phase 0–6 + audit).
+ * Nio Hook CLI — cross-process dispatcher for Hermes shell-hooks.
  *
- * For cross-process hook consumers that can't `import` TypeScript
- * directly. In particular, Hermes Agent's shell-hooks subsystem
- * (upstream PR #13296) spawns arbitrary subprocesses and pipes a JSON
- * envelope over stdin — this CLI is what gets spawned.
+ * Routes the JSON envelope (stdin or --envelope) into one of two
+ * pipelines based on the event name:
+ *   pre_tool_call → guard path (Phase 0–6 + audit)
+ *   anything else → collector path (lib/collector-core)
  *
- * Platform-specific stdout formatting is done here so each cross-
- * process consumer receives JSON in the shape it expects, without
- * any external translator.
+ * Hermes spawns this script for every event declared in
+ * ~/.hermes/config.yaml; one shared command string handles all events
+ * because dispatch keys off stdin's hook_event_name field, not CLI
+ * arguments. Hermes's snake_case event names are translated to the
+ * canonical Claude-Code-shaped names the collector core expects.
  *
  * Usage:
  *   node hook-cli.js --platform hermes --stdin
  *   node hook-cli.js --platform hermes --envelope '<json>'
  *
- *   For Hermes, both forms expect the Hermes canonical snake_case
- *   envelope payload. Output on stdout:
- *     deny  → {"decision": "block", "reason": "..."}
- *     allow → {} (silent)
- *     ask   → folded through `guard.confirm_action` config knob
- *             (allow → {}, deny → block, ask → block + stderr warn).
+ * Output (Hermes wire-shape per agent/shell_hooks.py::_parse_response):
+ *   pre_tool_call deny  → {"decision":"block","reason":"..."}
+ *   pre_tool_call allow → {} (silent)
+ *   pre_tool_call ask   → folded through guard.confirm_action
+ *                         (allow → {}, deny → block, ask → block + warn)
+ *   collector events    → {} (telemetry never blocks)
  *
- * Failure handling:
- *   - JSON parse errors / missing flags: exit 1, empty stdout, error
- *     on stderr. Hermes's `_parse_response` treats non-zero exits and
- *     malformed/missing stdout as "no block" (fail-open per upstream
- *     spec: "non-zero exit codes … never abort the agent loop").
- *   - evaluateHook errors: same — exit 1, empty stdout.
+ * Failure handling: malformed JSON / missing flags exit 1 with empty
+ * stdout. Hermes treats non-zero exits and missing stdout as no-action
+ * (fail-open per upstream spec).
  */
 
 import { createNio, HermesAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter, HookOutput } from '../index.js';
+import { loadCollectorConfig } from './lib/config-loader.js';
+import { createMeterProvider } from './lib/metrics-collector.js';
+import { createTracerProvider } from './lib/traces-collector.js';
+import {
+  dispatchCollectorEvent,
+  type HookStdinPayload,
+} from './lib/collector-core.js';
 
 // ── CLI arg parsing ─────────────────────────────────────────────────────
 
@@ -98,6 +104,88 @@ function selectAdapter(
   }
 }
 
+// ── Hermes → canonical event-name translation (collector path) ─────────
+//
+// Maps Hermes's snake_case lifecycle events onto the canonical Claude-
+// Code-shaped names that lib/collector-core.ts dispatches on.
+// pre_tool_call is intentionally NOT here — guard path handles it.
+
+const HERMES_COLLECTOR_EVENTS: Record<string, string> = {
+  post_tool_call: 'PostToolUse',
+  pre_llm_call: 'UserPromptSubmit',
+  post_llm_call: 'Stop',
+  on_session_start: 'SessionStart',
+  on_session_end: 'SessionEnd',
+  subagent_stop: 'SubagentStop',
+};
+
+/**
+ * Convert a Hermes-shaped envelope into the HookStdinPayload the
+ * collector core consumes. Hermes places event-specific fields
+ * (user message, tool result, task id) inside the `extra` object;
+ * we lift the ones the dispatcher recognises.
+ */
+function hermesToCollectorInput(
+  raw: unknown,
+  canonicalEvent: string,
+): HookStdinPayload {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const extra = (r.extra ?? {}) as Record<string, unknown>;
+  const sessionId =
+    (r.session_id as string | undefined) ??
+    (extra.parent_session_id as string | undefined) ??
+    '';
+
+  const input: HookStdinPayload = {
+    hook_event_name: canonicalEvent,
+    session_id: sessionId,
+    cwd: r.cwd as string | undefined,
+    tool_name: r.tool_name as string | undefined,
+    tool_input: r.tool_input as Record<string, unknown> | undefined,
+    tool_use_id: extra.tool_call_id as string | undefined,
+    task_id: extra.task_id as string | undefined,
+  };
+
+  if (canonicalEvent === 'UserPromptSubmit') {
+    input.prompt =
+      (extra.user_message as string | undefined) ??
+      (r.prompt as string | undefined);
+  } else if (canonicalEvent === 'PostToolUse') {
+    const result = extra.result as unknown;
+    if (typeof result === 'string') {
+      input.tool_response = { output: result };
+    } else if (result && typeof result === 'object') {
+      input.tool_response = result as HookStdinPayload['tool_response'];
+    }
+  }
+
+  return input;
+}
+
+/**
+ * Run the collector pipeline for a non-guard Hermes event. Always emits
+ * `{}` to Hermes stdout regardless of whether telemetry is enabled.
+ */
+async function runHermesCollector(
+  rawPayload: unknown,
+  hermesEvent: string,
+): Promise<void> {
+  const canonicalEvent = HERMES_COLLECTOR_EVENTS[hermesEvent];
+  if (!canonicalEvent) return;
+
+  const collectorConfig = loadCollectorConfig();
+  if (!collectorConfig.enabled) return;
+
+  await dispatchCollectorEvent({
+    event: canonicalEvent,
+    input: hermesToCollectorInput(rawPayload, canonicalEvent),
+    platform: 'hermes',
+    config: collectorConfig,
+    meterProvider: createMeterProvider(collectorConfig),
+    tracerProvider: createTracerProvider(collectorConfig),
+  });
+}
+
 // ── Platform-specific stdout formatting ────────────────────────────────
 
 interface FormattedOutput {
@@ -108,12 +196,8 @@ interface FormattedOutput {
 /**
  * Translate Nio's three-valued HookOutput.decision into the binary
  * Hermes wire protocol, folding `ask` through `guard.confirm_action`.
- *
- * See upstream `agent/shell_hooks.py::_parse_response` — Hermes only
- * recognises `{"decision":"block",...}` / `{"action":"block",...}`;
- * any other stdout (including empty) is treated as "no action" (allow).
  */
-function formatHermesOutput(
+function formatHermesGuardOutput(
   result: HookOutput,
   confirmAction: string,
 ): FormattedOutput {
@@ -177,21 +261,42 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const config = loadConfig();
-  const nio = createNio();
-  const adapter = selectAdapter(platform!, config);
+  const hookEventName = ((payload ?? {}) as Record<string, unknown>)
+    .hook_event_name as string | undefined;
 
-  const result = await evaluateHook(adapter, payload, { config, nio });
-
-  if (platform === 'hermes') {
+  // Guard path: only pre_tool_call runs through Phase 0–6.
+  if (platform === 'hermes' && hookEventName === 'pre_tool_call') {
+    const config = loadConfig();
+    const nio = createNio();
+    const adapter = selectAdapter(platform!, config);
+    const result = await evaluateHook(adapter, payload, { config, nio });
     const confirmAction = config.guard?.confirm_action ?? 'allow';
-    const { stdout, stderr } = formatHermesOutput(result, confirmAction);
+    const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
     process.stdout.write(stdout + '\n');
-  } else {
-    // Other platforms (future) get the raw HookOutput.
-    process.stdout.write(JSON.stringify(result) + '\n');
+    return;
   }
+
+  // Collector path: post_*, on_session_*, subagent_stop, *_llm_call.
+  if (platform === 'hermes' && hookEventName) {
+    await runHermesCollector(payload, hookEventName);
+    process.stdout.write('{}\n');
+    return;
+  }
+
+  // Future non-Hermes platforms or missing event_name: forward raw
+  // HookOutput so existing guard-hook-style consumers still work.
+  if (platform !== 'hermes') {
+    const config = loadConfig();
+    const nio = createNio();
+    const adapter = selectAdapter(platform!, config);
+    const result = await evaluateHook(adapter, payload, { config, nio });
+    process.stdout.write(JSON.stringify(result) + '\n');
+    return;
+  }
+
+  // Hermes envelope without hook_event_name — silent no-op.
+  process.stdout.write('{}\n');
 }
 
 main().catch((err: Error) => {

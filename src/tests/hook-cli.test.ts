@@ -280,3 +280,117 @@ describe('hook-cli --platform hermes: stdin handling', () => {
     assert.equal(stdout.trim(), '{}');
   });
 });
+
+// ── Collector path: non-pre_tool_call events ──────────────────────────
+//
+// hook-cli dispatches based on hook_event_name from stdin:
+//   pre_tool_call → guard pipeline (covered above)
+//   anything else → collector pipeline (audit + OTEL traces/metrics)
+// Collector path always emits {} — telemetry never blocks Hermes.
+
+describe('hook-cli --platform hermes: collector path', () => {
+  function makeEnvelope(eventName: string, extras: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      hook_event_name: eventName,
+      session_id: 'collector-test-sess',
+      cwd: '/tmp',
+      ...extras,
+    });
+  }
+
+  it('post_tool_call emits {} silently', async () => {
+    const payload = makeEnvelope('post_tool_call', {
+      tool_name: 'terminal',
+      tool_input: { command: 'ls /tmp' },
+      extra: { tool_call_id: 'tc-1', result: { output: 'a\nb\nc' } },
+    });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('pre_llm_call emits {} silently', async () => {
+    const payload = makeEnvelope('pre_llm_call', {
+      extra: { user_message: 'hello world', is_first_turn: true },
+    });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('post_llm_call emits {} silently', async () => {
+    const payload = makeEnvelope('post_llm_call', { extra: {} });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('on_session_start emits {} silently', async () => {
+    const payload = makeEnvelope('on_session_start', { extra: {} });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('on_session_end emits {} silently', async () => {
+    const payload = makeEnvelope('on_session_end', { extra: {} });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('subagent_stop emits {} silently', async () => {
+    const payload = makeEnvelope('subagent_stop', {
+      extra: { parent_session_id: 'parent', task_id: 'tk-1' },
+    });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('unknown event still emits {} (forward-compat with future Hermes events)', async () => {
+    const payload = makeEnvelope('on_some_future_event', {});
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+
+  it('collector events do NOT block even on dangerous-looking tool input', async () => {
+    // post_tool_call would carry the same dangerous command as a
+    // pre_tool_call would, but post is observational only — never
+    // blocks. Regression guard against any future code path that
+    // accidentally routes a non-pre event into the guard pipeline.
+    const payload = makeEnvelope('post_tool_call', {
+      tool_name: 'terminal',
+      tool_input: { command: 'rm -rf /' },
+      extra: { result: { error: 'permission denied' } },
+    });
+    const { stdout, code } = await runHookCli(
+      ['--platform', 'hermes', '--stdin'],
+      payload,
+    );
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), '{}');
+  });
+});
