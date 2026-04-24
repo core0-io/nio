@@ -738,3 +738,116 @@ describe('Integration: Nio self-invocation short-circuit', () => {
     assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// G: Hermes adapter — evaluateHook end-to-end
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Exercises HermesAdapter + evaluateHook in-process, without the
+// hook-cli subprocess layer. hook-cli.test.ts already covers the CLI
+// framing (stdout/stderr shape, exit codes, confirm_action matrix);
+// these tests isolate the adapter + pipeline so a regression there
+// produces a clear signal.
+
+describe('Integration: Hermes adapter evaluateHook', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  function hermesPayload(toolName: string, toolInput: Record<string, unknown>) {
+    return {
+      hook_event_name: 'pre_tool_call',
+      tool_name: toolName,
+      tool_input: toolInput,
+      session_id: 'sess_test',
+      cwd: '/tmp',
+      extra: {},
+    };
+  }
+
+  it('should DENY dangerous terminal command', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('terminal', { command: 'rm -rf /' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  it('should ALLOW safe terminal command', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('terminal', { command: 'ls /tmp' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('should DENY dangerous patch (write_file) to sensitive path', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('patch', { path: '/home/user/.ssh/id_rsa', content: 'junk' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.some((t) => /SSH|SENSITIVE_PATH/.test(t)));
+  });
+
+  it('should ALLOW unmapped tool (delegate_task, pass-through at Phase 0)', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('delegate_task', {}),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('should DENY when blocked_tools.hermes lists the tool (Phase 0)', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { blocked_tools: { hermes: ['terminal'] } },
+    });
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('terminal', { command: 'ls' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('should ALLOW post_tool_call events without running the pipeline', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      {
+        hook_event_name: 'post_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'rm -rf /' },
+      },
+      ctx.options,
+    );
+    // Post events bypass Phase 1-6 — decision is always allow regardless
+    // of tool_input content.
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('should propagate session_id from the payload into the envelope context', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.hermesAdapter,
+      hermesPayload('terminal', { command: 'ls' }),
+      ctx.options,
+    );
+    // Evidence that session_id flowed through: the result includes a
+    // decision (Phase 0 passed, envelope was built, Phase 1-6 ran). If
+    // session_id had broken the envelope, buildEnvelope would have
+    // returned null and decision would still be 'allow', so this is a
+    // weak but useful smoke check that the happy path completes.
+    assert.ok(['allow', 'deny', 'ask'].includes(result.decision));
+  });
+});

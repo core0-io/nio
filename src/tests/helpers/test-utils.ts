@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeCodeAdapter } from '../../adapters/claude-code.js';
 import { OpenClawAdapter } from '../../adapters/openclaw.js';
+import { HermesAdapter } from '../../adapters/hermes.js';
 import { ActionOrchestrator } from '../../core/action-orchestrator.js';
 import type { EngineOptions } from '../../adapters/types.js';
 import type { GuardRulesConfig } from '../../core/analysers/runtime/index.js';
@@ -67,6 +68,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     options,
     claudeAdapter: new ClaudeCodeAdapter({ guardedTools: opts.guard?.guarded_tools }),
     openclawAdapter: new OpenClawAdapter(),
+    hermesAdapter: new HermesAdapter(),
     cleanup() {
       try {
         rmSync(tempDir, { recursive: true });
