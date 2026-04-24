@@ -825,3 +825,52 @@ Typical latency: **~50 ms**. Output is **structured** (raw JSON or markdown tabl
 Both contracts share **one** `SKILL.md`. The tool-dispatch frontmatter keys (`command-dispatch`, `command-tool`, `command-arg-mode`) are additive: hosts that do not implement them (Claude Code today) simply ignore them and fall back to LLM-driven behaviour. Conversely, a host that does implement them (OpenClaw) will only route to `nio_command` if the plugin actually registers a tool of that name — if not, the dispatch fails open to the LLM-driven fallback.
 
 This means we can ship one skill folder to both hosts with no per-host forking, and opt each host into whichever contract it supports.
+
+### Shell-hook dispatch (Hermes)
+
+Hermes Agent does not install Nio as a skill at all. Starting with upstream [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296), Hermes exposes a native **shell-hook** facility — users declare shell subprocesses in `~/.hermes/config.yaml` that Hermes spawns on each plugin-hook event (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, …). We hook into this and ship zero Python code.
+
+```text
+Hermes pre_tool_call event
+  │
+  ├─► Hermes reads its config.yaml hooks: block
+  ├─► spawns: node <abs>/hook-cli.js --platform hermes --stdin
+  │       stdin = {hook_event_name, tool_name, tool_input,
+  │                session_id, cwd, extra}   (snake_case)
+  │
+  ├─► hook-cli.ts
+  │     ├─► new HermesAdapter()
+  │     ├─► parseInput(stdin)        snake_case → canonical HookInput
+  │     ├─► evaluateHook(adapter, input, {config, nio})
+  │     │     → Phase 0 → Phase 1-6 → audit write
+  │     └─► Hermes-shaped stdout
+  │             deny  → {"decision": "block", "reason": "..."}
+  │             allow → {}  (silent pass-through per Hermes spec)
+  │             ask   → folded through guard.confirm_action
+  │                     (allow default | deny | ask-fallback-to-deny + stderr warn)
+  │
+  └─► Hermes's _parse_response accepts Claude-Code style
+      {decision: "block"} or Hermes-canonical {action: "block"};
+      silently permits any other stdout
+```
+
+Typical latency: **~100–200 ms** (Node cold-start dominated — amortise via Hermes's hook-process warmup when the feature lands). Output is **structured JSON** — Hermes only inspects the `decision`/`action` field; the `reason` is plumbed through to the agent as the block message. Zero model tokens consumed by the guard path.
+
+**Install surface:** one YAML snippet merged into `~/.hermes/config.yaml` by `plugins/hermes/setup.sh`. No Python plugin, no pip install, no wheel. The `hook-cli.js` binary is the same bundled artifact that ships with the Claude Code skill — one binary, two hosts.
+
+**Consent:** handled by Hermes. First use prompts interactively, persisted to `~/.hermes/shell-hooks-allowlist.json`. Non-TTY runs (gateway, cron, CI) need `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true`. Script edits are silently trusted; `hermes hooks doctor` flags mtime drift.
+
+**Fail-open contract:** Hermes treats non-zero exit codes and malformed stdout as "no block" per upstream `_parse_response`. `hook-cli` honours this — any internal error (missing config, orchestrator throw, parse failure) exits 1 with empty stdout + a stderr diagnostic. Security property: a broken Nio install never blocks the agent loop.
+
+#### Contract at a glance
+
+|                  | Claude Code (LLM-driven) | OpenClaw (tool-dispatch) | Hermes (shell-hook) |
+|------------------|--------------------------|---------------------------|----------------------|
+| How registered   | LLM reads `SKILL.md`     | Plugin tool               | YAML in `~/.hermes/config.yaml` |
+| Invocation mode  | LLM → Bash → subprocess  | In-process method call    | Subprocess spawned by Hermes |
+| Language on path | JS (node subprocess)     | JS (in-process)           | JS (node subprocess) |
+| Latency          | 2–5 s                    | ~50 ms                    | ~100–200 ms          |
+| Model tokens     | Every call               | 0                         | 0                    |
+| Can block tools  | Yes (via hook)           | Yes (Phase 0–6)           | Yes (Phase 0–6)      |
+| Phase 0 source   | `blocked_tools.claude_code` | `blocked_tools.openclaw` | `blocked_tools.hermes` |
+| Consent prompt   | N/A (implicit)           | N/A (implicit)            | First-run interactive, cached |
