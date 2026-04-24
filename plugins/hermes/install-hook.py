@@ -216,25 +216,19 @@ def merge_without_yaml(
     hook_cli_abs: str,
     snippet_body: str,
 ) -> Tuple[str, Dict[str, str]]:
-    """Conservative fallback when PyYAML is missing: only handles the
-    "no existing hooks:" case safely. Anything more complex is punted
-    to the user with a clear message."""
-    if has_nio_entry(existing_text):
-        if hook_cli_abs in existing_text:
-            # Best-effort: assume all events are present at this path.
-            return existing_text, {"_all": "already-installed"}
+    """Conservative fallback when PyYAML is missing. The fallback can
+    ONLY handle the "no existing hooks: block at all" case — the 6
+    lifecycle event entries need real YAML parsing for a correct
+    per-event merge. Any existing hooks: or Nio entry is refused with
+    a clear instruction to install PyYAML (or use setup.sh's default
+    path that picks up Hermes's venv python, which already has it)."""
+    if has_nio_entry(existing_text) or has_top_level_hooks(existing_text):
         raise ValueError(
-            "An older Nio hook-cli entry appears in your config but at a "
-            "different path. Install PyYAML (`pip install --user pyyaml`) "
-            "and re-run setup.sh to rewrite the path automatically, or "
-            "edit the command manually."
-        )
-    if has_top_level_hooks(existing_text):
-        raise ValueError(
-            "Your config.yaml already has a `hooks:` block. Install "
-            "PyYAML (`pip install --user pyyaml`) and re-run setup.sh "
-            "to merge automatically, or paste the snippet from "
-            "plugins/hermes/config-snippet.yaml into the existing block."
+            "Your config.yaml already contains a `hooks:` block (possibly "
+            "from a previous partial Nio install). Install PyYAML "
+            "(`pip install --user pyyaml`) and re-run setup.sh for a "
+            "correct per-event merge, or paste the full snippet from "
+            "plugins/hermes/config-snippet.yaml manually."
         )
 
     suffix = "\n" if not existing_text.endswith("\n") else ""
