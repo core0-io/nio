@@ -8,6 +8,7 @@
  * Usage:
  *   node scripts/release.js claude-code   # Claude Code plugin zip
  *   node scripts/release.js openclaw      # OpenClaw plugin zip
+ *   node scripts/release.js hermes        # Hermes plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
  *
  * Output: releases/nio-{target}-v{version}.zip
@@ -15,9 +16,12 @@
  * Single-platform zips extract as a self-contained plugin directory:
  *   claude-code.zip → .claude-plugin/, hooks/, skills/, setup.sh, ...
  *   openclaw.zip    → openclaw.plugin.json, plugin.js, setup.sh, ...
+ *   hermes.zip      → config-snippet.yaml, install-hook.py, setup.sh,
+ *                     scripts/hook-cli.js (self-contained single-file
+ *                     bundle built by scripts/build.js)
  *
  * The all zip preserves the multi-plugin structure:
- *   all.zip → plugins/claude-code/, plugins/openclaw/, setup.sh
+ *   all.zip → plugins/claude-code/, plugins/openclaw/, plugins/hermes/, setup.sh
  */
 
 import { execSync } from 'node:child_process';
@@ -33,8 +37,8 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const version = pkg.version;
 
 const target = process.argv[2];
-if (!target || !['claude-code', 'openclaw', 'all'].includes(target)) {
-  console.error('Usage: node scripts/release.js <claude-code|openclaw|all>');
+if (!target || !['claude-code', 'openclaw', 'hermes', 'all'].includes(target)) {
+  console.error('Usage: node scripts/release.js <claude-code|openclaw|hermes|all>');
   process.exit(1);
 }
 
@@ -68,7 +72,9 @@ function zipFromRoot(outName, files) {
   console.log(`\n  Created: ${outPath}\n`);
 }
 
-const targets = target === 'all' ? ['claude-code', 'openclaw', 'all'] : [target];
+const targets = target === 'all'
+  ? ['claude-code', 'openclaw', 'hermes', 'all']
+  : [target];
 
 for (const t of targets) {
   const name = `nio-${t}-v${version}.zip`;
@@ -81,6 +87,10 @@ for (const t of targets) {
 
     case 'openclaw':
       zipFromDir(name, 'plugins/openclaw');
+      break;
+
+    case 'hermes':
+      zipFromDir(name, 'plugins/hermes');
       break;
 
     case 'all':

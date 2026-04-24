@@ -21,6 +21,8 @@ plugins/claude-code/skills/nio/scripts/*.js.map
 plugins/openclaw/skills/nio/scripts/*.js
 plugins/openclaw/skills/nio/scripts/*.js.map
 plugins/openclaw/plugin/plugin.js
+plugins/hermes/scripts/*.js
+plugins/hermes/scripts/*.js.map
 # Synced shared files (build output, source of truth is plugins/shared/)
 plugins/claude-code/config.default.yaml
 plugins/claude-code/config.schema.json
