@@ -38,6 +38,7 @@ const cc = await Bun.build({
     'collector-hook',
     'action-cli',
     'config-cli',
+    'hook-cli',
   ].map((n) => join(ROOT, `src/scripts/${n}.ts`)),
   outdir: CC_SKILL_SCRIPTS,
   splitting: true,
