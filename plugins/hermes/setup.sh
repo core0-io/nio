@@ -65,14 +65,32 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
+# Prefer Hermes's own venv Python — it ships with PyYAML, which
+# install-hook.py needs for smart per-event merging. Without PyYAML the
+# fallback path can't tell a partial install from a complete one (e.g.
+# a pre-Ext-E config with only pre_tool_call looks "already installed"
+# even though the 6 new lifecycle events are missing). System python3
+# often lacks PyYAML on stock macOS / CI runners.
+INSTALL_PY="python3"
+if command -v hermes >/dev/null 2>&1; then
+  _hermes_shebang="$(head -n1 "$(command -v hermes)" 2>/dev/null || true)"
+  _hermes_py="$(printf '%s\n' "$_hermes_shebang" | sed -n 's|^#! *\([^ ]*\).*|\1|p')"
+  if [[ -n "$_hermes_py" && -x "$_hermes_py" ]]; then
+    if "$_hermes_py" -c 'import yaml' >/dev/null 2>&1; then
+      INSTALL_PY="$_hermes_py"
+    fi
+  fi
+fi
+
 # ── Report + invoke the Python merge helper ─────────────────────────────
 
 echo "Nio → Hermes shell-hook installer"
 echo "  hook-cli.js    : $HOOK_CLI"
 echo "  target config  : $HERMES_CONFIG"
+echo "  python         : $INSTALL_PY"
 echo
 
-python3 "$SCRIPT_DIR/install-hook.py" \
+"$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
   --config "$HERMES_CONFIG" \
   --hook-cli "$HOOK_CLI" \
   --snippet "$SNIPPET" \
