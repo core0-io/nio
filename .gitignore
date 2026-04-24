@@ -28,4 +28,7 @@ plugins/claude-code/README.md
 plugins/openclaw/config.default.yaml
 plugins/openclaw/config.schema.json
 plugins/openclaw/README.md
+plugins/hermes/config.default.yaml
+plugins/hermes/config.schema.json
+plugins/hermes/README.md
 releases/
