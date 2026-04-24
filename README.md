@@ -283,16 +283,28 @@ Detection rules cover both malicious intent and unintentional agent misbehaviour
 
 ## Compatibility
 
-Nio currently provides full hook-based execution assurance for Claude Code and OpenClaw. Skill-based scan and action evaluation is available across a broader set of platforms today. Full hook support for additional agent frameworks is progressively being added.
+Nio currently provides full hook-based execution assurance for Claude Code, OpenClaw, and Hermes. Skill-based scan and action evaluation is available across a broader set of platforms today. Full hook support for additional agent frameworks is progressively being added.
 
 | Platform | Support | Features |
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard |
 | **OpenClaw** | Full | Plugin hooks + OTEL collector |
+| **Hermes Agent** | Full (CLI + Gateway) | Shell-hook integration via `plugins/hermes/setup.sh` |
 | **OpenAI Codex CLI** | Skill | Scan/action commands |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |
 | **GitHub Copilot** | Skill | Scan/action commands |
+
+### Hermes integration
+
+Hermes Agent runs Nio as a `pre_tool_call` shell-hook (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296) — requires a Hermes version that includes it). One-time install:
+
+```bash
+pnpm run build                  # emits plugins/claude-code/skills/nio/scripts/hook-cli.js
+bash plugins/hermes/setup.sh    # merges a hooks: entry into ~/.hermes/config.yaml
+```
+
+On first Hermes run the hook prompts for consent (Hermes's standard trust flow). For non-TTY runs (gateway, cron, CI), pre-approve with `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true`. See `hermes hooks doctor` for health checks and `bash plugins/hermes/setup.sh --uninstall` to roll back.
 
 ## Documentation
 
