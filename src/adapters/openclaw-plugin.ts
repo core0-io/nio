@@ -482,6 +482,51 @@ export function registerOpenClawPlugin(
   });
 
   // agent_end → end-turn span flush
+  // session_start: hard session boundary. Reset turn counters so a
+  // fresh session doesn't inherit numbering from a previous one.
+  api.on('session_start', async (_event: unknown, ctx: unknown) => {
+    try {
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      turnCounters.delete(sessionId);
+      const entry: AuditLifecycleEntry = {
+        event: 'lifecycle',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        session_id: sessionId,
+        lifecycle_type: 'session_start',
+      };
+      writeAuditLog(entry, auditOpts);
+    } catch {
+      // Non-critical
+    }
+  });
+
+  // session_end: hard session boundary. Defensively close any in-flight
+  // turn span — agent_end usually handles this per-turn, but
+  // session_end is the last-resort flush before a session is torn down.
+  api.on('session_end', async (_event: unknown, ctx: unknown) => {
+    try {
+      const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      const entry: AuditLifecycleEntry = {
+        event: 'lifecycle',
+        timestamp: new Date().toISOString(),
+        platform: 'openclaw',
+        session_id: sessionId,
+        lifecycle_type: 'session_end',
+      };
+      writeAuditLog(entry, auditOpts);
+      if (tracerProvider && activeTurns.has(sessionId)) {
+        finishTurn(sessionId);
+        await tracerProvider.forceFlush();
+      }
+      turnCounters.delete(sessionId);
+    } catch {
+      // Non-critical
+    }
+  });
+
   api.on('agent_end', async (_event: unknown, ctx: unknown) => {
     try {
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };

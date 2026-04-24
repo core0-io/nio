@@ -84,7 +84,12 @@ export interface AuditLifecycleEntry {
   timestamp: string;
   platform: string;
   session_id?: string;
-  lifecycle_type: 'subagent_spawning' | 'subagent_ended' | 'agent_end';
+  lifecycle_type:
+    | 'subagent_spawning'
+    | 'subagent_ended'
+    | 'agent_end'
+    | 'session_start'
+    | 'session_end';
   details?: Record<string, unknown>;
 }
 
