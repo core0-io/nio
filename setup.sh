@@ -49,8 +49,11 @@ while [ $# -gt 0 ]; do
     --hermes-home=*)
       HERMES_HOME_ARG="${1#*=}"
       shift ;;
+    --accept-hermes-hook|--accept-hermes-hooks)
+      HERMES_ARGS+=("--accept-hooks")
+      shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--reset-config] [--uninstall]"
       echo ""
       echo "  --cc-home <path>        Path to .claude directory."
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
@@ -59,6 +62,10 @@ while [ $# -gt 0 ]; do
       echo "  --hermes-home <path>    Path to .hermes directory (holds config.yaml)."
       echo "                          Defaults to \$HOME/.hermes; HERMES_CONFIG_PATH"
       echo "                          overrides the exact config file location."
+      echo "  --accept-hermes-hook    Pre-approve the Nio hook in Hermes's allowlist"
+      echo "                          non-interactively. Only approves this exact"
+      echo "                          command; other future shell hooks still need"
+      echo "                          consent. (Runs 'hermes --accept-hooks hooks doctor'.)"
       echo "  --reset-config          Overwrite existing nio config with defaults."
       echo "  --uninstall             Remove the plugin and config."
       echo ""

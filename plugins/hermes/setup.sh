@@ -8,7 +8,10 @@
 # Usage:
 #   bash plugins/hermes/setup.sh                # normal install
 #   bash plugins/hermes/setup.sh --dry-run      # print resulting YAML, no write
-#   bash plugins/hermes/setup.sh --yes          # skip interactive prompts
+#   bash plugins/hermes/setup.sh --yes          # skip interactive merge prompts
+#   bash plugins/hermes/setup.sh --accept-hooks # also pre-approve in Hermes's
+#                                               # allowlist (so the hook fires
+#                                               # immediately, non-interactive)
 #   bash plugins/hermes/setup.sh --uninstall    # remove the Nio entry
 #
 # Environment:
@@ -22,6 +25,27 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 HOOK_CLI="$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js"
 SNIPPET="$SCRIPT_DIR/config-snippet.yaml"
 HERMES_CONFIG="${HERMES_CONFIG_PATH:-$HOME/.hermes/config.yaml}"
+
+# Partition args: `--accept-hooks` is ours (handled post-install below);
+# everything else is forwarded to install-hook.py verbatim.
+ACCEPT_HOOKS=0
+DRY_RUN=0
+UNINSTALL=0
+FORWARD_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --accept-hooks|--approve)
+      ACCEPT_HOOKS=1 ;;
+    --dry-run)
+      DRY_RUN=1
+      FORWARD_ARGS+=("$arg") ;;
+    --uninstall)
+      UNINSTALL=1
+      FORWARD_ARGS+=("$arg") ;;
+    *)
+      FORWARD_ARGS+=("$arg") ;;
+  esac
+done
 
 # ── Pre-flight checks ───────────────────────────────────────────────────
 
@@ -52,25 +76,85 @@ python3 "$SCRIPT_DIR/install-hook.py" \
   --config "$HERMES_CONFIG" \
   --hook-cli "$HOOK_CLI" \
   --snippet "$SNIPPET" \
-  "$@"
+  "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
 
-# ── Post-install reminder (skip for dry-run / uninstall) ────────────────
+# Dry-run and uninstall skip the approval flow.
+if [ "$DRY_RUN" -eq 1 ] || [ "$UNINSTALL" -eq 1 ]; then
+  exit 0
+fi
 
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run|--uninstall) exit 0 ;;
+# ── Optional: pre-approve in Hermes's shell-hooks allowlist ─────────────
+# Hermes refuses to fire unknown shell hooks until the user has consented
+# (persisted to ~/.hermes/shell-hooks-allowlist.json). This is upstream's
+# security boundary — we do NOT write that file directly. Instead, we
+# invoke `hermes` with --accept-hooks, which adds an entry keyed on the
+# exact command string. Other future shell hooks still need consent.
+
+approve_hook() {
+  if ! command -v hermes >/dev/null 2>&1; then
+    echo "[nio-hermes] 'hermes' CLI not on PATH; skipping approval." >&2
+    echo "[nio-hermes] After installing Hermes, run:" >&2
+    echo "             hermes --accept-hooks hooks doctor" >&2
+    return 0
+  fi
+  echo "[nio-hermes] Approving hook via: hermes --accept-hooks hooks doctor"
+  if hermes --accept-hooks hooks doctor >/dev/null 2>&1; then
+    echo "[nio-hermes] Hook approved. Verify with: hermes hooks list"
+  else
+    echo "[nio-hermes] Approval command exited non-zero. Run it manually:" >&2
+    echo "             hermes --accept-hooks hooks doctor" >&2
+  fi
+}
+
+APPROVED=0
+if [ "$ACCEPT_HOOKS" -eq 1 ]; then
+  approve_hook
+  APPROVED=1
+elif [ -t 0 ] && [ -t 1 ]; then
+  # Real interactive TTY — offer one-shot approval. Default N is safer
+  # (just hitting Enter doesn't touch the allowlist).
+  echo
+  echo "Hermes won't fire unknown shell hooks until you approve them."
+  echo "Approve this Nio hook now? (only this exact command; other future"
+  echo "shell hooks still require consent.)"
+  printf "  [y/N] "
+  read -r answer || answer=""
+  case "$answer" in
+    [Yy]|[Yy][Ee][Ss])
+      approve_hook
+      APPROVED=1 ;;
+    *)
+      echo "[nio-hermes] Skipped. Approve later with:" >&2
+      echo "             hermes --accept-hooks hooks doctor" >&2 ;;
   esac
-done
+fi
 
-cat <<'EOF'
+# ── Post-install reminder ────────────────────────────────────────────────
+
+if [ "$APPROVED" -eq 1 ]; then
+  cat <<'EOF'
+
+Next steps (Hermes side):
+  1. Verify the hook fires on pre_tool_call:
+       hermes hooks list      # ✓ allowlisted
+       hermes hooks doctor    # all green, runs a JSON smoke test
+
+  2. Re-run this script after any `pnpm run build` to refresh the
+     absolute path in config.yaml; you will need to re-approve
+     because the command string (and its allowlist hash) changes.
+EOF
+else
+  cat <<'EOF'
 
 Next steps (Hermes side):
   1. Approve the hook on first run. Either interactive:
        hermes chat             # first pre_tool_call prompts for consent
      — or pre-approve (required for gateway / CI / cron / non-TTY runs):
-       hermes --accept-hooks <command>
-       export HERMES_ACCEPT_HOOKS=1
-       # or add hooks_auto_accept: true to ~/.hermes/config.yaml
+       hermes --accept-hooks hooks doctor     # one-shot, scoped to Nio
+       export HERMES_ACCEPT_HOOKS=1           # blanket for this shell
+       # or add hooks_auto_accept: true to ~/.hermes/config.yaml (global)
+
+     Or re-run this installer with: bash plugins/hermes/setup.sh --accept-hooks
 
   2. Verify registration at any time:
        hermes hooks list
@@ -80,6 +164,7 @@ Next steps (Hermes side):
        hermes hooks test pre_tool_call --for-tool terminal \
          --payload-file <(echo '{"tool_input":{"command":"ls /tmp"}}')
 
-  Re-run this script any time you update the Nio install (e.g. after
-  a new `pnpm run build`) to rewrite the absolute path in config.yaml.
+  Re-run this script after any `pnpm run build` to refresh the absolute
+  path in config.yaml (and re-approve — the command string changes).
 EOF
+fi
