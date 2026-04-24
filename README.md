@@ -306,11 +306,11 @@ bash plugins/hermes/setup.sh    # merges a hooks: entry into ~/.hermes/config.ya
 
 Hermes won't fire unknown shell hooks until you consent (persisted to `~/.hermes/shell-hooks-allowlist.json`). Three ways to approve:
 
-- **Interactive**: running the installer in a TTY ends with `Approve this hook now? [y/N]` — answer `y` and we invoke `hermes --accept-hooks hooks doctor` for you.
+- **Interactive**: running the installer in a TTY ends with `Approve this hook now? [y/N]` — answer `y` and we invoke Hermes's own `register_from_config(accept_hooks=True)` for you (same code path as `hermes chat --accept-hooks`, but without spinning up a chat session).
 - **Non-interactive**: pass `--accept-hooks` to the installer (or `--accept-hermes-hook` to the top-level `./setup.sh`) to approve immediately without a prompt. Scoped to this exact command string; other future shell hooks still require consent.
-- **Manual later**: run `hermes chat` (TTY consent) or `hermes --accept-hooks hooks doctor` whenever. Blanket alternatives: `HERMES_ACCEPT_HOOKS=1` env var, or `hooks_auto_accept: true` in `~/.hermes/config.yaml` — these approve _all_ shell hooks globally, not just Nio.
+- **Manual later**: `hermes chat --accept-hooks` and then type `exit` — anything that enters an agent path (`chat`, `acp`, `rl`) with `--accept-hooks` writes the allowlist on startup. Blanket alternatives: `HERMES_ACCEPT_HOOKS=1` env var, or `hooks_auto_accept: true` in `~/.hermes/config.yaml` — these approve _all_ shell hooks globally, not just Nio.
 
-See `hermes hooks list` / `hermes hooks doctor` for status and `bash plugins/hermes/setup.sh --uninstall` to roll back. Note: the allowlist entry is keyed on the exact command string, so any `pnpm run build` that changes the absolute path of `hook-cli.js` requires re-approval.
+Note: `hermes hooks test` and `hermes hooks doctor` don't populate the allowlist even with `--accept-hooks` — they bypass the registration path. See `hermes hooks list` / `hermes hooks doctor` for status and `bash plugins/hermes/setup.sh --uninstall` to roll back. The allowlist entry is keyed on the exact command string, so any `pnpm run build` that changes the absolute path of `hook-cli.js` requires re-approval.
 
 ## Documentation
 
