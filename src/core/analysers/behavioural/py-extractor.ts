@@ -80,6 +80,18 @@ const SINK_PATTERNS: Array<{ re: RegExp; kind: TaintSink['kind']; name: string }
   { re: /\bopen\s*\([^)]*,\s*['"][wWaA]/, kind: 'file_write', name: 'open(w)' },
   { re: /\bPath\s*\([^)]*\)\.write_text\s*\(/, kind: 'file_write', name: 'Path.write_text' },
   { re: /\bshutil\.copy/, kind: 'file_write', name: 'shutil.copy' },
+
+  // Destructive filesystem ops — recursive deletes and unlinks. Semantic
+  // equivalents of `rm -rf`; Phase 2's DANGEROUS_COMMAND regex doesn't see
+  // them because they live inside a language, not the shell. Phase 4 picks
+  // them up here and classifies as DESTRUCTIVE_FS.
+  { re: /\bshutil\.rmtree\s*\(/, kind: 'file_destructive', name: 'shutil.rmtree' },
+  { re: /\bos\.removedirs\s*\(/, kind: 'file_destructive', name: 'os.removedirs' },
+  { re: /\bos\.remove\s*\(/, kind: 'file_destructive', name: 'os.remove' },
+  { re: /\bos\.unlink\s*\(/, kind: 'file_destructive', name: 'os.unlink' },
+  { re: /\bos\.rmdir\s*\(/, kind: 'file_destructive', name: 'os.rmdir' },
+  { re: /\bPath\s*\([^)]*\)\.unlink\s*\(/, kind: 'file_destructive', name: 'Path.unlink' },
+  { re: /\bPath\s*\([^)]*\)\.rmdir\s*\(/, kind: 'file_destructive', name: 'Path.rmdir' },
 ];
 
 /** Import patterns for dangerous modules. */

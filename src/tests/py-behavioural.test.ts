@@ -161,6 +161,45 @@ describe('Python Extractor', () => {
       assert.ok(result);
       assert.ok(result.sinks.some(s => s.kind === 'file_write'));
     });
+
+    it('should detect shutil.rmtree as file_destructive', () => {
+      const result = pyExtractor.extract(
+        "import shutil\nshutil.rmtree('/tmp/victim')",
+        'test.py',
+      );
+      assert.ok(result);
+      const sink = result.sinks.find(s => s.kind === 'file_destructive');
+      assert.ok(sink, 'expected file_destructive sink');
+      assert.equal(sink.name, 'shutil.rmtree');
+    });
+
+    it('should detect os.remove / os.unlink / os.rmdir / os.removedirs', () => {
+      for (const fn of ['remove', 'unlink', 'rmdir', 'removedirs']) {
+        const result = pyExtractor.extract(
+          `import os\nos.${fn}('/tmp/victim')`,
+          'test.py',
+        );
+        assert.ok(result);
+        assert.ok(
+          result.sinks.some(s => s.kind === 'file_destructive'),
+          `expected file_destructive sink for os.${fn}`,
+        );
+      }
+    });
+
+    it('should detect Path(...).unlink / Path(...).rmdir', () => {
+      for (const fn of ['unlink', 'rmdir']) {
+        const result = pyExtractor.extract(
+          `from pathlib import Path\nPath('/tmp/v').${fn}()`,
+          'test.py',
+        );
+        assert.ok(result);
+        assert.ok(
+          result.sinks.some(s => s.kind === 'file_destructive'),
+          `expected file_destructive sink for Path.${fn}`,
+        );
+      }
+    });
   });
 
   describe('functions', () => {

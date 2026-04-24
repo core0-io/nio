@@ -68,6 +68,24 @@ const SINK_PATTERNS: Record<string, TaintSink['kind']> = {
   'fs.writeFile': 'file_write',
   'writeFileSync': 'file_write',
   'writeFile': 'file_write',
+  // Destructive filesystem ops — semantic equivalents of `rm -rf`.
+  // Phase 2's DANGEROUS_COMMAND shell-regex can't see these because
+  // they live inside JS; Phase 4 picks them up here as DESTRUCTIVE_FS.
+  'fs.rm': 'file_destructive',
+  'fs.rmSync': 'file_destructive',
+  'fs.rmdir': 'file_destructive',
+  'fs.rmdirSync': 'file_destructive',
+  'fs.unlink': 'file_destructive',
+  'fs.unlinkSync': 'file_destructive',
+  'fsPromises.rm': 'file_destructive',
+  'fsPromises.rmdir': 'file_destructive',
+  'fsPromises.unlink': 'file_destructive',
+  'rm': 'file_destructive',
+  'rmSync': 'file_destructive',
+  'rmdir': 'file_destructive',
+  'rmdirSync': 'file_destructive',
+  'unlink': 'file_destructive',
+  'unlinkSync': 'file_destructive',
 };
 
 /** Regex for suspicious string literals. */
@@ -283,7 +301,9 @@ function memberExpressionName(node: MemberExpression): string | null {
   if (node.object.type === 'Identifier') {
     return `${node.object.name}.${prop}`;
   }
-  return null;
+  // `require('fs').rmSync(...)` / chained calls / etc: caller (SINK_PATTERNS)
+  // may still match on the bare method name (e.g. `rmSync`).
+  return prop;
 }
 
 /** Extract parameter name from a function param node. */

@@ -205,6 +205,7 @@ function describeFlow(source: TaintSource, sink: TaintSink, via: string): string
     fetch: 'network request',
     network_send: 'network send',
     file_write: 'file write',
+    file_destructive: 'destructive filesystem operation',
     spawn: 'process spawn',
   };
 

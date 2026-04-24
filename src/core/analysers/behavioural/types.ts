@@ -19,7 +19,14 @@ export interface TaintSource {
 
 /** A security-relevant sink (where data is consumed). */
 export interface TaintSink {
-  kind: 'exec' | 'eval' | 'fetch' | 'network_send' | 'file_write' | 'spawn';
+  kind:
+    | 'exec'
+    | 'eval'
+    | 'fetch'
+    | 'network_send'
+    | 'file_write'
+    | 'file_destructive'
+    | 'spawn';
   name: string;
   line: number;
   column: number;
