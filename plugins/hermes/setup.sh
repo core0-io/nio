@@ -118,10 +118,23 @@ approve_hook() {
   fi
 
   echo "[nio-hermes] Approving hook via Hermes's register_from_config()..."
+  # register_from_config() only writes an allowlist entry when the hook is
+  # not yet listed. For re-approvals after a rebuild (new hook-cli.js
+  # mtime, or user switched to a different install path) we need to clear
+  # the stale entry first so the new approved_at / script_mtime_at_approval
+  # land in shell-hooks-allowlist.json. revoke() is a no-op on first
+  # install (nothing to remove), so this path is idempotent either way.
   if "$hermes_py" - <<'PY'
 from hermes_cli.config import load_config
-from agent.shell_hooks import register_from_config
-register_from_config(load_config(), accept_hooks=True)
+from agent.shell_hooks import register_from_config, revoke
+
+cfg = load_config()
+for entry in (cfg.get("hooks", {}).get("pre_tool_call") or []):
+    if isinstance(entry, dict):
+        cmd = entry.get("command")
+        if isinstance(cmd, str) and cmd:
+            revoke(cmd)
+register_from_config(cfg, accept_hooks=True)
 PY
   then
     echo "[nio-hermes] Hook approved. Verify with: hermes hooks doctor"
