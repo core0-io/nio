@@ -93,16 +93,41 @@ fi
 approve_hook() {
   if ! command -v hermes >/dev/null 2>&1; then
     echo "[nio-hermes] 'hermes' CLI not on PATH; skipping approval." >&2
-    echo "[nio-hermes] After installing Hermes, run:" >&2
-    echo "             hermes --accept-hooks hooks doctor" >&2
+    echo "[nio-hermes] After installing Hermes, run once:" >&2
+    echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
     return 0
   fi
-  echo "[nio-hermes] Approving hook via: hermes --accept-hooks hooks doctor"
-  if hermes --accept-hooks hooks doctor >/dev/null 2>&1; then
-    echo "[nio-hermes] Hook approved. Verify with: hermes hooks list"
+
+  # Hermes writes its allowlist (~/.hermes/shell-hooks-allowlist.json) only
+  # inside register_from_config(accept_hooks=True), which runs at startup
+  # for chat/acp/rl — not for 'hermes hooks test/doctor' and not for the
+  # top-level --accept-hooks flag on other subcommands. Spinning up chat
+  # just to populate one allowlist entry is overkill (model auth, TUI,
+  # startup cost). Invoke register_from_config directly from Hermes's own
+  # venv Python: same code path, no chat, no LLM.
+  local hermes_bin shebang hermes_py
+  hermes_bin="$(command -v hermes)"
+  shebang="$(head -n1 "$hermes_bin" 2>/dev/null || true)"
+  hermes_py="$(printf '%s\n' "$shebang" | sed -n 's|^#! *\([^ ]*\).*|\1|p')"
+
+  if [[ -z "$hermes_py" || ! -x "$hermes_py" ]]; then
+    echo "[nio-hermes] Couldn't locate Hermes's Python interpreter from" >&2
+    echo "             $hermes_bin shebang. Approve manually:" >&2
+    echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
+    return 0
+  fi
+
+  echo "[nio-hermes] Approving hook via Hermes's register_from_config()..."
+  if "$hermes_py" - <<'PY'
+from hermes_cli.config import load_config
+from agent.shell_hooks import register_from_config
+register_from_config(load_config(), accept_hooks=True)
+PY
+  then
+    echo "[nio-hermes] Hook approved. Verify with: hermes hooks doctor"
   else
-    echo "[nio-hermes] Approval command exited non-zero. Run it manually:" >&2
-    echo "             hermes --accept-hooks hooks doctor" >&2
+    echo "[nio-hermes] Approval failed. Run manually:" >&2
+    echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
   fi
 }
 
