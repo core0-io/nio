@@ -39,6 +39,7 @@ import type { HookAdapter, HookOutput } from '../index.js';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
+import { createLoggerProvider } from './lib/logs-collector.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
@@ -295,8 +296,18 @@ async function main(): Promise<void> {
       ? createMeterProvider(collectorConfig) : null;
     const tracerProvider = collectorConfig.enabled
       ? createTracerProvider(collectorConfig) : null;
+    // LoggerProvider sends guard decisions to OTLP /v1/logs — matches
+    // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
+    // "Logs" view stays empty for Hermes guard activity even though
+    // metrics and traces flow correctly.
+    const logsConfig = config.collector?.logs;
+    const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+      ? createLoggerProvider(collectorConfig) : null;
 
-    const result = await evaluateHook(adapter, payload, { config, nio });
+    const result = await evaluateHook(
+      adapter, payload, { config, nio },
+      { loggerProvider, logsConfig },
+    );
 
     // Guard decision metric (nio.decision.count).
     if (meterProvider) {
@@ -331,6 +342,7 @@ async function main(): Promise<void> {
     await Promise.all([
       meterProvider?.forceFlush(),
       tracerProvider?.forceFlush(),
+      loggerProvider?.forceFlush(),
     ]);
 
     const confirmAction = config.guard?.confirm_action ?? 'allow';
