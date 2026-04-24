@@ -616,7 +616,7 @@ Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
 |-----------|--------|
 | `nio.session_id` | Hook stdin `session_id` |
 | `nio.turn_number` | Auto-incrementing per session |
-| `nio.platform` | `claude-code` or `openclaw` |
+| `nio.platform` | `claude-code`, `openclaw`, or `hermes` |
 | `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
 | `nio.turn.input_tokens` | Sum of API call input tokens for this turn |
 | `nio.turn.output_tokens` | Sum of API call output tokens for this turn |
