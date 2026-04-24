@@ -2,16 +2,21 @@
 # Copyright 2026 core0-io
 # SPDX-License-Identifier: Apache-2.0
 
-"""Safely merge Nio's pre_tool_call shell-hook entry into the user's
+"""Safely merge Nio's shell-hook entries into the user's
 ~/.hermes/config.yaml.
 
-Invoked by plugins/hermes/setup.sh. Keeps the merge conservative so
-we never clobber a user's custom hooks: we backup first, then either
-append the snippet as a new top-level `hooks:` key, or add our entry
-to the user's existing `hooks.pre_tool_call:` list.
+Invoked by plugins/hermes/setup.sh. The snippet declares one entry per
+Hermes lifecycle event (pre_tool_call, post_tool_call, pre_llm_call,
+post_llm_call, on_session_start, on_session_end, subagent_stop). Each
+entry points at the same hook-cli.js — the CLI dispatches internally
+based on the stdin payload's `hook_event_name` field.
+
+We never clobber a user's custom hooks: we backup first, then for each
+event in the snippet either add a new top-level entry, append our entry
+to the user's existing list, or rewrite the path on a stale Nio entry.
 
 Exit codes:
-  0   success (hook installed or already present)
+  0   success (hooks installed or already present)
   1   user-facing error (file missing, bad config, refused confirmation)
   2   internal error (unexpected state we don't know how to merge)
 """
@@ -25,7 +30,7 @@ import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # PyYAML is strongly preferred — Hermes runs on Python so it's almost
@@ -45,8 +50,6 @@ def log(msg: str) -> None:
 
 def prompt_yes_no(question: str, default_yes: bool = True) -> bool:
     if not sys.stdin.isatty():
-        # Non-interactive: fall back to the default. Callers that want
-        # a non-TTY happy path should pass --yes explicitly.
         return default_yes
     suffix = " [Y/n] " if default_yes else " [y/N] "
     try:
@@ -66,8 +69,6 @@ def load_snippet(snippet_path: Path, hook_cli_abs: str) -> str:
     """Read config-snippet.yaml, strip file-level comments, resolve
     the __NIO_HOOK_CLI_PATH__ sentinel to hook_cli_abs."""
     text = snippet_path.read_text(encoding="utf-8")
-    # Strip leading comment-only lines + blank lines so the result
-    # is just the hooks: YAML block. Keeps the merged config tidy.
     lines = text.splitlines()
     start = 0
     for i, line in enumerate(lines):
@@ -98,17 +99,69 @@ def backup(config_path: Path) -> Optional[Path]:
 
 
 # ---------------------------------------------------------------------------
-# YAML merge (PyYAML path)
+# YAML merge (PyYAML path) — multi-event aware
 # ---------------------------------------------------------------------------
+
+def entry_targets_nio(cmd: Any) -> bool:
+    return (
+        isinstance(cmd, str)
+        and "hook-cli.js" in cmd
+        and "/skills/nio/scripts/" in cmd
+    )
+
+
+def merge_event(
+    hooks: Dict[str, Any],
+    event_name: str,
+    our_entry: Dict[str, Any],
+) -> str:
+    """Apply our entry to a single event key. Returns the per-event
+    status: 'added' | 'added-alongside' | 'already-installed' |
+    'rewrote-path'."""
+    pre = hooks.get(event_name)
+    if pre is None:
+        hooks[event_name] = [our_entry]
+        return "added"
+    if not isinstance(pre, list):
+        raise ValueError(
+            f"hooks.{event_name} in ~/.hermes/config.yaml is not a list; "
+            "refusing to overwrite. Please merge the snippet manually."
+        )
+
+    nio_entries = [
+        e for e in pre
+        if isinstance(e, dict) and entry_targets_nio(e.get("command"))
+    ]
+    if not nio_entries:
+        pre.append(our_entry)
+        return "added-alongside"
+
+    same = [e for e in nio_entries if e.get("command") == our_entry["command"]]
+    if same:
+        return "already-installed"
+
+    # Path drift — rewrite the first stale Nio entry to point at the new
+    # location.
+    for e in pre:
+        if (
+            isinstance(e, dict)
+            and entry_targets_nio(e.get("command"))
+            and e.get("command") != our_entry["command"]
+        ):
+            e["command"] = our_entry["command"]
+            return "rewrote-path"
+
+    return "rewrote-path"
+
 
 def merge_with_yaml(
     existing_text: str,
-    hook_cli_abs: str,
     snippet_body: str,
-) -> Tuple[str, str]:
-    """Return (new_text, status) where status is one of:
-       'added', 'already-installed', 'rewrote-path', 'added-alongside'
-    """
+) -> Tuple[str, Dict[str, str]]:
+    """Multi-event merge. Returns (new_text, statuses) where statuses
+    maps event_name → status. The snippet body has already been
+    path-resolved by load_snippet, so the absolute hook-cli path is
+    embedded in each entry's `command` field."""
     existing: Any = yaml.safe_load(existing_text) or {}
     if not isinstance(existing, dict):
         raise ValueError(
@@ -117,56 +170,26 @@ def merge_with_yaml(
         )
 
     snippet_parsed = yaml.safe_load(snippet_body) or {}
-    our_entry = snippet_parsed["hooks"]["pre_tool_call"][0]
-
-    def entry_targets_nio(cmd: Any) -> bool:
-        return isinstance(cmd, str) and "hook-cli.js" in cmd and "/skills/nio/scripts/" in cmd
+    snippet_hooks = snippet_parsed.get("hooks", {})
+    if not isinstance(snippet_hooks, dict) or not snippet_hooks:
+        raise ValueError(
+            "snippet template has no hooks block — internal error"
+        )
 
     hooks = existing.get("hooks")
     if not isinstance(hooks, dict):
-        existing["hooks"] = {"pre_tool_call": [our_entry]}
-        status = "added"
-    else:
-        pre = hooks.get("pre_tool_call")
-        if pre is None:
-            hooks["pre_tool_call"] = [our_entry]
-            status = "added"
-        elif not isinstance(pre, list):
-            raise ValueError(
-                "hooks.pre_tool_call in ~/.hermes/config.yaml is not a "
-                "list; refusing to overwrite. Please merge the snippet "
-                "manually."
-            )
-        else:
-            existing_nio = [
-                e for e in pre
-                if isinstance(e, dict) and entry_targets_nio(e.get("command"))
-            ]
-            if not existing_nio:
-                pre.append(our_entry)
-                status = "added-alongside"
-            else:
-                # Already has a Nio entry — check path.
-                same = [
-                    e for e in existing_nio
-                    if e.get("command") == our_entry["command"]
-                ]
-                if same:
-                    status = "already-installed"
-                else:
-                    # Path moved — rewrite the first matching entry.
-                    for e in pre:
-                        if (
-                            isinstance(e, dict)
-                            and entry_targets_nio(e.get("command"))
-                            and e.get("command") != our_entry["command"]
-                        ):
-                            e["command"] = our_entry["command"]
-                            break
-                    status = "rewrote-path"
+        existing["hooks"] = hooks = {}
+
+    statuses: Dict[str, str] = {}
+    for event_name, our_entries in snippet_hooks.items():
+        if not isinstance(our_entries, list) or not our_entries:
+            continue
+        # Snippet always lists exactly one entry per event.
+        our_entry = our_entries[0]
+        statuses[event_name] = merge_event(hooks, event_name, our_entry)
 
     new_text = yaml.safe_dump(existing, default_flow_style=False, sort_keys=False)
-    return new_text, status
+    return new_text, statuses
 
 
 # ---------------------------------------------------------------------------
@@ -192,15 +215,14 @@ def merge_without_yaml(
     existing_text: str,
     hook_cli_abs: str,
     snippet_body: str,
-) -> Tuple[str, str]:
-    """Conservative fallback: only handles the "no existing hooks:" case
-    safely. Anything more complex is punted to the user with a clear
-    message.
-    """
+) -> Tuple[str, Dict[str, str]]:
+    """Conservative fallback when PyYAML is missing: only handles the
+    "no existing hooks:" case safely. Anything more complex is punted
+    to the user with a clear message."""
     if has_nio_entry(existing_text):
-        # Check whether the path matches.
         if hook_cli_abs in existing_text:
-            return existing_text, "already-installed"
+            # Best-effort: assume all events are present at this path.
+            return existing_text, {"_all": "already-installed"}
         raise ValueError(
             "An older Nio hook-cli entry appears in your config but at a "
             "different path. Install PyYAML (`pip install --user pyyaml`) "
@@ -215,14 +237,13 @@ def merge_without_yaml(
             "plugins/hermes/config-snippet.yaml into the existing block."
         )
 
-    # No existing hooks block — safe to append.
     suffix = "\n" if not existing_text.endswith("\n") else ""
     new_text = existing_text + suffix + "\n" + snippet_body.rstrip() + "\n"
-    return new_text, "added"
+    return new_text, {"_all": "added"}
 
 
 # ---------------------------------------------------------------------------
-# Uninstall
+# Uninstall — walks every event in the user's hooks block.
 # ---------------------------------------------------------------------------
 
 def uninstall(config_path: Path, hook_cli_abs: str) -> int:
@@ -246,36 +267,40 @@ def uninstall(config_path: Path, hook_cli_abs: str) -> int:
     if not isinstance(hooks, dict):
         log("no hooks: block found — nothing to uninstall")
         return 0
-    pre = hooks.get("pre_tool_call")
-    if not isinstance(pre, list):
-        log("no pre_tool_call list — nothing to uninstall")
+
+    removed_any = False
+    for event_name in list(hooks.keys()):
+        pre = hooks.get(event_name)
+        if not isinstance(pre, list):
+            continue
+        before = len(pre)
+        remaining = [
+            e for e in pre
+            if not (
+                isinstance(e, dict)
+                and isinstance(e.get("command"), str)
+                and entry_targets_nio(e["command"])
+            )
+        ]
+        if len(remaining) == before:
+            continue
+        removed_any = True
+        if remaining:
+            hooks[event_name] = remaining
+        else:
+            del hooks[event_name]
+
+    if not removed_any:
+        log("no Nio hook-cli entries found — nothing to uninstall")
         return 0
 
-    before = len(pre)
-    remaining = [
-        e for e in pre
-        if not (
-            isinstance(e, dict)
-            and isinstance(e.get("command"), str)
-            and "hook-cli.js" in e["command"]
-            and "/skills/nio/scripts/" in e["command"]
-        )
-    ]
-    if len(remaining) == before:
-        log("no Nio hook-cli entry found — nothing to uninstall")
-        return 0
-
-    backup(config_path)
-    if remaining:
-        hooks["pre_tool_call"] = remaining
-    else:
-        del hooks["pre_tool_call"]
     if not hooks:
         del data["hooks"]
 
+    backup(config_path)
     new_text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False)
     config_path.write_text(new_text, encoding="utf-8")
-    log(f"removed Nio hook-cli entry from {config_path}")
+    log(f"removed Nio hook-cli entries from {config_path}")
     return 0
 
 
@@ -283,9 +308,23 @@ def uninstall(config_path: Path, hook_cli_abs: str) -> int:
 # Main
 # ---------------------------------------------------------------------------
 
+def summarize(statuses: Dict[str, str]) -> str:
+    """Render per-event statuses as a one-line summary."""
+    if "_all" in statuses:
+        return statuses["_all"]
+    counts: Dict[str, List[str]] = {}
+    for event, st in statuses.items():
+        counts.setdefault(st, []).append(event)
+    parts = []
+    for st in ("added", "added-alongside", "rewrote-path", "already-installed"):
+        if st in counts:
+            parts.append(f"{st}={len(counts[st])}")
+    return ", ".join(parts) or "no-op"
+
+
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(
-        description="Merge Nio's pre_tool_call shell-hook into ~/.hermes/config.yaml",
+        description="Merge Nio's lifecycle shell-hooks into ~/.hermes/config.yaml",
     )
     ap.add_argument("--config", required=True, type=Path,
                     help="path to ~/.hermes/config.yaml")
@@ -298,7 +337,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--yes", action="store_true",
                     help="skip confirmation prompts (for CI / scripting)")
     ap.add_argument("--uninstall", action="store_true",
-                    help="remove the Nio hook entry and exit")
+                    help="remove the Nio hook entries and exit")
     args = ap.parse_args(argv)
 
     config_path: Path = args.config.expanduser()
@@ -320,30 +359,30 @@ def main(argv: list[str]) -> int:
 
     try:
         if HAVE_YAML:
-            new_text, status = merge_with_yaml(
-                existing_text, args.hook_cli, snippet_body,
-            )
+            new_text, statuses = merge_with_yaml(existing_text, snippet_body)
         else:
             log("PyYAML not installed — using fallback merge (appends only)")
-            new_text, status = merge_without_yaml(
+            new_text, statuses = merge_without_yaml(
                 existing_text, args.hook_cli, snippet_body,
             )
     except ValueError as e:
         log(f"merge aborted: {e}")
         return 1
 
-    if status == "already-installed":
-        log(f"Nio hook-cli is already installed at {config_path} — no change")
+    all_already = bool(statuses) and all(s == "already-installed" for s in statuses.values())
+    if all_already:
+        log(f"Nio hook-cli already installed for all events at {config_path} — no change")
         return 0
 
     if args.dry_run:
         print("=== new ~/.hermes/config.yaml ===")
         print(new_text)
-        log(f"dry-run complete (status={status}); no files were modified")
+        log(f"dry-run complete ({summarize(statuses)}); no files were modified")
         return 0
 
+    has_rewrite = any(s == "rewrote-path" for s in statuses.values())
     if (
-        status == "rewrote-path"
+        has_rewrite
         and not args.yes
         and not prompt_yes_no(
             "An existing Nio entry points at a different path. "
@@ -357,16 +396,8 @@ def main(argv: list[str]) -> int:
     backup(config_path)
     config_path.write_text(new_text, encoding="utf-8")
 
-    messages = {
-        "added": f"installed Nio hook-cli entry into {config_path}",
-        "added-alongside":
-            f"added Nio hook-cli entry alongside existing pre_tool_call hooks "
-            f"in {config_path}",
-        "rewrote-path":
-            f"rewrote existing Nio hook-cli path to the new location in {config_path}",
-    }
-    log(messages.get(status, f"merge complete (status={status})"))
-    log(json.dumps({"command": args.hook_cli, "status": status}))
+    log(f"installed Nio shell-hooks into {config_path} ({summarize(statuses)})")
+    log(json.dumps({"command": args.hook_cli, "statuses": statuses}))
     return 0
 
 

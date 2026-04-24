@@ -117,27 +117,37 @@ approve_hook() {
     return 0
   fi
 
-  echo "[nio-hermes] Approving hook via Hermes's register_from_config()..."
-  # register_from_config() only writes an allowlist entry when the hook is
-  # not yet listed. For re-approvals after a rebuild (new hook-cli.js
-  # mtime, or user switched to a different install path) we need to clear
-  # the stale entry first so the new approved_at / script_mtime_at_approval
-  # land in shell-hooks-allowlist.json. revoke() is a no-op on first
-  # install (nothing to remove), so this path is idempotent either way.
+  echo "[nio-hermes] Approving Nio hooks via Hermes's register_from_config()..."
+  # register_from_config() only writes an allowlist entry when the hook
+  # is not yet listed. For re-approvals after a rebuild (new hook-cli.js
+  # mtime, or user switched to a different install path) we need to
+  # clear the stale entry first so the new approved_at /
+  # script_mtime_at_approval land in shell-hooks-allowlist.json.
+  # revoke() is a no-op when there's nothing to remove, so this is
+  # idempotent on first install too. We loop over every event in
+  # config.yaml's hooks block — Nio installs entries for pre_tool_call,
+  # post_tool_call, pre_llm_call, post_llm_call, on_session_*,
+  # subagent_stop. Same command string across all events means one
+  # allowlist entry covers them; the revoke loop is still cheap and
+  # robust against future per-event command divergence.
   if "$hermes_py" - <<'PY'
 from hermes_cli.config import load_config
 from agent.shell_hooks import register_from_config, revoke
 
 cfg = load_config()
-for entry in (cfg.get("hooks", {}).get("pre_tool_call") or []):
-    if isinstance(entry, dict):
-        cmd = entry.get("command")
-        if isinstance(cmd, str) and cmd:
-            revoke(cmd)
+hooks = cfg.get("hooks", {}) if isinstance(cfg.get("hooks", {}), dict) else {}
+for event_entries in hooks.values():
+    if not isinstance(event_entries, list):
+        continue
+    for entry in event_entries:
+        if isinstance(entry, dict):
+            cmd = entry.get("command")
+            if isinstance(cmd, str) and cmd:
+                revoke(cmd)
 register_from_config(cfg, accept_hooks=True)
 PY
   then
-    echo "[nio-hermes] Hook approved. Verify with: hermes hooks doctor"
+    echo "[nio-hermes] Hooks approved. Verify with: hermes hooks doctor"
   else
     echo "[nio-hermes] Approval failed. Run manually:" >&2
     echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
