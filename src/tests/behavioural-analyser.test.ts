@@ -78,6 +78,38 @@ describe('AST Parser', () => {
       assert.ok(result.sinks.some((s) => s.kind === 'fetch'));
     });
 
+    it('should detect fs.rmSync with recursive as file_destructive', () => {
+      const result = parseAndExtract(
+        "const fs = require('fs');\nfs.rmSync('/tmp/victim', {recursive: true, force: true});",
+        'test.ts',
+      );
+      assert.ok(result);
+      assert.ok(
+        result.sinks.some((s) => s.kind === 'file_destructive'),
+        'expected file_destructive sink for fs.rmSync',
+      );
+    });
+
+    it('should detect fs.unlinkSync / fs.rmdirSync as file_destructive', () => {
+      for (const fn of ['unlinkSync', 'rmdirSync']) {
+        const result = parseAndExtract(`fs.${fn}('/tmp/v');`, 'test.ts');
+        assert.ok(result);
+        assert.ok(
+          result.sinks.some((s) => s.kind === 'file_destructive'),
+          `expected file_destructive for fs.${fn}`,
+        );
+      }
+    });
+
+    it('should detect fsPromises.rm as file_destructive', () => {
+      const result = parseAndExtract(
+        "await fsPromises.rm('/tmp/v', {recursive:true});",
+        'test.ts',
+      );
+      assert.ok(result);
+      assert.ok(result.sinks.some((s) => s.kind === 'file_destructive'));
+    });
+
     it('should detect dynamic import with variable', () => {
       const result = parseAndExtract('const mod = await import(modulePath);', 'test.ts');
       assert.ok(result);

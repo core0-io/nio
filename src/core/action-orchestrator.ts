@@ -176,42 +176,57 @@ export class ActionOrchestrator {
     timings.runtime = { score: scoreA, finding_count: phase2Findings.length, duration_ms: Math.round(t2End - t2) };
 
     if (shouldShortCircuit(scoreA, level)) {
-      return this.buildResult(allFindings, scores, 2, level, timings);
+      return this.buildResult(allFindings, scores, 2, level, timings, scoreA);
     }
 
-    // ── Phase 3: StaticAnalyser (Write/Edit only) ────────────────────
+    // ── Resolve content + path for Phase 3/4 analysis ─────────────────
+    // Both write_file and exec_command flow through the same analysers:
+    // write_file uses its content/path directly; exec_command passes
+    // through extractInlineCode() to unwrap python3 -c / heredoc /
+    // node -e / bash -c / etc. into a synthetic "inline.<ext>" file,
+    // so an agent cannot bypass Phase 4 by wrapping a destructive call
+    // in `python3 -c "..."` (see plan Ext D).
+    let phase34Content: string | undefined;
+    let phase34Path: string | undefined;
+
     if (envelope.action.type === 'write_file') {
       const data = envelope.action.data as { content_preview?: string; path?: string };
-      if (data.content_preview) {
-        const t3 = performance.now();
-        const phase3Findings = await this.runStaticOnContent(
-          data.content_preview,
-          data.path || 'unknown',
-        );
-        const t3End = performance.now();
-        allFindings.push(...phase3Findings);
-        const scoreB = findingsToScore(phase3Findings);
-        scores.static = scoreB;
-        timings.static = { score: scoreB, finding_count: phase3Findings.length, duration_ms: Math.round(t3End - t3) };
-
-        if (shouldShortCircuit(scoreB, level)) {
-          return this.buildResult(allFindings, scores, 3, level, timings);
+      phase34Content = data.content_preview;
+      phase34Path = data.path || 'unknown';
+    } else if (envelope.action.type === 'exec_command') {
+      const { extractInlineCode } = await import('./shared/inline-code.js');
+      const data = envelope.action.data as { command?: string };
+      if (typeof data.command === 'string') {
+        const inline = extractInlineCode(data.command);
+        if (inline) {
+          phase34Content = inline.content;
+          phase34Path = inline.virtualPath;
         }
       }
     }
 
-    // ── Phase 4: BehaviouralAnalyser (Write/Edit .ts/.js/.py only) ─────
-    if (envelope.action.type === 'write_file') {
-      const data = envelope.action.data as { content_preview?: string; path?: string };
-      const path = data.path || '';
-      const isBehaviouralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(path);
+    // ── Phase 3: StaticAnalyser on resolved content ──────────────────
+    if (phase34Content && phase34Path) {
+      const t3 = performance.now();
+      const phase3Findings = await this.runStaticOnContent(phase34Content, phase34Path);
+      const t3End = performance.now();
+      allFindings.push(...phase3Findings);
+      const scoreB = findingsToScore(phase3Findings);
+      scores.static = scoreB;
+      timings.static = { score: scoreB, finding_count: phase3Findings.length, duration_ms: Math.round(t3End - t3) };
 
-      if (isBehaviouralTarget && data.content_preview) {
+      if (shouldShortCircuit(scoreB, level)) {
+        return this.buildResult(allFindings, scores, 3, level, timings, scoreB);
+      }
+    }
+
+    // ── Phase 4: BehaviouralAnalyser on resolved content ─────────────
+    if (phase34Content && phase34Path) {
+      const isBehaviouralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(phase34Path);
+
+      if (isBehaviouralTarget) {
         const t4 = performance.now();
-        const phase4Findings = await this.runBehaviouralOnContent(
-          data.content_preview,
-          path,
-        );
+        const phase4Findings = await this.runBehaviouralOnContent(phase34Content, phase34Path);
         const t4End = performance.now();
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
@@ -219,7 +234,7 @@ export class ActionOrchestrator {
         timings.behavioural = { score: scoreC, finding_count: phase4Findings.length, duration_ms: Math.round(t4End - t4) };
 
         if (shouldShortCircuit(scoreC, level)) {
-          return this.buildResult(allFindings, scores, 4, level, timings);
+          return this.buildResult(allFindings, scores, 4, level, timings, scoreC);
         }
       }
     }
@@ -235,7 +250,7 @@ export class ActionOrchestrator {
       timings.llm = { score: scoreD, finding_count: phase5Findings.length, duration_ms: Math.round(t5End - t5) };
 
       if (shouldShortCircuit(scoreD, level)) {
-        return this.buildResult(allFindings, scores, 5, level, timings);
+        return this.buildResult(allFindings, scores, 5, level, timings, scoreD);
       }
     }
 
@@ -271,7 +286,7 @@ export class ActionOrchestrator {
         }
 
         if (shouldShortCircuit(result.score, level)) {
-          return this.buildResult(allFindings, scores, 6, level, timings);
+          return this.buildResult(allFindings, scores, 6, level, timings, result.score);
         }
       }
     }
@@ -383,8 +398,26 @@ export class ActionOrchestrator {
     phaseStopped: 1 | 2 | 3 | 4 | 5 | 6,
     level: ProtectionLevel = this.level,
     phaseTimings?: PhaseTimings,
+    shortCircuitScore?: number,
   ): ActionDecision {
-    const finalScore = aggregateScores(scores, this.weights);
+    // Base aggregate: weighted average across every phase that produced a
+    // score. On a natural end-of-pipeline (phase 6 without triggering
+    // short-circuit) this is the final answer.
+    const aggregated = aggregateScores(scores, this.weights);
+
+    // When a phase's own score crossed the deny threshold, we short-
+    // circuited on that phase. That phase alone said "this is severe
+    // enough to stop" — we shouldn't let weighted-average with earlier
+    // zero-or-low phases dilute that verdict. Phase 2 is naturally
+    // immune because nothing has run before it, but Phase 3/4/5/6
+    // short-circuits otherwise get averaged with preceding clean
+    // phases. Using max() here restores symmetry so `shutil.rmtree`
+    // (Phase 4 critical) blocks under balanced for the same reason
+    // `rm -rf` (Phase 2 critical) does.
+    const finalScore = shortCircuitScore !== undefined
+      ? Math.max(aggregated, shortCircuitScore)
+      : aggregated;
+
     const decision = scoreToDecision(finalScore, level);
     const riskLevel = scoreToRiskLevel(finalScore);
     const maxFindingSeverity = findings.length > 0

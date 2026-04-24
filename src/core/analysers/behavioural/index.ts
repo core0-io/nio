@@ -191,6 +191,14 @@ function classifyFlow(flow: DataflowPath): {
     return { category: 'execution', severity: 'high', ruleId: 'DATAFLOW_EVAL' };
   }
 
+  // Any source to destructive fs op = destructive filesystem operation.
+  // Marked critical to match Phase 2's `rm -rf` severity — these are
+  // semantic equivalents; short-circuits at Phase 4 deny/confirm under
+  // balanced/strict, not diluted away by later-phase averaging.
+  if (sink.kind === 'file_destructive') {
+    return { category: 'execution', severity: 'critical', ruleId: 'DESTRUCTIVE_FS' };
+  }
+
   // Default: medium risk, execution category
   return { category: 'execution', severity: 'medium', ruleId: 'DATAFLOW_GENERIC' };
 }
@@ -202,6 +210,7 @@ function flowTitle(flow: DataflowPath): string {
     DATAFLOW_CMD_INJECT: 'Command Injection Risk',
     DATAFLOW_EVAL: 'Unsafe Code Evaluation',
     DATAFLOW_GENERIC: 'Suspicious Dataflow',
+    DESTRUCTIVE_FS: 'Destructive Filesystem Operation',
   };
   const ruleId = classifyFlow(flow).ruleId;
   return titles[ruleId] ?? 'Suspicious Dataflow';
@@ -216,6 +225,9 @@ function flowRemediation(flow: DataflowPath): string {
   }
   if (flow.sink.kind === 'fetch' || flow.sink.kind === 'network_send') {
     return 'Ensure sensitive data is not sent to untrusted endpoints. Use domain allowlists.';
+  }
+  if (flow.sink.kind === 'file_destructive') {
+    return 'Avoid recursive deletes on agent-chosen paths. Prefer removing specific named files; require explicit human approval for directory trees.';
   }
   return 'Review this dataflow for potential security implications.';
 }
@@ -283,6 +295,40 @@ function capabilityFindings(
           remediation: 'Replace eval/Function with safer alternatives (JSON.parse, structured APIs).',
           analyser: 'behavioural',
           confidence: 0.9,
+        });
+      }
+    }
+  }
+
+  // Destructive filesystem operation — flag even without source taint.
+  // A literal `shutil.rmtree('/tmp/x')` has no dataflow source, so it
+  // produces no DATAFLOW_* finding. But the semantic equivalent of
+  // `rm -rf` inside a language body is exactly what we want to catch
+  // on the exec_command unwrap path.
+  for (const fa of fileAnalyses) {
+    for (const sink of fa.extraction.sinks) {
+      if (sink.kind === 'file_destructive') {
+        findings.push({
+          id: findingId('DESTRUCTIVE_FS', fa.file, sink.line),
+          rule_id: 'DESTRUCTIVE_FS',
+          category: 'execution',
+          severity: 'critical',
+          title: 'Destructive Filesystem Operation',
+          description:
+            `Uses ${sink.name}() — a recursive / destructive filesystem call. ` +
+            'Semantic equivalent of `rm -rf`; bypasses Phase 2 shell-command detection.',
+          location: {
+            file: fa.file,
+            line: sink.line,
+            column: sink.column,
+            snippet: sink.snippet,
+          },
+          remediation:
+            'Avoid recursive deletes on agent-chosen paths. Prefer removing ' +
+            'specific named files; require explicit human approval for directory trees.',
+          analyser: 'behavioural',
+          confidence: 0.95,
+          metadata: { sink_name: sink.name },
         });
       }
     }

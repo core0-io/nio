@@ -399,3 +399,86 @@ describe('ActionOrchestrator: secret_patterns (user config)', () => {
     assert.ok(result.findings.some((f) => f.rule_id === 'SECRET_LEAK_USER'));
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// exec_command inline-code unwrap → Phase 3/4 coverage
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ActionOrchestrator: inline code in exec_command', () => {
+  it('catches `python3 -c shutil.rmtree(...)` via Phase 4 DESTRUCTIVE_FS', async () => {
+    const analyser = new ActionOrchestrator({ level: 'balanced' });
+    const envelope = makeEnvelope('exec_command', {
+      command: `python3 -c "import shutil; shutil.rmtree('/tmp/victim')"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'DESTRUCTIVE_FS'),
+      `expected DESTRUCTIVE_FS, got rule_ids=[${result.findings.map((f) => f.rule_id).join(', ')}]`,
+    );
+    // Symmetric with Phase 2's `rm -rf` under balanced: short-circuit
+    // at Phase 4 with critical severity should deny, not get diluted
+    // by clean Phase 2/3 scores down into the confirm band.
+    assert.equal(result.decision, 'deny');
+    assert.equal(result.phase_stopped, 4);
+  });
+
+  it('catches python heredoc body (the e2e-observed bypass shape)', async () => {
+    const cmd = [
+      "python3 - <<'PY'",
+      'import shutil, os',
+      "p='/tmp/gh-stats-cli'",
+      'shutil.rmtree(p, ignore_errors=True)',
+      'PY',
+    ].join('\n');
+    const analyser = new ActionOrchestrator({ level: 'balanced' });
+    const envelope = makeEnvelope('exec_command', { command: cmd });
+    const result = await analyser.evaluate(envelope);
+
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'DESTRUCTIVE_FS'),
+      'expected DESTRUCTIVE_FS finding for python heredoc shutil.rmtree',
+    );
+  });
+
+  it('catches `node -e fs.rmSync(...)` via Phase 4', async () => {
+    const analyser = new ActionOrchestrator({ level: 'balanced' });
+    const envelope = makeEnvelope('exec_command', {
+      command: `node -e "require('fs').rmSync('/tmp/v', {recursive: true, force: true})"`,
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'DESTRUCTIVE_FS'),
+      'expected DESTRUCTIVE_FS finding for node -e fs.rmSync',
+    );
+  });
+
+  it('does not flag benign `node index.js foo` (regression guard)', async () => {
+    const analyser = new ActionOrchestrator({ level: 'balanced' });
+    const envelope = makeEnvelope('exec_command', {
+      command: 'node index.js nodejs/node',
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'allow');
+    assert.ok(
+      !result.findings.some((f) => f.rule_id === 'DESTRUCTIVE_FS'),
+      'benign node invocation should not produce DESTRUCTIVE_FS',
+    );
+  });
+
+  it('still catches literal `rm -rf` at Phase 2 (no regression)', async () => {
+    const analyser = new ActionOrchestrator({ level: 'balanced' });
+    const envelope = makeEnvelope('exec_command', {
+      command: 'rm -rf /tmp/victim',
+    });
+    const result = await analyser.evaluate(envelope);
+
+    assert.equal(result.decision, 'deny');
+    assert.ok(
+      result.findings.some((f) => f.rule_id === 'DANGEROUS_COMMAND'),
+      'Phase 2 should still own literal rm -rf',
+    );
+  });
+});

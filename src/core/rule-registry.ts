@@ -97,6 +97,12 @@ const BUILTIN_META: Record<string, Partial<RuleMetadata>> = {
     title: 'Social Engineering Language',
     remediation: 'Remove urgency / pressure language directing users to run commands.',
   },
+  DESTRUCTIVE_FS: {
+    title: 'Destructive Filesystem Operation',
+    remediation:
+      'Avoid recursive deletes on agent-chosen paths. Prefer removing specific ' +
+      'named files; require explicit human approval for directory trees.',
+  },
 };
 
 // ── Rule Registry ────────────────────────────────────────────────────────
