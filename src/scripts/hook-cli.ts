@@ -37,7 +37,7 @@ export {};
 import { createNio, HermesAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter, HookOutput } from '../index.js';
 import { loadCollectorConfig } from './lib/config-loader.js';
-import { createMeterProvider } from './lib/metrics-collector.js';
+import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import {
   dispatchCollectorEvent,
@@ -176,14 +176,27 @@ async function runHermesCollector(
   const collectorConfig = loadCollectorConfig();
   if (!collectorConfig.enabled) return;
 
+  const meterProvider = createMeterProvider(collectorConfig);
+  const tracerProvider = createTracerProvider(collectorConfig);
+
   await dispatchCollectorEvent({
     event: canonicalEvent,
     input: hermesToCollectorInput(rawPayload, canonicalEvent),
     platform: 'hermes',
     config: collectorConfig,
-    meterProvider: createMeterProvider(collectorConfig),
-    tracerProvider: createTracerProvider(collectorConfig),
+    meterProvider,
+    tracerProvider,
   });
+
+  // Every hook-cli invocation is a fresh subprocess that exits right
+  // after this returns. PeriodicExportingMetricReader batches metrics
+  // on a 1s timer, and the HTTP exporter chunks requests — without an
+  // explicit flush here the recorded metric/span can sit in-memory
+  // and never reach OTLP before the process dies.
+  await Promise.all([
+    meterProvider?.forceFlush(),
+    tracerProvider?.forceFlush(),
+  ]);
 }
 
 // ── Platform-specific stdout formatting ────────────────────────────────
@@ -265,11 +278,61 @@ async function main(): Promise<void> {
     .hook_event_name as string | undefined;
 
   // Guard path: only pre_tool_call runs through Phase 0–6.
+  //
+  // On Claude Code, PreToolUse fires both guard-hook.ts (Phase 0–6
+  // + guard-decision metric) AND collector-hook.ts (tool-use counter
+  // + pending_span state that post_tool_call later closes). Hermes
+  // registers a single hook command string per event, so the guard
+  // path here has to do both — otherwise post_tool_call can't find
+  // a pending span and no tool span ever reaches OTLP.
   if (platform === 'hermes' && hookEventName === 'pre_tool_call') {
     const config = loadConfig();
     const nio = createNio();
     const adapter = selectAdapter(platform!, config);
+
+    const collectorConfig = loadCollectorConfig();
+    const meterProvider = collectorConfig.enabled
+      ? createMeterProvider(collectorConfig) : null;
+    const tracerProvider = collectorConfig.enabled
+      ? createTracerProvider(collectorConfig) : null;
+
     const result = await evaluateHook(adapter, payload, { config, nio });
+
+    // Guard decision metric (nio.decision.count).
+    if (meterProvider) {
+      const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
+      await recordGuardDecision(
+        meterProvider,
+        result.decision,
+        result.riskLevel || 'low',
+        result.riskScore ?? 0,
+        toolName,
+        'hermes',
+      );
+    }
+
+    // Also run the collector PreToolUse path so a pending_span is
+    // saved AND nio.tool_use.count{event=PreToolUse,platform=hermes}
+    // is emitted, mirroring Claude Code's parallel hook chain.
+    if (collectorConfig.enabled) {
+      await dispatchCollectorEvent({
+        event: 'PreToolUse',
+        input: hermesToCollectorInput(payload, 'PreToolUse'),
+        platform: 'hermes',
+        config: collectorConfig,
+        meterProvider,
+        tracerProvider,
+      });
+    }
+
+    // Make sure network exports complete before the subprocess exits;
+    // the PeriodicExportingMetricReader batches by default and would
+    // drop the counter we just recorded without an explicit flush.
+    await Promise.all([
+      meterProvider?.forceFlush(),
+      tracerProvider?.forceFlush(),
+    ]);
+
     const confirmAction = config.guard?.confirm_action ?? 'allow';
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
