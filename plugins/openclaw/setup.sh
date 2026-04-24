@@ -110,6 +110,36 @@ SKILL_SRC="$SCRIPT_DIR/skills/nio"
 # ---- Step 1: Register OpenClaw plugin ----
 echo "[1/3] Registering OpenClaw plugin..."
 if command -v openclaw &>/dev/null; then
+  # Scrub any stale paths from openclaw.json before install. OpenClaw's CLI
+  # validates every entry in plugins.load.paths upfront, so a single dangling
+  # path (e.g. a previous release-zip install at ~/Work/.../nio-openclaw/plugin
+  # that has since been removed) fails the whole `plugins install` command.
+  OC_CONFIG="$OPENCLAW_HOME/openclaw.json"
+  if [[ -f "$OC_CONFIG" ]] && command -v node &>/dev/null; then
+    node -e '
+      const fs = require("fs");
+      const p = process.argv[1];
+      const cfg = JSON.parse(fs.readFileSync(p, "utf8"));
+      let changed = false;
+      const paths = cfg?.plugins?.load?.paths;
+      if (Array.isArray(paths)) {
+        const kept = paths.filter((q) => {
+          try { return fs.statSync(q).isDirectory(); }
+          catch { changed = true; return false; }
+        });
+        if (changed) cfg.plugins.load.paths = kept;
+      }
+      const nio = cfg?.plugins?.installs?.nio;
+      if (nio?.installPath) {
+        try { fs.statSync(nio.installPath); }
+        catch { delete cfg.plugins.installs.nio; changed = true; }
+      }
+      if (changed) {
+        fs.writeFileSync(p, JSON.stringify(cfg, null, 2) + "\n");
+        console.log("  Cleaned stale plugin paths from openclaw.json");
+      }
+    ' "$OC_CONFIG" || true
+  fi
   openclaw plugins install -l "$SCRIPT_DIR/plugin"
   echo "  OK: Plugin registered (nio)"
 
