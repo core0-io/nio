@@ -230,7 +230,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.external_analyser.enabled` | boolean | `true` | Enable/disable Phase 6 external scoring |
 | `guard.external_analyser.endpoint` | string | `""` | Phase 6 external scoring API URL |
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
-| `guard.available_tools` | object | `{}` | Phase 0 allowlist. Keys are platform names (`claude_code`, `openclaw`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
+| `guard.available_tools` | object | `{}` | Phase 0 allowlist. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
 | `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `available_tools`; the `mcp` key covers MCP tools on every platform in one place. |
 | `guard.guarded_tools` | object | *(see above)* | Per-platform tool → action type mapping |
 | `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |

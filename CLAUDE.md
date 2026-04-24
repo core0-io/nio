@@ -18,6 +18,7 @@ This project provides a unified Claude Code skill: `/nio`
 - `plugins/shared/` — Shared config + skill source of truth (`skill/SKILL.md`, `SCAN-RULES.md`, `ACTION-POLICIES.md`, `README.md`)
 - `plugins/claude-code/` — Claude Code plugin (hooks, `skills/nio/` synced from shared, setup)
 - `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/nio/` synced from shared; setup.sh orchestrates both)
+- `plugins/hermes/` — Hermes integration via shell-hooks (upstream PR #13296). `setup.sh` + `install-hook.py` merge a `hooks:` entry into `~/.hermes/config.yaml` pointing at the bundled `hook-cli.js`; no Python plugin required
 - `src/` — TypeScript source (scanner, analysers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output (npm library export)
 - `scripts/` — Build and release scripts
