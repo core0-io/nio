@@ -18,7 +18,7 @@ This project provides a unified Claude Code skill: `/nio`
 - `plugins/shared/` — Shared config + skill source of truth (`skill/SKILL.md`, `SCAN-RULES.md`, `ACTION-POLICIES.md`, `README.md`)
 - `plugins/claude-code/` — Claude Code plugin (hooks, `skills/nio/` synced from shared, setup)
 - `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/nio/` synced from shared; setup.sh orchestrates both)
-- `plugins/hermes/` — Hermes integration via shell-hooks (upstream PR #13296). `setup.sh` + `install-hook.py` merge a `hooks:` entry into `~/.hermes/config.yaml` pointing at the bundled `hook-cli.js`; no Python plugin required
+- `plugins/hermes/` — Hermes integration via shell-hooks (upstream PR #13296). `setup.sh` + `install-hook.py` merge **7 lifecycle event entries** into `~/.hermes/config.yaml` — all pointing at the same self-contained `scripts/hook-cli.js`, which internally dispatches `pre_tool_call` to the guard pipeline (Phase 0–6) and `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` to the collector pipeline (OTEL traces + metrics + logs). `scripts/hook-cli.js` is built by `build.js` as a single-file bundle (`splitting: false`) so a Hermes-only release zip (`nio-hermes-vX.zip`) has no dependency on the Claude Code plugin. No Python plugin required.
 - `src/` — TypeScript source (scanner, analysers, runtime guard, adapters)
 - `dist/` — Compiled JavaScript output (npm library export)
 - `scripts/` — Build and release scripts
