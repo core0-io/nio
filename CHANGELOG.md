@@ -1,5 +1,83 @@
 # @core0-io/nio
 
+## 2.1.0
+
+### Minor Changes
+
+- # v2.1.0 — Hermes lifecycle, `/nio` slash dispatch, semantic-bypass guard
+
+  ## Features
+
+  ### Hermes Agent — full integration
+
+  - **Shell-hook adapter** (initial bring-up — relies on upstream [Hermes PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296)). New `HermesAdapter` parses snake_case envelope; `setup.sh` merges hook entries into `~/.hermes/config.yaml`.
+  - **7 lifecycle events** wired through one `hook-cli.js` binary that internally dispatches `pre_tool_call` to the Phase 0–6 guard pipeline and `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` to the OTEL collector. Same command string across all events → one Hermes allowlist approval covers them all.
+  - **`/nio` slash command via tiny Python plugin** (`plugins/hermes/python-plugin/`). Drops into `~/.hermes/plugins/nio/`, registers `/nio` with Hermes's command-dispatch — `/nio config show` / `/nio scan ./src` / `/nio action ...` skip the LLM entirely. No pip install / wheel / entry-points; Hermes auto-discovers user plugins.
+  - **Self-contained release zip** `nio-hermes-vX.zip` (new `pnpm run release:hermes` target). Bundles `hook-cli.js` + `nio-cli.js` as `splitting:false` single-file outputs; no dependency on the Claude Code plugin dir.
+  - **Top-level `setup.sh` dispatcher** detects Hermes via `--hermes-home` / `HERMES_CONFIG_PATH`, supports `--accept-hermes-hook` for non-interactive allowlist approval. One-shot `setup.sh --accept-hooks` calls Hermes's own `register_from_config(accept_hooks=True)` from the venv Python — no chat session, no LLM tokens.
+
+  ### Semantic-bypass guard (Phase 3/4 enhancement)
+
+  - **`DESTRUCTIVE_FS` behavioural rule** (severity: critical). Catches `shutil.rmtree`, `os.remove/unlink/rmdir/removedirs`, `pathlib.Path.unlink/rmdir`, `fs.rmSync({recursive:true})`, `fs.rm`, `fs.rmdirSync`, `fs.unlinkSync`, `fsPromises.*` — semantic equivalents of literal recursive-delete shell commands that previously slipped past Phase 2's literal-string regex.
+  - **`exec_command` inline-code unwrap.** Phase 3/4 used to gate on `action.type === 'write_file'` only. Now also unwraps `python -c` / `node -e` / `bash -c` / `perl -e` / `ruby -e` / `php -r` / heredoc forms via a new `extractInlineCode()` util and runs static + behavioural analysers on the inline body. Closes the bypass where an agent retried with `python3 -c "import shutil; shutil.rmtree(...)"` after the literal shell command got blocked.
+  - **Short-circuit scoring symmetry.** When a phase's individual score crossed the deny threshold, weighted-average aggregation with clean earlier-phase zeros was diluting the verdict (Phase 4 critical 0.95 averaged with Phase 2 0.35 → final 0.56 → `confirm`). `buildResult` now takes an optional `shortCircuitScore` and uses `max(aggregate, triggering)`. `shutil.rmtree`-style ops now deny under `balanced` symmetrically with their literal shell counterparts at Phase 2.
+
+  ### OpenClaw — session boundary hooks
+
+  - New `api.on('session_start', ...)` and `api.on('session_end', ...)` registrations in the OpenClaw plugin. Resets turn counters, emits new `AuditLifecycleEntry { lifecycle_type: 'session_start' | 'session_end' }`, defensively force-flushes any in-flight turn span on session teardown.
+
+  ### `nio-cli.ts`
+
+  Single-binary unified dispatcher for `/nio <subcommand>...`. Cross-process consumers (Hermes Python plugin) shell out to it; OpenClaw still uses `dispatchNioCommand` in-process. Subcommands match the SKILL.md surface: `scan` / `action` / `config` / `report` / `reset`.
+
+  ## Fixes
+
+  - **Hermes setup.sh refresh allowlist on re-approve.** `register_from_config` is no-op when the entry already exists, so post-rebuild re-approvals never updated `script_mtime_at_approval`. setup.sh now revokes-then-registers, preserving idempotency on first install while making rebuilds refresh cleanly.
+  - **Hermes setup.sh prefers Hermes venv Python** for `install-hook.py`. System `python3` often lacks PyYAML; the fallback line-based merger couldn't tell a partial install (only `pre_tool_call`) from a complete one (all 7 events). Tightened fallback to refuse any pre-existing `hooks:` block when PyYAML is missing.
+  - **Hermes setup.sh wired into top-level dispatcher.** Previous `./setup.sh` only enumerated Claude Code + OpenClaw; Hermes was silently skipped even when `~/.hermes/` existed.
+  - **Hermes guard path emits OTEL.** `pre_tool_call` runs `recordGuardDecision` (metric) + dispatches `PreToolUse` through `collector-core` (saves pending_span state so `post_tool_call` can close a tool span) + emits OTLP `/v1/logs` for the audit entry — bringing parity with Claude Code's parallel guard-hook + collector-hook chain.
+  - **OpenClaw setup.sh scrubs stale plugin paths** in `~/.openclaw/openclaw.json` before install. OpenClaw's CLI validates every entry in `plugins.load.paths` upfront — a single dangling path (e.g. from a previous release-zip layout) failed the whole `plugins install` command and `plugins uninstall` couldn't pre-clean because it hit the same validator.
+  - **Hermes `install-hook.py` multi-event merge** with `width=10_000` PyYAML dump (long command strings stop wrapping across lines, `grep`-friendly). Per-event idempotency: status reports `added` / `added-alongside` / `rewrote-path` / `already-installed` per event.
+  - **Hermes consent flow uses `register_from_config`, not `hooks doctor --accept-hooks`.** The doctor path doesn't run `register_from_config` so `--accept-hooks` was silently no-op there. Now invokes `register_from_config(load_config(), accept_hooks=True)` directly via the Hermes venv Python.
+
+  ## Internal
+
+  - **`collector-hook.ts` refactored** — extracted the platform-agnostic core into `src/scripts/lib/collector-core.ts`. Both Claude Code's `collector-hook.ts` (stdin wrapper) and Hermes's `hook-cli.ts` collector branch share one `dispatchCollectorEvent({event, input, platform, config, meterProvider, tracerProvider})`. `toolSummary()` now recognises Claude Code, Hermes, and OpenClaw tool names.
+  - **Type widening:**
+    - `TaintSink.kind` gains `'file_destructive'`
+    - `AuditLifecycleEntry.lifecycle_type` gains `'session_start' | 'session_end'`
+    - `dispatchCollectorEvent` event union gains `'SessionEnd'` (Hermes-driven)
+      Each is additive — only TS strict exhaustive-switch consumers see a soft break.
+
+  ## Docs
+
+  - README.md / `docs/ARCHITECTURE.md` / CLAUDE.md updated to describe both Hermes surfaces (shell-hooks + Python plugin) and the new `/nio` dispatch.
+  - `docs/ARCHITECTURE.md` shell-hook diagram redrawn to show the guard-vs-collector split inside `hook-cli.js`; new `/nio slash command (Hermes Python plugin)` subsection documents directory layout + 4-step routing.
+  - "Contract at a glance" table now contrasts `/nio` dispatch routes across all three platforms.
+
+  ## Tests
+
+  **634 passing** (was 519 at v2.0.2, +115 new):
+
+  - `inline-code.test.ts` — 31 cases covering Python / Node / Shell / Perl / Ruby / PHP `-c|-e|-r|-eval` flag forms, all heredoc variants (`<<EOF`, `<<'EOF'`, `<<-EOF`), pipeline + chained command boundaries, regression guards for benign `node index.js foo` etc.
+  - `collector-core.test.ts` — 21 cases for the platform-agnostic dispatcher (`toolSummary` cross-platform, `spanKey`, `writeToLog`, `dispatchCollectorEvent` event routing).
+  - `hook-cli.test.ts` — extended with collector-path coverage for all 6 Hermes lifecycle events.
+  - `nio-cli.test.ts` — 9 cases for the unified slash dispatcher (subcommand routing, multi-argv + single-arg styles, output normalisation).
+  - Existing `action-orchestrator.test.ts` extended with `exec_command` inline-code coverage (Python heredoc, Node `-e`, regression guards).
+  - Existing `behavioural-analyser.test.ts` / `py-behavioural.test.ts` extended with destructive-fs sink detection.
+
+  ## Upgrading
+
+  After installing v2.1.0:
+
+  ```bash
+  # Refresh Hermes hooks (now 7 lifecycle events; one approval covers all)
+  bash plugins/hermes/setup.sh --accept-hooks
+
+  # Restart any running Hermes gateway so it loads the new config + allowlist
+  hermes gateway run --replace
+  ```
+
 ## 2.0.2
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@core0-io/nio",
-  "version": "2.0.2",
+  "version": "2.1.0",
   "description": "Nio — Execution assurance and observability for autonomous AI agents. Real-time evaluation before every action executes, with full OpenTelemetry telemetry capture.",
   "license": "Apache-2.0",
   "type": "module",
