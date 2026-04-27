@@ -292,7 +292,7 @@ Nio currently provides full hook-based execution assurance for Claude Code, Open
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard — see [install guide](docs/install-claude-code.html) |
 | **OpenClaw** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-openclaw.html) |
-| **Hermes Agent** | Full (CLI + Gateway) | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install-hermes.html) |
+| **Hermes Agent** | Full | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install-hermes.html) |
 | **OpenAI Codex CLI** | Skill | Scan/action commands |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |
