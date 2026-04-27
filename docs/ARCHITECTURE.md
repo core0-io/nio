@@ -880,21 +880,50 @@ Hermes lifecycle event
 
 Typical latency: **~100–200 ms** per event (Node cold-start dominated — amortise via Hermes's hook-process warmup when the feature lands). Zero model tokens consumed by the guard path.
 
-**Install surface:** `plugins/hermes/setup.sh` merges 7 lifecycle event entries into `~/.hermes/config.yaml` via `install-hook.py` (PyYAML-aware per-event merge; uses Hermes's own venv Python so PyYAML is always available). No Python plugin, no pip install, no wheel. `scripts/build.js` produces a self-contained `plugins/hermes/scripts/hook-cli.js` single-file bundle (bun `splitting: false`) so `nio-hermes-vX.zip` has no dependency on the Claude Code plugin dir.
+**Install surface:** `plugins/hermes/setup.sh` merges 7 lifecycle event entries into `~/.hermes/config.yaml` via `install-hook.py` (PyYAML-aware per-event merge; uses Hermes's own venv Python so PyYAML is always available). `scripts/build.js` produces self-contained `plugins/hermes/scripts/{hook-cli,nio-cli}.js` single-file bundles (bun `splitting: false`) so `nio-hermes-vX.zip` has no dependency on the Claude Code plugin dir.
 
 **Consent:** handled by Hermes. First use prompts interactively, persisted to `~/.hermes/shell-hooks-allowlist.json`. Non-TTY runs (gateway, cron, CI) need `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true`. Script edits are silently trusted; `hermes hooks doctor` flags mtime drift.
 
 **Fail-open contract:** Hermes treats non-zero exit codes and malformed stdout as "no block" per upstream `_parse_response`. `hook-cli` honours this — any internal error (missing config, orchestrator throw, parse failure) exits 1 with empty stdout + a stderr diagnostic. Security property: a broken Nio install never blocks the agent loop.
 
+### `/nio` slash command (Hermes Python plugin)
+
+Shell-hooks cover the guard + observability surface. The user-facing `/nio` slash command (scan / action / config / report / reset) takes a different path: a small Python plugin dropped into `~/.hermes/plugins/nio/` that registers `/nio` as a Hermes command-dispatch handler, mirroring OpenClaw's `command-dispatch: tool` route. No pip install — Hermes auto-discovers any directory under `~/.hermes/plugins/<name>/` (one of four discovery paths in `hermes_cli/plugins.py::discover_and_load`).
+
+The plugin directory layout, post-install:
+
+```text
+~/.hermes/plugins/nio/
+├── plugin.yaml              # manifest
+├── __init__.py              # ~50 LOC — register(ctx).register_command("nio", _handle_slash, ...)
+└── scripts/
+    ├── nio-cli.js           # bundled slash dispatcher
+    └── hook-cli.js          # bundled shell-hook dispatcher (also referenced from config.yaml)
+```
+
+When a user types `/nio config show` in Hermes chat / Telegram / Discord:
+
+1. Hermes parses the slash and routes to the registered command handler — no LLM tokens spent on dispatch.
+2. The handler `_handle_slash(raw_args)` spawns `node <plugin>/scripts/nio-cli.js <raw_args>`. `raw_args` is passed as a single argv string so quoting survives (e.g. `/nio action exec_command: ls -la`).
+3. `nio-cli.ts` joins argv on whitespace and calls `dispatchNioCommand(rawArgs, {orchestrator, scanner})` — the same in-process function OpenClaw's `nio_command` tool calls. Routing is identical to OpenClaw's `/nio`.
+4. Result string is written to stdout; the Python handler returns it to Hermes, which routes it back to the user channel.
+
+**Install surface:** `setup.sh` copies `plugin.yaml` + `__init__.py` + the `scripts/` directory into `~/.hermes/plugins/nio/` and appends `"nio"` to `plugins.enabled` in `~/.hermes/config.yaml`. Hermes plugins are opt-in — without that opt-in entry the directory exists but `discover_and_load` skips it. Idempotent on re-run; `--uninstall` clears both.
+
+**Latency:** ~100–200 ms (node cold-start, same order as shell-hooks). Slower than OpenClaw's in-process call (~50 ms) but invisible for user-driven slash commands. Not on the tool-call hot path.
+
+**Why a separate Python plugin instead of folding `/nio` into the shell-hook channel?** Shell-hooks are event-triggered (Hermes spawns a subprocess on `pre_tool_call` etc.); the shell-hook surface has no way to register new slash commands. The slash-command surface needs `register_command` on the in-process plugin context, which is what the Python plugin provides. The two surfaces are orthogonal: shell-hooks for hot-path guard + observability, Python plugin for user-driven slash dispatch.
+
 #### Contract at a glance
 
 |                  | Claude Code (LLM-driven) | OpenClaw (tool-dispatch) | Hermes (shell-hook) |
 |------------------|--------------------------|---------------------------|----------------------|
-| How registered   | LLM reads `SKILL.md`     | Plugin tool               | YAML in `~/.hermes/config.yaml` |
-| Invocation mode  | LLM → Bash → subprocess  | In-process method call    | Subprocess spawned by Hermes |
+| How registered   | LLM reads `SKILL.md`     | Plugin tool               | Shell-hooks: YAML in `~/.hermes/config.yaml`. `/nio` slash: Python plugin in `~/.hermes/plugins/nio/`. |
+| Invocation mode  | LLM → Bash → subprocess  | In-process method call    | Hot path (guard / collector): subprocess spawned by Hermes. `/nio`: in-process handler → subprocess. |
 | Language on path | JS (node subprocess)     | JS (in-process)           | JS (node subprocess) |
 | Latency          | 2–5 s                    | ~50 ms                    | ~100–200 ms          |
 | Model tokens     | Every call               | 0                         | 0                    |
 | Can block tools  | Yes (via hook)           | Yes (Phase 0–6)           | Yes (Phase 0–6)      |
+| `/nio` dispatch  | LLM-driven (skill)       | Tool-dispatch (`nio_command`) | Python plugin → `nio-cli.js` (bypass LLM) |
 | Phase 0 source   | `blocked_tools.claude_code` | `blocked_tools.openclaw` | `blocked_tools.hermes` |
 | Consent prompt   | N/A (implicit)           | N/A (implicit)            | First-run interactive, cached |
