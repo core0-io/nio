@@ -14,6 +14,7 @@
     { id: 'install', title: 'Install', openByDefault: false, items: [
       { label: 'Claude Code', path: '/docs/install-claude-code.html' },
       { label: 'OpenClaw', path: '/docs/install-openclaw.html' },
+      { label: 'Hermes', path: '/docs/install-hermes.html' },
     ]},
     { id: 'skill', title: 'Skill', openByDefault: true, items: [
       { label: '/nio commands', path: '/docs/skill.html' },
