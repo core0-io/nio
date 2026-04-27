@@ -300,13 +300,19 @@ Nio currently provides full hook-based execution assurance for Claude Code, Open
 
 ### Hermes integration
 
-Hermes Agent runs Nio as a family of shell-hooks (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296) — requires a Hermes version that includes it). Seven lifecycle events are wired to a single `hook-cli.js` binary that dispatches internally: `pre_tool_call` runs the Phase 0–6 guard pipeline, while `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` feed the OTEL collector (metrics, traces, logs). One command string across all seven means Hermes's allowlist only needs approving once.
+Hermes Agent runs Nio across two surfaces, both installed by the same `setup.sh`:
+
+1. **Shell-hooks** for the guard + observability pipeline (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296)). Seven lifecycle events are wired to a single `hook-cli.js` binary that dispatches internally: `pre_tool_call` runs the Phase 0–6 guard pipeline, while `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` feed the OTEL collector (metrics, traces, logs). One command string across all seven means Hermes's allowlist only needs approving once.
+
+2. **`/nio` slash command** via a tiny Python plugin dropped into `~/.hermes/plugins/nio/` (no pip install — Hermes auto-discovers any directory under that path). The handler subprocess-spawns the bundled `nio-cli.js` and routes the user's args through `dispatchNioCommand`, the same in-process function OpenClaw's `nio_command` tool calls. `/nio config show` / `/nio scan ./src` / `/nio action ...` / `/nio report` skip the LLM entirely.
 
 One-time install from source:
 
 ```bash
-pnpm run build                  # emits plugins/hermes/scripts/hook-cli.js (self-contained bundle)
+pnpm run build                  # emits plugins/hermes/scripts/{hook-cli,nio-cli}.js (self-contained bundles)
 bash plugins/hermes/setup.sh    # merges 7 hooks: entries into ~/.hermes/config.yaml
+                                #   + installs python plugin into ~/.hermes/plugins/nio/
+                                #   + adds 'nio' to plugins.enabled
 ```
 
 Or grab the standalone release zip:
