@@ -49,11 +49,15 @@
 
         <h2>Requirements</h2>
         <ul>
-          <li>Hermes Agent installed with shell-hook support — upstream <a href="https://github.com/NousResearch/hermes-agent/pull/13296">PR #13296</a> merged in your build (run <code>hermes hooks --help</code> to confirm)</li>
+          <li>Hermes Agent installed and <code>hermes</code> on <code>PATH</code></li>
           <li>Node.js <strong>≥ 18</strong> on <code>PATH</code> (the bundled CLIs are Node)</li>
-          <li>Hermes ships its own Python with PyYAML — used by <code>install-hook.py</code> for the <code>config.yaml</code> merge. No system Python install needed.</li>
           <li>macOS, Linux, or WSL</li>
         </ul>
+
+        <div class="callout warn">
+          <div class="title">Shell-hook support</div>
+          <p>The shell-hook subsystem Nio plugs into landed via <a href="https://github.com/NousResearch/hermes-agent/pull/13296">upstream PR #13296</a>. If your Hermes is older, <code>hermes hooks --help</code> will fail or omit the <code>list</code> / <code>doctor</code> / <code>test</code> subcommands. Upgrade Hermes before running <code>setup.sh</code>.</p>
+        </div>
 
         <h2>Install</h2>
 
@@ -108,12 +112,9 @@ cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
         <h2>What setup.sh does</h2>
         <ol>
           <li>Verifies Node.js ≥ 18 is on <code>PATH</code>.</li>
-          <li>Resolves <code>hook-cli.js</code> from <code>scripts/</code> (release zip) or <code>plugins/claude-code/skills/nio/scripts/</code> (monorepo dev).</li>
-          <li>Picks the Python interpreter — prefers Hermes's own venv Python (PyYAML guaranteed) over system <code>python3</code>.</li>
-          <li>Runs <code>install-hook.py</code> to merge the seven event entries into <code>~/.hermes/config.yaml</code> with a timestamped <code>.bak</code> backup.</li>
-          <li>Copies <code>plugin.yaml</code> + <code>__init__.py</code> + bundled scripts into <code>~/.hermes/plugins/nio/</code>.</li>
-          <li>Appends <code>"nio"</code> to <code>plugins.enabled</code> in <code>config.yaml</code> (Hermes plugins are opt-in).</li>
-          <li>Optionally pre-approves the hooks via Hermes's <code>register_from_config(accept_hooks=True)</code> — see <em>Consent</em> below.</li>
+          <li>Merges the seven event entries into <code>~/.hermes/config.yaml</code> with a timestamped <code>.bak</code> backup.</li>
+          <li>Installs the <code>/nio</code> Python plugin into <code>~/.hermes/plugins/nio/</code> and appends <code>"nio"</code> to <code>plugins.enabled</code> (Hermes plugins are opt-in).</li>
+          <li>Optionally pre-approves the hooks for non-TTY runs — see <em>Consent</em> below.</li>
           <li>Creates <code>~/.nio/</code> and writes <code>config.yaml</code> from defaults (kept if it already exists, unless <code>--reset-config</code>).</li>
         </ol>
 
@@ -147,14 +148,14 @@ cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
 
         <div class="callout warn">
           <div class="title">Why <code>hermes hooks doctor --accept-hooks</code> doesn't work</div>
-          <p><code>hermes hooks doctor</code> and <code>hermes hooks test</code> bypass <code>register_from_config</code>, so <code>--accept-hooks</code> is silently a no-op on those subcommands. Approval only persists when an agent path (<code>chat</code>, <code>acp</code>, <code>rl</code>) calls <code>register_from_config(accept_hooks=True)</code> at startup. setup.sh invokes that path directly via Hermes's venv Python — same code path, no chat session, no LLM tokens.</p>
+          <p><code>hermes hooks doctor</code> and <code>hermes hooks test</code> don't write to the allowlist — <code>--accept-hooks</code> is silently a no-op on those subcommands. Approval only persists when an agent path (<code>chat</code>, <code>acp</code>, <code>rl</code>) starts up. <code>setup.sh --accept-hooks</code> handles this for you without spawning a chat session, so you don't need to <code>hermes chat</code> manually.</p>
         </div>
 
         <h2>Flags</h2>
         <table>
           <thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
           <tbody>
-            <tr><td><code>--accept-hooks</code></td><td>Approve hooks non-interactively (no TTY prompt). Runs Hermes's own <code>register_from_config(accept_hooks=True)</code>.</td></tr>
+            <tr><td><code>--accept-hooks</code></td><td>Approve hooks non-interactively (no TTY prompt). Required for CI / cron / gateway-only installs.</td></tr>
             <tr><td><code>--dry-run</code></td><td>Print the resulting <code>config.yaml</code> without writing.</td></tr>
             <tr><td><code>--yes</code></td><td>Skip interactive merge prompts (CI / scripting).</td></tr>
             <tr><td><code>--uninstall</code></td><td>Remove the seven hook entries, the Python plugin directory, and the allowlist entry.</td></tr>
@@ -192,8 +193,8 @@ cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
           <p>If <code>nio</code> is missing, re-run <code>./setup.sh</code> — the script appends it idempotently. After any change, restart any running gateway with <code>hermes gateway run --replace</code>.</p>
         </div>
 
-        <h2>Re-approval after rebuild</h2>
-        <p>The allowlist entry is keyed on the exact <code>command</code> string in <code>config.yaml</code>. Any <code>pnpm run build</code> that changes the absolute path of <code>hook-cli.js</code> requires re-approval. <code>setup.sh --accept-hooks</code> handles this automatically: it revokes the stale entry first, then re-registers with the new path so <code>approved_at</code> + <code>script_mtime_at_approval</code> refresh cleanly.</p>
+        <h2>Re-approval after upgrade or move</h2>
+        <p>The allowlist entry is keyed on the exact command string in <code>config.yaml</code>. Anything that changes the absolute path of <code>hook-cli.js</code> — moving the install directory, upgrading to a new release zip, switching machines — requires re-approval. <code>setup.sh --accept-hooks</code> handles this automatically: it revokes the stale entry first, then re-registers with the new path.</p>
 
         <h2>Upgrade</h2>
         <p>Download the new zip, run <code>./setup.sh --accept-hooks</code>. The seven hook entries are merged per-event idempotently. Restart any running gateway to pick up new bindings: <code>hermes gateway run --replace</code>.</p>
