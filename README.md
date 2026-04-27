@@ -290,44 +290,13 @@ Nio currently provides full hook-based execution assurance for Claude Code, Open
 
 | Platform | Support | Features |
 |----------|---------|----------|
-| **Claude Code** | Full | Skill + hooks auto-guard |
-| **OpenClaw** | Full | Plugin hooks + OTEL collector |
-| **Hermes Agent** | Full (CLI + Gateway) | Shell-hook integration via `plugins/hermes/setup.sh` |
+| **Claude Code** | Full | Skill + hooks auto-guard — see [install guide](docs/install-claude-code.html) |
+| **OpenClaw** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-openclaw.html) |
+| **Hermes Agent** | Full (CLI + Gateway) | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install-hermes.html) |
 | **OpenAI Codex CLI** | Skill | Scan/action commands |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |
 | **GitHub Copilot** | Skill | Scan/action commands |
-
-### Hermes integration
-
-Hermes Agent runs Nio across two surfaces, both installed by the same `setup.sh`:
-
-1. **Shell-hooks** for the guard + observability pipeline (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296)). Seven lifecycle events are wired to a single `hook-cli.js` binary that dispatches internally: `pre_tool_call` runs the Phase 0–6 guard pipeline, while `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` feed the OTEL collector (metrics, traces, logs). One command string across all seven means Hermes's allowlist only needs approving once.
-
-2. **`/nio` slash command** via a tiny Python plugin dropped into `~/.hermes/plugins/nio/` (no pip install — Hermes auto-discovers any directory under that path). The handler subprocess-spawns the bundled `nio-cli.js` and routes the user's args through `dispatchNioCommand`, the same in-process function OpenClaw's `nio_command` tool calls. `/nio config show` / `/nio scan ./src` / `/nio action ...` / `/nio report` skip the LLM entirely.
-
-One-time install from source:
-
-```bash
-pnpm run build                  # emits plugins/hermes/scripts/{hook-cli,nio-cli}.js (self-contained bundles)
-bash plugins/hermes/setup.sh    # merges 7 hooks: entries into ~/.hermes/config.yaml
-                                #   + installs python plugin into ~/.hermes/plugins/nio/
-                                #   + adds 'nio' to plugins.enabled
-```
-
-Or grab the standalone release zip:
-
-```bash
-unzip nio-hermes-v<version>.zip -d nio-hermes && cd nio-hermes && ./setup.sh
-```
-
-Hermes won't fire unknown shell hooks until you consent (persisted to `~/.hermes/shell-hooks-allowlist.json`). Three ways to approve:
-
-- **Interactive**: running the installer in a TTY ends with `Approve this hook now? [y/N]` — answer `y` and we invoke Hermes's own `register_from_config(accept_hooks=True)` for you (same code path as `hermes chat --accept-hooks`, but without spinning up a chat session).
-- **Non-interactive**: pass `--accept-hooks` to the installer (or `--accept-hermes-hook` to the top-level `./setup.sh`) to approve immediately without a prompt. Scoped to this exact command string; other future shell hooks still require consent.
-- **Manual later**: `hermes chat --accept-hooks` and then type `exit` — anything that enters an agent path (`chat`, `acp`, `rl`) with `--accept-hooks` writes the allowlist on startup. Blanket alternatives: `HERMES_ACCEPT_HOOKS=1` env var, or `hooks_auto_accept: true` in `~/.hermes/config.yaml` — these approve _all_ shell hooks globally, not just Nio.
-
-Note: `hermes hooks test` and `hermes hooks doctor` don't populate the allowlist even with `--accept-hooks` — they bypass the registration path. See `hermes hooks list` / `hermes hooks doctor` for status and `bash plugins/hermes/setup.sh --uninstall` to roll back. The allowlist entry is keyed on the exact command string, so any `pnpm run build` that changes the absolute path of `hook-cli.js` requires re-approval.
 
 ## Documentation
 

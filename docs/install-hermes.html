@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Install · Hermes — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio (also known as nio-agent-guard) — execution-assurance and observability for autonomous AI agents. Blocks risky commands, scans third-party skills, and captures OTEL telemetry. Supports Claude Code, OpenClaw, Hermes, and more.">
+<meta name="keywords" content="nio, nio-agent-guard, agent-guard, nio-agent-harness, agent-harness, ai-agent-harness, ai agent security, ai agent harness, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, openclaw, hermes, hermes-agent, skill scanner, otel">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/hermes/README.md, plugins/hermes/setup.sh, root setup.sh -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Install · Hermes</div>
+        <h1>Install Nio for <em>Hermes Agent</em>.</h1>
+        <p class="lead">Two surfaces, one <code>setup.sh</code>: shell-hooks for the guard + observability pipeline, and a small Python plugin for the <code>/nio</code> slash command. Bypass the LLM entirely on both.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>Requirements</h2>
+        <ul>
+          <li>Hermes Agent installed with shell-hook support — upstream <a href="https://github.com/NousResearch/hermes-agent/pull/13296">PR #13296</a> merged in your build (run <code>hermes hooks --help</code> to confirm)</li>
+          <li>Node.js <strong>≥ 18</strong> on <code>PATH</code> (the bundled CLIs are Node)</li>
+          <li>Hermes ships its own Python with PyYAML — used by <code>install-hook.py</code> for the <code>config.yaml</code> merge. No system Python install needed.</li>
+          <li>macOS, Linux, or WSL</li>
+        </ul>
+
+        <h2>Install</h2>
+
+        <h3>One-liner</h3>
+        <pre><code>VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) &amp;&amp; \
+curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-hermes-${VERSION}.zip" &amp;&amp; \
+unzip -o "nio-hermes-${VERSION}.zip" -d nio-hermes &amp;&amp; \
+cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
+
+        <h3>Manual</h3>
+        <ol>
+          <li>Grab <code>nio-hermes-v&lt;version&gt;.zip</code> from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>.</li>
+          <li><code>unzip nio-hermes-v&lt;version&gt;.zip -d nio-hermes</code></li>
+          <li><code>cd nio-hermes &amp;&amp; ./setup.sh</code></li>
+        </ol>
+
+        <p>If you also use Claude Code or OpenClaw, grab <code>nio-all-v&lt;version&gt;.zip</code> instead — the bundled <code>setup.sh</code> auto-detects which agents you have and installs Nio for each.</p>
+
+        <h2>Two surfaces</h2>
+        <p>Hermes integration installs along two orthogonal channels:</p>
+        <table>
+          <thead><tr><th>Channel</th><th>What</th><th>How</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Shell-hooks</strong></td>
+              <td>Hot path: guard (Phase 0–6) + OTEL collector (metrics, traces, logs).</td>
+              <td>Seven entries merged into <code>~/.hermes/config.yaml</code>; Hermes spawns <code>hook-cli.js</code> on each event.</td>
+            </tr>
+            <tr>
+              <td><strong>Python plugin</strong></td>
+              <td>User-facing <code>/nio</code> slash command — bypasses the LLM, mirrors OpenClaw's <code>command-dispatch: tool</code>.</td>
+              <td>Files dropped into <code>~/.hermes/plugins/nio/</code>; Hermes auto-discovers and registers <code>/nio</code> on startup.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Shell-hook events</h3>
+        <p>Same command string across all seven, so Hermes's allowlist only needs approving once:</p>
+        <table>
+          <thead><tr><th>Event</th><th>Pipeline branch</th></tr></thead>
+          <tbody>
+            <tr><td><code>pre_tool_call</code></td><td>Guard — Phase 0–6, can <code>deny</code> / <code>confirm</code> / <code>allow</code></td></tr>
+            <tr><td><code>post_tool_call</code></td><td>Collector — closes tool span, emits <code>nio.tool_use.count</code></td></tr>
+            <tr><td><code>pre_llm_call</code></td><td>Collector — opens turn span, captures user prompt</td></tr>
+            <tr><td><code>post_llm_call</code></td><td>Collector — closes turn span, emits <code>nio.turn.count</code></td></tr>
+            <tr><td><code>on_session_start</code></td><td>Collector — session boundary marker</td></tr>
+            <tr><td><code>on_session_end</code></td><td>Collector — defensive turn close + flush</td></tr>
+            <tr><td><code>subagent_stop</code></td><td>Collector — subagent turn close</td></tr>
+          </tbody>
+        </table>
+
+        <h2>What setup.sh does</h2>
+        <ol>
+          <li>Verifies Node.js ≥ 18 is on <code>PATH</code>.</li>
+          <li>Resolves <code>hook-cli.js</code> from <code>scripts/</code> (release zip) or <code>plugins/claude-code/skills/nio/scripts/</code> (monorepo dev).</li>
+          <li>Picks the Python interpreter — prefers Hermes's own venv Python (PyYAML guaranteed) over system <code>python3</code>.</li>
+          <li>Runs <code>install-hook.py</code> to merge the seven event entries into <code>~/.hermes/config.yaml</code> with a timestamped <code>.bak</code> backup.</li>
+          <li>Copies <code>plugin.yaml</code> + <code>__init__.py</code> + bundled scripts into <code>~/.hermes/plugins/nio/</code>.</li>
+          <li>Appends <code>"nio"</code> to <code>plugins.enabled</code> in <code>config.yaml</code> (Hermes plugins are opt-in).</li>
+          <li>Optionally pre-approves the hooks via Hermes's <code>register_from_config(accept_hooks=True)</code> — see <em>Consent</em> below.</li>
+          <li>Creates <code>~/.nio/</code> and writes <code>config.yaml</code> from defaults (kept if it already exists, unless <code>--reset-config</code>).</li>
+        </ol>
+
+        <h2>Consent</h2>
+        <p>Hermes refuses to fire unknown shell hooks until you consent. Approval is persisted to <code>~/.hermes/shell-hooks-allowlist.json</code>, keyed on the exact command string. Four ways to approve:</p>
+        <table>
+          <thead><tr><th>Path</th><th>How</th><th>Scope</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Interactive (TTY)</strong></td>
+              <td>setup.sh ends with <code>Approve this hook now? [y/N]</code> — answer <code>y</code>.</td>
+              <td>This exact command string only.</td>
+            </tr>
+            <tr>
+              <td><strong>Non-interactive</strong></td>
+              <td><code>bash plugins/hermes/setup.sh --accept-hooks</code> (or <code>./setup.sh --accept-hermes-hook</code> at the top level).</td>
+              <td>Same — scoped to this command.</td>
+            </tr>
+            <tr>
+              <td><strong>Hermes-side, on next run</strong></td>
+              <td><code>hermes chat --accept-hooks</code> — type <code>exit</code> to leave.</td>
+              <td>Same — scoped to declared shell hooks.</td>
+            </tr>
+            <tr>
+              <td><strong>Blanket</strong></td>
+              <td><code>HERMES_ACCEPT_HOOKS=1</code> env var, or <code>hooks_auto_accept: true</code> in <code>~/.hermes/config.yaml</code>.</td>
+              <td>All shell hooks globally — not just Nio.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="title">Why <code>hermes hooks doctor --accept-hooks</code> doesn't work</div>
+          <p><code>hermes hooks doctor</code> and <code>hermes hooks test</code> bypass <code>register_from_config</code>, so <code>--accept-hooks</code> is silently a no-op on those subcommands. Approval only persists when an agent path (<code>chat</code>, <code>acp</code>, <code>rl</code>) calls <code>register_from_config(accept_hooks=True)</code> at startup. setup.sh invokes that path directly via Hermes's venv Python — same code path, no chat session, no LLM tokens.</p>
+        </div>
+
+        <h2>Flags</h2>
+        <table>
+          <thead><tr><th>Flag</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td><code>--accept-hooks</code></td><td>Approve hooks non-interactively (no TTY prompt). Runs Hermes's own <code>register_from_config(accept_hooks=True)</code>.</td></tr>
+            <tr><td><code>--dry-run</code></td><td>Print the resulting <code>config.yaml</code> without writing.</td></tr>
+            <tr><td><code>--yes</code></td><td>Skip interactive merge prompts (CI / scripting).</td></tr>
+            <tr><td><code>--uninstall</code></td><td>Remove the seven hook entries, the Python plugin directory, and the allowlist entry.</td></tr>
+            <tr><td><code>HERMES_CONFIG_PATH</code> env</td><td>Override target config path (default <code>~/.hermes/config.yaml</code>).</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Where things live</h2>
+        <table>
+          <thead><tr><th>Path</th><th>What</th></tr></thead>
+          <tbody>
+            <tr><td><code>~/.hermes/config.yaml</code></td><td>Hermes runtime config — Nio appends a <code>hooks:</code> block + <code>"nio"</code> to <code>plugins.enabled</code>.</td></tr>
+            <tr><td><code>~/.hermes/shell-hooks-allowlist.json</code></td><td>Approved hook command strings (Hermes-managed).</td></tr>
+            <tr><td><code>~/.hermes/plugins/nio/</code></td><td>Python plugin: <code>plugin.yaml</code>, <code>__init__.py</code>, <code>scripts/{nio-cli,hook-cli}.js</code>.</td></tr>
+            <tr><td><code>~/.nio/config.yaml</code></td><td>Nio's guard + collector config (shared with Claude Code / OpenClaw). See <a href="configuration.html">Config reference</a>.</td></tr>
+            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL log of guard decisions. Read via <code>/nio report</code>.</td></tr>
+            <tr><td><code>~/.nio/metrics.jsonl</code></td><td>Local OTEL metrics dump (when <code>collector.metrics.local = true</code>).</td></tr>
+          </tbody>
+        </table>
+
+        <p>Set <code>NIO_HOME</code> to move the Nio config/audit/metrics elsewhere. Hermes's own <code>HERMES_CONFIG_PATH</code> override is independent.</p>
+
+        <h2>Verify</h2>
+        <ol>
+          <li><code>hermes hooks doctor</code> — expect <em>"Checking 7 configured shell hook(s)…"</em>, all green, JSON smoke test passes for each.</li>
+          <li>If a Hermes gateway is already running, restart so it loads the new config + allowlist: <code>hermes gateway run --replace</code>.</li>
+          <li>Trigger a tool call (chat, Telegram, Discord — any channel). Watch <code>~/.nio/audit.jsonl</code> for a <code>platform: "hermes"</code> guard entry.</li>
+          <li>In any Hermes channel, send <code>/nio config show</code> — bot replies with the current Nio config JSON. <strong>No LLM in the loop.</strong></li>
+        </ol>
+
+        <div class="callout ok">
+          <div class="title">If <code>/nio</code> isn't responding</div>
+          <p>Hermes plugins are opt-in. Confirm:</p>
+          <pre><code>grep -A3 '^plugins:' ~/.hermes/config.yaml | grep nio   # should print "- nio"</code></pre>
+          <p>If <code>nio</code> is missing, re-run <code>./setup.sh</code> — the script appends it idempotently. After any change, restart any running gateway with <code>hermes gateway run --replace</code>.</p>
+        </div>
+
+        <h2>Re-approval after rebuild</h2>
+        <p>The allowlist entry is keyed on the exact <code>command</code> string in <code>config.yaml</code>. Any <code>pnpm run build</code> that changes the absolute path of <code>hook-cli.js</code> requires re-approval. <code>setup.sh --accept-hooks</code> handles this automatically: it revokes the stale entry first, then re-registers with the new path so <code>approved_at</code> + <code>script_mtime_at_approval</code> refresh cleanly.</p>
+
+        <h2>Upgrade</h2>
+        <p>Download the new zip, run <code>./setup.sh --accept-hooks</code>. The seven hook entries are merged per-event idempotently. Restart any running gateway to pick up new bindings: <code>hermes gateway run --replace</code>.</p>
+
+        <h2>Uninstall</h2>
+        <pre><code>./setup.sh --uninstall</code></pre>
+        <p>Removes the seven hook entries from <code>~/.hermes/config.yaml</code>, deletes <code>~/.hermes/plugins/nio/</code>, and revokes the allowlist entry. Safe to re-run.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="install-openclaw.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Install · OpenClaw</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="skill.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">/nio commands</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>
