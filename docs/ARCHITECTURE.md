@@ -733,12 +733,19 @@ src/
 ├── types/                             # Type definitions
 ├── utils/                             # Utility functions
 └── scripts/                           # CLI entry points
-    ├── guard-hook.ts                  # PreToolUse/PostToolUse hook
-    ├── scanner-hook.ts                # SessionStart: scan installed skills
+    ├── guard-hook.ts                  # Claude Code: PreToolUse/PostToolUse hook
+    ├── scanner-hook.ts                # Claude Code: SessionStart skill scan
+    ├── collector-hook.ts              # Claude Code: telemetry stdin wrapper around lib/collector-core
+    ├── hook-cli.ts                    # Hermes: shell-hook dispatcher (guard + collector paths)
+    ├── nio-cli.ts                     # Hermes (Python plugin) / shell: /nio slash dispatcher → dispatchNioCommand
     ├── action-cli.ts                  # CLI over ActionOrchestrator.evaluate (Phase 1–6)
-    ├── hook-cli.ts                    # CLI over evaluateHook (Phase 0–6) — cross-process hook consumers (Hermes)
     ├── config-cli.ts                  # Protection level CLI
-    └── collector-hook.ts              # Telemetry collector hook
+    └── lib/
+        ├── collector-core.ts          # Platform-agnostic event dispatcher (used by collector-hook + hook-cli)
+        ├── traces-collector.ts        # OTEL traces (turn + tool spans)
+        ├── metrics-collector.ts       # OTEL metrics
+        ├── logs-collector.ts          # OTEL logs
+        └── config-loader.ts           # ~/.nio/config.yaml loader
 ```
 
 ## Configuration
@@ -831,7 +838,7 @@ This means we can ship one skill folder to both hosts with no per-host forking, 
 
 ### Shell-hook dispatch (Hermes)
 
-Hermes Agent does not install Nio as a skill at all. Starting with upstream [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296), Hermes exposes a native **shell-hook** facility — users declare shell subprocesses in `~/.hermes/config.yaml` that Hermes spawns on each plugin-hook event. We hook into this and ship zero Python code.
+Hermes Agent does not install Nio as a skill at all. Starting with upstream [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296), Hermes exposes a native **shell-hook** facility — users declare shell subprocesses in `~/.hermes/config.yaml` that Hermes spawns on each plugin-hook event. We hook into this for the hot path (guard + observability). The user-facing `/nio` slash command is delivered separately through a small Python plugin (see "`/nio` slash command" below); shell-hooks alone don't expose a slash-registration surface.
 
 Seven lifecycle events map to the **same** `hook-cli.js` command string. The CLI peeks at stdin's `hook_event_name` field and routes internally:
 
