@@ -831,35 +831,56 @@ This means we can ship one skill folder to both hosts with no per-host forking, 
 
 ### Shell-hook dispatch (Hermes)
 
-Hermes Agent does not install Nio as a skill at all. Starting with upstream [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296), Hermes exposes a native **shell-hook** facility — users declare shell subprocesses in `~/.hermes/config.yaml` that Hermes spawns on each plugin-hook event (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, …). We hook into this and ship zero Python code.
+Hermes Agent does not install Nio as a skill at all. Starting with upstream [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296), Hermes exposes a native **shell-hook** facility — users declare shell subprocesses in `~/.hermes/config.yaml` that Hermes spawns on each plugin-hook event. We hook into this and ship zero Python code.
+
+Seven lifecycle events map to the **same** `hook-cli.js` command string. The CLI peeks at stdin's `hook_event_name` field and routes internally:
 
 ```text
-Hermes pre_tool_call event
+Hermes lifecycle event
   │
-  ├─► Hermes reads its config.yaml hooks: block
+  ├─► Hermes reads its config.yaml hooks: block (7 entries, all
+  │   pointing at the same plugins/hermes/scripts/hook-cli.js)
   ├─► spawns: node <abs>/hook-cli.js --platform hermes --stdin
   │       stdin = {hook_event_name, tool_name, tool_input,
   │                session_id, cwd, extra}   (snake_case)
   │
-  ├─► hook-cli.ts
-  │     ├─► new HermesAdapter()
-  │     ├─► parseInput(stdin)        snake_case → canonical HookInput
-  │     ├─► evaluateHook(adapter, input, {config, nio})
-  │     │     → Phase 0 → Phase 1-6 → audit write
-  │     └─► Hermes-shaped stdout
-  │             deny  → {"decision": "block", "reason": "..."}
-  │             allow → {}  (silent pass-through per Hermes spec)
-  │             ask   → folded through guard.confirm_action
-  │                     (allow default | deny | ask-fallback-to-deny + stderr warn)
+  ├─► hook-cli.ts · dispatches on hook_event_name
+  │   │
+  │   ├── pre_tool_call ─── GUARD path
+  │   │     ├─► new HermesAdapter() + parseInput
+  │   │     ├─► evaluateHook → Phase 0 → Phase 1-6 → audit write
+  │   │     ├─► recordGuardDecision → nio.decision.count metric
+  │   │     ├─► dispatchCollectorEvent(PreToolUse)
+  │   │     │     saves pending_span + nio.tool_use.count metric
+  │   │     ├─► LoggerProvider emits audit entry to /v1/logs
+  │   │     ├─► forceFlush all three providers
+  │   │     └─► Hermes-shaped stdout
+  │   │             deny  → {"decision": "block", "reason": "..."}
+  │   │             allow → {}
+  │   │             ask   → folded via guard.confirm_action
+  │   │
+  │   └── everything else ── COLLECTOR path
+  │         ├─► HERMES_COLLECTOR_EVENTS[hook_event_name] → canonical
+  │         │     post_tool_call   → PostToolUse   (close tool span)
+  │         │     pre_llm_call     → UserPromptSubmit
+  │         │     post_llm_call    → Stop          (close turn span)
+  │         │     on_session_start → SessionStart
+  │         │     on_session_end   → SessionEnd
+  │         │     subagent_stop    → SubagentStop
+  │         ├─► hermesToCollectorInput lifts extra.tool_call_id /
+  │         │   user_message / result into the canonical shape
+  │         ├─► dispatchCollectorEvent → metrics.jsonl + OTLP export
+  │         ├─► forceFlush → /v1/metrics, /v1/traces
+  │         └─► stdout: {} (collector never blocks)
   │
   └─► Hermes's _parse_response accepts Claude-Code style
       {decision: "block"} or Hermes-canonical {action: "block"};
       silently permits any other stdout
 ```
 
-Typical latency: **~100–200 ms** (Node cold-start dominated — amortise via Hermes's hook-process warmup when the feature lands). Output is **structured JSON** — Hermes only inspects the `decision`/`action` field; the `reason` is plumbed through to the agent as the block message. Zero model tokens consumed by the guard path.
+Typical latency: **~100–200 ms** per event (Node cold-start dominated — amortise via Hermes's hook-process warmup when the feature lands). Zero model tokens consumed by the guard path.
 
-**Install surface:** one YAML snippet merged into `~/.hermes/config.yaml` by `plugins/hermes/setup.sh`. No Python plugin, no pip install, no wheel. The `hook-cli.js` binary is the same bundled artifact that ships with the Claude Code skill — one binary, two hosts.
+**Install surface:** `plugins/hermes/setup.sh` merges 7 lifecycle event entries into `~/.hermes/config.yaml` via `install-hook.py` (PyYAML-aware per-event merge; uses Hermes's own venv Python so PyYAML is always available). No Python plugin, no pip install, no wheel. `scripts/build.js` produces a self-contained `plugins/hermes/scripts/hook-cli.js` single-file bundle (bun `splitting: false`) so `nio-hermes-vX.zip` has no dependency on the Claude Code plugin dir.
 
 **Consent:** handled by Hermes. First use prompts interactively, persisted to `~/.hermes/shell-hooks-allowlist.json`. Non-TTY runs (gateway, cron, CI) need `--accept-hooks`, `HERMES_ACCEPT_HOOKS=1`, or `hooks_auto_accept: true`. Script edits are silently trusted; `hermes hooks doctor` flags mtime drift.
 

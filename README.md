@@ -136,9 +136,10 @@ Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io
 |----------|----------|---------------|
 | **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
 | **OpenClaw** | `nio-openclaw-v<version>.zip` | `unzip … -d nio-openclaw && cd nio-openclaw && ./setup.sh` |
-| **Both** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
+| **Hermes** | `nio-hermes-v<version>.zip` | `unzip … -d nio-hermes && cd nio-hermes && ./setup.sh` |
+| **All** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
 
-`setup.sh` installs the skill, registers hooks, and writes the default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
+`setup.sh` installs the skill (Claude Code / OpenClaw), merges shell-hook entries into the platform config (Hermes), and writes the Nio default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
 
 **More frameworks coming.** Nio currently supports Claude Code, OpenClaw, and Hermes. Support for additional agent frameworks is progressively being added.
 
@@ -165,7 +166,9 @@ unzip -o "nio-openclaw-${VERSION}.zip" -d nio-openclaw && \
 cd nio-openclaw && ./setup.sh
 ```
 
-**Both (all-in-one):**
+**Hermes:** substitute `hermes` for `claude-code` / `openclaw` in the block above (i.e. `nio-hermes-${VERSION}.zip` → `-d nio-hermes && cd nio-hermes && ./setup.sh`).
+
+**All (all-in-one):**
 
 ```bash
 VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
@@ -297,11 +300,19 @@ Nio currently provides full hook-based execution assurance for Claude Code, Open
 
 ### Hermes integration
 
-Hermes Agent runs Nio as a `pre_tool_call` shell-hook (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296) — requires a Hermes version that includes it). One-time install:
+Hermes Agent runs Nio as a family of shell-hooks (upstream support added in [PR #13296](https://github.com/NousResearch/hermes-agent/pull/13296) — requires a Hermes version that includes it). Seven lifecycle events are wired to a single `hook-cli.js` binary that dispatches internally: `pre_tool_call` runs the Phase 0–6 guard pipeline, while `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` feed the OTEL collector (metrics, traces, logs). One command string across all seven means Hermes's allowlist only needs approving once.
+
+One-time install from source:
 
 ```bash
-pnpm run build                  # emits plugins/claude-code/skills/nio/scripts/hook-cli.js
-bash plugins/hermes/setup.sh    # merges a hooks: entry into ~/.hermes/config.yaml
+pnpm run build                  # emits plugins/hermes/scripts/hook-cli.js (self-contained bundle)
+bash plugins/hermes/setup.sh    # merges 7 hooks: entries into ~/.hermes/config.yaml
+```
+
+Or grab the standalone release zip:
+
+```bash
+unzip nio-hermes-v<version>.zip -d nio-hermes && cd nio-hermes && ./setup.sh
 ```
 
 Hermes won't fire unknown shell hooks until you consent (persisted to `~/.hermes/shell-hooks-allowlist.json`). Three ways to approve:
