@@ -175,6 +175,7 @@ function* allMatches(s: string, re: RegExp): Generator<RegExpExecArray> {
 
 // ---------------------------------------------------------------------------
 // U1 — shell -c "..."
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U1 shell -c')
 // ---------------------------------------------------------------------------
 
 const SHELL_C_RE = /\b(?:bash|sh|zsh|dash|ksh|fish|busybox(?:\s+sh)?)\s+(?:-[a-zA-Z]+\s+)*-c\s+/g;
@@ -190,6 +191,7 @@ register('u1-shell-c', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U2 — variable shell — $SHELL -c "...", ${SHELL} -c "..."
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U2 variable shell')
 // ---------------------------------------------------------------------------
 
 const VAR_SHELL_RE = /\$(?:\{(?:SHELL|BASH)\}|SHELL|BASH)\s+(?:-[a-zA-Z]+\s+)*-c\s+/g;
@@ -205,6 +207,7 @@ register('u2-var-shell', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U3 — eval "..."
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U3 eval')
 // ---------------------------------------------------------------------------
 
 const EVAL_RE = /\beval\s+/g;
@@ -231,6 +234,11 @@ register('u3-eval', (command: string) => {
 // Heredoc: `<<[-]MARKER\n...body...\nMARKER`. We detect the marker, locate
 // the trailing line that contains only the marker, and slice the body.
 // Here-string: `<<<value` or `<<<'value'` — extract value.
+// When the heredoc/here-string opens directly into an interpreter
+// (`python3 <<EOF`, `node <<<'...'`, …), the body is tagged inline=true
+// so D7 picks it up as language-runtime code (same as `python -c "..."`).
+//
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U4 heredoc / here-string')
 // ---------------------------------------------------------------------------
 
 const HEREDOC_OPEN_RE = /<<-?\s*(?:'([A-Za-z_][\w]*)'|"([A-Za-z_][\w]*)"|([A-Za-z_][\w]*))/g;
@@ -285,6 +293,7 @@ register('u4-heredoc', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U5 — process substitution `<(X)` and `>(X)`
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U5 process substitution')
 // ---------------------------------------------------------------------------
 
 register('u5-process-sub', (command: string) => {
@@ -302,6 +311,7 @@ register('u5-process-sub', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U6 — command substitution `$(X)` and backticks
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U6 command substitution')
 // ---------------------------------------------------------------------------
 
 register('u6-cmd-sub', (command: string) => {
@@ -333,12 +343,14 @@ register('u6-cmd-sub', (command: string) => {
 // U7 — `source <(X)`, `. <(X)`, `bash <(X)` — covered by U5; this unwrapper
 // also handles `source file` / `. file` / `bash file` (no extraction
 // possible from a path, so it is a no-op for static analysis).
+// (No dedicated test — exercised transitively via U5 cases.)
 // ---------------------------------------------------------------------------
 
 register('u7-source', (_command: string) => null);
 
 // ---------------------------------------------------------------------------
 // U8 — interpreter inline (`python -c "..."`, `node -e "..."`, …)
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U8 interpreter inline')
 // ---------------------------------------------------------------------------
 
 const INTERPRETER_INLINE_RE =
@@ -360,6 +372,7 @@ register('u8-interp-inline', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U9 — encoded-pipe decoder: `<echo|printf> '<b64>' | base64 -d | <interp>`
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U9 base64-decode pipe')
 // ---------------------------------------------------------------------------
 
 const BASE64_PIPE_RE =
@@ -386,6 +399,7 @@ register('u9-encoded-pipe', (command: string) => {
 // Detects: `c=cu; c=$c"rl"; $c URL` → resolves $c to "curl"
 // Only handles simple a=$a"x" / a="x"$a chains; complex patterns are an
 // acknowledged residual gap.
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U10 variable folding')
 // ---------------------------------------------------------------------------
 
 const VAR_ASSIGN_RE = /\b([A-Za-z_][A-Za-z0-9_]*)=([^\s;|&]+)/g;
@@ -439,6 +453,7 @@ register('u10-var-fold', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U11 — indirect executor: xargs / find -exec / parallel / watch / time / env
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U11 indirect executor')
 // ---------------------------------------------------------------------------
 
 const FIND_EXEC_RE = /\bfind\s+\S[^\n]*?-exec\s+/g;
@@ -475,6 +490,7 @@ register('u11-indirect', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U12 — remote shell pass-through (ssh, docker exec, kubectl exec, podman exec)
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U12 remote shell')
 // ---------------------------------------------------------------------------
 
 const SSH_RE = /\bssh\s+(?:-[a-zA-Z]+\s*\S*\s+)*\S+\s+/g;
@@ -498,6 +514,7 @@ register('u12-remote-shell', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U13 — editor escape: `vim -c '!X'`, `nvim -c '!X'`, `ed/ex -c '!X'`
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U13 editor escape')
 // ---------------------------------------------------------------------------
 
 const EDITOR_RE = /\b(?:vim|nvim|ed|ex)\s+(?:[A-Za-z0-9-]+\s+)*-c\s+/g;
@@ -516,6 +533,7 @@ register('u13-editor', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U14 — build/orchestration inline shell (best-effort)
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U14 build/orchestration inline shell')
 // ---------------------------------------------------------------------------
 
 const ANSIBLE_SHELL_RE = /\bansible(?:-playbook)?\s+(?:[^\n]*?)\s-a\s+/g;
@@ -538,6 +556,7 @@ register('u14-build-inline', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U15 — background / scheduling pass-through
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U15 background / scheduled')
 // ---------------------------------------------------------------------------
 
 const BG_PREFIX_RE = /\b(?:nohup|setsid|systemd-run(?:\s+(?:-[a-zA-Z]+|--user))*)\s+/g;
@@ -581,6 +600,7 @@ register('u15-background', (command: string) => {
 // U16 — compile-and-run pass-through. The compiled binary's runtime
 // behaviour is not statically inspectable; flag the fragment as
 // `compiled=true` so downstream detectors emit audit-only.
+// @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U16 compile-and-run flag')
 // ---------------------------------------------------------------------------
 
 const COMPILE_RE =

@@ -22,6 +22,11 @@ const SERVER_TOOL_RE = /^([a-zA-Z][\w-]*)\.([a-zA-Z][\w-]*)/;
  * `npx mcporter ...`, `bunx mcporter ...`, absolute paths to mcporter, etc.
  * Skips the optional `call` verb and any flags (`-x`, `--flag`, `--flag=v`,
  * `--`).
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D1 mcporter (parity coverage via the new API)')
+ * @see src/tests/mcp-route-detect/composition.test.ts — every nested-wrapper case
+ * @see src/tests/mcp-shell-detect.test.ts — legacy parity (re-export shim)
+ * @see src/tests/integration.test.ts — group A "blocked_tools.mcp denies Claude Code Bash running `mcporter call <tool>`"
  */
 export function detectMcporter(fragment: UnwrappedFragment): RoutedMcpCall[] {
   const command = fragment.command;
@@ -234,6 +239,15 @@ function lookupSocketServer(registry: MCPRegistry, socket: string): MCPServerEnt
   return registry.lookupBySocket(socket);
 }
 
+/**
+ * D2 — curl-class HTTP clients (curl/wget/aria2c/fetch/lwp-request).
+ * Resolves URL → server via registry; tool from -d/--data-binary/
+ * --data-raw/--post-data body via JSON-RPC `params.name`. Also handles
+ * `--unix-socket` to socket-resident MCP servers.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D2 curl-class HTTP clients')
+ * @see src/tests/integration.test.ts — groups B (curl POST), C (--unix-socket), plus OpenClaw/Hermes parity, ssh+curl composition, nohup wrapping
+ */
 export function detectCurlClass(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const command = fragment.command;
@@ -282,6 +296,13 @@ export function detectCurlClass(fragment: UnwrappedFragment, registry: MCPRegist
 const HTTPIE_BIN = new Set(['http', 'https', 'httpie', 'xh']);
 const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']);
 
+/**
+ * D3 — HTTPie-class clients (http/https/httpie/xh). Recognises HTTPie body
+ * shorthand `name:='"X"'` to populate the tool field.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D3 HTTPie-class')
+ * @see src/tests/integration.test.ts — group D
+ */
 export function detectHttpie(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const command = fragment.command;
@@ -328,6 +349,14 @@ export function detectHttpie(fragment: UnwrappedFragment, registry: MCPRegistry)
 const TCP_BIN = new Set(['nc', 'netcat', 'ncat', 'socat', 'websocat', 'grpcurl']);
 const HOST_PORT_RE = /^(?!--)([A-Za-z0-9.-]+):(\d+)$/;
 
+/**
+ * D4 — TCP / socket multiplex (nc/netcat/ncat/socat/openssl s_client/
+ * websocat/grpcurl). Resolves host:port → http(s)://host:port → registry,
+ * unix sockets via -U flag, socat TCP:/UNIX-CONNECT: prefixes.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D4 TCP / socket multiplex')
+ * @see src/tests/integration.test.ts — group E
+ */
 export function detectTcpSocket(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const command = fragment.command;
@@ -387,6 +416,13 @@ export function detectTcpSocket(fragment: UnwrappedFragment, registry: MCPRegist
 
 const DEV_TCP_RE = /\/dev\/(?:tcp|udp)\/([A-Za-z0-9.-]+)\/(\d+)/g;
 
+/**
+ * D5 — Bash builtin networking (`/dev/tcp/<host>/<port>`, `/dev/udp/...`,
+ * `exec N<>/dev/tcp/...`).
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D5 Bash builtin networking')
+ * @see src/tests/integration.test.ts — group F
+ */
 export function detectDevTcp(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const results: RoutedMcpCall[] = [];
@@ -411,6 +447,13 @@ export function detectDevTcp(fragment: UnwrappedFragment, registry: MCPRegistry)
 
 const PWSH_HTTP_RE = /\b(?:Invoke-WebRequest|Invoke-RestMethod|System\.Net\.WebClient|System\.Net\.Http\.HttpClient)\b/;
 
+/**
+ * D6 — PowerShell HTTP cmdlets/types (Invoke-WebRequest /
+ * Invoke-RestMethod / System.Net.WebClient / HttpClient).
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D6 PowerShell HTTP')
+ * @see src/tests/integration.test.ts — group G
+ */
 export function detectPwshHttp(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   // PowerShell code may reach detectors via U8 (inline=true) or as raw shell tokens.
   if (!PWSH_HTTP_RE.test(fragment.command)) return [];
@@ -432,6 +475,14 @@ export function detectPwshHttp(fragment: UnwrappedFragment, registry: MCPRegistr
 // D7 — Language-runtime HTTP (URL literals inside inline code)
 // ---------------------------------------------------------------------------
 
+/**
+ * D7 — Language-runtime HTTP. Runs against `inline=true` fragments
+ * captured by U8 (`python -c`, `node -e`, …) or U4-tagged
+ * interpreter-fed heredocs (`python3 <<EOF`). Scans for URL literals.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D7 Language-runtime HTTP')
+ * @see src/tests/integration.test.ts — groups H (Python), I (Node), J (Ruby/Perl/PHP/Deno), heredoc composition
+ */
 export function detectLanguageRuntime(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (!fragment.inline) return [];
   const results: RoutedMcpCall[] = [];
@@ -497,6 +548,13 @@ function extractFeederBody(stage: string): string | undefined {
   return body;
 }
 
+/**
+ * D8 — Stdio JSON-RPC injection. `<echo|printf|cat|jq|tee|yes> ... | <bin>`
+ * where bin matches a registry binary. Tool extracted from feeder body.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D8 stdio JSON-RPC pipe')
+ * @see src/tests/integration.test.ts — group V (stdio pipe), OpenClaw/Hermes parity
+ */
 export function detectStdioPipe(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const stages = splitPipeline(fragment.command);
@@ -531,6 +589,14 @@ export function detectStdioPipe(fragment: UnwrappedFragment, registry: MCPRegist
 
 const STDIN_REDIR_RE = /(?:^|[\s;|&])([A-Za-z][\w./-]*)\s*(?:<<<\s*('[^']*'|"[^"]*"|\S+)|<<-?\s*['"]?([A-Za-z_]\w*)['"]?|<\s*(\S+))/g;
 
+/**
+ * D9 — Stdin redirect. `<bin> < file.json`, `<bin> <<EOF`,
+ * `<bin> <<<'json'` where bin matches a registry binary. Tool extracted
+ * from heredoc/here-string body when available.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D9 stdin redirect')
+ * @see src/tests/integration.test.ts — group V (stdin redirect)
+ */
 export function detectStdinRedirect(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const command = fragment.command;
@@ -575,6 +641,13 @@ export function detectStdinRedirect(fragment: UnwrappedFragment, registry: MCPRe
 const MKFIFO_RE = /\bmkfifo\s+([^\s;|&]+)/g;
 const FIFO_READER_RE = /\b([A-Za-z][\w./-]*)\s+<\s*([^\s;|&]+)/g;
 
+/**
+ * D10 — FIFO / named pipe. `mkfifo PATH; <bin> < PATH &; ... > PATH`.
+ * Pairs the mkfifo creation with a downstream reader best-effort.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D10 FIFO')
+ * @see src/tests/integration.test.ts — group W
+ */
 export function detectFifo(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const command = fragment.command;
@@ -621,6 +694,16 @@ const PACKAGE_RUNNER_SPECS: RunnerSpec[] = [
   { runner: 'go', subcommand: 'run' },
 ];
 
+/**
+ * D11 — Package runners. npx / bunx / pnpm dlx / pnpm exec / yarn dlx /
+ * yarn exec / pipx run / uv run / uvx / deno run / go run, resolved
+ * against `cliPackages` in the registry. Best-effort tool extraction
+ * from positional args (e.g. `mcporter call hass.HassTurnOff` after
+ * the package).
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D11 package runner')
+ * @see src/tests/integration.test.ts — group U, OpenClaw/Hermes parity
+ */
 export function detectPackageRunner(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const tokens = tokenize(fragment.command);
@@ -677,6 +760,14 @@ export function detectPackageRunner(fragment: UnwrappedFragment, registry: MCPRe
 
 const SELF_LAUNCH_FLAG_RE = /\s--(?:transport|port|listen|bind|host|address)\b/;
 
+/**
+ * D12 — MCP server self-launch. **audit-only** — emits `auditOnly: true`
+ * so Phase 0 does NOT use it to deny. Common in dev workflows where the
+ * agent legitimately starts a local MCP server.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D12 MCP server self-launch (audit-only)')
+ * @see src/tests/integration.test.ts — group Z
+ */
 export function detectSelfLaunch(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (fragment.inline) return [];
   const tokens = tokenize(fragment.command);
@@ -715,6 +806,16 @@ export function detectSelfLaunch(fragment: UnwrappedFragment, registry: MCPRegis
 // compile and run code.
 // ---------------------------------------------------------------------------
 
+/**
+ * D15 — Compile-and-run pass-through. **audit-only** — fragment is
+ * tagged `compiled=true` by U16; the compiled binary's runtime
+ * behaviour is opaque to static analysis, so emit an audit marker
+ * rather than block. (D13 / D14 — remote-shell / background pass-through
+ * — are emergent from U12 / U15 flag propagation; no detector code.)
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D15 compile-and-run (audit-only)')
+ * @see src/tests/integration.test.ts — group AA
+ */
 export function detectCompiled(fragment: UnwrappedFragment): RoutedMcpCall[] {
   if (!fragment.flags?.compiled) return [];
   // Only emit once per top-level fragment — the flag is set on the original
@@ -736,6 +837,15 @@ export function detectCompiled(fragment: UnwrappedFragment): RoutedMcpCall[] {
 // Audit-only, since the binary itself wasn't structurally invoked.
 // ---------------------------------------------------------------------------
 
+/**
+ * D16 — Obfuscation fallback. **audit-only** — scans fragment text for
+ * registry URL or binary literal as a string match when other detectors
+ * miss (U9/U10 cannot fully decode obfuscated payloads). Heuristic and
+ * prone to false positives; never gates.
+ *
+ * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D16 obfuscation fallback (audit-only)')
+ * @see src/tests/integration.test.ts — describe('Integration: D16 obfuscation fallback is audit-only')
+ */
 export function detectObfuscationFallback(
   fragment: UnwrappedFragment,
   registry: MCPRegistry,
