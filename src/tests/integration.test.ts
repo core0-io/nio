@@ -1220,6 +1220,58 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// D16 obfuscation fallback — must NOT deny (audit-only) and must NOT
+// interfere with the regular allowlist gate. Verifies our auditOnly
+// filter works end-to-end.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: D16 obfuscation fallback is audit-only', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const allowOnlyHassTurnOn = () => createTestContext({
+    guard: { available_tools: { mcp: ['HassTurnOn'] } },
+    mcpRegistry: buildIntegrationRegistry(),
+  });
+
+  it('plain text mention of registry URL does NOT deny', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `printf "see http://localhost:5173/mcp"` },
+    }, ctx.options);
+    assert.notEqual(result.decision, 'deny',
+      'D16 fires audit-only — printf with registry URL is benign');
+  });
+
+  it('plain `which` of registry binary does NOT deny', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `which mcp-server-hass` },
+    }, ctx.options);
+    assert.notEqual(result.decision, 'deny',
+      'D16 fires audit-only — `which` is dev-time, not invocation');
+  });
+
+  it('base64-decoded curl to registry is denied via D2 (not D16)', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const payload = Buffer.from(
+      `curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOff"}}'`,
+    ).toString('base64');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `echo '${payload}' | base64 -d | sh` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny',
+      'U9 decodes the payload, D2 then routes the curl to MCP gate');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Sensitive-path write protection across protection levels.
 // SENSITIVE_FILE_PATHS produces critical findings — they should deny under
 // every level (strict / balanced / permissive). Verify with one MCP-config

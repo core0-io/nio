@@ -175,6 +175,38 @@ describe('detectMcpCalls: D2 curl-class HTTP clients', () => {
     const calls = detectMcpCalls(cmd, HASS_REG);
     assert.equal(calls.filter((c) => c.via === 'http_client').length, 0);
   });
+
+  it('matches aria2c hitting registry URL', () => {
+    const cmd = `aria2c http://localhost:5173/mcp`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'http_client' && c.server === 'hass'));
+  });
+
+  it('matches BSD fetch hitting registry URL', () => {
+    const cmd = `fetch http://localhost:5173/mcp`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'http_client' && c.server === 'hass'));
+  });
+
+  it('matches lwp-request hitting registry URL', () => {
+    const cmd = `lwp-request -m POST http://localhost:5173/mcp`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'http_client' && c.server === 'hass'));
+  });
+
+  it('extracts tool from --data-binary', () => {
+    const cmd = `curl http://localhost:5173/mcp --data-binary '{"params":{"name":"HassTurnOff"}}'`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'http_client');
+    assert.ok(hit);
+    assert.equal(hit!.tool, 'HassTurnOff');
+  });
+
+  it('extracts tool from --data-raw', () => {
+    const cmd = `curl --data-raw='{"params":{"name":"X"}}' http://localhost:5173/mcp`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'http_client');
+    assert.ok(hit);
+    assert.equal(hit!.tool, 'X');
+  });
 });
 
 describe('detectMcpCalls: D3 HTTPie-class', () => {
@@ -351,6 +383,19 @@ describe('detectMcpCalls: D10 FIFO', () => {
 
   it('does NOT match plain mkfifo without reader', () => {
     const cmd = `mkfifo /tmp/p`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'fifo').length, 0);
+  });
+
+  it('does NOT match reader without matching mkfifo', () => {
+    // reader from a path that wasn't created by mkfifo in this fragment
+    const cmd = `mcp-server-hass < /tmp/some-other-file`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'fifo').length, 0);
+  });
+
+  it('does NOT match fifo to unrelated binary', () => {
+    const cmd = `mkfifo /tmp/p; cat < /tmp/p`;
     const calls = detectMcpCalls(cmd, HASS_REG);
     assert.equal(calls.filter((c) => c.via === 'fifo').length, 0);
   });
