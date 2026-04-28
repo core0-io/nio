@@ -108,7 +108,9 @@ export function parseMcpToolName(toolName: string, platform: string): ParsedMcpT
     return { isMcp: false };
   }
 
-  if (platform === 'openclaw') {
+  // Hermes uses the same `<server>__<tool>` format as OpenClaw — see
+  // plugins/hermes/config.default.yaml notes on `available_tools.mcp`.
+  if (platform === 'openclaw' || platform === 'hermes') {
     const idx = name.indexOf('__');
     if (idx > 0 && idx < name.length - 2) {
       return { isMcp: true, server: name.slice(0, idx), local: name.slice(idx + 2) };

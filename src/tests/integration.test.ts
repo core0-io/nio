@@ -337,6 +337,34 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
   });
 
+  // ── MCP direct call: Hermes uses server__tool (same as OpenClaw) ────────
+  it('blocked_tools.mcp matches Hermes MCP tool by bare name', async () => {
+    ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOn'] } } });
+    const result = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'hass__HassTurnOn',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('available_tools.mcp gates Hermes MCP tools', async () => {
+    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+    const allowed = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'hass__HassTurnOn',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(allowed.decision, 'allow');
+    const denied = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'hass__HassTurnOff',
+      tool_input: {},
+    }, ctx.options);
+    assert.equal(denied.decision, 'deny');
+  });
+
   // ── MCP cross-platform gate ──────────────────────────────────────────────
   it('blocked_tools.mcp matches OpenClaw MCP tool by bare name', async () => {
     ctx = createTestContext({ guard: { blocked_tools: { mcp: ['HassTurnOn'] } } });

@@ -47,6 +47,23 @@ describe('parseMcpToolName: OpenClaw', () => {
   });
 });
 
+describe('parseMcpToolName: Hermes', () => {
+  it('parses server__tool (same format as OpenClaw)', () => {
+    const r = parseMcpToolName('hass__HassTurnOn', 'hermes');
+    assert.deepEqual(r, { isMcp: true, server: 'hass', local: 'HassTurnOn' });
+  });
+
+  it('does not parse native Hermes tool names', () => {
+    for (const name of ['terminal', 'exec', 'shell', 'write_file', 'patch', 'read_file', 'fetch', 'http_request']) {
+      assert.deepEqual(parseMcpToolName(name, 'hermes'), { isMcp: false }, name);
+    }
+  });
+
+  it('rejects trailing __ with no tool part', () => {
+    assert.deepEqual(parseMcpToolName('hass__', 'hermes'), { isMcp: false });
+  });
+});
+
 describe('parseMcpToolName: miscellaneous', () => {
   it('returns isMcp:false for unknown platforms', () => {
     assert.deepEqual(parseMcpToolName('mcp__hass__HassTurnOn', 'other'), { isMcp: false });
