@@ -225,10 +225,15 @@ guard:
     external: 2.0      # Phase 6: external scoring API
 
 # Telemetry collection — shared OTLP connection + per-signal settings.
-# Disabled when endpoint is empty and all local options are disabled.
+# OTLP export is disabled by default (empty endpoint). Set endpoint to enable;
+# per-signal `enabled` flags then gate which signals get exported. Local JSONL
+# files keep working regardless of endpoint — they're controlled by the
+# per-signal `local` flag.
 collector:
-  # OTLP collector base URL. /v1/traces, /v1/metrics, /v1/logs are appended automatically.
-  endpoint: "http://localhost:4318"
+  # OTLP collector base URL. /v1/traces, /v1/metrics, /v1/logs are appended
+  # automatically. Leave empty to disable OTLP export entirely.
+  # Example: "http://localhost:4318"
+  endpoint: ""
   # Bearer token for OTLP endpoint authentication.
   api_key: ""
   # OTLP export timeout in milliseconds.
