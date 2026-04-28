@@ -1099,3 +1099,50 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
       'compile-and-run must not be denied — common dev workflow, runtime behavior is OS-sandbox concern');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP config / persistence path write protection (groups X, Y).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: MCP config & persistence write protection (groups X, Y)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  for (const path of [
+    '/Users/test/.claude.json',
+    '/Users/test/.claude/mcp.json',
+    '/Users/test/Library/Application Support/Claude/claude_desktop_config.json',
+    '/Users/test/.hermes/config.yaml',
+    '/Users/test/.openclaw/openclaw.json',
+  ]) {
+    it(`X: write to MCP config (${path.split('/').slice(-2).join('/')}) is denied`, async () => {
+      ctx = createTestContext('balanced');
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: path, content: '{}' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+      assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+    });
+  }
+
+  for (const path of [
+    '/Users/test/Library/LaunchAgents/com.evil.plist',
+    '/etc/cron.d/evil',
+    '/Users/test/.zshrc',
+    '/Users/test/.bashrc',
+    '/Users/test/.config/systemd/user/evil.service',
+  ]) {
+    it(`Y: write to persistence channel (${path}) is denied`, async () => {
+      ctx = createTestContext('balanced');
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: path, content: '...' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+      assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+    });
+  }
+});

@@ -57,12 +57,34 @@ export const HIGH_RISK_TLDS = [
 
 /** File path fragments that indicate sensitive data. */
 export const SENSITIVE_FILE_PATHS = [
+  // ── Credentials ─────────────────────────────────────────────────────
   '.env', '.env.local', '.env.production',
-  '.ssh/', 'id_rsa', 'id_ed25519',
+  '.ssh/', 'id_rsa', 'id_ed25519', 'authorized_keys',
   '.aws/credentials', '.aws/config',
   '.npmrc', '.netrc',
   'credentials.json', 'serviceAccountKey.json',
   '.kube/config',
+
+  // ── MCP server configuration (writes here can register a new server
+  //    that bypasses the available_tools.mcp allowlist) ──────────────
+  '.claude.json',
+  '.claude/mcp',
+  'Library/Application Support/Claude/claude_desktop_config.json',
+  'AppData/Roaming/Claude/claude_desktop_config.json',
+  '.config/Claude/claude_desktop_config.json',
+  '.hermes/config.yaml',
+  '.hermes/plugins/',
+  '.openclaw/openclaw.json',
+  '.openclaw/',
+
+  // ── Persistence channels (next-launch / scheduled triggers) ────────
+  'Library/LaunchAgents/',
+  'Library/LaunchDaemons/',
+  'etc/cron.',
+  'var/spool/cron/',
+  '.config/systemd/user/',
+  'etc/systemd/system/',
+  '.bashrc', '.zshrc', '.profile', '.bash_profile', '.zprofile', '.zshenv',
 ] as const;
 
 // ── Secret Pattern Regexes ──────────────────────────────────────────────
