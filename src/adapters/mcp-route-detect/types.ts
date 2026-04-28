@@ -42,6 +42,12 @@ export interface RoutedMcpCall {
     background?: boolean;
     compiled?: boolean;
   };
+  /**
+   * When true, this call is informational only — Phase 0 must NOT use it
+   * to deny. Set by D12 (self-launch), D15 (compile-and-run), and D16
+   * (obfuscation fallback). Production audit pipelines may still log it.
+   */
+  auditOnly?: boolean;
 }
 
 /** A single fragment produced by Stage 1 unwrap, plus any pass-through flags. */

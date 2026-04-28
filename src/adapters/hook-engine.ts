@@ -160,7 +160,10 @@ function checkToolGate(
     : [];
 
   const registry = injectedRegistry ?? loadMCPRegistry();
-  const shellHits = detectMcpCalls(extractCommandString(toolInput), registry);
+  const allShellHits = detectMcpCalls(extractCommandString(toolInput), registry);
+  // Audit-only hits (D12 self-launch, D15 compile-and-run, D16 obfuscation
+  // fallback) inform the audit pipeline but must not gate execution.
+  const shellHits = allShellHits.filter(h => !h.auditOnly);
   const shellMcpCandidates = shellHits.flatMap(h =>
     h.tool ? [h.tool, `${h.server}__${h.tool}`] : [`${h.server}__*`]);
 

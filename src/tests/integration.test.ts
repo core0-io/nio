@@ -1074,4 +1074,28 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
     }, ctx.options);
     assert.notEqual(result.decision, 'deny');
   });
+
+  // ── Audit-only channels (groups Z, AA) — must NOT deny ──────────────────────
+
+  it('Z: self-launching the registered MCP binary is NOT denied (audit only)', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `mcp-server-hass --transport http --port 9000` },
+    }, ctx.options);
+    assert.notEqual(result.decision, 'deny',
+      'self-launch must not be denied — dev workflows commonly start MCP servers');
+  });
+
+  it('AA: compile-and-run is NOT denied (audit only)', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `gcc -x c - -o /tmp/a; /tmp/a` },
+    }, ctx.options);
+    assert.notEqual(result.decision, 'deny',
+      'compile-and-run must not be denied — common dev workflow, runtime behavior is OS-sandbox concern');
+  });
 });

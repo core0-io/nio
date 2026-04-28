@@ -390,3 +390,80 @@ describe('detectMcpCalls: D11 package runner', () => {
     assert.equal(calls.filter((c) => c.via === 'package_runner').length, 0);
   });
 });
+
+describe('detectMcpCalls: D12 MCP server self-launch (audit-only)', () => {
+  it('matches `<registry-binary> --transport http --port N`', () => {
+    const cmd = `mcp-server-hass --transport http --port 9000`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'self_launch');
+    assert.ok(hit);
+    assert.equal(hit!.server, 'hass');
+    assert.equal(hit!.auditOnly, true);
+  });
+
+  it('matches `<registry-binary> --listen`', () => {
+    const cmd = `mcp-server-hass --listen 0.0.0.0:8080`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'self_launch');
+    assert.ok(hit);
+    assert.equal(hit!.auditOnly, true);
+  });
+
+  it('does NOT match registered binary without listen-style flag', () => {
+    const cmd = `mcp-server-hass --version`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'self_launch').length, 0);
+  });
+});
+
+describe('detectMcpCalls: D13/D14 flag pass-through (emergent)', () => {
+  it('curl inside ssh carries flags.remote=true', () => {
+    const cmd = `ssh user@host 'curl http://localhost:5173/mcp'`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'http_client');
+    assert.ok(hit);
+    assert.equal(hit!.flags?.remote, true);
+  });
+
+  it('curl inside nohup carries flags.background=true', () => {
+    const cmd = `nohup curl http://localhost:5173/mcp &`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'http_client');
+    assert.ok(hit);
+    assert.equal(hit!.flags?.background, true);
+  });
+});
+
+describe('detectMcpCalls: D15 compile-and-run (audit-only)', () => {
+  it('emits audit when fragment is flagged compiled=true', () => {
+    const cmd = `gcc -x c - -o /tmp/a; /tmp/a`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'compiled');
+    assert.ok(hit);
+    assert.equal(hit!.auditOnly, true);
+  });
+
+  it('does NOT emit compiled for non-compile commands', () => {
+    const calls = detectMcpCalls(`echo hi`, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'compiled').length, 0);
+  });
+});
+
+describe('detectMcpCalls: D16 obfuscation fallback (audit-only)', () => {
+  it('matches a registry URL even without curl/wget invocation', () => {
+    const cmd = `printf "see http://localhost:5173/mcp"`;
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'obfuscation_fallback');
+    assert.ok(hit);
+    assert.equal(hit!.auditOnly, true);
+  });
+
+  it('matches a registry binary literal name as text', () => {
+    const cmd = `which mcp-server-hass`;
+    // `which mcp-server-hass` doesn't structurally invoke the binary;
+    // fallback detector flags the literal presence.
+    const hit = detectMcpCalls(cmd, HASS_REG).find((c) => c.via === 'obfuscation_fallback');
+    assert.ok(hit);
+  });
+
+  it('does NOT match unrelated text', () => {
+    const cmd = `echo hello world`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'obfuscation_fallback').length, 0);
+  });
+});

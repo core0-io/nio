@@ -671,6 +671,112 @@ export function detectPackageRunner(fragment: UnwrappedFragment, registry: MCPRe
 }
 
 // ---------------------------------------------------------------------------
+// D12 — MCP server self-launch (audit-only)
+// `<registry-binary> --transport (http|sse)`, `--port N`, `--listen`
+// ---------------------------------------------------------------------------
+
+const SELF_LAUNCH_FLAG_RE = /\s--(?:transport|port|listen|bind|host|address)\b/;
+
+export function detectSelfLaunch(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
+  if (fragment.inline) return [];
+  const tokens = tokenize(fragment.command);
+  const results: RoutedMcpCall[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = stripQuotes(tokens[i]);
+    const entry = registry.lookupByBinary(tok);
+    if (!entry) continue;
+    const argvText = ' ' + tokens.slice(i + 1).map(stripQuotes).join(' ');
+    if (!SELF_LAUNCH_FLAG_RE.test(argvText)) continue;
+    results.push({
+      server: entry.serverName,
+      via: 'self_launch',
+      evidence: tok + argvText,
+      flags: fragment.flags,
+      auditOnly: true,
+    });
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// D13 — Remote-shell pass-through.
+// D14 — Background/scheduled pass-through.
+// Both are emergent from Stage 1 flag propagation: U12 marks remote=true
+// and U15 marks background=true on inner fragments, which the existing
+// D2-D11 detectors carry forward via `fragment.flags`. No additional
+// detector logic is required — the flag IS the attribution.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// D15 — Compile-and-run pass-through (audit-only).
+// U16 marks the original fragment with `compiled=true`. The compiled
+// binary's runtime behaviour is not statically inspectable; emit an
+// audit-only marker rather than blocking, since dev workflows commonly
+// compile and run code.
+// ---------------------------------------------------------------------------
+
+export function detectCompiled(fragment: UnwrappedFragment): RoutedMcpCall[] {
+  if (!fragment.flags?.compiled) return [];
+  // Only emit once per top-level fragment — the flag is set on the original
+  // and inherited by inners; we want the audit entry on the original.
+  if (fragment.inline) return [];
+  return [{
+    server: '<compiled>',
+    via: 'compiled',
+    evidence: fragment.command,
+    flags: fragment.flags,
+    auditOnly: true,
+  }];
+}
+
+// ---------------------------------------------------------------------------
+// D16 — Obfuscation fallback.
+// When U9/U10 cannot fully decode obfuscated payloads, scan the fragment
+// for any registry URL / socket / binary literal as a string match.
+// Audit-only, since the binary itself wasn't structurally invoked.
+// ---------------------------------------------------------------------------
+
+export function detectObfuscationFallback(
+  fragment: UnwrappedFragment,
+  registry: MCPRegistry,
+): RoutedMcpCall[] {
+  const results: RoutedMcpCall[] = [];
+  const seen = new Set<string>();
+  // URLs
+  for (const url of extractUrls(fragment.command)) {
+    const entry = registry.lookupByUrl(url);
+    if (!entry || seen.has(entry.serverName)) continue;
+    seen.add(entry.serverName);
+    results.push({
+      server: entry.serverName,
+      via: 'obfuscation_fallback',
+      evidence: url,
+      flags: fragment.flags,
+      auditOnly: true,
+    });
+  }
+  // Binary names as bare tokens (only when no other detector picked them up)
+  for (const e of registry.entries) {
+    if (seen.has(e.serverName)) continue;
+    for (const b of e.binaries) {
+      const re = new RegExp(`\\b${b.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&')}\\b`);
+      if (re.test(fragment.command)) {
+        results.push({
+          server: e.serverName,
+          via: 'obfuscation_fallback',
+          evidence: b,
+          flags: fragment.flags,
+          auditOnly: true,
+        });
+        seen.add(e.serverName);
+        break;
+      }
+    }
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
 
@@ -695,6 +801,9 @@ export function runDetectors(
     out.push(...detectStdinRedirect(fragment, registry));
     out.push(...detectFifo(fragment, registry));
     out.push(...detectPackageRunner(fragment, registry));
+    out.push(...detectSelfLaunch(fragment, registry));
+    out.push(...detectCompiled(fragment));
+    out.push(...detectObfuscationFallback(fragment, registry));
   }
   return out;
 }
