@@ -1022,4 +1022,56 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
     // is allow for a plain HTTP GET with no body / no risky pattern.
     assert.notEqual(result.decision, 'deny', 'should not be denied by Phase 0 MCP gate');
   });
+
+  // ── Stdio / package-runner channels (groups U, V, W) ───────────────────────
+
+  it('U: npx with registered MCP CLI package is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `npx -y @hass/mcp-cli call hass.HassTurnOff` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('V: stdio JSON-RPC pipe to registered MCP binary is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `echo '{"params":{"name":"HassTurnOff"}}' | mcp-server-hass` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('V: stdin redirect to registered MCP binary is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `mcp-server-hass < /tmp/payload.json` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('W: FIFO read by registered binary is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `mkfifo /tmp/p; mcp-server-hass < /tmp/p &` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('npx with non-registered package is NOT denied via MCP gate', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `npx -y @random/unrelated-cli` },
+    }, ctx.options);
+    assert.notEqual(result.decision, 'deny');
+  });
 });

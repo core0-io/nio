@@ -449,6 +449,228 @@ export function detectLanguageRuntime(fragment: UnwrappedFragment, registry: MCP
 }
 
 // ---------------------------------------------------------------------------
+// D8 — Stdio JSON-RPC injection: `<echo|printf|cat|jq|tee|yes> ... | <bin>`
+// ---------------------------------------------------------------------------
+
+const STDIO_FEEDERS = new Set(['echo', 'printf', 'cat', 'jq', 'tee', 'yes']);
+
+/** Split a command into shell pipeline stages, naive but quote-aware. */
+function splitPipeline(command: string): string[] {
+  const parts: string[] = [];
+  let buf = '';
+  let i = 0;
+  while (i < command.length) {
+    const ch = command[i];
+    if (ch === '\\' && i + 1 < command.length) { buf += ch + command[i + 1]; i += 2; continue; }
+    if (ch === '"' || ch === "'") {
+      const q = (() => {
+        let j = i + 1;
+        while (j < command.length && command[j] !== ch) {
+          if (command[j] === '\\' && ch === '"' && j + 1 < command.length) { j += 2; continue; }
+          j++;
+        }
+        return j < command.length ? j + 1 : command.length;
+      })();
+      buf += command.slice(i, q);
+      i = q;
+      continue;
+    }
+    if (ch === '|' && command[i + 1] !== '|') { parts.push(buf); buf = ''; i++; continue; }
+    buf += ch;
+    i++;
+  }
+  if (buf.trim()) parts.push(buf);
+  return parts.map((p) => p.trim()).filter(Boolean);
+}
+
+/** Pull the body string from `echo ARGS` / `printf 'fmt' args` / `cat <file>` */
+function extractFeederBody(stage: string): string | undefined {
+  const tokens = tokenize(stage);
+  if (tokens.length === 0) return undefined;
+  const cmd = stripQuotes(tokens[0]);
+  if (!STDIO_FEEDERS.has(cmd)) return undefined;
+  // Concatenate non-flag args (best effort) to scan for JSON-RPC.
+  const body = tokens.slice(1)
+    .filter((t) => !t.startsWith('-'))
+    .map((t) => stripQuotes(t))
+    .join(' ');
+  return body;
+}
+
+export function detectStdioPipe(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
+  if (fragment.inline) return [];
+  const stages = splitPipeline(fragment.command);
+  if (stages.length < 2) return [];
+  const last = stages[stages.length - 1];
+  const lastTokens = tokenize(last);
+  if (lastTokens.length === 0) return [];
+  const binTok = stripQuotes(lastTokens[0]);
+  const entry = registry.lookupByBinary(binTok);
+  if (!entry) return [];
+
+  // Walk earlier stages to find a feeder body for tool extraction
+  let body = '';
+  for (const stage of stages.slice(0, -1)) {
+    const fb = extractFeederBody(stage);
+    if (fb) body += ' ' + fb;
+  }
+  const tool = body ? extractToolFromJsonBody(body) : undefined;
+
+  return [{
+    server: entry.serverName,
+    tool,
+    via: 'stdio_pipe',
+    evidence: fragment.command,
+    flags: fragment.flags,
+  }];
+}
+
+// ---------------------------------------------------------------------------
+// D9 — Stdin redirect: `<bin> < file.json`, `<bin> <<EOF`, `<bin> <<<'json'`
+// ---------------------------------------------------------------------------
+
+const STDIN_REDIR_RE = /(?:^|[\s;|&])([A-Za-z][\w./-]*)\s*(?:<<<\s*('[^']*'|"[^"]*"|\S+)|<<-?\s*['"]?([A-Za-z_]\w*)['"]?|<\s*(\S+))/g;
+
+export function detectStdinRedirect(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
+  if (fragment.inline) return [];
+  const command = fragment.command;
+  const results: RoutedMcpCall[] = [];
+  STDIN_REDIR_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = STDIN_REDIR_RE.exec(command)) !== null) {
+    const bin = m[1];
+    const entry = registry.lookupByBinary(bin);
+    if (!entry) continue;
+    let body: string | undefined;
+    const here = m[2];
+    if (here) body = stripQuotes(here);
+    else if (m[3]) {
+      // Heredoc body — find marker
+      const marker = m[3];
+      const after = command.slice(m.index + m[0].length);
+      const closeRe = new RegExp('\\n' + marker.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&') + '(?:\\n|$)');
+      const cm = closeRe.exec('\n' + after);
+      if (cm) body = after.slice(0, cm.index);
+    } else if (m[4]) {
+      // `< file.json` — file content not available statically
+      body = undefined;
+    }
+    const tool = body ? extractToolFromJsonBody(body) : undefined;
+    results.push({
+      server: entry.serverName,
+      tool,
+      via: 'stdin_redirect',
+      evidence: m[0].trim(),
+      flags: fragment.flags,
+    });
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// D10 — FIFO / named pipe: `mkfifo /tmp/p; <bin> < /tmp/p &; echo ... > /tmp/p`
+// Best-effort cross-command pairing within a single fragment.
+// ---------------------------------------------------------------------------
+
+const MKFIFO_RE = /\bmkfifo\s+([^\s;|&]+)/g;
+const FIFO_READER_RE = /\b([A-Za-z][\w./-]*)\s+<\s*([^\s;|&]+)/g;
+
+export function detectFifo(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
+  if (fragment.inline) return [];
+  const command = fragment.command;
+  const fifos = new Set<string>();
+  for (const m of command.matchAll(MKFIFO_RE)) fifos.add(m[1]);
+  if (fifos.size === 0) return [];
+
+  const results: RoutedMcpCall[] = [];
+  FIFO_READER_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = FIFO_READER_RE.exec(command)) !== null) {
+    const bin = m[1];
+    const path = m[2];
+    if (!fifos.has(path)) continue;
+    const entry = registry.lookupByBinary(bin);
+    if (!entry) continue;
+    results.push({
+      server: entry.serverName,
+      via: 'fifo',
+      evidence: m[0],
+      flags: fragment.flags,
+    });
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// D11 — Package runners (npx/bunx/pnpm dlx/yarn dlx/pipx run/uv run/uvx/
+//                       deno run/go run <pkg>)
+// ---------------------------------------------------------------------------
+
+interface RunnerSpec { runner: string; subcommand?: string; }
+const PACKAGE_RUNNER_SPECS: RunnerSpec[] = [
+  { runner: 'npx' },
+  { runner: 'bunx' },
+  { runner: 'pnpm', subcommand: 'dlx' },
+  { runner: 'pnpm', subcommand: 'exec' },
+  { runner: 'yarn', subcommand: 'dlx' },
+  { runner: 'yarn', subcommand: 'exec' },
+  { runner: 'pipx', subcommand: 'run' },
+  { runner: 'uv', subcommand: 'run' },
+  { runner: 'uvx' },
+  { runner: 'deno', subcommand: 'run' },
+  { runner: 'go', subcommand: 'run' },
+];
+
+export function detectPackageRunner(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
+  if (fragment.inline) return [];
+  const tokens = tokenize(fragment.command);
+  const results: RoutedMcpCall[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const tok = stripQuotes(tokens[i]);
+    const spec = PACKAGE_RUNNER_SPECS.find((s) => s.runner === (tok.split('/').pop() || tok));
+    if (!spec) continue;
+    let j = i + 1;
+    if (spec.subcommand) {
+      while (j < tokens.length && stripQuotes(tokens[j]).startsWith('-')) j++;
+      if (j >= tokens.length || stripQuotes(tokens[j]) !== spec.subcommand) continue;
+      j++;
+    }
+    // Skip flags (e.g. `-y`, `--package=x`, `-p some`)
+    while (j < tokens.length) {
+      const t = stripQuotes(tokens[j]);
+      if (!t.startsWith('-')) break;
+      j++;
+    }
+    if (j >= tokens.length) continue;
+    const pkg = stripQuotes(tokens[j]);
+    const entry = registry.lookupByCliPackage(pkg);
+    if (!entry) continue;
+
+    // Best-effort tool name from following positional args (e.g. `mcporter call hass.HassTurnOff`)
+    let tool: string | undefined;
+    for (let k = j + 1; k < tokens.length; k++) {
+      const t = stripQuotes(tokens[k]);
+      if (t.startsWith('-')) continue;
+      if (t === 'call') continue;
+      const m = SERVER_TOOL_RE.exec(t);
+      if (m) { tool = m[2]; break; }
+      // Plain tool name fallback
+      if (/^[A-Za-z][\w-]*$/.test(t)) { tool = t; break; }
+    }
+
+    results.push({
+      server: entry.serverName,
+      tool,
+      via: 'package_runner',
+      evidence: tok + (spec.subcommand ? ' ' + spec.subcommand : '') + ' ' + pkg,
+      flags: fragment.flags,
+    });
+  }
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------
 
@@ -469,6 +691,10 @@ export function runDetectors(
     out.push(...detectDevTcp(fragment, registry));
     out.push(...detectPwshHttp(fragment, registry));
     out.push(...detectLanguageRuntime(fragment, registry));
+    out.push(...detectStdioPipe(fragment, registry));
+    out.push(...detectStdinRedirect(fragment, registry));
+    out.push(...detectFifo(fragment, registry));
+    out.push(...detectPackageRunner(fragment, registry));
   }
   return out;
 }

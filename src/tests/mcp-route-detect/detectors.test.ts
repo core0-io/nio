@@ -296,3 +296,97 @@ describe('detectMcpCalls: D7 Language-runtime HTTP', () => {
     assert.equal(calls.filter((c) => c.via === 'language_runtime').length, 0);
   });
 });
+
+describe('detectMcpCalls: D8 stdio JSON-RPC pipe', () => {
+  it('matches `echo \'{...}\' | mcp-server-hass`', () => {
+    const cmd = `echo '{"params":{"name":"HassTurnOff"}}' | mcp-server-hass`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'stdio_pipe');
+    assert.ok(hit);
+    assert.equal(hit!.server, 'hass');
+    assert.equal(hit!.tool, 'HassTurnOff');
+  });
+
+  it('matches `printf | hass-mcp` (basename-based)', () => {
+    const cmd = `printf '{"params":{"name":"X"}}' | hass-mcp`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'stdio_pipe' && c.server === 'hass'));
+  });
+
+  it('does NOT match pipe to unrelated binary', () => {
+    const cmd = `echo '{}' | grep x`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'stdio_pipe').length, 0);
+  });
+});
+
+describe('detectMcpCalls: D9 stdin redirect', () => {
+  it('matches `<bin> < file.json`', () => {
+    const cmd = `mcp-server-hass < /tmp/payload.json`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'stdin_redirect' && c.server === 'hass'));
+  });
+
+  it('matches `<bin> <<<\'json\'`', () => {
+    const cmd = `mcp-server-hass <<<'{"params":{"name":"HassTurnOff"}}'`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'stdin_redirect');
+    assert.ok(hit);
+    assert.equal(hit!.tool, 'HassTurnOff');
+  });
+
+  it('does NOT match redirect to unregistered binary', () => {
+    const cmd = `cat < /tmp/x`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'stdin_redirect').length, 0);
+  });
+});
+
+describe('detectMcpCalls: D10 FIFO', () => {
+  it('matches mkfifo + reader binary in same fragment', () => {
+    const cmd = `mkfifo /tmp/p; mcp-server-hass < /tmp/p &; echo '{}' > /tmp/p`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'fifo' && c.server === 'hass'));
+  });
+
+  it('does NOT match plain mkfifo without reader', () => {
+    const cmd = `mkfifo /tmp/p`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'fifo').length, 0);
+  });
+});
+
+describe('detectMcpCalls: D11 package runner', () => {
+  it('matches `npx <registered-cli-pkg>`', () => {
+    const cmd = `npx -y @hass/mcp-cli call hass.HassTurnOff`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'package_runner');
+    assert.ok(hit);
+    assert.equal(hit!.server, 'hass');
+    assert.equal(hit!.tool, 'HassTurnOff');
+  });
+
+  it('matches `bunx <pkg>`', () => {
+    const cmd = `bunx @hass/mcp-cli`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'package_runner' && c.server === 'hass'));
+  });
+
+  it('matches `pipx run <pkg>`', () => {
+    const cmd = `pipx run @hass/mcp-cli`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'package_runner'));
+  });
+
+  it('matches `uvx <pkg>`', () => {
+    const cmd = `uvx @hass/mcp-cli`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.ok(calls.find((c) => c.via === 'package_runner'));
+  });
+
+  it('does NOT match runner with unregistered package', () => {
+    const cmd = `npx -y @random/cli`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    assert.equal(calls.filter((c) => c.via === 'package_runner').length, 0);
+  });
+});
