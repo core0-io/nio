@@ -83,4 +83,10 @@ export interface EngineOptions {
   };
   /** Runtime Nio engine (scanner + registry facade) */
   nio: NioInstance;
+  /**
+   * Optional pre-loaded MCP endpoint registry. When omitted, the engine
+   * loads it from disk via `loadMCPRegistry()` on each hook entry. Tests
+   * inject a fixture-built registry to avoid touching real config files.
+   */
+  mcpRegistry?: import('./mcp-registry.js').MCPRegistry;
 }

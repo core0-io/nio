@@ -12,6 +12,7 @@ import type { EngineOptions } from '../../adapters/types.js';
 import type { GuardRulesConfig } from '../../core/analysers/runtime/index.js';
 import type { PhaseWeights } from '../../core/scoring.js';
 import type { ProtectionLevel } from '../../core/action-decision.js';
+import type { MCPRegistry } from '../../adapters/mcp-registry.js';
 
 /**
  * Create an isolated test context with injectable config level.
@@ -29,6 +30,7 @@ export interface TestContextOptions {
     allowlist_mode?: 'exit' | 'continue';
     scoring_weights?: Partial<PhaseWeights>;
   };
+  mcpRegistry?: MCPRegistry;
 }
 
 export function createTestContext(levelOrOpts: string | TestContextOptions = 'balanced') {
@@ -59,6 +61,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
   const options: EngineOptions = {
     config,
     nio: nio as unknown as EngineOptions['nio'],
+    mcpRegistry: opts.mcpRegistry,
   };
 
   return {

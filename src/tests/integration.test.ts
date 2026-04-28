@@ -3,6 +3,58 @@ import assert from 'node:assert/strict';
 import { evaluateHook } from '../adapters/hook-engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { createTestContext } from './helpers/test-utils.js';
+import type { MCPRegistry, MCPServerEntry } from '../adapters/mcp-registry.js';
+
+/** Minimal in-memory registry helper for integration tests. */
+function buildIntegrationRegistry(): MCPRegistry {
+  const entries: MCPServerEntry[] = [{
+    serverName: 'hass',
+    urls: ['http://localhost:5173/mcp'],
+    sockets: ['/tmp/mcp-hass.sock'],
+    binaries: ['mcp-server-hass'],
+    cliPackages: ['@hass/mcp-cli'],
+    source: 'manual',
+  }];
+  const norm = (u: string) => {
+    try { const p = new URL(u); p.host = p.host.toLowerCase(); return p.toString().replace(/\/$/, ''); }
+    catch { return u.toLowerCase(); }
+  };
+  return {
+    entries,
+    lookupByUrl(u) {
+      if (!u) return null;
+      const tn = norm(u);
+      for (const e of entries) for (const ru of e.urls) {
+        if (norm(ru) === tn) return e;
+        try {
+          const a = new URL(u); const b = new URL(ru);
+          if (a.protocol === b.protocol && a.host.toLowerCase() === b.host.toLowerCase()) return e;
+        } catch { /* ignore */ }
+      }
+      return null;
+    },
+    lookupBySocket(p) {
+      if (!p) return null;
+      for (const e of entries) for (const s of e.sockets) if (s === p) return e;
+      return null;
+    },
+    lookupByBinary(n) {
+      if (!n) return null;
+      const t = (n.split('/').pop() ?? n).toLowerCase();
+      for (const e of entries) for (const b of e.binaries) {
+        if ((b.split('/').pop() ?? b).toLowerCase() === t) return e;
+      }
+      return null;
+    },
+    lookupByCliPackage(p) {
+      if (!p) return null;
+      for (const e of entries) for (const c of e.cliPackages) {
+        if (c.toLowerCase() === p.toLowerCase()) return e;
+      }
+      return null;
+    },
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // A: Claude Code evaluateHook full chain
@@ -849,5 +901,125 @@ describe('Integration: Hermes adapter evaluateHook', () => {
     // returned null and decision would still be 'allow', so this is a
     // weak but useful smoke check that the happy path completes.
     assert.ok(['allow', 'deny', 'ask'].includes(result.decision));
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MCP indirect-invocation routing (groups B-J: HTTP, runtime, TCP, /dev/tcp,
+// pwsh, language one-liners). Verifies that available_tools.mcp denies via
+// the new mcp-route-detect content detection in Phase 0.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: MCP indirect invocation (groups B-J)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const allowOnlyHassTurnOn = () => createTestContext({
+    guard: { available_tools: { mcp: ['HassTurnOn'] } },
+    mcpRegistry: buildIntegrationRegistry(),
+  });
+
+  it('B: curl POSTing JSON-RPC to a registered MCP URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOff"}}'` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+  });
+
+  it('C: curl --unix-socket targeting registry socket is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `curl --unix-socket /tmp/mcp-hass.sock http://x/mcp` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('D: HTTPie POST to registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `http POST http://localhost:5173/mcp` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('E: nc to registry host:port is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `echo '{}' | nc localhost 5173` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('F: /dev/tcp/host/port to registry is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `exec 3<>/dev/tcp/localhost/5173` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('G: pwsh Invoke-RestMethod to registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `pwsh -Command "Invoke-RestMethod http://localhost:5173/mcp"` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('H: python3 -c with urllib hitting registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5173/mcp')"` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('I: node -e with fetch hitting registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `node -e "fetch('http://localhost:5173/mcp')"` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('J: ruby -e with Net::HTTP hitting registry is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `ruby -e "require 'net/http'; Net::HTTP.get(URI('http://localhost:5173/mcp'))"` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('curl to a non-registry URL is NOT routed through MCP allowlist', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `curl http://api.openai.com/v1/chat` },
+    }, ctx.options);
+    // No platform allowlist set, no MCP context → should pass Phase 0;
+    // Phase 2 may flag curl but the score-based decision under balanced
+    // is allow for a plain HTTP GET with no body / no risky pattern.
+    assert.notEqual(result.decision, 'deny', 'should not be denied by Phase 0 MCP gate');
   });
 });

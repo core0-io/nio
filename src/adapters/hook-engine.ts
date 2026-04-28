@@ -7,10 +7,11 @@ import type { WriteAuditLogOptions } from './common.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import {
-  extractMcpCallsFromCommand,
+  detectMcpCalls,
   extractCommandString,
-  type ExtractedMcpCall,
+  type RoutedMcpCall,
 } from './mcp-route-detect/index.js';
+import { loadMCPRegistry } from './mcp-registry.js';
 import { isNioSelfInvocation } from './self-invocation.js';
 
 function policyHookReason(
@@ -145,6 +146,7 @@ function checkToolGate(
   toolInput: Record<string, unknown> | undefined,
   config: EngineOptions['config'],
   platform: string,
+  injectedRegistry?: ReturnType<typeof loadMCPRegistry>,
 ): HookOutput | null {
   const platformKey = platform.replace(/-/g, '_');
   const blockedPlatform = config.guard?.blocked_tools?.[platformKey] ?? [];
@@ -157,8 +159,10 @@ function checkToolGate(
     ? [parsed.local, `${parsed.server}__${parsed.local}`]
     : [];
 
-  const shellHits = extractMcpCallsFromCommand(extractCommandString(toolInput));
-  const shellMcpCandidates = shellHits.flatMap(h => [h.local, `${h.server}__${h.local}`]);
+  const registry = injectedRegistry ?? loadMCPRegistry();
+  const shellHits = detectMcpCalls(extractCommandString(toolInput), registry);
+  const shellMcpCandidates = shellHits.flatMap(h =>
+    h.tool ? [h.tool, `${h.server}__${h.tool}`] : [`${h.server}__*`]);
 
   const allMcpCandidates = [...nameMcpCandidates, ...shellMcpCandidates];
   const hasMcpContext = parsed.isMcp || shellHits.length > 0;
@@ -167,13 +171,16 @@ function checkToolGate(
   const nameBlocked = blockedPlatform.length > 0 && matchesCaseInsensitive(blockedPlatform, [toolName]);
   const nativeMcpBlocked = parsed.isMcp && blockedMcp.length > 0
     && matchesCaseInsensitive(blockedMcp, nameMcpCandidates);
-  const shellMcpBlockHit: ExtractedMcpCall | undefined = blockedMcp.length > 0 && shellHits.length > 0
-    ? shellHits.find(h => matchesCaseInsensitive(blockedMcp, [h.local, `${h.server}__${h.local}`]))
+  const shellMcpBlockHit: RoutedMcpCall | undefined = blockedMcp.length > 0 && shellHits.length > 0
+    ? shellHits.find(h => {
+        const cands = h.tool ? [h.tool, `${h.server}__${h.tool}`] : [`${h.server}__*`, h.server];
+        return matchesCaseInsensitive(blockedMcp, cands);
+      })
     : undefined;
 
   if (nameBlocked || nativeMcpBlocked || shellMcpBlockHit) {
     const reason = (shellMcpBlockHit && !nameBlocked && !nativeMcpBlocked)
-      ? `Tool "${shellMcpBlockHit.server}__${shellMcpBlockHit.local}" is blocked (blocked_tools; invoked via mcporter)`
+      ? `Tool "${shellMcpBlockHit.server}__${shellMcpBlockHit.tool ?? '*'}" is blocked (blocked_tools; invoked via ${shellMcpBlockHit.via})`
       : `Tool "${toolName}" is blocked (blocked_tools)`;
     return {
       decision: 'deny',
@@ -228,7 +235,7 @@ export async function evaluateHook(
 
   // Phase 0: Tool-level gate
   const t0 = performance.now();
-  const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name);
+  const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name, options.mcpRegistry);
   const t0End = performance.now();
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);

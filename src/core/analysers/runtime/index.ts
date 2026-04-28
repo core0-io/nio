@@ -71,7 +71,11 @@ const SYSTEM_COMMANDS = [
 ];
 
 const NETWORK_COMMANDS = [
-  'curl ', 'wget ', 'nc ', 'netcat', 'ncat',
+  'curl ', 'wget ', 'aria2c ', 'fetch ',
+  'http ', 'https ', 'httpie ', 'xh ',
+  'nc ', 'netcat', 'ncat',
+  'socat ', 'websocat ', 'grpcurl ',
+  'openssl s_client',
   'ssh ', 'scp ', 'rsync ', 'ftp ', 'sftp ',
 ];
 
