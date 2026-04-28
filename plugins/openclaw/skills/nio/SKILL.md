@@ -255,6 +255,27 @@ Set `NIO_HOME` environment variable to change the config directory (default: `~/
 
 ---
 
+## Protection Boundary
+
+Nio's detection layer is positioned as **"catches every common misuse
+and known bypass"** — not a hard isolation primitive. Phase 0 inspects
+direct MCP tool calls *and* indirect ones routed through Bash content
+(mcporter, curl/wget/httpie, language-runtime one-liners, stdio pipes,
+package runners, …) by mapping each channel back to a registered server
+via the MCP endpoint registry (auto-discovered from Claude Code, Claude
+Desktop, Hermes, OpenClaw configs). The full capture model — 16 unwrap
+stages + 16 detectors + the registry — is documented at
+[docs/MCP-DETECTION.md](../../../../docs/MCP-DETECTION.md).
+
+Residual gaps are unavoidable at the shell-pattern layer:
+self-launching an off-registry MCP binary, network calls inside a
+freshly compiled binary, brand-new protocols, DNS rebinding. For
+high-assurance deployments, pair Nio with OS-level isolation
+(`sandbox-exec` on macOS, seccomp / Bubblewrap on Linux, `--network
+none` containers).
+
+---
+
 ## Subcommand: reset
 
 Reset `~/.nio/config.yaml` to factory defaults (from `config.default.yaml`).

@@ -225,3 +225,18 @@ Detects trojanized binary distribution patterns. Flags when 2+ of the following 
 **Validation**: Only triggers if content also contains a command execution pattern (`curl`, `wget`, `bash`, `sh`, `./`, `chmod`, `npm run`, `node`).
 
 Note: `(i)` = case insensitive search, `(multiline)` = enable multiline matching.
+
+---
+
+## MCP Tool-Call Routing (Phase 0 content detection)
+
+In addition to the file-content scan rules above, Phase 0 inspects every
+`exec_command` action for indirect MCP tool invocations. The capture
+model is documented at [docs/MCP-DETECTION.md](../../../../docs/MCP-DETECTION.md);
+the runtime path is summarized below.
+
+| Stage | Layer | Coverage |
+|-------|-------|----------|
+| 1 | Unwrap (U1-U16) | shell `-c`, `$SHELL -c`, eval, heredoc/here-string, process substitution, command substitution, source/script, interpreter inline (Python/Node/Ruby/Perl/PHP/Lua/Rscript/Deno/Bun/PowerShell), base64 / xxd / openssl-base64 decode pipes, string-concat folding, xargs / find -exec / parallel / watch / time / env, ssh / docker exec / kubectl exec / podman exec, vim/nvim/ed/ex `-c '!...'`, ansible / make-stdin, nohup / setsid / disown / at / batch / crontab / systemd-run / launchctl bsexec, gcc/clang/go run/rustc compile-and-run |
+| 2 | Detect (D1-D16) | mcporter, curl-class, HTTPie-class, TCP/socket multiplex (nc/socat/openssl s_client/websocat/grpcurl), Bash `/dev/tcp` builtin, PowerShell `Invoke-*`, language-runtime URL literals, stdio JSON-RPC pipe, stdin redirect, FIFO, package runners (npx/bunx/pnpm-dlx/yarn-dlx/pipx/uv/uvx/deno run/go run), MCP server self-launch (audit-only), compile-and-run (audit-only), obfuscation fallback (audit-only) |
+| 3 | Gate | Resolved `{server, tool}` candidates feed the existing `available_tools.mcp` / `blocked_tools.mcp` allowlist; audit-only hits inform the audit log without contributing to deny |

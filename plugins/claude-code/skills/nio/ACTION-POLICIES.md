@@ -97,6 +97,14 @@ Sensitive file paths are matched in two layers against `write_file` actions
 
 Both layers feed the same `SENSITIVE_PATH` finding (critical).
 
+**Built-in `SENSITIVE_FILE_PATHS`** (always active, additive to user
+config) covers credentials, MCP server configuration, and persistence
+channels:
+
+- **Credentials:** `.env*`, `.ssh/`, `id_rsa`, `id_ed25519`, `authorized_keys`, `.aws/credentials`, `.aws/config`, `.npmrc`, `.netrc`, `credentials.json`, `serviceAccountKey.json`, `.kube/config`
+- **MCP configuration** (writes here register a new server that bypasses `available_tools.mcp` — see [MCP-DETECTION.md](../../../../docs/MCP-DETECTION.md)): `.claude.json`, `.claude/mcp*`, `Library/Application Support/Claude/claude_desktop_config.json`, `AppData/Roaming/Claude/claude_desktop_config.json`, `.config/Claude/claude_desktop_config.json`, `.hermes/config.yaml`, `.hermes/plugins/`, `.openclaw/openclaw.json`, `.openclaw/`
+- **Persistence channels** (next-launch / scheduled triggers): `Library/LaunchAgents/`, `Library/LaunchDaemons/`, `etc/cron.*`, `var/spool/cron/`, `.config/systemd/user/`, `etc/systemd/system/`, `.bashrc`, `.zshrc`, `.profile`, `.bash_profile`, `.zprofile`, `.zshenv`
+
 ### Sensitive Data Access (high)
 
 | Command | Target |
