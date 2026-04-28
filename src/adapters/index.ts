@@ -28,3 +28,11 @@ export {
   NioConfigSchema,
   CollectorConfigSchema,
 } from './config-schema.js';
+export {
+  loadMCPRegistry,
+  clearMCPRegistryCache,
+  type MCPRegistry,
+  type MCPServerEntry,
+  type MCPSource,
+  type LoadMCPRegistryOptions,
+} from './mcp-registry.js';
