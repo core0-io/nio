@@ -83,7 +83,8 @@
         </ul>
 
         <h2>MCP nuance</h2>
-        <p>The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool, including <code>mcporter</code>-style shell invocations like <code>npx mcporter call hass.HassTurnOn</code>. Entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
+        <p>The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool — both direct calls (<code>mcp__hass__HassTurnOn</code> on Claude Code, <code>hass__HassTurnOn</code> on OpenClaw / Hermes) and <strong>indirect</strong> ones embedded in shell commands. Phase 0 unwraps the command and runs a battery of content detectors (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket pipes, package runners, stdio JSON-RPC, …), mapping each hit back to <code>{server, tool}</code> via an auto-discovered MCP endpoint registry, and re-applies the same allowlist. See <a href="../mcp-detection.html">MCP Detection</a> for the full capture model.</p>
+        <p>Entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
 
         <h2>Examples</h2>
         <pre><code>guard:

@@ -15,8 +15,9 @@ An agent can drive an MCP server two ways:
 
 1. **Direct call** — the agent invokes the platform's MCP tool surface,
    e.g. `mcp__hass__HassTurnOff` (Claude Code) or `hass__HassTurnOff`
-   (OpenClaw). Phase 0 sees the tool name, parses `{server, tool}`, and
-   checks the allowlist. Direct calls have always worked.
+   (OpenClaw / Hermes — both use the `<server>__<tool>` separator).
+   Phase 0 sees the tool name, parses `{server, tool}`, and checks the
+   allowlist. Direct calls have always worked.
 
 2. **Indirect call** — the agent invokes an *allowed* tool (most often
    `Bash`) and uses its content to talk to the MCP server: shelling out

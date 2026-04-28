@@ -80,7 +80,7 @@ Execution risk evaluation with two modes:
 
 | Phase | Name | Latency | Applies To |
 |-------|------|---------|------------|
-| 0 | **Tool Gate** | <1ms | All tools (`blocked_tools` / `available_tools` / `guarded_tools`) |
+| 0 | **Tool Gate** | <1ms | All tools (`blocked_tools` / `available_tools` / `guarded_tools`); also reroutes [indirect MCP invocations](docs/MCP-DETECTION.md) through `available_tools.mcp` |
 | 1 | **Allowlist Gate** | <1ms | Guarded tools only |
 | 2 | **Pattern Analysis** | <5ms | Guarded tools only |
 | 3 | **Static Analysis** | <50ms | Write/Edit only |
@@ -301,6 +301,7 @@ Nio currently provides full hook-based execution assurance for Claude Code, Open
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md) — Two-pipeline design, 6-phase guard flow, scoring system
+- [MCP Detection](docs/MCP-DETECTION.md) — How Phase 0 captures direct AND indirect MCP tool calls (mcporter, curl/HTTP, language runtimes, stdio pipes, package runners) and reroutes them through `available_tools.mcp`
 - [Dynamic Guard Flow](docs/dynamic-guard-flow.excalidraw) — Visual Excalidraw diagram
 
 ## Development

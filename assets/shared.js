@@ -22,6 +22,9 @@
     { id: 'configuration', title: 'Configuration', openByDefault: true, items: [
       { label: 'Config reference', path: '/docs/configuration.html' },
     ]},
+    { id: 'mcp', title: 'MCP', openByDefault: false, items: [
+      { label: 'MCP Detection', path: '/docs/mcp-detection.html' },
+    ]},
     { id: 'pipeline', title: 'Pipeline', openByDefault: false, items: [
       { label: 'Overview', path: '/docs/phases/' },
       { label: 'Scoring', path: '/docs/phases/scoring.html' },

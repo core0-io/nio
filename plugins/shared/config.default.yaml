@@ -174,10 +174,14 @@ guard:
   # matches any MCP server) or a server-qualified name (`hass__HassTurnOn` —
   # that server only). Matching is case-insensitive.
   #
-  # The `mcp` list also covers mcporter-style shell invocations: when a
-  # `Bash` / `exec` command contains `mcporter <server>.<tool>` (with or
-  # without the `call` verb, `npx`/`bunx` prefixes, flags, or function-call
-  # syntax), the extracted `server.tool` is matched against this list.
+  # The `mcp` list also covers indirect MCP invocations embedded in
+  # shell commands. Phase 0 unwraps the command (16 layers covering
+  # shells, heredocs, evals, encodings, package wrappers, ssh/docker
+  # exec, …) and runs detectors (mcporter, curl/wget/HTTPie,
+  # language-runtime one-liners, TCP/socket multiplexers, stdio
+  # JSON-RPC pipes, package runners, etc.) against every fragment,
+  # mapping each hit back to {server, tool} via the endpoint registry.
+  # See docs/MCP-DETECTION.md for the full capture model.
   available_tools:
     claude_code: []
     openclaw: []
@@ -189,6 +193,21 @@ guard:
     openclaw: []
     hermes: []
     mcp: []
+
+  # Manual additions to the MCP endpoint registry, for SaaS or otherwise
+  # non-discoverable servers (Phase 0 auto-discovers from ~/.claude.json,
+  # Claude Desktop, ~/.hermes/config.yaml, ~/.openclaw/openclaw.json by
+  # default — declare here only what's missing). Every handle indexes the
+  # server so indirect detectors can route a curl URL / unix socket /
+  # binary name / npx package back to the server name.
+  #
+  # mcp_endpoints:
+  #   hass:
+  #     urls:        ['http://localhost:5173/mcp']
+  #     sockets:     ['/tmp/mcp-hass.sock']
+  #     binaries:    ['mcp-server-hass']
+  #     cliPackages: ['@hass/mcp-cli']
+  mcp_endpoints: {}
 
   # Tool → action type mapping, per platform.
   # Tools listed here enter Phase 1-6 deep analysis.
