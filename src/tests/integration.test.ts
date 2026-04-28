@@ -1126,6 +1126,131 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
     assert.notEqual(result.decision, 'deny',
       'compile-and-run must not be denied — common dev workflow, runtime behavior is OS-sandbox concern');
   });
+
+  // ── Cross-platform parity: indirect MCP detection works on OpenClaw + Hermes ──
+
+  it('OpenClaw exec running curl POST to registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'exec',
+      params: { command: 'curl', args: ['-X', 'POST', 'http://localhost:5173/mcp', '-d', '{"params":{"name":"HassTurnOff"}}'] },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('OpenClaw exec running stdio JSON-RPC pipe to registry binary is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'exec',
+      params: { command: `echo '{"params":{"name":"HassTurnOff"}}' | mcp-server-hass` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('OpenClaw exec running npx with registered MCP CLI package is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.openclawAdapter, {
+      toolName: 'exec',
+      params: { command: `npx -y @hass/mcp-cli call hass.HassTurnOff` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('Hermes terminal running curl POST to registry URL is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: `curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOff"}}'` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('Hermes terminal running python -c with urllib is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5173/mcp')"` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('Hermes terminal running npx with registered MCP CLI is denied', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.hermesAdapter, {
+      hook_event_name: 'pre_tool_call',
+      tool_name: 'terminal',
+      tool_input: { command: `npx -y @hass/mcp-cli call hass.HassTurnOff` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  // ── Composition: indirect MCP through outer shell wrappers ─────────────────
+
+  it('curl inside ssh remote shell is detected (D2 + U12)', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `ssh user@host 'curl -X POST http://localhost:5173/mcp -d \\'{"params":{"name":"HassTurnOff"}}\\''` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('python inline in heredoc body is detected (D7 + U4)', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `python3 <<'EOF'\nimport urllib.request\nurllib.request.urlopen('http://localhost:5173/mcp')\nEOF` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('curl wrapped in nohup runs through Phase 0 with background flag', async () => {
+    ctx = allowOnlyHassTurnOn();
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: `nohup curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"X"}}' &` },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Sensitive-path write protection across protection levels.
+// SENSITIVE_FILE_PATHS produces critical findings — they should deny under
+// every level (strict / balanced / permissive). Verify with one MCP-config
+// path + one persistence path under each level.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: sensitive-path write protection across levels', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  for (const level of ['strict', 'balanced', 'permissive']) {
+    it(`MCP config write is denied under ${level}`, async () => {
+      ctx = createTestContext(level);
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: '/Users/test/.claude.json', content: '{}' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+    });
+
+    it(`Persistence channel write is denied under ${level}`, async () => {
+      ctx = createTestContext(level);
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: '/Users/test/.zshrc', content: 'echo evil' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+    });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

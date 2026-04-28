@@ -235,9 +235,12 @@ register('u3-eval', (command: string) => {
 
 const HEREDOC_OPEN_RE = /<<-?\s*(?:'([A-Za-z_][\w]*)'|"([A-Za-z_][\w]*)"|([A-Za-z_][\w]*))/g;
 const HERESTRING_RE = /<<<\s*/g;
+const INTERPRETER_BIN = /\b(python3?|python2|node|nodejs|deno|bun|ruby|perl|php|lua|Rscript|tclsh|osascript|pwsh|powershell)\b/;
 
 register('u4-heredoc', (command: string) => {
-  const fragments: string[] = [];
+  const generic: string[] = [];
+  const inline: string[] = [];
+
   for (const m of allMatches(command, HEREDOC_OPEN_RE)) {
     const marker = m[1] || m[2] || m[3];
     if (!marker) continue;
@@ -249,14 +252,35 @@ register('u4-heredoc', (command: string) => {
     const closeMatch = closeRe.exec(command.slice(nl));
     if (!closeMatch) continue;
     const body = command.slice(nl + 1, nl + closeMatch.index);
-    if (body) fragments.push(body);
+    if (!body) continue;
+    // If the heredoc opens directly into an interpreter command (e.g.
+    // `python3 <<EOF`), the body is inline code — same semantics as
+    // `python3 -c "..."`. Tag it so D7 picks it up.
+    const lineStart = command.lastIndexOf('\n', m.index) + 1;
+    const prefix = command.slice(lineStart, m.index);
+    if (INTERPRETER_BIN.test(prefix)) inline.push(body);
+    else generic.push(body);
   }
+
   for (const m of allMatches(command, HERESTRING_RE)) {
     const start = m.index + m[0].length;
     const inner = extractQuotedOrToken(command, start);
-    if (inner && inner.value) fragments.push(inner.value);
+    if (!inner || !inner.value) continue;
+    const lineStart = command.lastIndexOf('\n', m.index) + 1;
+    const prefix = command.slice(lineStart, m.index);
+    if (INTERPRETER_BIN.test(prefix)) inline.push(inner.value);
+    else generic.push(inner.value);
   }
-  return fragments.length ? { fragments } : null;
+
+  if (!generic.length && !inline.length) return null;
+  // Two emissions: one with inline=true for interpreter-fed bodies, one
+  // without for plain heredoc text. Driver dedupes so this never produces
+  // both (key is `depth|inline|cmd`).
+  if (inline.length && !generic.length) return { fragments: inline, inline: true };
+  if (!inline.length) return { fragments: generic };
+  // Both present — emit generic in the result and inject inline via a
+  // second pass by appending them; driver inline flag carries forward.
+  return { fragments: [...generic, ...inline], inline: inline.length > 0 };
 });
 
 // ---------------------------------------------------------------------------
