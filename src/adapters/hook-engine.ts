@@ -10,7 +10,7 @@ import {
   extractMcpCallsFromCommand,
   extractCommandString,
   type ExtractedMcpCall,
-} from './mcp-shell-detect.js';
+} from './mcp-route-detect/index.js';
 import { isNioSelfInvocation } from './self-invocation.js';
 
 function policyHookReason(

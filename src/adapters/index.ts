@@ -36,3 +36,11 @@ export {
   type MCPSource,
   type LoadMCPRegistryOptions,
 } from './mcp-registry.js';
+export {
+  detectMcpCalls,
+  extractMcpCallsFromCommand,
+  extractCommandString,
+  type RoutedMcpCall,
+  type DetectorTag,
+  type ExtractedMcpCall,
+} from './mcp-route-detect/index.js';
