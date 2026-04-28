@@ -1,4 +1,4 @@
 name: nio
-version: 2.0.2
+version: 2.1.0
 description: "Nio — execution assurance slash commands. Registers /nio (scan / action / config / report / reset) as a Hermes command-dispatch handler so the LLM is bypassed entirely. Lifecycle hooks remain shell-hook-driven via ~/.hermes/config.yaml; this plugin only adds slash-command dispatch."
 author: core0-io

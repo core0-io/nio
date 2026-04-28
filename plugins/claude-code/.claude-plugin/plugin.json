@@ -1,6 +1,6 @@
 {
   "name": "nio",
-  "version": "1.0.0",
+  "version": "2.1.0",
   "description": "Nio — Execution assurance and observability for autonomous AI agents. Dynamic guard, static scan, OTEL collector.",
   "author": {
     "name": "core0-io",
