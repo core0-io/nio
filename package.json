@@ -83,6 +83,7 @@
     "zod": "^3.25.32"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.13",
     "@changesets/cli": "^2.30.0",
     "@types/babel__traverse": "^7.28.0",
     "@types/js-yaml": "^4.0.9",
