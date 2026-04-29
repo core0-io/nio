@@ -215,9 +215,9 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
         const preAttrs: Record<string, unknown> = {
-          'nio.tool.input': redactAndTruncate(toolInput),
+          'gen_ai.tool.call.arguments': redactAndTruncate(toolInput),
         };
-        if (input.tool_use_id) preAttrs['nio.tool.call_id'] = input.tool_use_id;
+        if (input.tool_use_id) preAttrs['gen_ai.tool.call.id'] = input.tool_use_id;
         state = recordPreToolUse(state, key, toolName, summary, preAttrs);
         saveState(logsConfig, state);
       }
@@ -236,7 +236,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const state = ensureTurn(prev, sessionId);
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const postAttrs: Record<string, unknown> = {
-          'nio.tool.output': redactAndTruncate(resp),
+          'gen_ai.tool.call.result': redactAndTruncate(resp),
         };
         const err = (resp.error ?? resp.stderr) as string | undefined;
         if (err) postAttrs['nio.tool.error'] = redactAndTruncate(err);
