@@ -603,36 +603,44 @@ Captures agent activity as **OpenTelemetry** metrics and traces. Runs independen
 
 ### Traces
 
-One trace per conversation turn, with child spans per tool call / task:
+One trace per conversation turn, with child spans per tool call / task. Span
+names and attributes follow the OTel [GenAI semantic
+conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where
+applicable; Nio-specific extensions use the `nio.*` prefix.
 
 ```
-Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
-  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
-  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
-  └─ Span: task:execute    (TaskCreated → TaskCompleted)
+Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
+  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
+  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
+  └─ Span: task:execute             (TaskCreated → TaskCompleted)
 ```
 
-**Turn span attributes:**
+**Turn span (`invoke_agent UserPromptSubmit`) attributes:**
 
 | Attribute | Source |
 |-----------|--------|
-| `nio.session_id` | Hook stdin `session_id` |
+| `gen_ai.operation.name` | Constant: `invoke_agent` |
+| `gen_ai.provider.name` | Constant: `nio` |
+| `gen_ai.conversation.id` | Hook stdin `session_id` |
+| `gen_ai.agent.name` | Same value as `nio.platform` (acts as the agent identifier) |
+| `session.id` | Hook stdin `session_id` (mirror of `gen_ai.conversation.id` for OTel base-spec consumers) |
+| `gen_ai.usage.input_tokens` | Sum of API call input tokens for this turn |
+| `gen_ai.usage.output_tokens` | Sum of API call output tokens for this turn |
+| `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
+| `gen_ai.usage.cache_read.input_tokens` | Tokens read from prompt cache |
 | `nio.turn_number` | Auto-incrementing per session |
 | `nio.platform` | `claude-code`, `openclaw`, or `hermes` |
+| `nio.cwd` | Working directory when the turn started |
 | `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
-| `nio.turn.input_tokens` | Sum of API call input tokens for this turn |
-| `nio.turn.output_tokens` | Sum of API call output tokens for this turn |
-| `nio.turn.cache_creation_input_tokens` | Tokens written to prompt cache |
-| `nio.turn.cache_read_input_tokens` | Tokens read from prompt cache |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start
 - **OpenClaw**: `llm_output` event passes `usage` directly in event payload, accumulated in-memory across calls
 
-**Tool span attributes:** `tool_name`, `tool_summary`, `tool.input`, `tool.output`, `tool.error`, `tool.call_id`
+**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
 
-**Task span attributes:** `task_id`, `task_summary`
+**Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 
 ### Cross-Process State (Claude Code only)
 

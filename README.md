@@ -64,13 +64,13 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 | `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
 | `nio.risk.score` | Histogram | `tool_name`, `platform` |
 
-**Traces** — one trace per conversation turn:
+**Traces** — one trace per conversation turn (OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)):
 
 | Span | Trigger | Key Attributes |
 |------|---------|----------------|
-| `turn:<N>` | `Stop` / `SubagentStop` | `session_id`, `turn_number`, `platform`, `cwd`, `input_tokens`, `output_tokens`, `cache_hit_rate` |
-| `tool:<name>` | `PreToolUse` → `PostToolUse` | `tool_name`, `tool_summary` |
-| `task:execute` | `TaskCreated` → `TaskCompleted` | `task_id`, `task_summary` |
+| `invoke_agent UserPromptSubmit` | `Stop` / `SubagentStop` | `gen_ai.conversation.id`, `gen_ai.agent.name`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `nio.turn_number`, `nio.platform`, `nio.cwd`, `nio.turn.cache_hit_rate` |
+| `execute_tool <name>` | `PreToolUse` → `PostToolUse` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `nio.tool_summary`, `nio.platform` |
+| `task:execute` | `TaskCreated` → `TaskCompleted` | `nio.task_id`, `nio.task_summary` |
 
 ### Guard
 
