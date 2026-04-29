@@ -583,7 +583,9 @@ Captures agent activity as **OpenTelemetry** metrics and traces. Runs independen
 │                                                                     │
 │   openclaw-plugin.ts                                                │
 │     ├─ MeterProvider  → all metrics (tool use + turn + decision)    │
-│     └─ TracerProvider → all traces (in-memory span tracking)        │
+│     └─ TracerProvider → all traces via traces-collector pure        │
+│        functions (same as Claude Code / Hermes), with per-session   │
+│        `Map<sessionId, CollectorState>` held in memory.             │
 │         └─ No state file needed — same process across events        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -642,16 +644,35 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 
 **Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 
-### Cross-Process State (Claude Code only)
+### Trace state and span lifecycle
 
-Claude Code hooks run as separate processes per event. To correlate spans:
+All three platforms route trace span construction through the same pure
+functions in [src/scripts/lib/traces-collector.ts](../src/scripts/lib/traces-collector.ts)
+(`ensureTurn` / `recordPreToolUse` / `recordPostToolUse` /
+`recordPreTaskToolUse` / `recordPostTaskToolUse` / `setTurnAttributes` /
+`endTurn`). Span names and attribute schema are therefore identical
+across platforms; what differs is only **where the per-session
+`CollectorState` lives**:
 
-1. `PreToolUse` → writes span start time + span ID to `traces-state-store.json`
-2. `PostToolUse` → reads pending span, emits with correct start/end time
-3. `Stop` → emits turn root span, clears state
+- **Claude Code / Hermes (cross-process)** — each hook fires in a fresh
+  Node process. State is bridged via the JSON file managed by
+  [traces-state-store.ts](../src/scripts/lib/traces-state-store.ts):
+  1. `PreToolUse` → writes `{start_ms, span_id}` for the pending tool
+     into `traces-state-store.json`
+  2. `PostToolUse` → reads pending entry, calls `recordPostToolUse`
+     which emits the span retroactively with the original start time
+  3. `Stop` / `SubagentStop` → `endTurn` emits the turn root span
+     (whose span ID was pre-derived as `traceId.slice(0, 16)` so child
+     spans could parent to it before it existed)
+- **OpenClaw (in-process daemon)** — state lives in a per-session
+  in-memory `Map<sessionId, CollectorState>` inside
+  [openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). No on-disk
+  bridging; otherwise identical lifecycle (the same pure-function calls
+  are used at the same lifecycle points).
 
-State file location: derived from `collector.logs.path` (sits in the same
-directory as `audit.jsonl`); falls back to `${NIO_HOME ?? ~/.nio}/`.
+State file location (CC / Hermes only): derived from
+`collector.logs.path` (sits in the same directory as `audit.jsonl`);
+falls back to `${NIO_HOME ?? ~/.nio}/`.
 
 ### Local JSONL Log
 
