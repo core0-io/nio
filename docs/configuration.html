@@ -267,11 +267,9 @@
           <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
           <tbody>
             <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>OTLP metrics export.</td></tr>
-            <tr><td><code>local</code></td><td>boolean</td><td><code>true</code></td><td>Also write to local JSONL.</td></tr>
-            <tr><td><code>log</code></td><td>string</td><td><code>"~/.nio/metrics.jsonl"</code></td><td>Local file path. Supports <code>~/</code>.</td></tr>
-            <tr><td><code>max_size_mb</code></td><td>number</td><td><code>100</code></td><td>Rotation threshold; <code>0</code> disables rotation.</td></tr>
           </tbody>
         </table>
+        <p>Metrics are exported via OTLP only — there is no local metrics file. Hook event audit records live in the audit log (see <a href="#collector.logs"><code>collector.logs</code></a>).</p>
 
         <h3 id="collector.traces"><code>collector.traces</code></h3>
         <table>

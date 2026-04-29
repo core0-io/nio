@@ -87,7 +87,7 @@ collector:
   api_key: ""
   timeout: 5000
   protocol: http            # http | grpc
-  metrics: { enabled: true, local: true, log: "~/.nio/metrics.jsonl", max_size_mb: 100 }
+  metrics: { enabled: true }
   traces: { enabled: true }
   logs: { enabled: true, local: true, path: "~/.nio/audit.jsonl", max_size_mb: 100 }
 ```

@@ -878,8 +878,9 @@ Hermes lifecycle event
   │         │     subagent_stop    → SubagentStop
   │         ├─► hermesToCollectorInput lifts extra.tool_call_id /
   │         │   user_message / result into the canonical shape
-  │         ├─► dispatchCollectorEvent → metrics.jsonl + OTLP export
-  │         ├─► forceFlush → /v1/metrics, /v1/traces
+  │         ├─► dispatchCollectorEvent → audit.jsonl (writeAuditLog)
+  │         │                          + OTLP export (logs/traces/metrics)
+  │         ├─► forceFlush → /v1/metrics, /v1/traces, /v1/logs
   │         └─► stdout: {} (collector never blocks)
   │
   └─► Hermes's _parse_response accepts Claude-Code style

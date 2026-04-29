@@ -236,11 +236,11 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
 | `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |
-| `collector.metrics.enabled` | boolean | `true` | Enable OTEL metrics export |
-| `collector.metrics.local` | boolean | `true` | Write metrics to local JSONL |
+| `collector.metrics.enabled` | boolean | `true` | Enable OTEL metrics export (no local file) |
 | `collector.traces.enabled` | boolean | `true` | Enable OTEL traces export |
 | `collector.logs.enabled` | boolean | `true` | Enable OTEL audit log export |
-| `collector.logs.local` | boolean | `true` | Write audit logs to local JSONL |
+| `collector.logs.local` | boolean | `true` | Write audit log + hook events + collector trace state to local JSONL |
+| `collector.logs.path` | string | `"~/.nio/audit.jsonl"` | Audit log file path; the cross-process trace state file sits alongside it |
 | `collector.logs.max_size_mb` | number | `100` | Rotate local audit log when exceeded |
 
 Set `NIO_HOME` environment variable to change the config directory (default: `~/.nio`).

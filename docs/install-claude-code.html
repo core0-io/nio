@@ -96,13 +96,13 @@ cd nio-claude-code && ./setup.sh</code></pre>
           <thead><tr><th>Path</th><th>What</th></tr></thead>
           <tbody>
             <tr><td><code>~/.nio/config.yaml</code></td><td>Guard + collector config. See <a href="configuration.html">Config reference</a>.</td></tr>
-            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL log of guard decisions, scans, and lifecycle events. Read via <code>/nio report</code>.</td></tr>
-            <tr><td><code>~/.nio/metrics.jsonl</code></td><td>Local OTEL metrics dump (when <code>collector.metrics.local = true</code>).</td></tr>
+            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL audit log: guard decisions, scans, lifecycle events, and every hook event (<code>PreToolUse</code>, <code>PostToolUse</code>, <code>TaskCreated</code>, <code>TaskCompleted</code>, <code>Stop</code>, <code>SubagentStop</code>, …). Read via <code>/nio report</code>.</td></tr>
+            <tr><td><code>~/.nio/collector-state.json</code></td><td>Cross-process trace state (turn IDs + pending span starts). Internal; sits next to <code>audit.jsonl</code>.</td></tr>
             <tr><td><code>~/.claude/plugins/…</code></td><td>Plugin cache — managed by Claude Code; don't edit directly.</td></tr>
           </tbody>
         </table>
 
-        <p>Set <code>NIO_HOME</code> to move the config/audit/metrics elsewhere (e.g. <code>NIO_HOME=~/Projects/nio-state</code>).</p>
+        <p>Set <code>NIO_HOME</code> to move the config/audit log elsewhere (e.g. <code>NIO_HOME=~/Projects/nio-state</code>), or set <code>collector.logs.path</code> in <code>config.yaml</code> to relocate just the audit log + state file.</p>
 
         <h2>Verify</h2>
         <ol>
