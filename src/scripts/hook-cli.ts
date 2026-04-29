@@ -179,6 +179,8 @@ async function runHermesCollector(
 
   const meterProvider = createMeterProvider(collectorConfig);
   const tracerProvider = createTracerProvider(collectorConfig);
+  const config = loadConfig();
+  const logsConfig = config.collector?.logs;
 
   await dispatchCollectorEvent({
     event: canonicalEvent,
@@ -187,6 +189,7 @@ async function runHermesCollector(
     config: collectorConfig,
     meterProvider,
     tracerProvider,
+    logsConfig,
   });
 
   // Every hook-cli invocation is a fresh subprocess that exits right
@@ -333,6 +336,7 @@ async function main(): Promise<void> {
         config: collectorConfig,
         meterProvider,
         tracerProvider,
+        logsConfig,
       });
     }
 

@@ -10,6 +10,11 @@
  * hook dispatcher in [../hook-cli.ts](../hook-cli.ts) call into this
  * module so the per-platform script stays thin.
  *
+ * Cross-process trace state (turn_trace_id, pending span starts, …) is
+ * loaded from `state-store` at the top of each branch, mutated via the
+ * pure functions in `traces-collector`, and saved back. The trace module
+ * itself never touches the filesystem.
+ *
  * Canonical event names (Claude Code shape — adapters at the call site
  * translate their native event names to these before dispatch):
  *
@@ -31,6 +36,7 @@ import type { MeterProvider } from '@opentelemetry/sdk-metrics';
 import type { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
 
 import type { ResolvedMetricsConfig as CollectorConfig } from '../../adapters/common.js';
+import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
 import {
   ensureTurn,
@@ -42,6 +48,7 @@ import {
   redactAndTruncate,
   setTurnAttributes,
 } from './traces-collector.js';
+import { loadState, saveState } from './state-store.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -74,6 +81,12 @@ export interface DispatchOptions {
   config: CollectorConfig;
   meterProvider: MeterProvider | null;
   tracerProvider: NodeTracerProvider | null;
+  /**
+   * Audit log + trace state path config. Used to resolve the
+   * collector-state.json location (sits next to audit.jsonl). When
+   * omitted, state-store falls back to `${NIO_HOME ?? ~/.nio}/`.
+   */
+  logsConfig?: CollectorLogsConfig;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -116,7 +129,14 @@ export function spanKey(input: HookStdinPayload): string {
   return input.tool_use_id || `${input.tool_name ?? 'unknown'}:${Date.now()}`;
 }
 
-/** Append a JSONL record to config.log if configured. Best-effort; no throw. */
+/**
+ * Append a JSONL record to config.log if configured. Best-effort; no throw.
+ *
+ * @deprecated Pending removal in the next commit — hook event records are
+ * being routed through `writeAuditLog` instead. Kept here only so this
+ * commit stays a pure refactor (state IO extraction) without behaviour
+ * change.
+ */
 export function writeToLog(config: CollectorConfig, record: Record<string, unknown>): void {
   if (!config.log) return;
   try {
@@ -140,7 +160,7 @@ export function writeToLog(config: CollectorConfig, record: Record<string, unkno
  * the top of this module before calling dispatch.
  */
 export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<void> {
-  const { event, input, platform, config, meterProvider, tracerProvider } = opts;
+  const { event, input, platform, config, meterProvider, tracerProvider, logsConfig } = opts;
 
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
@@ -163,10 +183,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   try {
     if (event === 'UserPromptSubmit') {
       if (tracerProvider && input.prompt) {
-        const state = ensureTurn(config, sessionId);
-        setTurnAttributes(config, state, {
+        const prev = loadState(logsConfig);
+        let state = ensureTurn(prev, sessionId);
+        state = setTurnAttributes(state, {
           'nio.turn.user_prompt': redactAndTruncate(input.prompt),
         });
+        saveState(logsConfig, state);
       }
 
     } else if (event === 'PreToolUse') {
@@ -174,12 +196,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const key = spanKey(input);
 
       if (tracerProvider) {
-        const state = ensureTurn(config, sessionId);
+        const prev = loadState(logsConfig);
+        let state = ensureTurn(prev, sessionId);
         const preAttrs: Record<string, unknown> = {
           'nio.tool.input': redactAndTruncate(toolInput),
         };
         if (input.tool_use_id) preAttrs['nio.tool.call_id'] = input.tool_use_id;
-        recordPreToolUse(config, state, key, toolName, summary, preAttrs);
+        state = recordPreToolUse(state, key, toolName, summary, preAttrs);
+        saveState(logsConfig, state);
       }
 
       if (meterProvider) {
@@ -190,14 +214,18 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const key = spanKey(input);
 
       if (tracerProvider) {
-        const state = ensureTurn(config, sessionId);
+        const prev = loadState(logsConfig);
+        const state = ensureTurn(prev, sessionId);
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const postAttrs: Record<string, unknown> = {
           'nio.tool.output': redactAndTruncate(resp),
         };
         const err = (resp.error ?? resp.stderr) as string | undefined;
         if (err) postAttrs['nio.tool.error'] = redactAndTruncate(err);
-        await recordPostToolUse(config, tracerProvider, state, key, platform, cwd, postAttrs, err ?? null);
+        const result = await recordPostToolUse(
+          tracerProvider, state, key, platform, cwd, postAttrs, err ?? null,
+        );
+        saveState(logsConfig, result.state);
       }
 
       if (meterProvider) {
@@ -220,8 +248,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       });
 
       if (tracerProvider) {
-        const state = ensureTurn(config, sessionId);
-        recordPreTaskToolUse(config, state, taskId, summary);
+        const prev = loadState(logsConfig);
+        let state = ensureTurn(prev, sessionId);
+        state = recordPreTaskToolUse(state, taskId, summary);
+        saveState(logsConfig, state);
       }
 
       if (meterProvider) {
@@ -241,8 +271,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       });
 
       if (tracerProvider) {
-        const state = ensureTurn(config, sessionId);
-        await recordPostTaskToolUse(config, tracerProvider, state, taskId, platform, cwd);
+        const prev = loadState(logsConfig);
+        const state = ensureTurn(prev, sessionId);
+        const result = await recordPostTaskToolUse(
+          tracerProvider, state, taskId, platform, cwd,
+        );
+        saveState(logsConfig, result.state);
       }
 
       if (meterProvider) {
@@ -255,9 +289,11 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // hard session boundary; we treat it the same way as a defensive
       // turn-close so any in-flight span gets flushed.
       if (tracerProvider) {
-        const state = ensureTurn(config, sessionId);
+        const prev = loadState(logsConfig);
+        const state = ensureTurn(prev, sessionId);
         if (state.turn_trace_id) {
-          await endTurn(config, tracerProvider, state, platform, cwd, transcriptPath);
+          const next = await endTurn(tracerProvider, state, platform, cwd, transcriptPath);
+          if (next) saveState(logsConfig, next);
         }
       }
 

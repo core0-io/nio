@@ -18,7 +18,7 @@ export {};
  * Always exits 0 — telemetry never blocks the agent.
  */
 
-import { loadCollectorConfig } from './lib/config-loader.js';
+import { loadCollectorConfig, loadLogsConfig } from './lib/config-loader.js';
 import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import {
@@ -27,6 +27,7 @@ import {
 } from './lib/collector-core.js';
 
 const config = loadCollectorConfig();
+const logsConfig = loadLogsConfig();
 if (!config.enabled) {
   process.exit(0);
 }
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
     config,
     meterProvider,
     tracerProvider,
+    logsConfig,
   });
 
   process.exit(0);
