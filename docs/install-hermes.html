@@ -172,7 +172,7 @@ cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
             <tr><td><code>~/.hermes/plugins/nio/</code></td><td>Python plugin: <code>plugin.yaml</code>, <code>__init__.py</code>, <code>scripts/{nio-cli,hook-cli}.js</code>.</td></tr>
             <tr><td><code>~/.nio/config.yaml</code></td><td>Nio's guard + collector config (shared with Claude Code / OpenClaw). See <a href="configuration.html">Config reference</a>.</td></tr>
             <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL audit log: guard decisions, scans, lifecycle events, and every hook event (<code>pre_tool_call</code>, <code>post_tool_call</code>, <code>on_session_start</code>, <code>on_session_end</code>, …). Read via <code>/nio report</code>.</td></tr>
-            <tr><td><code>~/.nio/collector-state.json</code></td><td>Cross-process trace state (turn IDs + pending span starts). Internal; sits next to <code>audit.jsonl</code>.</td></tr>
+            <tr><td><code>~/.nio/traces-state-store.json</code></td><td>Cross-process trace state (turn IDs + pending span starts). Internal; sits next to <code>audit.jsonl</code>.</td></tr>
           </tbody>
         </table>
 

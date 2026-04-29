@@ -10,7 +10,7 @@ import {
   recordPreTaskToolUse,
   redactAndTruncate,
 } from '../scripts/lib/traces-collector.js';
-import type { CollectorState } from '../scripts/lib/state-store.js';
+import type { CollectorState } from '../scripts/lib/traces-state-store.js';
 
 const seed = (overrides: Partial<CollectorState> = {}): CollectorState => ({
   session_id: 'sess-1',

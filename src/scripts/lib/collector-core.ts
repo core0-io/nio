@@ -11,7 +11,7 @@
  * module so the per-platform script stays thin.
  *
  * Cross-process trace state (turn_trace_id, pending span starts, …) is
- * loaded from `state-store` at the top of each branch, mutated via the
+ * loaded from `traces-state-store` at the top of each branch, mutated via the
  * pure functions in `traces-collector`, and saved back. The trace module
  * itself never touches the filesystem.
  *
@@ -54,7 +54,7 @@ import {
   redactAndTruncate,
   setTurnAttributes,
 } from './traces-collector.js';
-import { loadState, saveState } from './state-store.js';
+import { loadState, saveState } from './traces-state-store.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -91,7 +91,7 @@ export interface DispatchOptions {
   loggerProvider?: LoggerProvider | null;
   /**
    * Audit log + trace state path config. Used to resolve audit.jsonl AND
-   * the collector-state.json location (state file sits next to audit
+   * the traces-state-store.json location (state file sits next to audit
    * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;

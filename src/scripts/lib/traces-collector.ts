@@ -7,7 +7,7 @@ export {};
  * Traces Collector
  *
  * Pure functions that compute span lifecycles and emit OTEL spans. The
- * cross-process turn/span state is owned by `state-store.ts`; collector-
+ * cross-process turn/span state is owned by `collector-state.ts`; collector-
  * core orchestrates load → call here → save around every hook event.
  * This module performs no filesystem IO of its own — only network-bound
  * span export through the OTEL provider.
@@ -29,7 +29,7 @@ import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/expor
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
 import type { CollectorConfig } from './config-loader.js';
-import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './state-store.js';
+import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan };
@@ -118,7 +118,7 @@ export function createTracerProvider(config: CollectorConfig): NodeTracerProvide
 }
 
 // ---------------------------------------------------------------------------
-// State transitions (pure — caller persists via state-store)
+// State transitions (pure — caller persists via collector-state)
 // ---------------------------------------------------------------------------
 
 /**

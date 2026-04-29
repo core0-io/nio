@@ -4,8 +4,8 @@
 export {};
 
 /**
- * Collector state store — owns the on-disk persistence for cross-process
- * trace state.
+ * Traces state store — owns the on-disk persistence
+ * (`traces-state-store.json`) for cross-process trace state.
  *
  * Why this exists: PreToolUse and PostToolUse run in separate Node
  * processes (Claude Code spawns a fresh process per hook; Hermes does the
@@ -17,9 +17,10 @@ export {};
  * hook event.
  *
  * Path: derived from `collector.logs.path` so the trace state file always
- * sits next to the audit log. Default `${NIO_HOME ?? ~/.nio}/collector-
- * state.json`. Users who customise `collector.logs.path` get the state
- * file in the same directory automatically.
+ * sits next to the audit log. Default
+ * `${NIO_HOME ?? ~/.nio}/traces-state-store.json`. Users who customise
+ * `collector.logs.path` get the state file in the same directory
+ * automatically.
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -55,7 +56,7 @@ export interface CollectorState {
 
 // ── Path resolution ────────────────────────────────────────────────────
 
-const STATE_FILE_NAME = 'collector-state.json';
+const STATE_FILE_NAME = 'traces-state-store.json';
 
 function expandHome(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;

@@ -11,11 +11,11 @@ import {
   loadState,
   saveState,
   type CollectorState,
-} from '../scripts/lib/state-store.js';
+} from '../scripts/lib/traces-state-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-state-store-'));
+  return mkdtempSync(join(tmpdir(), 'nio-collector-state-'));
 }
 
 const sample = (overrides: Partial<CollectorState> = {}): CollectorState => ({
@@ -47,24 +47,24 @@ const sample = (overrides: Partial<CollectorState> = {}): CollectorState => ({
 describe('statePath', () => {
   it('derives state file from dirname(logsConfig.path)', () => {
     const cfg: CollectorLogsConfig = { path: '/tmp/x/audit.jsonl' };
-    assert.equal(statePath(cfg), '/tmp/x/collector-state.json');
+    assert.equal(statePath(cfg), '/tmp/x/traces-state-store.json');
   });
 
   it('expands ~/ in logsConfig.path before deriving', () => {
     const cfg: CollectorLogsConfig = { path: '~/.custom/audit.jsonl' };
-    assert.equal(statePath(cfg), join(homedir(), '.custom', 'collector-state.json'));
+    assert.equal(statePath(cfg), join(homedir(), '.custom', 'traces-state-store.json'));
   });
 
   it('falls back to NIO_HOME default when no logsConfig', () => {
     const resolved = statePath(undefined);
-    assert.ok(resolved.endsWith('/collector-state.json'),
+    assert.ok(resolved.endsWith('/traces-state-store.json'),
       `expected default state path, got ${resolved}`);
   });
 
   it('falls back to default when logsConfig has no path', () => {
     const cfg: CollectorLogsConfig = { enabled: true, local: true };
     const resolved = statePath(cfg);
-    assert.ok(resolved.endsWith('/collector-state.json'));
+    assert.ok(resolved.endsWith('/traces-state-store.json'));
   });
 
   it('places state file next to audit log when both customised', () => {

@@ -571,7 +571,7 @@ Captures agent activity as **OpenTelemetry** metrics and traces. Runs independen
 │   collector-hook.ts (async, runs per hook event)                    │
 │     ├─ MeterProvider  → OTLP metrics export                        │
 │     └─ TracerProvider → OTLP traces export                         │
-│         └─ State file (collector-state.json) for cross-process      │
+│         └─ State file (traces-state-store.json) for cross-process   │
 │            span correlation (PreToolUse ↔ PostToolUse)              │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
@@ -638,11 +638,12 @@ Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
 
 Claude Code hooks run as separate processes per event. To correlate spans:
 
-1. `PreToolUse` → writes span start time + span ID to `collector-state.json`
+1. `PreToolUse` → writes span start time + span ID to `traces-state-store.json`
 2. `PostToolUse` → reads pending span, emits with correct start/end time
 3. `Stop` → emits turn root span, clears state
 
-State file location: derived from `collector.log` config path or `~/.nio/`.
+State file location: derived from `collector.logs.path` (sits in the same
+directory as `audit.jsonl`); falls back to `${NIO_HOME ?? ~/.nio}/`.
 
 ### Local JSONL Log
 
