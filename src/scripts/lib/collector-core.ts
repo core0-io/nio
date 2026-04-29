@@ -4,8 +4,8 @@
 /**
  * Platform-agnostic collector core.
  *
- * Routes a canonical hook event into the OTEL metrics/traces stack and
- * the local JSONL log. Both the Claude Code stdin wrapper
+ * Routes a canonical hook event into the OTEL metrics + traces stack and
+ * the audit log. Both the Claude Code stdin wrapper
  * ([../collector-hook.ts](../collector-hook.ts)) and the Hermes shell-
  * hook dispatcher in [../hook-cli.ts](../hook-cli.ts) call into this
  * module so the per-platform script stays thin.
@@ -14,6 +14,10 @@
  * loaded from `state-store` at the top of each branch, mutated via the
  * pure functions in `traces-collector`, and saved back. The trace module
  * itself never touches the filesystem.
+ *
+ * Hook event audit records flow through `writeAuditLog` (shared with
+ * guard / scan / lifecycle entries), landing in `~/.nio/audit.jsonl` by
+ * default or `collector.logs.path` when configured.
  *
  * Canonical event names (Claude Code shape — adapters at the call site
  * translate their native event names to these before dispatch):
@@ -24,19 +28,21 @@
  *   TaskCreated       — task span open
  *   TaskCompleted     — task span close
  *   Stop / SubagentStop — turn span close + turn counter
- *   SessionEnd        — defensive turn close (Hermes-driven, no-op on CC)
+ *   SessionStart / SessionEnd — session boundary audit (Hermes-driven;
+ *                      SessionEnd doubles as defensive turn-close)
  *
  * Unknown events are silently ignored, matching the legacy collector-
  * hook behaviour. Always returns; never throws to the caller.
  */
 
-import { appendFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
 import type { MeterProvider } from '@opentelemetry/sdk-metrics';
 import type { NodeTracerProvider } from '@opentelemetry/sdk-trace-node';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 import type { ResolvedMetricsConfig as CollectorConfig } from '../../adapters/common.js';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
+import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
+import { writeAuditLog } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
 import {
   ensureTurn,
@@ -81,10 +87,12 @@ export interface DispatchOptions {
   config: CollectorConfig;
   meterProvider: MeterProvider | null;
   tracerProvider: NodeTracerProvider | null;
+  /** OTEL Logs provider for audit-record export. Optional. */
+  loggerProvider?: LoggerProvider | null;
   /**
-   * Audit log + trace state path config. Used to resolve the
-   * collector-state.json location (sits next to audit.jsonl). When
-   * omitted, state-store falls back to `${NIO_HOME ?? ~/.nio}/`.
+   * Audit log + trace state path config. Used to resolve audit.jsonl AND
+   * the collector-state.json location (state file sits next to audit
+   * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
 }
@@ -129,59 +137,65 @@ export function spanKey(input: HookStdinPayload): string {
   return input.tool_use_id || `${input.tool_name ?? 'unknown'}:${Date.now()}`;
 }
 
-/**
- * Append a JSONL record to config.log if configured. Best-effort; no throw.
- *
- * @deprecated Pending removal in the next commit — hook event records are
- * being routed through `writeAuditLog` instead. Kept here only so this
- * commit stays a pure refactor (state IO extraction) without behaviour
- * change.
- */
-export function writeToLog(config: CollectorConfig, record: Record<string, unknown>): void {
-  if (!config.log) return;
-  try {
-    const dir = dirname(config.log);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
-    }
-    appendFileSync(config.log, JSON.stringify(record) + '\n');
-  } catch {
-    // Disk full / permission denied / etc — telemetry never blocks the host.
-  }
+const KNOWN_HOOK_EVENTS: ReadonlySet<HookEventName> = new Set<HookEventName>([
+  'UserPromptSubmit',
+  'PreToolUse',
+  'PostToolUse',
+  'TaskCreated',
+  'TaskCompleted',
+  'Stop',
+  'SubagentStop',
+  'SessionStart',
+  'SessionEnd',
+]);
+
+function isKnownHookEvent(event: string): event is HookEventName {
+  return KNOWN_HOOK_EVENTS.has(event as HookEventName);
 }
 
 // ── Core dispatcher ─────────────────────────────────────────────────────
 
 /**
- * Route a single hook event through the metrics + traces pipeline.
+ * Route a single hook event through the metrics + traces + audit log
+ * pipeline.
  *
  * All platforms share this; the only platform-specific concern is
  * translating the native event name into the canonical names listed at
  * the top of this module before calling dispatch.
  */
 export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<void> {
-  const { event, input, platform, config, meterProvider, tracerProvider, logsConfig } = opts;
+  const {
+    event, input, platform,
+    meterProvider, tracerProvider,
+    loggerProvider = null, logsConfig,
+  } = opts;
 
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
   const transcriptPath = input.transcript_path ?? null;
   const toolInput = input.tool_input ?? {};
+  const auditOpts = { loggerProvider, logsConfig };
 
-  writeToLog(config, {
+  // Shared base fields for every audit entry shape. Branches augment with
+  // event-specific fields (task_id/task_summary, …) before writing.
+  const baseFields: Omit<AuditHookEntry, 'event'> = {
     timestamp: new Date().toISOString(),
     platform,
-    event,
-    tool_name: toolName,
     session_id: sessionId,
-    tool_use_id: input.tool_use_id,
     cwd,
     ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
-    tool_summary: toolName ? toolSummary(toolName, toolInput) : undefined,
-  });
+    ...(toolName ? {
+      tool_name: toolName,
+      tool_summary: toolSummary(toolName, toolInput),
+    } : {}),
+    ...(input.tool_use_id ? { tool_use_id: input.tool_use_id } : {}),
+  };
 
   try {
     if (event === 'UserPromptSubmit') {
+      writeAuditLog({ event, ...baseFields }, auditOpts);
+
       if (tracerProvider && input.prompt) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
@@ -192,6 +206,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'PreToolUse') {
+      writeAuditLog({ event, ...baseFields }, auditOpts);
+
       const summary = toolSummary(toolName, toolInput);
       const key = spanKey(input);
 
@@ -211,6 +227,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'PostToolUse') {
+      writeAuditLog({ event, ...baseFields }, auditOpts);
+
       const key = spanKey(input);
 
       if (tracerProvider) {
@@ -237,15 +255,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const prompt = input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {});
       const summary = (prompt as string).slice(0, 300);
 
-      writeToLog(config, {
-        timestamp: new Date().toISOString(),
-        platform,
-        event,
-        task_id: taskId,
-        session_id: sessionId,
-        cwd,
-        task_summary: summary,
-      });
+      writeAuditLog(
+        { event, ...baseFields, task_id: taskId, task_summary: summary },
+        auditOpts,
+      );
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
@@ -261,14 +274,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     } else if (event === 'TaskCompleted') {
       const taskId = input.task_id ?? spanKey(input);
 
-      writeToLog(config, {
-        timestamp: new Date().toISOString(),
-        platform,
-        event,
-        task_id: taskId,
-        session_id: sessionId,
-        cwd,
-      });
+      writeAuditLog(
+        { event, ...baseFields, task_id: taskId },
+        auditOpts,
+      );
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
@@ -288,6 +297,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // SubagentStop already close the turn. SessionEnd in Hermes is the
       // hard session boundary; we treat it the same way as a defensive
       // turn-close so any in-flight span gets flushed.
+      writeAuditLog({ event, ...baseFields }, auditOpts);
+
       if (tracerProvider) {
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
@@ -300,7 +311,19 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (meterProvider) {
         await recordTurn(meterProvider, platform);
       }
+
+    } else if (event === 'SessionStart') {
+      writeAuditLog({ event, ...baseFields }, auditOpts);
+
+    } else if (isKnownHookEvent(event)) {
+      // Future hook events that are typed but have no specific handling
+      // yet — still write an audit entry so they're observable.
+      writeAuditLog(
+        { event: event as HookEventName, ...baseFields },
+        auditOpts,
+      );
     }
+    // Unknown event names: silently no-op (matches the legacy contract).
   } catch (err) {
     // Telemetry must never break the host; log and continue.
     console.error('[nio] collector-core error:', err);
