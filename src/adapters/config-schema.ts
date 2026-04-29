@@ -8,10 +8,11 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 
 export const CollectorMetricsConfigSchema = z.object({
+  // Toggle OTLP metrics export. Local persistence was removed: the
+  // legacy `local` / `log` / `max_size_mb` fields used to write hook-
+  // event audits to a misnamed `metrics.jsonl`; those records now flow
+  // through `collector.logs.path` via writeAuditLog.
   enabled: z.boolean().optional(),
-  local: z.boolean().optional(),
-  log: z.string().optional(),
-  max_size_mb: z.number().optional(),
 });
 
 export const CollectorTracesConfigSchema = z.object({
@@ -131,12 +132,15 @@ export type CollectorLogsConfig = z.infer<typeof CollectorLogsConfigSchema>;
 export type CollectorMetricsConfig = z.infer<typeof CollectorMetricsConfigSchema>;
 export type NioConfig = z.infer<typeof NioConfigSchema>;
 
-/** Resolved metrics config with defaults applied. */
+/**
+ * Resolved collector config with defaults applied. Used by the OTLP
+ * exporter factories (metrics / traces / logs); does NOT carry any
+ * audit-log path — that's owned by `CollectorLogsConfig.path`.
+ */
 export interface ResolvedMetricsConfig {
   endpoint: string;
   api_key: string;
   timeout: number;
-  log: string;
   protocol: 'http' | 'grpc';
   enabled: boolean;
 }

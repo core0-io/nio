@@ -120,13 +120,8 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
   const api_key = c.api_key ?? '';
   const timeout = c.timeout || 5000;
   const protocol = c.protocol ?? 'http';
-  let log = c.metrics?.log ?? '';
 
-  if (log.startsWith('~/')) {
-    log = join(homedir(), log.slice(2));
-  }
-
-  return { endpoint, api_key, timeout, log, protocol, enabled: !!(endpoint || log) };
+  return { endpoint, api_key, timeout, protocol, enabled: endpoint !== '' };
 }
 
 // ---------------------------------------------------------------------------

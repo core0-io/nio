@@ -31,7 +31,6 @@ const baseConfig: ResolvedMetricsConfig = {
   endpoint: '',
   api_key: '',
   timeout: 5000,
-  log: '',
   protocol: 'http',
   enabled: true,
 };
@@ -273,20 +272,20 @@ describe('collector-core: dispatchCollectorEvent → audit.jsonl', () => {
     assert.equal(entries[0]!['session_id'], 'unknown');
   });
 
-  it('does not write to legacy metrics.jsonl path', async () => {
+  it('does not create a sibling metrics.jsonl (regression: writeToLog removed)', async () => {
     const { auditPath, logsConfig } = freshFixture();
     const legacyMetrics = join(dirname(auditPath), 'metrics.jsonl');
     await dispatchCollectorEvent({
       event: 'PreToolUse',
       input: { tool_name: 'Bash', tool_input: { command: 'ls' }, session_id: 's1' },
       platform: 'claude-code',
-      config: { ...baseConfig, log: legacyMetrics },
+      config: baseConfig,
       meterProvider: null,
       tracerProvider: null,
       logsConfig,
     });
     assert.equal(existsSync(legacyMetrics), false,
-      'commit 4: hook events must no longer flow through writeToLog/config.log');
+      'hook events must not flow into the misnamed metrics.jsonl any more');
     assert.ok(existsSync(auditPath));
   });
 });

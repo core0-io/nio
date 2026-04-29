@@ -19,7 +19,6 @@ export interface CollectorConfig {
   endpoint: string;
   api_key: string;
   timeout: number;
-  log: string;
   protocol: 'http' | 'grpc';
   enabled: boolean;
 }
@@ -77,23 +76,17 @@ function expandHome(path: string): string {
 export function loadCollectorConfig(): CollectorConfig {
   const raw = readRawConfig();
 
-  // New format: collector at top level
-  let c = (raw['collector'] ?? {}) as Record<string, unknown>;
-
-  const metrics = (c['metrics'] ?? {}) as Record<string, unknown>;
-  let log = (metrics['log'] as string) ?? '';
-  if (log) log = expandHome(log);
-
+  const c = (raw['collector'] ?? {}) as Record<string, unknown>;
   const endpoint = (c['endpoint'] as string) ?? '';
-  const enabled = endpoint !== '' || log !== '';
 
   return {
     endpoint,
     api_key: (c['api_key'] as string) ?? '',
     timeout: (c['timeout'] as number) || 5000,
-    log,
     protocol: (c['protocol'] as 'http' | 'grpc') ?? 'http',
-    enabled,
+    // Reflects only OTLP export readiness. Local audit logging is
+    // controlled separately via loadLogsConfig() / logsConfig.local.
+    enabled: endpoint !== '',
   };
 }
 

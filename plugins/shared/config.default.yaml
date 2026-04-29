@@ -262,14 +262,11 @@ collector:
   #   grpc — gRPC on port 4317
   protocol: http
 
-  # Metrics signal (counters, histograms).
+  # Metrics signal (counters, histograms). Exported via OTLP only — there
+  # is no local metrics file. Hook event audit records live in the audit
+  # log (see `logs` block below).
   metrics:
     enabled: true
-    local: true
-    # Path to local JSONL file for metric payloads. Supports ~/ prefix.
-    log: "~/.nio/metrics.jsonl"
-    # Maximum local file size in MB before rotation (0 = no rotation).
-    max_size_mb: 100
 
   # Traces signal (spans for tool calls, turns, tasks).
   traces:
