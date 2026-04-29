@@ -13,9 +13,9 @@ export {};
  *
  * Trace hierarchy:
  *
- *   Trace: "turn:<N>" — one trace per conversation turn
- *     └─ Span: "tool:<name>" — one span per tool call (pre→post)
- *     └─ Span: "task:execute" — one span per Task tool invocation
+ *   Trace: "invoke_agent UserPromptSubmit" — one trace per conversation turn
+ *     └─ Span: "execute_tool <name>" — one span per tool call (pre→post)
+ *     └─ Span: "task:execute" — one span per task lifecycle
  */
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
@@ -85,6 +85,39 @@ export interface CollectorState {
   pending_spans: Record<string, PendingToolSpan>;  // keyed by tool_use_id or fallback
   pending_task_spans: Record<string, PendingTaskSpan>;  // keyed by task_id
   turn_attributes?: Record<string, unknown>;
+}
+
+export const GEN_AI_PROVIDER_NAME = "nio";
+
+export function genAiInvokeAgentAttributes(
+  sessionId: string,
+  platform: string,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  const agentName = platform;
+  return {
+    "gen_ai.operation.name": "invoke_agent",
+    "gen_ai.provider.name": GEN_AI_PROVIDER_NAME,
+    "gen_ai.conversation.id": sessionId,
+    "gen_ai.agent.name": agentName,
+    "session.id": sessionId,
+    ...extra,
+  };
+}
+
+export function genAiToolAttributes(
+  toolName: string,
+  toolCallId?: string,
+  extra?: Record<string, unknown>,
+  toolType?: string,
+): Record<string, unknown> {
+  return {
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": toolName || "unknown",
+    ...(toolType ? { "gen_ai.tool.type": toolType } : {}),
+    ...(toolCallId ? { "gen_ai.tool.call.id": toolCallId } : {}),
+    ...extra,
+  };
 }
 
 /**
@@ -345,17 +378,19 @@ export async function recordPostToolUse(
   });
 
   const tracer = trace.getTracer('nio-collector', '1.0.0');
+  const toolCallId =
+    (pending.attributes?.["gen_ai.tool.call.id"] as string | undefined) ??
+    undefined;
   const span = tracer.startSpan(
-    `tool:${pending.tool_name}`,
+    `execute_tool ${pending.tool_name || "unknown"}`,
     {
       startTime: startMs,
       attributes: {
-        'nio.tool_name': pending.tool_name,
-        'nio.tool_summary': pending.tool_summary,
-        'nio.platform': platform,
-        'nio.session_id': state.session_id,
-        'nio.turn_number': state.turn_number,
-        ...(cwd ? { 'nio.cwd': cwd } : {}),
+        ...genAiToolAttributes(pending.tool_name, toolCallId),
+        "nio.tool_summary": pending.tool_summary,
+        "nio.platform": platform,
+        "nio.turn_number": state.turn_number,
+        ...(cwd ? { "nio.cwd": cwd } : {}),
         ...(pending.attributes ?? {}),
         ...(postAttributes ?? {}),
       } as Record<string, string | number | boolean>,
@@ -485,16 +520,16 @@ export async function endTurn(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('nio-collector', '1.0.0');
+  const tracer = trace.getTracer("nio-collector", "1.0.0");
   const span = tracer.startSpan(
-    `turn:${state.turn_number}`,
+    "invoke_agent UserPromptSubmit",
     {
       startTime: state.turn_start_ms,
       attributes: {
-        'nio.session_id': state.session_id,
-        'nio.turn_number': state.turn_number,
-        'nio.platform': platform,
-        ...(cwd ? { 'nio.cwd': cwd } : {}),
+        ...genAiInvokeAgentAttributes(state.session_id, platform),
+        "nio.turn_number": state.turn_number,
+        "nio.platform": platform,
+        ...(cwd ? { "nio.cwd": cwd } : {}),
         ...(state.turn_attributes ?? {}),
       } as Record<string, string | number | boolean>,
     },
@@ -504,11 +539,17 @@ export async function endTurn(
   if (transcriptPath) {
     const usage = parseTranscriptUsage(transcriptPath, state.turn_start_ms);
     if (usage) {
-      span.setAttribute('nio.turn.input_tokens', usage.input_tokens);
-      span.setAttribute('nio.turn.output_tokens', usage.output_tokens);
-      span.setAttribute('nio.turn.cache_creation_input_tokens', usage.cache_creation_input_tokens);
-      span.setAttribute('nio.turn.cache_read_input_tokens', usage.cache_read_input_tokens);
-      span.setAttribute('nio.turn.cache_hit_rate', usage.cache_hit_rate);
+      span.setAttribute("nio.turn.cache_hit_rate", usage.cache_hit_rate);
+      span.setAttribute("gen_ai.usage.input_tokens", usage.input_tokens);
+      span.setAttribute("gen_ai.usage.output_tokens", usage.output_tokens);
+      span.setAttribute(
+        "gen_ai.usage.cache_creation.input_tokens",
+        usage.cache_creation_input_tokens,
+      );
+      span.setAttribute(
+        "gen_ai.usage.cache_read.input_tokens",
+        usage.cache_read_input_tokens,
+      );
     }
   }
 

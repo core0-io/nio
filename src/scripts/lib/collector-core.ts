@@ -176,24 +176,23 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
         const preAttrs: Record<string, unknown> = {
-          'nio.tool.input': redactAndTruncate(toolInput),
+          "gen_ai.tool.call.arguments": redactAndTruncate(toolInput),
         };
-        if (input.tool_use_id) preAttrs['nio.tool.call_id'] = input.tool_use_id;
+        if (input.tool_use_id) preAttrs["gen_ai.tool.call.id"] = input.tool_use_id;
         recordPreToolUse(config, state, key, toolName, summary, preAttrs);
       }
 
       if (meterProvider) {
         await recordToolUse(meterProvider, toolName, event, platform);
       }
-
-    } else if (event === 'PostToolUse') {
+    } else if (event === "PostToolUse") {
       const key = spanKey(input);
 
       if (tracerProvider) {
         const state = ensureTurn(config, sessionId);
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const postAttrs: Record<string, unknown> = {
-          'nio.tool.output': redactAndTruncate(resp),
+          "gen_ai.tool.call.result": redactAndTruncate(resp),
         };
         const err = (resp.error ?? resp.stderr) as string | undefined;
         if (err) postAttrs['nio.tool.error'] = redactAndTruncate(err);
