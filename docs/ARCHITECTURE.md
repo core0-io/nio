@@ -608,10 +608,10 @@ All three platforms feed the same `traces-collector` pure-function API and the s
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `nio.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `nio.turn.count` | Counter | `platform` |
-| `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
-| `nio.risk.score` | Histogram | `tool_name`, `platform` |
+| `nio.tool_use.count` | Counter | `gen_ai.tool.name`, `nio.event`, `nio.platform` |
+| `nio.turn.count` | Counter | `nio.platform` |
+| `nio.decision.count` | Counter | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` |
+| `nio.risk.score` | Histogram | `gen_ai.tool.name`, `nio.platform` |
 
 - `decision.count` — recorded by guard-hook (Claude Code) / openclaw-plugin after each `evaluateHook()` call
 - `risk.score` — histogram of 0–1 risk scores, enables avg/p50/p99 queries

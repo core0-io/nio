@@ -61,10 +61,10 @@ For the full schema (every metric, every span attribute, every audit entry field
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `nio.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `nio.turn.count` | Counter | `platform` |
-| `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
-| `nio.risk.score` | Histogram | `tool_name`, `platform` |
+| `nio.tool_use.count` | Counter | `gen_ai.tool.name`, `nio.event`, `nio.platform` |
+| `nio.turn.count` | Counter | `nio.platform` |
+| `nio.decision.count` | Counter | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` |
+| `nio.risk.score` | Histogram | `gen_ai.tool.name`, `nio.platform` |
 
 **Traces** — one trace per conversation turn (OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)):
 
