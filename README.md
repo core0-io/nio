@@ -51,9 +51,11 @@ Nio is a Claude Code / OpenClaw plugin with two core systems:
 
 ### Collector
 
-> **Optional — but strongly recommended for enterprise deployments.** The Collector works out of the box with no configuration, writing traces and metrics to local JSONL files. To export telemetry to an observability platform, set `collector.endpoint` in your config. For enterprise customers running agents on production systems, exporting to a centralised observability platform is strongly recommended — it gives you a complete, queryable record of every action every agent took, across every session.
+> **Optional — but strongly recommended for enterprise deployments.** The Collector works out of the box with no configuration: audit log entries are written to a local JSONL backup at `~/.nio/audit.jsonl` regardless of OTLP setup. To export full telemetry to an observability platform, set `collector.endpoint` in your config. For enterprise customers running agents on production systems, exporting to a centralised observability platform is strongly recommended — it gives you a complete, queryable record of every action every agent took, across every session.
 
-Captures agent activity as **OpenTelemetry** metrics and traces via an async collector hook. Every hook event (`PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`) is recorded and exported over OTLP (gRPC or HTTP).
+Captures agent activity as **OpenTelemetry** signals — metrics, traces, and logs — across every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`). All three signals are exported over OTLP (gRPC or HTTP); the logs signal additionally has a local JSONL backup at `collector.logs.path`.
+
+For the full schema (every metric, every span attribute, every audit entry field) see [docs/COLLECTOR-SIGNALS.md](docs/COLLECTOR-SIGNALS.md). Quick reference:
 
 **Metrics:**
 
@@ -71,6 +73,16 @@ Captures agent activity as **OpenTelemetry** metrics and traces via an async col
 | `invoke_agent UserPromptSubmit` | `Stop` / `SubagentStop` | `gen_ai.conversation.id`, `gen_ai.agent.name`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `nio.turn_number`, `nio.platform`, `nio.cwd`, `nio.turn.cache_hit_rate` |
 | `execute_tool <name>` | `PreToolUse` → `PostToolUse` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `nio.tool_summary`, `nio.platform` |
 | `task:execute` | `TaskCreated` → `TaskCompleted` | `nio.task_id`, `nio.task_summary` |
+
+**Logs (audit log)** — discriminated by the `event` field; dual-written to OTLP and `~/.nio/audit.jsonl`:
+
+| `event` | What |
+|---------|------|
+| `guard` | Per-PreToolUse / PostToolUse guard decision (decision, risk level, score, top findings, per-phase scores) |
+| `session_scan` | On-demand or session-start skill scan result |
+| `lifecycle` | Subagent / agent / session lifecycle (`session_start` / `session_end` / `agent_end` / `subagent_spawning` / `subagent_ended`) |
+| Hook event names (`PreToolUse`, `PostToolUse`, `TaskCreated`, `Stop`, …) | One audit entry per dispatched hook, with tool / task metadata |
+| `config_error` | Config load failure (path + parser error) |
 
 ### Guard
 

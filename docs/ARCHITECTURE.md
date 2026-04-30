@@ -560,35 +560,49 @@ class ExternalAnalyser {
 
 ## Collector: Telemetry Pipeline
 
-Captures agent activity as **OpenTelemetry** metrics and traces. Runs independently from the guard — never influences allow/deny decisions.
+Captures agent activity as **OpenTelemetry** metrics, traces, and logs. Runs independently from the guard — never influences allow/deny decisions.
+
+For the full per-signal schema (every metric instrument, every span attribute, every audit entry field) see [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md). The sections below cover architecture, source of truth, and lifecycle.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Claude Code (cross-process)                                         │
+│ Claude Code (cross-process; spawn-per-hook)                         │
 │                                                                     │
 │   collector-hook.ts (async, runs per hook event)                    │
-│     ├─ MeterProvider  → OTLP metrics export                        │
-│     └─ TracerProvider → OTLP traces export                         │
-│         └─ State file (traces-state-store.json) for cross-process   │
-│            span correlation (PreToolUse ↔ PostToolUse)              │
+│     └─ dispatchCollectorEvent → traces-collector pure functions     │
+│        + state via traces-state-store.json (cross-process bridge)   │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
-│     └─ MeterProvider  → guard decision + risk score metrics         │
+│     └─ MeterProvider → guard decision + risk score metrics          │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│ OpenClaw (in-process)                                               │
+│ Hermes (cross-process; spawn-per-shell-hook)                        │
+│                                                                     │
+│   hook-cli.ts (single binary handling all 7 lifecycle events)       │
+│     ├─ HERMES_COLLECTOR_EVENTS map: snake_case → canonical          │
+│     │   (post_tool_call→PostToolUse, pre_llm_call→UserPromptSubmit, │
+│     │    post_llm_call→Stop, on_session_start→SessionStart, …)      │
+│     ├─ pre_tool_call: guard pipeline + collector dispatch combined  │
+│     └─ everything else: dispatchCollectorEvent → same code path     │
+│        as Claude Code (traces-collector + traces-state-store)       │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ OpenClaw (in-process daemon plugin)                                 │
 │                                                                     │
 │   openclaw-plugin.ts                                                │
-│     ├─ MeterProvider  → all metrics (tool use + turn + decision)    │
+│     ├─ MeterProvider → all metrics (tool use + turn + decision)     │
 │     └─ TracerProvider → all traces via traces-collector pure        │
 │        functions (same as Claude Code / Hermes), with per-session   │
-│        `Map<sessionId, CollectorState>` held in memory.             │
+│        Map<sessionId, CollectorState> held in memory.               │
 │         └─ No state file needed — same process across events        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+All three platforms feed the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for CC / Hermes, memory for OpenClaw).
 
 ### Metrics
 
@@ -637,8 +651,9 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
-- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start
-- **OpenClaw**: `llm_output` event passes `usage` directly in event payload, accumulated in-memory across calls
+- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
+- **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
+- **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
 
 **Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
 
@@ -674,13 +689,11 @@ State file location (CC / Hermes only): derived from
 `collector.logs.path` (sits in the same directory as `audit.jsonl`);
 falls back to `${NIO_HOME ?? ~/.nio}/`.
 
-### Local JSONL Log
+### Local JSONL backup
 
-Besides OTEL export, every hook event is appended to a local JSONL file (`collector.log` config):
+The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-```jsonl
-{"timestamp":"...","platform":"claude-code","event":"PreToolUse","tool_name":"Bash","session_id":"...","tool_summary":"npm test"}
-```
+Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for CC / Hermes; not user-facing observability data.
 
 ---
 
