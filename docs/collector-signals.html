@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Collector Signals — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="What Nio captures while an agent runs — every metric, every trace span attribute, every audit-log field. Three OTEL signals (metrics / traces / logs) aligned around shared GenAI semantic-convention keys for cross-signal queries.">
+<meta name="keywords" content="nio, nio-agent-guard, otel, opentelemetry, telemetry, collector, traces, metrics, logs, gen_ai, agent observability, claude code, openclaw, hermes">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: docs/COLLECTOR-SIGNALS.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Telemetry · Reference</div>
+        <h1><em>Collector Signals</em> — what Nio captures while an agent runs</h1>
+        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — covering every tool invocation, every guard decision, every conversation turn. Schemas are aligned around shared GenAI semantic-convention keys (<code>gen_ai.tool.name</code>, <code>gen_ai.conversation.id</code>, <code>nio.guard.*</code>) so the same dashboards work across all three signals. The audit log is the only signal with a local JSONL backup; metrics and traces are OTLP-only.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2 id="pipeline">Pipeline overview</h2>
+        <p>The three platform adapters (Claude Code, Hermes, OpenClaw) all funnel into a single dispatcher that fans out to the three OTEL signals. CC and Hermes share the spawn-per-hook entry; OpenClaw is in-process and bypasses <code>dispatchCollectorEvent</code>, calling the trace pure functions directly.</p>
+        <pre><code>                ┌─ collector-hook.ts (per hook)
+Claude Code  ──►│
+                └─ guard-hook.ts    (per PreToolUse)
+
+                ┌─ hook-cli.ts      (per shell hook)
+Hermes       ──►│
+                └─ pre_tool_call    routes both guard + collector through hook-cli
+
+                ┌─ openclaw-plugin.ts.before_tool_call / after_tool_call
+OpenClaw     ──►│
+                └─ openclaw-plugin.ts.{subagent_*, before_agent_reply, llm_output, agent_end, session_*}
+
+                              │
+                              ▼
+              ┌──────────────────────────────────┐
+              │  dispatchCollectorEvent          │ ← collector-core.ts (CC, Hermes)
+              │  (OpenClaw bypasses, calls       │
+              │   traces-collector directly)     │
+              └────────┬───────────┬──────────┬──┘
+                       │           │          │
+                       ▼           ▼          ▼
+                 ┌─────────┐ ┌─────────┐ ┌─────────┐
+                 │ Metrics │ │ Traces  │ │  Logs   │
+                 │ (OTLP)  │ │ (OTLP)  │ │ (OTLP + │
+                 │         │ │         │ │  local) │
+                 └─────────┘ └─────────┘ └─────────┘</code></pre>
+
+        <table>
+          <thead><tr><th>Signal</th><th>Endpoint</th><th>Local backup</th><th>Source-of-truth</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><a href="#metrics"><strong>Metrics</strong></a></td>
+              <td><code>&lt;endpoint&gt;/v1/metrics</code></td>
+              <td>—</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/metrics-collector.ts"><code>metrics-collector.ts</code></a></td>
+            </tr>
+            <tr>
+              <td><a href="#traces"><strong>Traces</strong></a></td>
+              <td><code>&lt;endpoint&gt;/v1/traces</code></td>
+              <td>—</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>traces-collector.ts</code></a></td>
+            </tr>
+            <tr>
+              <td><a href="#logs"><strong>Logs</strong></a></td>
+              <td><code>&lt;endpoint&gt;/v1/logs</code></td>
+              <td><code>~/.nio/audit.jsonl</code></td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/logs-collector.ts"><code>logs-collector.ts</code></a></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <hr>
+
+        <h2 id="metrics">Metrics</h2>
+        <p>Schema declared in the <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/metrics-collector.ts"><code>METRICS_SCHEMA</code></a> constant. Four instruments. Label keys are aligned with the matching trace span attributes (<code>gen_ai.tool.name</code> matches the tool span; <code>nio.guard.*</code> matches the OpenClaw tool-span guard attrs via <code>nioGuardAttributes</code>) so cross-signal queries (metrics ⇌ traces ⇌ logs) use the same keys.</p>
+
+        <h3>Instruments</h3>
+        <table>
+          <thead><tr><th>Instrument</th><th>Type</th><th>Unit</th><th>When recorded</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.tool_use.count</code></td><td>Counter</td><td><code>{invocations}</code></td><td>Each <code>PreToolUse</code> and <code>PostToolUse</code> (and <code>TaskCreated</code>/<code>TaskCompleted</code> if fired)</td></tr>
+            <tr><td><code>nio.turn.count</code></td><td>Counter</td><td><code>{turns}</code></td><td>Each <code>Stop</code> / <code>SubagentStop</code> / <code>SessionEnd</code> (turn boundary)</td></tr>
+            <tr><td><code>nio.decision.count</code></td><td>Counter</td><td><code>{decisions}</code></td><td>Each guard decision (allow / deny / ask)</td></tr>
+            <tr><td><code>nio.risk.score</code></td><td>Histogram</td><td><code>{score}</code></td><td>Each guard evaluation; 0–1 distribution for avg/p50/p99</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Labels per instrument</h3>
+        <table>
+          <thead><tr><th>Instrument</th><th>Labels</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.tool_use.count</code></td><td><code>gen_ai.tool.name</code> · <code>nio.event</code> · <code>nio.platform</code></td></tr>
+            <tr><td><code>nio.turn.count</code></td><td><code>nio.platform</code></td></tr>
+            <tr><td><code>nio.decision.count</code></td><td><code>nio.guard.decision</code> · <code>nio.guard.risk_level</code> · <code>gen_ai.tool.name</code> · <code>nio.platform</code></td></tr>
+            <tr><td><code>nio.risk.score</code></td><td><code>gen_ai.tool.name</code> · <code>nio.platform</code></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Label value enums</h3>
+        <table>
+          <thead><tr><th>Label</th><th>Allowed values</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.platform</code></td><td><code>claude-code</code> · <code>hermes</code> · <code>openclaw</code></td></tr>
+            <tr><td><code>nio.event</code></td><td><code>PreToolUse</code> · <code>PostToolUse</code> · <code>TaskCreated</code> · <code>TaskCompleted</code></td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td><code>allow</code> · <code>deny</code> · <code>ask</code></td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td><code>low</code> · <code>medium</code> · <code>high</code> · <code>critical</code></td></tr>
+            <tr><td><code>gen_ai.tool.name</code></td><td>Host-platform tool name — see the callout below for one Claude Code quirk.</td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="title">Claude Code · Task → Agent</div>
+          <p>The user-facing <strong>Task</strong> tool (subagent dispatch) is reported as <code>tool_name="Agent"</code> in CC hook payloads, so PreToolUse / PostToolUse counters use <code>Agent</code> as the <code>gen_ai.tool.name</code> label. The literal value <code>Task</code> only appears as a counter label when <code>TaskCreated</code> / <code>TaskCompleted</code> fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see <a href="https://github.com/core0-io/nio/blob/main/e2e-test/hook-subagent-e2e-task.md"><code>e2e-test/hook-subagent-e2e-task.md</code></a>). OpenClaw and Hermes use their own native tool names.</p>
+        </div>
+
+        <p>Metrics have <strong>no local file</strong> — there is no <code>metrics.jsonl</code>. If <code>collector.endpoint</code> is empty, metrics drop on the floor (the meter provider returns <code>null</code>).</p>
+
+        <hr>
+
+        <h2 id="traces">Traces</h2>
+        <p>One trace per conversation turn. Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> where applicable; Nio-specific extensions use the <code>nio.*</code> prefix. Schema lives in <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>traces-collector.ts</code></a> — every literal attribute key string is owned by one helper there; consumers (<code>collector-core.ts</code>, <code>openclaw-plugin.ts</code>) only call helpers.</p>
+
+        <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
+  ├─ Span: execute_tool &lt;name&gt;   (PreToolUse → PostToolUse)
+  ├─ Span: execute_tool &lt;name&gt;   (...)
+  └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)</code></pre>
+
+        <h3 id="span-turn">Span: <code>invoke_agent UserPromptSubmit</code> <span style="color: var(--fg-3); font-weight: 400;">— turn root</span></h3>
+        <p>Built by <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>endTurn</code></a> at turn close. Span ID is deterministic (<code>traceId.slice(0,16)</code>) so child spans can parent to it before it exists.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Source</th><th>Helper</th></tr></thead>
+          <tbody>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Operation &amp; identity —</td></tr>
+            <tr><td><code>gen_ai.operation.name</code></td><td>constant <code>invoke_agent</code></td><td><code>genAiInvokeAgentAttributes</code></td></tr>
+            <tr><td><code>gen_ai.provider.name</code></td><td>constant <code>nio</code></td><td><code>genAiInvokeAgentAttributes</code></td></tr>
+            <tr><td><code>gen_ai.conversation.id</code></td><td>session ID</td><td><code>genAiInvokeAgentAttributes</code></td></tr>
+            <tr><td><code>gen_ai.agent.name</code></td><td>platform name (acts as agent identifier)</td><td><code>genAiInvokeAgentAttributes</code></td></tr>
+            <tr><td><code>session.id</code></td><td>session ID (mirror of <code>conversation.id</code> for OTel base-spec consumers)</td><td><code>genAiInvokeAgentAttributes</code></td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Token usage —</td></tr>
+            <tr><td><code>gen_ai.usage.input_tokens</code></td><td>accumulated across turn</td><td><code>genAiUsageAttributes</code> / <code>accumulateGenAiUsage</code></td></tr>
+            <tr><td><code>gen_ai.usage.output_tokens</code></td><td>accumulated across turn</td><td>same</td></tr>
+            <tr><td><code>gen_ai.usage.cache_creation.input_tokens</code></td><td>accumulated across turn</td><td>same</td></tr>
+            <tr><td><code>gen_ai.usage.cache_read.input_tokens</code></td><td>accumulated across turn</td><td>same</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Nio extensions —</td></tr>
+            <tr><td><code>nio.platform</code></td><td><code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>inline in <code>endTurn</code></td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>per-session counter, starts at 1</td><td>inline in <code>endTurn</code></td></tr>
+            <tr><td><code>nio.cwd</code></td><td>working dir at turn start</td><td>inline in <code>endTurn</code> (when set)</td></tr>
+            <tr><td><code>nio.turn.user_prompt</code></td><td>first user message of the turn (redacted, ≤2 KB)</td><td><code>recordUserPrompt</code></td></tr>
+            <tr><td><code>nio.turn.assistant_reply</code></td><td>OpenClaw only — captured at <code>llm_output</code> (redacted, ≤2 KB)</td><td><code>recordAssistantReply</code></td></tr>
+            <tr><td><code>nio.turn.cache_hit_rate</code></td><td><code>cache_read / (input + cache_creation + cache_read)</code>, 0–1</td><td><code>recordCacheHitRate</code></td></tr>
+          </tbody>
+        </table>
+
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads <code>transcript_path</code> JSONL, sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as CC — if <code>transcriptPath</code> is included in the <code>post_llm_call</code> payload, parsed identically; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries <code>usage</code> directly; accumulated incrementally into <code>state.turn_attributes</code>.</p>
+
+        <h3 id="span-tool">Span: <code>execute_tool &lt;name&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— tool span</span></h3>
+        <p>Built by <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>recordPostToolUse</code></a> at <code>PostToolUse</code> time. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Source</th><th>Helper</th></tr></thead>
+          <tbody>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Operation &amp; identity —</td></tr>
+            <tr><td><code>gen_ai.operation.name</code></td><td>constant <code>execute_tool</code></td><td><code>genAiToolAttributes</code></td></tr>
+            <tr><td><code>gen_ai.tool.name</code></td><td>host tool name (<code>Bash</code>, <code>WebFetch</code>, …)</td><td><code>genAiToolAttributes</code></td></tr>
+            <tr><td><code>gen_ai.tool.type</code></td><td>optional, when known</td><td><code>genAiToolAttributes</code></td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>host tool-call id (<code>tool_use_id</code> for CC, <code>toolCallId</code> for OpenClaw)</td><td><code>genAiToolCallInputAttributes</code> / <code>genAiToolAttributes</code></td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Tool I/O (redacted) —</td></tr>
+            <tr><td><code>gen_ai.tool.call.arguments</code></td><td>tool input (redacted, ≤2 KB)</td><td><code>genAiToolCallInputAttributes</code></td></tr>
+            <tr><td><code>gen_ai.tool.call.result</code></td><td>tool output (redacted, ≤2 KB)</td><td><code>genAiToolCallOutputAttributes</code></td></tr>
+            <tr><td><code>nio.tool.error</code></td><td>error message (when tool failed)</td><td><code>genAiToolCallOutputAttributes</code></td></tr>
+            <tr><td><code>nio.tool.duration_ms</code></td><td>OpenClaw only — wall-clock duration</td><td><code>genAiToolCallOutputAttributes</code></td></tr>
+            <tr><td><code>nio.tool.run_id</code></td><td>OpenClaw only — runId from event</td><td><code>nioToolRunIdAttribute</code></td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Nio extensions —</td></tr>
+            <tr><td><code>nio.tool_summary</code></td><td>one-line summary derived from tool input</td><td>inline in <code>recordPostToolUse</code></td></tr>
+            <tr><td><code>nio.platform</code></td><td><code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>inline in <code>recordPostToolUse</code></td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>parent turn's number</td><td>inline in <code>recordPostToolUse</code></td></tr>
+            <tr><td><code>nio.cwd</code></td><td>working dir at hook fire</td><td>inline in <code>recordPostToolUse</code> (when set)</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Guard decision (OpenClaw only) —</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td><code>allow</code> / <code>deny</code> / <code>confirm_allowed</code> / <code>confirm_denied</code></td><td><code>nioGuardAttributes</code></td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td><code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code> / <code>unknown</code></td><td><code>nioGuardAttributes</code></td></tr>
+            <tr><td><code>nio.guard.risk_score</code></td><td>0–1</td><td><code>nioGuardAttributes</code></td></tr>
+            <tr><td><code>nio.guard.risk_tags</code></td><td>comma-joined rule IDs</td><td><code>nioGuardAttributes</code></td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise. <strong><code>nio.guard.*</code> on CC?</strong> Not yet — CC's guard decisions go to the audit log only; the <code>nioGuardAttributes</code> helper is exported and ready, symmetric CC adoption is a follow-up.</p>
+
+        <h3 id="span-task">Span: <code>task:execute</code> <span style="color: var(--fg-3); font-weight: 400;">— task span</span></h3>
+        <p>Built by <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>recordPostTaskToolUse</code></a> at <code>TaskCompleted</code> (CC, currently never fired in normal sessions) or <code>subagent_ended</code> (OpenClaw).</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Source</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.task_id</code></td><td>task id from event</td></tr>
+            <tr><td><code>nio.task_summary</code></td><td>derived from task input (CC: <code>task_input.prompt</code>; OpenClaw: empty)</td></tr>
+            <tr><td><code>nio.platform</code></td><td><code>claude-code</code> / <code>openclaw</code></td></tr>
+            <tr><td><code>nio.session_id</code></td><td>session id</td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>parent turn's number</td></tr>
+            <tr><td><code>nio.cwd</code></td><td>working dir at task start</td></tr>
+          </tbody>
+        </table>
+        <div class="callout warn">
+          <div class="title">Known gap · not yet GenAI-aligned</div>
+          <p>Span name is the literal <code>task:execute</code> (not <code>execute_tool task</code>); session id is <code>nio.session_id</code> instead of <code>gen_ai.conversation.id</code> + <code>session.id</code>. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until both CC and OpenClaw can migrate in lockstep.</p>
+        </div>
+
+        <h3 id="trace-state">Trace state and span lifecycle</h3>
+        <p>All three platforms route span construction through <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>traces-collector.ts</code></a> pure functions (<code>ensureTurn</code>, <code>recordPreToolUse</code>, <code>recordPostToolUse</code>, <code>recordPreTaskToolUse</code>, <code>recordPostTaskToolUse</code>, <code>setTurnAttributes</code>, <code>endTurn</code>). The only platform difference is <strong>where <code>CollectorState</code> lives</strong>:</p>
+        <ul>
+          <li><strong>Claude Code / Hermes</strong> — cross-process spawn-per-hook; bridged via <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-state-store.ts"><code>traces-state-store.json</code></a> on disk. <code>PreToolUse</code> writes pending span data; <code>PostToolUse</code> reads it and emits the span retroactively with the original start time. <code>Stop</code> (or <code>SubagentStop</code> / <code>SessionEnd</code>) emits the turn root span.</li>
+          <li><strong>OpenClaw</strong> — in-process daemon; per-session <code>Map&lt;sessionId, CollectorState&gt;</code> in memory inside <a href="https://github.com/core0-io/nio/blob/main/src/adapters/openclaw-plugin.ts"><code>openclaw-plugin.ts</code></a>. No disk bridging; same lifecycle methods.</li>
+        </ul>
+        <p>State file path: <code>dirname(collector.logs.path) / traces-state-store.json</code> (defaults to <code>${NIO_HOME ?? ~/.nio}/traces-state-store.json</code>).</p>
+
+        <hr>
+
+        <h2 id="logs">Logs (audit log)</h2>
+        <p>Audit entries are <strong>dual-written</strong>: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> (when <code>collector.logs.enabled</code>) AND a local JSONL file at <code>collector.logs.path</code> (when <code>collector.logs.local</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute list for indexing, built by <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/logs-collector.ts"><code>auditEntryAttributes</code></a>. Schema is the discriminated union <a href="https://github.com/core0-io/nio/blob/main/src/adapters/audit-types.ts"><code>AuditEntry</code></a>.</p>
+
+        <h3>Entry types <span style="color: var(--fg-3); font-weight: 400;">— discriminated by <code>event</code></span></h3>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "guard"</span>
+            <span>Guard decision per PreToolUse / PostToolUse</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td><code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>cwd</code></td><td>string?</td><td>working dir</td></tr>
+              <tr><td><code>tool_name</code></td><td>string</td><td>host tool name</td></tr>
+              <tr><td><code>action_type</code></td><td>string?</td><td><code>exec_command</code> / <code>write_file</code> / <code>network_request</code> / <code>read_file</code></td></tr>
+              <tr><td><code>tool_input_summary</code></td><td>string</td><td>redacted ≤200-char summary of tool input</td></tr>
+              <tr><td><code>decision</code></td><td>string</td><td><code>allow</code> / <code>deny</code> / <code>ask</code></td></tr>
+              <tr><td><code>risk_level</code></td><td>string</td><td><code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td></tr>
+              <tr><td><code>max_finding_severity</code></td><td>string</td><td>highest finding severity</td></tr>
+              <tr><td><code>risk_score</code></td><td>number</td><td>0–1 final score</td></tr>
+              <tr><td><code>risk_tags</code></td><td>string[]</td><td>rule IDs hit (deduped)</td></tr>
+              <tr><td><code>phase_stopped</code></td><td>number | null</td><td>which Phase 0–6 produced the decision</td></tr>
+              <tr><td><code>scores</code></td><td>Record&lt;string, number&gt;</td><td>per-phase score (<code>runtime</code>, <code>static</code>, <code>behavioural</code>, <code>llm</code>, <code>external</code>, <code>final</code>)</td></tr>
+              <tr><td><code>phases</code></td><td>AuditPhaseMap?</td><td>per-phase <code>{score, finding_count, duration_ms}</code></td></tr>
+              <tr><td><code>top_findings</code></td><td>AuditFindingSummary[]</td><td>up to 5: <code>{rule_id, severity, category, title, confidence}</code></td></tr>
+              <tr><td><code>explanation</code></td><td>string?</td><td>human-readable reason</td></tr>
+              <tr><td><code>initiating_skill</code></td><td>string?</td><td>which skill scope the action originated from</td></tr>
+              <tr><td><code>event_type</code></td><td>"pre" | "post"?</td><td>which hook side fired</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "session_scan"</span>
+            <span>Skill scan (on-demand or session-start)</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>skill_name</code></td><td>string</td><td>scanned skill / dir</td></tr>
+              <tr><td><code>risk_level</code></td><td>string</td><td>aggregated severity</td></tr>
+              <tr><td><code>risk_tags</code></td><td>string[]</td><td>rule IDs hit</td></tr>
+              <tr><td><code>finding_count</code></td><td>number?</td><td>total findings</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "lifecycle"</span>
+            <span>Subagent / agent / session lifecycle</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>lifecycle_type</code></td><td>string</td><td><code>subagent_spawning</code> / <code>subagent_ended</code> / <code>agent_end</code> / <code>session_start</code> / <code>session_end</code></td></tr>
+              <tr><td><code>details</code></td><td>Record&lt;string, unknown&gt;?</td><td>platform-specific (e.g. OpenClaw: <code>{subagent_id, run_id}</code>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "config_error"</span>
+            <span>Config load failure</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>config_path</code></td><td>string</td><td>path that failed to load</td></tr>
+              <tr><td><code>error_message</code></td><td>string</td><td>parser / IO error</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: &lt;hook event&gt;</span>
+            <span>Collector hook record (one entry per dispatched hook event)</span>
+          </div>
+          <p style="margin: 4px 0 10px; font-size: 13px; color: var(--fg-2);">Discriminator is the canonical hook event name itself: <code>UserPromptSubmit</code> · <code>PreToolUse</code> · <code>PostToolUse</code> · <code>TaskCreated</code> · <code>TaskCompleted</code> · <code>Stop</code> · <code>SubagentStop</code> · <code>SessionStart</code> · <code>SessionEnd</code>.</p>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>cwd</code></td><td>string | null</td><td>working dir</td></tr>
+              <tr><td><code>transcript_path</code></td><td>string?</td><td>CC-only — path to session transcript JSONL</td></tr>
+              <tr><td><code>tool_name</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>tool_use_id</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>tool_summary</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>task_id</code></td><td>string?</td><td>for TaskCreated / TaskCompleted</td></tr>
+              <tr><td><code>task_summary</code></td><td>string?</td><td>for TaskCreated</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3 id="log-projection">OTEL LogRecord projection</h3>
+        <p>The flat attribute set is built by <a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/logs-collector.ts"><code>auditEntryAttributes</code></a> and aligns with the trace span schema where concepts overlap — same key names work across logs and traces in dashboards.</p>
+        <ul>
+          <li><code>body</code> = JSON-stringified entry (full content)</li>
+          <li><code>severityNumber</code> / <code>severityText</code> derived from <code>risk_level</code>: <code>low</code>→INFO, <code>medium</code>→WARN, <code>high</code>→ERROR, <code>critical</code>→FATAL; INFO when no <code>risk_level</code></li>
+        </ul>
+        <table>
+          <thead><tr><th>Attribute</th><th>Source field</th><th>Cross-signal alignment</th></tr></thead>
+          <tbody>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Tool identity (matches tool span) —</td></tr>
+            <tr><td><code>gen_ai.tool.name</code></td><td><code>tool_name</code></td><td>matches tool-span attribute</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td><code>tool_use_id</code></td><td>matches tool-span attribute</td></tr>
+            <tr><td><code>nio.tool_summary</code></td><td><code>tool_summary</code></td><td>matches tool-span attribute</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Session identity (matches turn span) —</td></tr>
+            <tr><td><code>gen_ai.conversation.id</code></td><td><code>session_id</code></td><td>matches turn-span attribute</td></tr>
+            <tr><td><code>session.id</code></td><td><code>session_id</code></td><td>matches turn-span attribute</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Guard decision (matches OpenClaw tool span) —</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td><code>decision</code></td><td>via <code>nioGuardAttributes</code></td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td><code>risk_level</code></td><td>same</td></tr>
+            <tr><td><code>nio.guard.risk_score</code></td><td><code>risk_score</code></td><td>same</td></tr>
+            <tr><td><code>nio.guard.risk_tags</code></td><td><code>risk_tags</code> (comma-joined)</td><td>same</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Task identity (matches task span) —</td></tr>
+            <tr><td><code>nio.task_id</code></td><td><code>task_id</code></td><td>matches task-span attribute</td></tr>
+            <tr><td><code>nio.task_summary</code></td><td><code>task_summary</code></td><td>matches task-span attribute</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Shared (matches all spans) —</td></tr>
+            <tr><td><code>nio.platform</code></td><td><code>platform</code></td><td>matches every span</td></tr>
+            <tr><td><code>nio.cwd</code></td><td><code>cwd</code></td><td>matches tool-span / turn-span attribute</td></tr>
+            <tr><td colspan="3" style="font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--fg-3); padding-top: 14px;">— Logs-only —</td></tr>
+            <tr><td><code>nio.event</code></td><td><code>event</code></td><td>discriminator (hook event vs guard / lifecycle / scan)</td></tr>
+            <tr><td><code>nio.event_type</code></td><td><code>event_type</code></td><td><code>pre</code> / <code>post</code> for guard entries</td></tr>
+            <tr><td><code>nio.action_type</code></td><td><code>action_type</code></td><td><code>exec_command</code> / <code>write_file</code> / <code>network_request</code> / <code>read_file</code></td></tr>
+            <tr><td><code>nio.max_finding_severity</code></td><td><code>max_finding_severity</code></td><td>—</td></tr>
+            <tr><td><code>nio.phase_stopped</code></td><td><code>phase_stopped</code></td><td>—</td></tr>
+            <tr><td><code>nio.explanation</code></td><td><code>explanation</code></td><td>—</td></tr>
+            <tr><td><code>nio.transcript_path</code></td><td><code>transcript_path</code></td><td>—</td></tr>
+            <tr><td><code>nio.phases.{name}.score</code></td><td><code>phases[name].score</code></td><td>per-phase Phase 0–6 telemetry</td></tr>
+            <tr><td><code>nio.phases.{name}.finding_count</code></td><td><code>phases[name].finding_count</code></td><td>same</td></tr>
+            <tr><td><code>nio.phases.{name}.duration_ms</code></td><td><code>phases[name].duration_ms</code></td><td>same</td></tr>
+          </tbody>
+        </table>
+
+        <p style="font-size: 13px; color: var(--fg-2);">Local JSONL path: <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). Rotation kicks in at <code>collector.logs.max_size_mb</code> (default 100 MB) — the live file is renamed to <code>&lt;path&gt;.1</code>.</p>
+
+        <hr>
+
+        <h2 id="config">Configuration</h2>
+        <p>All three signals are gated by the <code>collector</code> section in <code>~/.nio/config.yaml</code>. Full field-by-field reference: <a href="configuration.html#collector">Configuration · collector</a>.</p>
+
+        <details>
+          <summary>YAML cheatsheet (click to expand)</summary>
+          <pre><code>collector:
+  endpoint: ""                      # OTLP base URL; empty = no OTLP export at all
+  api_key: ""                       # Bearer token
+  timeout: 5000                     # milliseconds
+  protocol: http                    # http | grpc
+  metrics:
+    enabled: true                   # OTLP metrics export on/off
+  traces:
+    enabled: true                   # OTLP traces export on/off
+  logs:
+    enabled: true                   # OTLP logs export on/off
+    local: true                     # local JSONL backup on/off
+    path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store.json
+    max_size_mb: 100                # rotation threshold for the local file</code></pre>
+        </details>
+
+        <ul>
+          <li>When <code>collector.endpoint</code> is empty, the corresponding provider factory returns <code>null</code> and the platform code skips emit.</li>
+          <li>The audit-log local JSONL still works (controlled by <code>collector.logs.local</code>) even without an endpoint — handy for offline / air-gapped use.</li>
+        </ul>
+
+        <hr>
+
+        <h2 id="source-of-truth">Source-of-truth files</h2>
+        <p>When schema drifts, update the source file and re-run <code>pnpm run build</code>. The helper functions in <code>traces-collector.ts</code> are the single point of change for trace attribute keys — most edits don't ripple beyond one file.</p>
+        <table>
+          <thead><tr><th>Schema</th><th>File</th><th>What it owns</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>Metrics catalog</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/metrics-collector.ts"><code>metrics-collector.ts</code></a> (<code>METRICS_SCHEMA</code>)</td>
+              <td>Instrument names, types, labels, descriptions</td>
+            </tr>
+            <tr>
+              <td>Trace span attributes</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-collector.ts"><code>traces-collector.ts</code></a></td>
+              <td>All <code>gen_ai.*</code> and <code>nio.*</code> span attribute keys via builder helpers (<code>genAi*Attributes</code>, <code>nio*Attributes</code>, <code>record*</code> operations)</td>
+            </tr>
+            <tr>
+              <td>Trace state shape</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/traces-state-store.ts"><code>traces-state-store.ts</code></a></td>
+              <td><code>CollectorState</code>, <code>PendingToolSpan</code>, <code>PendingTaskSpan</code></td>
+            </tr>
+            <tr>
+              <td>Audit log entry types</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/adapters/audit-types.ts"><code>audit-types.ts</code></a></td>
+              <td>All entry shapes (guard / scan / lifecycle / config_error / hook)</td>
+            </tr>
+            <tr>
+              <td>OTEL log attribute projection</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/scripts/lib/logs-collector.ts"><code>logs-collector.ts</code></a> (<code>auditEntryAttributes</code>)</td>
+              <td>Flat attribute keys for log indexing — shared GenAI / <code>nio.*</code> keys with the trace signal</td>
+            </tr>
+            <tr>
+              <td>Collector config schema</td>
+              <td><a href="https://github.com/core0-io/nio/blob/main/src/adapters/config-schema.ts"><code>config-schema.ts</code></a></td>
+              <td><code>CollectorConfigSchema</code>, <code>CollectorLogsConfigSchema</code> — YAML field validation + defaults</td>
+            </tr>
+          </tbody>
+        </table>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="configuration.html">
+          <span class="dir">← Configure</span>
+          <span class="label">Config reference</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="mcp-detection.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">MCP Detection</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

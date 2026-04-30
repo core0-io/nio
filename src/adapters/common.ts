@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, statSync, renameSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { homedir } from 'node:os';
 import type { HookInput } from './types.js';
@@ -13,7 +13,7 @@ import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsCo
 export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditConfigErrorEntry, AuditFindingSummary } from './audit-types.js';
-export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap } from './audit-types.js';
+export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { Finding } from '../core/models.js';
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
@@ -24,11 +24,25 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
 const CONFIG_YAML_PATH = join(NIO_DIR, 'config.yaml');
-const AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
+const DEFAULT_AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
 
-function ensureDir(): void {
-  if (!existsSync(NIO_DIR)) {
-    mkdirSync(NIO_DIR, { recursive: true });
+function expandHome(p: string): string {
+  return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
+}
+
+/**
+ * Resolve the audit JSONL path. Honors `collector.logs.path` (with `~/`
+ * expansion); falls back to `${NIO_HOME ?? ~/.nio}/audit.jsonl` when no
+ * config is provided.
+ */
+export function resolveAuditPath(logsConfig?: CollectorLogsConfig): string {
+  const raw = logsConfig?.path;
+  return raw ? expandHome(raw) : DEFAULT_AUDIT_PATH;
+}
+
+function ensureDir(dir: string = NIO_DIR): void {
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
   }
 }
 
@@ -67,7 +81,10 @@ function reportConfigError(err: unknown): void {
       config_path: CONFIG_YAML_PATH,
       error_message: message,
     };
-    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+    // Config error happens before logsConfig is loaded — always falls back
+    // to the default path. Cannot honor a user-customized logs.path here
+    // because that's exactly what failed to load.
+    appendFileSync(DEFAULT_AUDIT_PATH, JSON.stringify(entry) + '\n');
   } catch {
     // Best-effort — don't let audit write swallow the primary failure
   }
@@ -103,13 +120,8 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
   const api_key = c.api_key ?? '';
   const timeout = c.timeout || 5000;
   const protocol = c.protocol ?? 'http';
-  let log = c.metrics?.log ?? '';
 
-  if (log.startsWith('~/')) {
-    log = join(homedir(), log.slice(2));
-  }
-
-  return { endpoint, api_key, timeout, log, protocol, enabled: !!(endpoint || log) };
+  return { endpoint, api_key, timeout, protocol, enabled: endpoint !== '' };
 }
 
 // ---------------------------------------------------------------------------
@@ -191,8 +203,9 @@ export interface WriteAuditLogOptions {
 
 /**
  * Write an audit entry. Dual-write controlled by config:
- *  - OTEL LogRecord (if audit.otel !== false and loggerProvider is set)
- *  - Local JSONL (if audit.local !== false)
+ *  - OTEL LogRecord (if logsConfig.enabled !== false and loggerProvider is set)
+ *  - Local JSONL (if logsConfig.local !== false), to `logsConfig.path`
+ *    or the `${NIO_HOME ?? ~/.nio}/audit.jsonl` default.
  */
 export function writeAuditLog(
   entry: AuditEntry,
@@ -217,23 +230,24 @@ export function writeAuditLog(
   // Local JSONL backup
   if (logsConfig?.local !== false) {
     try {
-      ensureDir();
-      rotateIfNeeded(logsConfig?.max_size_mb);
-      appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+      const auditPath = resolveAuditPath(logsConfig);
+      ensureDir(dirname(auditPath));
+      rotateIfNeeded(auditPath, logsConfig?.max_size_mb);
+      appendFileSync(auditPath, JSON.stringify(entry) + '\n');
     } catch {
       // Non-critical
     }
   }
 }
 
-function rotateIfNeeded(maxSizeMb?: number): void {
+function rotateIfNeeded(auditPath: string, maxSizeMb?: number): void {
   const maxBytes = (maxSizeMb && maxSizeMb > 0)
     ? maxSizeMb * 1024 * 1024
     : DEFAULT_MAX_AUDIT_BYTES;
   try {
-    const stats = statSync(AUDIT_PATH);
+    const stats = statSync(auditPath);
     if (stats.size >= maxBytes) {
-      renameSync(AUDIT_PATH, AUDIT_PATH + '.1');
+      renameSync(auditPath, auditPath + '.1');
     }
   } catch {
     // File may not exist yet — that's fine

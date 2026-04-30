@@ -18,16 +18,21 @@ export {};
  * Always exits 0 — telemetry never blocks the agent.
  */
 
-import { loadCollectorConfig } from './lib/config-loader.js';
+import { loadCollectorConfig, loadLogsConfig } from './lib/config-loader.js';
 import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
+import { createLoggerProvider } from './lib/logs-collector.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
 } from './lib/collector-core.js';
 
 const config = loadCollectorConfig();
-if (!config.enabled) {
+const logsConfig = loadLogsConfig();
+// Audit dispatch is kept on even when OTLP export is disabled so the
+// local audit.jsonl still gets hook-event entries. Only short-circuit
+// when both endpoint and local logging are off.
+if (!config.enabled && logsConfig.local === false) {
   process.exit(0);
 }
 
@@ -49,6 +54,9 @@ function readStdin(): Promise<HookStdinPayload | null> {
 
 const meterProvider = createMeterProvider(config);
 const tracerProvider = createTracerProvider(config);
+const loggerProvider = (config.enabled && logsConfig.enabled !== false)
+  ? createLoggerProvider(config)
+  : null;
 
 async function main(): Promise<void> {
   const input = await readStdin();
@@ -61,7 +69,18 @@ async function main(): Promise<void> {
     config,
     meterProvider,
     tracerProvider,
+    loggerProvider,
+    logsConfig,
   });
+
+  // Force network exporters to flush before the subprocess exits.
+  // Without this, span/log/metric records can sit in batchers and never
+  // reach OTLP.
+  await Promise.all([
+    meterProvider?.forceFlush(),
+    tracerProvider?.forceFlush(),
+    loggerProvider?.forceFlush(),
+  ]);
 
   process.exit(0);
 }

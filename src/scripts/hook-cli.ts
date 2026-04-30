@@ -175,10 +175,18 @@ async function runHermesCollector(
   if (!canonicalEvent) return;
 
   const collectorConfig = loadCollectorConfig();
-  if (!collectorConfig.enabled) return;
+  const config = loadConfig();
+  const logsConfig = config.collector?.logs;
+  // Audit dispatch is kept on even when OTLP export is disabled so the
+  // local audit.jsonl still gets hook-event entries. Only short-circuit
+  // when both OTLP and local logging are off.
+  if (!collectorConfig.enabled && logsConfig?.local === false) return;
 
-  const meterProvider = createMeterProvider(collectorConfig);
-  const tracerProvider = createTracerProvider(collectorConfig);
+  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig) : null;
+  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig) : null;
+  const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+    ? createLoggerProvider(collectorConfig)
+    : null;
 
   await dispatchCollectorEvent({
     event: canonicalEvent,
@@ -187,16 +195,19 @@ async function runHermesCollector(
     config: collectorConfig,
     meterProvider,
     tracerProvider,
+    loggerProvider,
+    logsConfig,
   });
 
   // Every hook-cli invocation is a fresh subprocess that exits right
   // after this returns. PeriodicExportingMetricReader batches metrics
   // on a 1s timer, and the HTTP exporter chunks requests — without an
-  // explicit flush here the recorded metric/span can sit in-memory
+  // explicit flush here the recorded metric/span/log can sit in-memory
   // and never reach OTLP before the process dies.
   await Promise.all([
     meterProvider?.forceFlush(),
     tracerProvider?.forceFlush(),
+    loggerProvider?.forceFlush(),
   ]);
 }
 
@@ -325,7 +336,7 @@ async function main(): Promise<void> {
     // Also run the collector PreToolUse path so a pending_span is
     // saved AND nio.tool_use.count{event=PreToolUse,platform=hermes}
     // is emitted, mirroring Claude Code's parallel hook chain.
-    if (collectorConfig.enabled) {
+    if (collectorConfig.enabled || logsConfig?.local !== false) {
       await dispatchCollectorEvent({
         event: 'PreToolUse',
         input: hermesToCollectorInput(payload, 'PreToolUse'),
@@ -333,6 +344,8 @@ async function main(): Promise<void> {
         config: collectorConfig,
         meterProvider,
         tracerProvider,
+        loggerProvider,
+        logsConfig,
       });
     }
 

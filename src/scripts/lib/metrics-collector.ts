@@ -14,9 +14,9 @@ export const METRICS_SCHEMA = {
     description: 'Number of tool invocations captured by Nio (includes Task events)',
     unit: '{invocations}',
     labels: {
-      tool_name: 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, Task, etc.)',
-      event: 'Hook event name (PreToolUse, PostToolUse, TaskCreated, TaskCompleted)',
-      platform: 'Runtime platform identifier passed via --platform argument',
+      'gen_ai.tool.name': 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, Agent, etc.). Matches the tool-span attribute in the traces signal.',
+      'nio.event': 'Hook event name (PreToolUse, PostToolUse, TaskCreated, TaskCompleted)',
+      'nio.platform': 'Runtime platform identifier (claude-code, hermes, openclaw)',
     },
   },
   turnCount: {
@@ -24,7 +24,7 @@ export const METRICS_SCHEMA = {
     description: 'Number of conversation turns completed (Stop or SubagentStop events)',
     unit: '{turns}',
     labels: {
-      platform: 'Runtime platform identifier',
+      'nio.platform': 'Runtime platform identifier',
     },
   },
   decisionCount: {
@@ -32,10 +32,10 @@ export const METRICS_SCHEMA = {
     description: 'Number of guard decisions by outcome',
     unit: '{decisions}',
     labels: {
-      decision: 'Guard decision (allow, deny, ask)',
-      risk_level: 'Risk level (low, medium, high, critical)',
-      tool_name: 'Name of the tool being evaluated',
-      platform: 'Runtime platform identifier',
+      'nio.guard.decision': 'Guard decision (allow, deny, ask). Matches the tool-span guard attribute via nioGuardAttributes().',
+      'nio.guard.risk_level': 'Risk level (low, medium, high, critical). Matches the tool-span guard attribute.',
+      'gen_ai.tool.name': 'Name of the tool being evaluated. Matches the tool-span attribute.',
+      'nio.platform': 'Runtime platform identifier',
     },
   },
   riskScore: {
@@ -43,8 +43,8 @@ export const METRICS_SCHEMA = {
     description: 'Risk score distribution for guard evaluations (0–1)',
     unit: '{score}',
     labels: {
-      tool_name: 'Name of the tool being evaluated',
-      platform: 'Runtime platform identifier',
+      'gen_ai.tool.name': 'Name of the tool being evaluated',
+      'nio.platform': 'Runtime platform identifier',
     },
   },
 } as const;
@@ -119,7 +119,7 @@ export async function recordToolUse(
     unit: METRICS_SCHEMA.toolUseCount.unit,
   });
   counter.add(1, {
-    'nio.tool_name': toolName,
+    'gen_ai.tool.name': toolName,
     'nio.event': event,
     'nio.platform': platform,
   });
@@ -142,9 +142,9 @@ export async function recordGuardDecision(
     unit: METRICS_SCHEMA.decisionCount.unit,
   });
   counter.add(1, {
-    'nio.decision': decision,
-    'nio.risk_level': riskLevel,
-    'nio.tool_name': toolName,
+    'nio.guard.decision': decision,
+    'nio.guard.risk_level': riskLevel,
+    'gen_ai.tool.name': toolName,
     'nio.platform': platform,
   });
 
@@ -153,7 +153,7 @@ export async function recordGuardDecision(
     unit: METRICS_SCHEMA.riskScore.unit,
   });
   histogram.record(riskScore, {
-    'nio.tool_name': toolName,
+    'gen_ai.tool.name': toolName,
     'nio.platform': platform,
   });
 

@@ -171,12 +171,12 @@ cd nio-hermes &amp;&amp; ./setup.sh</code></pre>
             <tr><td><code>~/.hermes/shell-hooks-allowlist.json</code></td><td>Approved hook command strings (Hermes-managed).</td></tr>
             <tr><td><code>~/.hermes/plugins/nio/</code></td><td>Python plugin: <code>plugin.yaml</code>, <code>__init__.py</code>, <code>scripts/{nio-cli,hook-cli}.js</code>.</td></tr>
             <tr><td><code>~/.nio/config.yaml</code></td><td>Nio's guard + collector config (shared with Claude Code / OpenClaw). See <a href="configuration.html">Config reference</a>.</td></tr>
-            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL log of guard decisions. Read via <code>/nio report</code>.</td></tr>
-            <tr><td><code>~/.nio/metrics.jsonl</code></td><td>Local OTEL metrics dump (when <code>collector.metrics.local = true</code>).</td></tr>
+            <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL audit log: guard decisions, scans, lifecycle events, and every hook event (<code>pre_tool_call</code>, <code>post_tool_call</code>, <code>on_session_start</code>, <code>on_session_end</code>, …). Read via <code>/nio report</code>.</td></tr>
+            <tr><td><code>~/.nio/traces-state-store.json</code></td><td>Cross-process trace state (turn IDs + pending span starts). Internal; sits next to <code>audit.jsonl</code>.</td></tr>
           </tbody>
         </table>
 
-        <p>Set <code>NIO_HOME</code> to move the Nio config/audit/metrics elsewhere. Hermes's own <code>HERMES_CONFIG_PATH</code> override is independent.</p>
+        <p>Set <code>NIO_HOME</code> to move the Nio config/audit log elsewhere, or set <code>collector.logs.path</code> in <code>config.yaml</code> to relocate just the audit log + state file. Hermes's own <code>HERMES_CONFIG_PATH</code> override is independent.</p>
 
         <h2>Verify</h2>
         <ol>

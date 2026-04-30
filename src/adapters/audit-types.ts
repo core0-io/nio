@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Audit log types — shared schema for guard, scan, and lifecycle events.
+ * Audit log types — shared schema for guard, scan, lifecycle, and hook events.
  *
  * All audit entries are discriminated by the `event` field:
  *   - "guard"        — dynamic guard evaluation (Phase 0–6)
  *   - "session_scan" — on-demand or session-start skill scan
  *   - "lifecycle"    — subagent/agent lifecycle events
+ *   - hook events    — collector hook records (PreToolUse, PostToolUse,
+ *                      TaskCreated, TaskCompleted, Stop, SubagentStop, etc.)
  *
  * Entries are dual-written: OTEL LogRecord (primary) + local JSONL (backup),
  * both controlled by the `audit` config section.
@@ -102,10 +104,44 @@ export interface AuditConfigErrorEntry {
   error_message: string;
 }
 
+// ── Hook event entry ────────────────────────────────────────────────────
+
+/**
+ * Collector hook records — emitted by the platform-agnostic collector core
+ * when a hook event arrives (Claude Code, Hermes, OpenClaw). Replaces the
+ * legacy free-form records the deleted `writeToLog` used to append to
+ * `metrics.jsonl`.
+ */
+export type HookEventName =
+  | 'UserPromptSubmit'
+  | 'PreToolUse'
+  | 'PostToolUse'
+  | 'TaskCreated'
+  | 'TaskCompleted'
+  | 'Stop'
+  | 'SubagentStop'
+  | 'SessionStart'
+  | 'SessionEnd';
+
+export interface AuditHookEntry {
+  event: HookEventName;
+  timestamp: string;
+  platform: string;
+  session_id?: string;
+  cwd?: string | null;
+  transcript_path?: string;
+  tool_name?: string;
+  tool_use_id?: string;
+  tool_summary?: string;
+  task_id?: string;
+  task_summary?: string;
+}
+
 // ── Union ───────────────────────────────────────────────────────────────
 
 export type AuditEntry =
   | AuditGuardEntry
   | AuditScanEntry
   | AuditLifecycleEntry
-  | AuditConfigErrorEntry;
+  | AuditConfigErrorEntry
+  | AuditHookEntry;

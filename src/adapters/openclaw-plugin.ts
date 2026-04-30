@@ -26,84 +26,41 @@ import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
-import { createTracerProvider, redactAndTruncate } from '../scripts/lib/traces-collector.js';
+import {
+  createTracerProvider,
+  ensureTurn,
+  recordPreToolUse,
+  recordPreTaskToolUse,
+  recordPostToolUse,
+  recordPostTaskToolUse,
+  endTurn,
+  recordUserPrompt,
+  recordAssistantReply,
+  recordCacheHitRate,
+  accumulateGenAiUsage,
+  genAiToolCallInputAttributes,
+  genAiToolCallOutputAttributes,
+  nioGuardAttributes,
+  nioToolRunIdAttribute,
+  type CollectorState,
+} from '../scripts/lib/traces-collector.js';
+import { toolSummary } from '../scripts/lib/collector-core.js';
 import { createMeterProvider, recordToolUse, recordTurn, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
 import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
-import { trace, ROOT_CONTEXT, SpanStatusCode, type Span, type Context } from '@opentelemetry/api';
 
 // ---------------------------------------------------------------------------
-// In-memory turn / span tracking (same-process, standard OTEL context).
-// OpenClaw runs hooks in the gateway process, so we don't need the file-based
-// state machine that Claude Code's cross-process hooks require.
+// In-memory turn / span state (same-process daemon, no disk persistence
+// needed). All trace span construction routes through traces-collector's
+// pure functions — the same ones Claude Code and Hermes use across
+// processes via the deferred model. State per session lives in
+// `sessionState`; pending guard-decision attrs that need to attach to a
+// tool span at post time live in `pendingGuardAttrs` (a side channel
+// because traces-collector's pure-function API has no mid-flight span
+// mutation primitive).
 // ---------------------------------------------------------------------------
 
-interface TurnTokenUsage {
-  input: number;
-  output: number;
-  cacheRead: number;
-  cacheWrite: number;
-}
-
-interface ActiveTurn {
-  span: Span;
-  ctx: Context;
-  turnNumber: number;
-  usage: TurnTokenUsage;
-}
-
-const turnCounters = new Map<string, number>();
-const activeTurns = new Map<string, ActiveTurn>();
-const activeToolSpans = new Map<string, Span>();  // key: `${sessionId}:${spanKey}`
-const activeTaskSpans = new Map<string, Span>();  // key: `${sessionId}:${taskId}`
-
-function getOrStartTurn(sessionId: string, platform = 'openclaw', cwd: string | null = null): ActiveTurn {
-  let t = activeTurns.get(sessionId);
-  if (t) return t;
-  const n = (turnCounters.get(sessionId) ?? 0) + 1;
-  turnCounters.set(sessionId, n);
-  const tracer = trace.getTracer('nio-collector', '1.0.0');
-  const span = tracer.startSpan(
-    `turn:${n}`,
-    {
-      attributes: {
-        'nio.session_id': sessionId,
-        'nio.turn_number': n,
-        'nio.platform': platform,
-        ...(cwd ? { 'nio.cwd': cwd } : {}),
-      },
-    },
-    ROOT_CONTEXT,
-  );
-  const ctx = trace.setSpan(ROOT_CONTEXT, span);
-  t = { span, ctx, turnNumber: n, usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
-  activeTurns.set(sessionId, t);
-  return t;
-}
-
-function finishTurn(sessionId: string): void {
-  const t = activeTurns.get(sessionId);
-  if (!t) return;
-  // End any still-pending tool/task spans defensively.
-  for (const [k, s] of activeToolSpans) {
-    if (k.startsWith(`${sessionId}:`)) { s.end(); activeToolSpans.delete(k); }
-  }
-  for (const [k, s] of activeTaskSpans) {
-    if (k.startsWith(`${sessionId}:`)) { s.end(); activeTaskSpans.delete(k); }
-  }
-
-  // Attach token usage to turn span
-  const u = t.usage;
-  t.span.setAttribute('nio.turn.input_tokens', u.input);
-  t.span.setAttribute('nio.turn.output_tokens', u.output);
-  t.span.setAttribute('nio.turn.cache_creation_input_tokens', u.cacheWrite);
-  t.span.setAttribute('nio.turn.cache_read_input_tokens', u.cacheRead);
-  const totalInput = u.input + u.cacheWrite + u.cacheRead;
-  const cacheHitRate = totalInput > 0 ? Math.round((u.cacheRead / totalInput) * 1000) / 1000 : 0;
-  t.span.setAttribute('nio.turn.cache_hit_rate', cacheHitRate);
-
-  t.span.end();
-  activeTurns.delete(sessionId);
-}
+const sessionState = new Map<string, CollectorState>();
+const pendingGuardAttrs = new Map<string, Record<string, unknown>>();   // key: `${sessionId}:${spanKey}`
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -222,30 +179,25 @@ export function registerOpenClawPlugin(
       };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
 
-      // OTEL pre-tool span + metric
       const toolName = toolEvent.toolName || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';
       const spanKey = toolEvent.toolCallId || toolName;
+      const cwd = process.cwd();
+      const fullKey = `${sessionId}:${spanKey}`;
+
+      // Record pre-tool span data into per-session state. Span is not
+      // emitted yet — the post side (after_tool_call OR the block path
+      // below) reconstructs it via recordPostToolUse.
       if (tracerProvider) {
-        try {
-          const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-          const tracer = trace.getTracer('nio-collector', '1.0.0');
-          const span = tracer.startSpan(
-            `tool:${toolName}`,
-            {
-              attributes: {
-                'nio.tool_name': toolName,
-                'nio.platform': 'openclaw',
-                'nio.session_id': sessionId,
-                'nio.tool.input': redactAndTruncate(toolEvent.params ?? {}),
-                ...(toolEvent.toolCallId ? { 'nio.tool.call_id': toolEvent.toolCallId } : {}),
-                ...(toolEvent.runId ? { 'nio.tool.run_id': toolEvent.runId } : {}),
-              },
-            },
-            turn.ctx,
-          );
-          activeToolSpans.set(`${sessionId}:${spanKey}`, span);
-        } catch { /* non-critical */ }
+        let state = sessionState.get(sessionId) ?? null;
+        state = ensureTurn(state, sessionId);
+        const params = (toolEvent.params ?? {}) as Record<string, unknown>;
+        const preAttrs: Record<string, unknown> = {
+          ...genAiToolCallInputAttributes(params, toolEvent.toolCallId),
+          ...(toolEvent.runId ? nioToolRunIdAttribute(toolEvent.runId) : {}),
+        };
+        state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
+        sessionState.set(sessionId, state);
       }
       if (meterProvider) {
         recordToolUse(meterProvider, toolName, 'PreToolUse', 'openclaw').catch(() => {});
@@ -268,67 +220,50 @@ export function registerOpenClawPlugin(
         ).catch(() => {});
       }
 
-      if (result.decision === 'deny') {
+      // Categorise guard decision and stash attrs to merge onto the
+      // tool span at post time. `decision` here is the user-visible
+      // taxonomy (allow / deny / confirm_allowed / confirm_denied).
+      const isBlock =
+        result.decision === 'deny' || (result.decision === 'ask' && confirmAction === 'deny');
+      const decisionTag =
+        result.decision === 'deny'
+          ? 'deny'
+          : result.decision === 'ask'
+            ? confirmAction === 'deny'
+              ? 'confirm_denied'
+              : 'confirm_allowed'
+            : 'allow';
+      const guardAttrs = nioGuardAttributes(
+        decisionTag,
+        result.riskLevel || (decisionTag === 'allow' ? 'low' : 'unknown'),
+        result.riskScore ?? 0,
+        result.riskTags,
+      );
+      pendingGuardAttrs.set(fullKey, guardAttrs);
+
+      // Block path: after_tool_call won't fire because the tool didn't
+      // run. Flush the orphan post-span here with guard-error status.
+      if (isBlock) {
+        const reason =
+          result.reason || (decisionTag === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
         if (tracerProvider) {
-          const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
-          if (span) {
-            span.setAttribute('nio.guard.decision', 'deny');
-            span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
-            span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
-            if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
-            const reason = result.reason || 'Blocked by Nio';
-            span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
-            span.recordException(reason);
-            span.end();
-            activeToolSpans.delete(`${sessionId}:${spanKey}`);
+          const state = sessionState.get(sessionId);
+          if (state) {
+            const r = await recordPostToolUse(
+              tracerProvider, state, spanKey, 'openclaw', cwd,
+              guardAttrs,
+              reason,
+            );
+            sessionState.set(sessionId, r.state);
           }
         }
-        return { block: true, blockReason: result.reason || 'Blocked by Nio' };
+        pendingGuardAttrs.delete(fullKey);
+        return { block: true, blockReason: reason };
       }
 
-      if (result.decision === 'ask') {
-        const shouldBlock = confirmAction === 'deny';
-        if (shouldBlock) {
-          if (tracerProvider) {
-            const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
-            if (span) {
-              span.setAttribute('nio.guard.decision', 'confirm_denied');
-              span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
-              span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
-              if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
-              const reason = result.reason || 'Requires confirmation (Nio)';
-              span.setStatus({ code: SpanStatusCode.ERROR, message: reason });
-              span.recordException(reason);
-              span.end();
-              activeToolSpans.delete(`${sessionId}:${spanKey}`);
-            }
-          }
-          return { block: true, blockReason: result.reason || 'Requires confirmation (Nio)' };
-        }
-        // confirm_action is 'allow' or 'ask' — OpenClaw has no interactive confirm, so allow
-        if (tracerProvider) {
-          const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
-          if (span) {
-            span.setAttribute('nio.guard.decision', 'confirm_allowed');
-            span.setAttribute('nio.guard.risk_level', result.riskLevel || 'unknown');
-            span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
-            if (result.riskTags?.length) span.setAttribute('nio.guard.risk_tags', result.riskTags.join(','));
-          }
-        }
-        return undefined; // allow
-      }
-
-      // Allow — record decision on span for observability
-      if (tracerProvider) {
-        const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
-        if (span) {
-          span.setAttribute('nio.guard.decision', 'allow');
-          span.setAttribute('nio.guard.risk_level', result.riskLevel || 'low');
-          span.setAttribute('nio.guard.risk_score', result.riskScore ?? 0);
-        }
-      }
-
-      return undefined; // allow
+      // Allow / confirm_allowed: leave guardAttrs in pendingGuardAttrs;
+      // after_tool_call will drain and emit the span.
+      return undefined;
     } catch {
       // Fail open
       return undefined;
@@ -352,18 +287,28 @@ export function registerOpenClawPlugin(
       const toolName = toolEvent.toolName || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || toolEvent.runId || 'openclaw';
       const spanKey = toolEvent.toolCallId || toolName;
+      const cwd = process.cwd();
+      const fullKey = `${sessionId}:${spanKey}`;
+
       if (tracerProvider) {
-        const span = activeToolSpans.get(`${sessionId}:${spanKey}`);
-        if (span) {
-          if (toolEvent.result !== undefined) span.setAttribute('nio.tool.output', redactAndTruncate(toolEvent.result));
-          if (toolEvent.error) span.setAttribute('nio.tool.error', redactAndTruncate(toolEvent.error));
-          if (typeof toolEvent.durationMs === 'number') span.setAttribute('nio.tool.duration_ms', toolEvent.durationMs);
-          if (toolEvent.error) {
-            span.setStatus({ code: SpanStatusCode.ERROR, message: toolEvent.error });
-            span.recordException(toolEvent.error);
-          }
-          span.end();
-          activeToolSpans.delete(`${sessionId}:${spanKey}`);
+        const state = sessionState.get(sessionId);
+        if (state) {
+          const guardAttrs = pendingGuardAttrs.get(fullKey) ?? {};
+          pendingGuardAttrs.delete(fullKey);
+          const postAttrs: Record<string, unknown> = {
+            ...guardAttrs,
+            ...genAiToolCallOutputAttributes({
+              result: toolEvent.result,
+              error: toolEvent.error ?? null,
+              durationMs: toolEvent.durationMs,
+            }),
+          };
+          const r = await recordPostToolUse(
+            tracerProvider, state, spanKey, 'openclaw', cwd,
+            postAttrs,
+            toolEvent.error ?? null,
+          );
+          sessionState.set(sessionId, r.state);
         }
       }
       if (meterProvider) {
@@ -391,20 +336,10 @@ export function registerOpenClawPlugin(
       const taskId = e.subagentId || e.runId || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
       if (tracerProvider) {
-        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-        const tracer = trace.getTracer('nio-collector', '1.0.0');
-        const span = tracer.startSpan(
-          'task:execute',
-          {
-            attributes: {
-              'nio.task_id': taskId,
-              'nio.platform': 'openclaw',
-              'nio.session_id': sessionId,
-            },
-          },
-          turn.ctx,
-        );
-        activeTaskSpans.set(`${sessionId}:${taskId}`, span);
+        let state = sessionState.get(sessionId) ?? null;
+        state = ensureTurn(state, sessionId);
+        state = recordPreTaskToolUse(state, taskId, '');
+        sessionState.set(sessionId, state);
       }
       if (meterProvider) {
         await recordToolUse(meterProvider, 'Task', 'TaskCreated', 'openclaw');
@@ -430,11 +365,12 @@ export function registerOpenClawPlugin(
       writeAuditLog(endEntry, auditOpts);
       const taskId = e.subagentId || e.runId || 'unknown';
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
+      const cwd = process.cwd();
       if (tracerProvider) {
-        const span = activeTaskSpans.get(`${sessionId}:${taskId}`);
-        if (span) {
-          span.end();
-          activeTaskSpans.delete(`${sessionId}:${taskId}`);
+        const state = sessionState.get(sessionId);
+        if (state) {
+          const r = await recordPostTaskToolUse(tracerProvider, state, taskId, 'openclaw', cwd);
+          sessionState.set(sessionId, r.state);
         }
       }
       if (meterProvider) {
@@ -445,15 +381,18 @@ export function registerOpenClawPlugin(
     }
   });
 
-  // before_agent_reply → capture user prompt onto turn root span
+  // before_agent_reply → capture user prompt onto turn state (applied
+  // to the turn span at endTurn time).
   api.on('before_agent_reply', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { cleanedBody?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       if (tracerProvider && e.cleanedBody) {
-        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-        turn.span.setAttribute('nio.turn.user_prompt', redactAndTruncate(e.cleanedBody));
+        let state = sessionState.get(sessionId) ?? null;
+        state = ensureTurn(state, sessionId);
+        state = recordUserPrompt(state, e.cleanedBody);
+        sessionState.set(sessionId, state);
       }
     } catch { /* non-critical */ }
   });
@@ -465,30 +404,59 @@ export function registerOpenClawPlugin(
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
 
-      // Accumulate token usage
+      let state = sessionState.get(sessionId) ?? null;
+      state = ensureTurn(state, sessionId);
+
       if (e.usage) {
-        const turn = getOrStartTurn(sessionId, 'openclaw', process.cwd());
-        turn.usage.input += (e.usage['input'] as number) || 0;
-        turn.usage.output += (e.usage['output'] as number) || 0;
-        turn.usage.cacheRead += (e.usage['cacheRead'] as number) || 0;
-        turn.usage.cacheWrite += (e.usage['cacheWrite'] as number) || 0;
+        state = accumulateGenAiUsage(state, {
+          input: e.usage['input'] as number,
+          output: e.usage['output'] as number,
+          cacheRead: e.usage['cacheRead'] as number,
+          cacheWrite: e.usage['cacheWrite'] as number,
+        });
       }
 
       if (tracerProvider && e.assistantTexts?.length) {
-        const turn = activeTurns.get(sessionId);
-        if (turn) turn.span.setAttribute('nio.turn.assistant_reply', redactAndTruncate(e.assistantTexts.join('\n')));
+        state = recordAssistantReply(state, e.assistantTexts.join('\n'));
       }
+
+      sessionState.set(sessionId, state);
     } catch { /* non-critical */ }
   });
 
   // agent_end → end-turn span flush
   // session_start: hard session boundary. Reset turn counters so a
   // fresh session doesn't inherit numbering from a previous one.
+  // Flush an active session: compute cache_hit_rate, defensively close
+  // any leftover pending tool/task spans, emit the turn root span, and
+  // drop the per-session state. Idempotent: no-op if no state exists.
+  async function flushSessionTurn(sessionId: string): Promise<void> {
+    if (!tracerProvider) return;
+    let state = sessionState.get(sessionId);
+    if (!state) return;
+
+    state = recordCacheHitRate(state);
+
+    for (const k of Object.keys(state.pending_spans)) {
+      const r = await recordPostToolUse(tracerProvider, state, k, 'openclaw', process.cwd(), {}, null);
+      state = r.state;
+    }
+    for (const k of Object.keys(state.pending_task_spans ?? {})) {
+      const r = await recordPostTaskToolUse(tracerProvider, state, k, 'openclaw', process.cwd());
+      state = r.state;
+    }
+
+    await endTurn(tracerProvider, state, 'openclaw', process.cwd());
+    sessionState.delete(sessionId);
+    pendingGuardAttrs.forEach((_, k) => { if (k.startsWith(`${sessionId}:`)) pendingGuardAttrs.delete(k); });
+    await tracerProvider.forceFlush();
+  }
+
   api.on('session_start', async (_event: unknown, ctx: unknown) => {
     try {
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
-      turnCounters.delete(sessionId);
+      sessionState.delete(sessionId);
       const entry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),
@@ -517,11 +485,7 @@ export function registerOpenClawPlugin(
         lifecycle_type: 'session_end',
       };
       writeAuditLog(entry, auditOpts);
-      if (tracerProvider && activeTurns.has(sessionId)) {
-        finishTurn(sessionId);
-        await tracerProvider.forceFlush();
-      }
-      turnCounters.delete(sessionId);
+      await flushSessionTurn(sessionId);
     } catch {
       // Non-critical
     }
@@ -539,10 +503,7 @@ export function registerOpenClawPlugin(
         lifecycle_type: 'agent_end',
       };
       writeAuditLog(agentEndEntry, auditOpts);
-      if (tracerProvider) {
-        finishTurn(sessionId);
-        await tracerProvider.forceFlush();
-      }
+      await flushSessionTurn(sessionId);
       if (meterProvider) {
         await recordTurn(meterProvider, 'openclaw');
       }

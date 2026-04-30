@@ -560,42 +560,58 @@ class ExternalAnalyser {
 
 ## Collector: Telemetry Pipeline
 
-Captures agent activity as **OpenTelemetry** metrics and traces. Runs independently from the guard — never influences allow/deny decisions.
+Captures agent activity as **OpenTelemetry** metrics, traces, and logs. Runs independently from the guard — never influences allow/deny decisions.
+
+For the full per-signal schema (every metric instrument, every span attribute, every audit entry field) see [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md). The sections below cover architecture, source of truth, and lifecycle.
 
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Claude Code (cross-process)                                         │
+│ Claude Code (cross-process; spawn-per-hook)                         │
 │                                                                     │
 │   collector-hook.ts (async, runs per hook event)                    │
-│     ├─ MeterProvider  → OTLP metrics export                        │
-│     └─ TracerProvider → OTLP traces export                         │
-│         └─ State file (collector-state.json) for cross-process      │
-│            span correlation (PreToolUse ↔ PostToolUse)              │
+│     └─ dispatchCollectorEvent → traces-collector pure functions     │
+│        + state via traces-state-store.json (cross-process bridge)   │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
-│     └─ MeterProvider  → guard decision + risk score metrics         │
+│     └─ MeterProvider → guard decision + risk score metrics          │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│ OpenClaw (in-process)                                               │
+│ Hermes (cross-process; spawn-per-shell-hook)                        │
+│                                                                     │
+│   hook-cli.ts (single binary handling all 7 lifecycle events)       │
+│     ├─ HERMES_COLLECTOR_EVENTS map: snake_case → canonical          │
+│     │   (post_tool_call→PostToolUse, pre_llm_call→UserPromptSubmit, │
+│     │    post_llm_call→Stop, on_session_start→SessionStart, …)      │
+│     ├─ pre_tool_call: guard pipeline + collector dispatch combined  │
+│     └─ everything else: dispatchCollectorEvent → same code path     │
+│        as Claude Code (traces-collector + traces-state-store)       │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ OpenClaw (in-process daemon plugin)                                 │
 │                                                                     │
 │   openclaw-plugin.ts                                                │
-│     ├─ MeterProvider  → all metrics (tool use + turn + decision)    │
-│     └─ TracerProvider → all traces (in-memory span tracking)        │
+│     ├─ MeterProvider → all metrics (tool use + turn + decision)     │
+│     └─ TracerProvider → all traces via traces-collector pure        │
+│        functions (same as Claude Code / Hermes), with per-session   │
+│        Map<sessionId, CollectorState> held in memory.               │
 │         └─ No state file needed — same process across events        │
 └─────────────────────────────────────────────────────────────────────┘
 ```
+
+All three platforms feed the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for CC / Hermes, memory for OpenClaw).
 
 ### Metrics
 
 | Metric | Type | Labels |
 |--------|------|--------|
-| `nio.tool_use.count` | Counter | `tool_name`, `event`, `platform` |
-| `nio.turn.count` | Counter | `platform` |
-| `nio.decision.count` | Counter | `decision`, `risk_level`, `tool_name`, `platform` |
-| `nio.risk.score` | Histogram | `tool_name`, `platform` |
+| `nio.tool_use.count` | Counter | `gen_ai.tool.name`, `nio.event`, `nio.platform` |
+| `nio.turn.count` | Counter | `nio.platform` |
+| `nio.decision.count` | Counter | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` |
+| `nio.risk.score` | Histogram | `gen_ai.tool.name`, `nio.platform` |
 
 - `decision.count` — recorded by guard-hook (Claude Code) / openclaw-plugin after each `evaluateHook()` call
 - `risk.score` — histogram of 0–1 risk scores, enables avg/p50/p99 queries
@@ -603,54 +619,81 @@ Captures agent activity as **OpenTelemetry** metrics and traces. Runs independen
 
 ### Traces
 
-One trace per conversation turn, with child spans per tool call / task:
+One trace per conversation turn, with child spans per tool call / task. Span
+names and attributes follow the OTel [GenAI semantic
+conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where
+applicable; Nio-specific extensions use the `nio.*` prefix.
 
 ```
-Trace: turn:<N>  (root span, UserPromptSubmit → Stop)
-  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
-  ├─ Span: tool:<name>     (PreToolUse → PostToolUse)
-  └─ Span: task:execute    (TaskCreated → TaskCompleted)
+Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
+  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
+  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
+  └─ Span: task:execute             (TaskCreated → TaskCompleted)
 ```
 
-**Turn span attributes:**
+**Turn span (`invoke_agent UserPromptSubmit`) attributes:**
 
 | Attribute | Source |
 |-----------|--------|
-| `nio.session_id` | Hook stdin `session_id` |
+| `gen_ai.operation.name` | Constant: `invoke_agent` |
+| `gen_ai.provider.name` | Constant: `nio` |
+| `gen_ai.conversation.id` | Hook stdin `session_id` |
+| `gen_ai.agent.name` | Same value as `nio.platform` (acts as the agent identifier) |
+| `session.id` | Hook stdin `session_id` (mirror of `gen_ai.conversation.id` for OTel base-spec consumers) |
+| `gen_ai.usage.input_tokens` | Sum of API call input tokens for this turn |
+| `gen_ai.usage.output_tokens` | Sum of API call output tokens for this turn |
+| `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
+| `gen_ai.usage.cache_read.input_tokens` | Tokens read from prompt cache |
 | `nio.turn_number` | Auto-incrementing per session |
 | `nio.platform` | `claude-code`, `openclaw`, or `hermes` |
+| `nio.cwd` | Working directory when the turn started |
 | `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
-| `nio.turn.input_tokens` | Sum of API call input tokens for this turn |
-| `nio.turn.output_tokens` | Sum of API call output tokens for this turn |
-| `nio.turn.cache_creation_input_tokens` | Tokens written to prompt cache |
-| `nio.turn.cache_read_input_tokens` | Tokens read from prompt cache |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
-- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start
-- **OpenClaw**: `llm_output` event passes `usage` directly in event payload, accumulated in-memory across calls
+- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
+- **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
+- **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
 
-**Tool span attributes:** `tool_name`, `tool_summary`, `tool.input`, `tool.output`, `tool.error`, `tool.call_id`
+**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
 
-**Task span attributes:** `task_id`, `task_summary`
+**Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 
-### Cross-Process State (Claude Code only)
+### Trace state and span lifecycle
 
-Claude Code hooks run as separate processes per event. To correlate spans:
+All three platforms route trace span construction through the same pure
+functions in [src/scripts/lib/traces-collector.ts](../src/scripts/lib/traces-collector.ts)
+(`ensureTurn` / `recordPreToolUse` / `recordPostToolUse` /
+`recordPreTaskToolUse` / `recordPostTaskToolUse` / `setTurnAttributes` /
+`endTurn`). Span names and attribute schema are therefore identical
+across platforms; what differs is only **where the per-session
+`CollectorState` lives**:
 
-1. `PreToolUse` → writes span start time + span ID to `collector-state.json`
-2. `PostToolUse` → reads pending span, emits with correct start/end time
-3. `Stop` → emits turn root span, clears state
+- **Claude Code / Hermes (cross-process)** — each hook fires in a fresh
+  Node process. State is bridged via the JSON file managed by
+  [traces-state-store.ts](../src/scripts/lib/traces-state-store.ts):
+  1. `PreToolUse` → writes `{start_ms, span_id}` for the pending tool
+     into `traces-state-store.json`
+  2. `PostToolUse` → reads pending entry, calls `recordPostToolUse`
+     which emits the span retroactively with the original start time
+  3. `Stop` / `SubagentStop` → `endTurn` emits the turn root span
+     (whose span ID was pre-derived as `traceId.slice(0, 16)` so child
+     spans could parent to it before it existed)
+- **OpenClaw (in-process daemon)** — state lives in a per-session
+  in-memory `Map<sessionId, CollectorState>` inside
+  [openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). No on-disk
+  bridging; otherwise identical lifecycle (the same pure-function calls
+  are used at the same lifecycle points).
 
-State file location: derived from `collector.log` config path or `~/.nio/`.
+State file location (CC / Hermes only): derived from
+`collector.logs.path` (sits in the same directory as `audit.jsonl`);
+falls back to `${NIO_HOME ?? ~/.nio}/`.
 
-### Local JSONL Log
+### Local JSONL backup
 
-Besides OTEL export, every hook event is appended to a local JSONL file (`collector.log` config):
+The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-```jsonl
-{"timestamp":"...","platform":"claude-code","event":"PreToolUse","tool_name":"Bash","session_id":"...","tool_summary":"npm test"}
-```
+Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for CC / Hermes; not user-facing observability data.
 
 ---
 
@@ -878,8 +921,9 @@ Hermes lifecycle event
   │         │     subagent_stop    → SubagentStop
   │         ├─► hermesToCollectorInput lifts extra.tool_call_id /
   │         │   user_message / result into the canonical shape
-  │         ├─► dispatchCollectorEvent → metrics.jsonl + OTLP export
-  │         ├─► forceFlush → /v1/metrics, /v1/traces
+  │         ├─► dispatchCollectorEvent → audit.jsonl (writeAuditLog)
+  │         │                          + OTLP export (logs/traces/metrics)
+  │         ├─► forceFlush → /v1/metrics, /v1/traces, /v1/logs
   │         └─► stdout: {} (collector never blocks)
   │
   └─► Hermes's _parse_response accepts Claude-Code style
