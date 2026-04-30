@@ -52,7 +52,7 @@ Schema declared in [`METRICS_SCHEMA`](../src/scripts/lib/metrics-collector.ts) a
 - `event` ∈ `PreToolUse` | `PostToolUse` | `TaskCreated` | `TaskCompleted`
 - `decision` ∈ `allow` | `deny` | `ask`
 - `risk_level` ∈ `low` | `medium` | `high` | `critical`
-- `tool_name` — host-platform tool name (e.g. `Bash`, `Write`, `WebFetch` for CC; OpenClaw / Hermes use their own tool names; `Task` for task counters)
+- `tool_name` — host-platform tool name. Claude Code reports the canonical hook-payload tool name (`Bash`, `Write`, `WebFetch`, etc.). One quirk: the user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent`. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
 
 Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.endpoint` is empty, metrics drop on the floor (the meter provider returns `null`).
 
