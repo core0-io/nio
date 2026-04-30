@@ -1,10 +1,10 @@
-# MCP Tool-Call Capture
+# MCP Tool Routing
 
-How Nio detects MCP tool calls — direct and indirect — and reroutes them
-through the existing `available_tools.mcp` / `blocked_tools.mcp`
-allowlist at Phase 0.
+How Nio routes MCP tool calls — direct and indirect — through the
+existing `available_tools.mcp` / `blocked_tools.mcp` allowlist at
+Phase 0.
 
-This document is the canonical reference for the capture model. For
+This document is the canonical reference for the routing model. For
 the broader pipeline see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ---

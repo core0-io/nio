@@ -372,6 +372,21 @@ body.no-grid::before { display: none; }
   margin: 24px 0 8px;
   font-weight: 600;
 }
+
+/* ── heading anchors (rendered by shared.js wireAnchors) ── */
+.doc h2, .doc h3 { position: relative; }
+.doc h2 .anchor, .doc h3 .anchor {
+  margin-left: 8px;
+  color: var(--fg-3);
+  text-decoration: none;
+  font-weight: normal;
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease;
+}
+.doc h2:hover .anchor, .doc h3:hover .anchor,
+.doc h2 .anchor:focus, .doc h3 .anchor:focus { opacity: 1; }
+.doc h2 .anchor:hover, .doc h3 .anchor:hover { color: var(--fg-0); }
+
 .doc p { margin: 0 0 14px; }
 .doc a {
   color: var(--sev-2);

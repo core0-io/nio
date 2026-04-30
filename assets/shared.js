@@ -28,13 +28,11 @@
       { label: 'Metrics', path: '/docs/collector-signals-metrics.html' },
       { label: 'Logs', path: '/docs/collector-signals-logs.html' },
     ]},
-    { id: 'mcp', title: 'MCP', openByDefault: false, items: [
-      { label: 'MCP Detection', path: '/docs/mcp-detection.html' },
-    ]},
     { id: 'pipeline', title: 'Pipeline', openByDefault: false, items: [
       { label: 'Overview', path: '/docs/phases/' },
       { label: 'Scoring', path: '/docs/phases/scoring.html' },
       { label: 'Phase 0 — Tool Gate', path: '/docs/phases/phase-0-tool-gate.html' },
+      { label: 'MCP Tool Routing', path: '/docs/mcp-detection.html' },
       { label: 'Phase 1 — Allowlist', path: '/docs/phases/phase-1-allowlist.html' },
       { label: 'Phase 2 — Pattern', path: '/docs/phases/phase-2-pattern.html' },
       { label: 'Phase 3 — Static', path: '/docs/phases/phase-3-static.html' },
@@ -178,6 +176,27 @@
     });
   }
 
+  function wireAnchors() {
+    const headings = document.querySelectorAll('main.main .doc h2, main.main .doc h3');
+    for (const h of headings) {
+      if (!h.id) {
+        h.id = (h.textContent || '')
+          .trim()
+          .toLowerCase()
+          .replace(/[^\w\s-]/g, '')
+          .replace(/\s+/g, '-')
+          .slice(0, 64);
+      }
+      if (!h.id) continue;
+      const a = document.createElement('a');
+      a.className = 'anchor';
+      a.href = `#${h.id}`;
+      a.setAttribute('aria-label', `Link to ${h.id}`);
+      a.textContent = '#';
+      h.appendChild(a);
+    }
+  }
+
   document.addEventListener('DOMContentLoaded', () => {
     const sidebar = document.querySelector('aside[data-sidebar]');
     if (sidebar) {
@@ -185,6 +204,7 @@
       render(sidebar, base);
       wireMobile(sidebar);
     }
+    wireAnchors();
     wireBackToTop();
   });
 })();

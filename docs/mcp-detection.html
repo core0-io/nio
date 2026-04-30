@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
-<title>MCP Tool-Call Capture — Nio</title>
+<title>MCP Tool Routing — Nio</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="How Nio detects MCP tool calls — direct and indirect — and reroutes them through the available_tools.mcp / blocked_tools.mcp allowlist at Phase 0.">
-<meta name="keywords" content="nio, nio-agent-guard, mcp security, mcp allowlist, mcp tool calls, mcporter, indirect mcp invocation, claude code, openclaw, hermes, mcp endpoint registry">
+<meta name="description" content="How Nio routes MCP tool calls — direct and indirect — through the available_tools.mcp / blocked_tools.mcp allowlist at Phase 0.">
+<meta name="keywords" content="nio, nio-agent-guard, mcp security, mcp allowlist, mcp tool calls, mcp routing, mcporter, indirect mcp invocation, claude code, openclaw, hermes, mcp endpoint registry">
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
@@ -40,9 +40,9 @@
     <main class="main">
 
       <div class="doc-hero">
-        <div class="eyebrow">MCP</div>
-        <h1><em>MCP Tool-Call Capture</em> — direct and indirect, one allowlist</h1>
-        <p class="lead">An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 covers both paths through a single <code>available_tools.mcp</code> allowlist.</p>
+        <div class="eyebrow">Pipeline · Phase 0</div>
+        <h1><em>MCP Tool Routing</em> — direct and indirect, one allowlist</h1>
+        <p class="lead">An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <code>available_tools.mcp</code> allowlist.</p>
       </div>
 
       <div class="doc">
@@ -207,13 +207,13 @@
 
       <div class="page-nav">
         <a href="phases/phase-0-tool-gate.html">
-          <span class="dir">← Related</span>
-          <span class="label">Phase 0 — Tool Gate</span>
+          <span class="dir">← Phase 0</span>
+          <span class="label">Tool Gate</span>
         </a>
         <div class="spacer"></div>
-        <a href="configuration.html" class="next">
-          <span class="dir">Configure →</span>
-          <span class="label">Config reference</span>
+        <a href="phases/phase-1-allowlist.html" class="next">
+          <span class="dir">Phase 1 →</span>
+          <span class="label">Allowlist</span>
         </a>
       </div>
 
