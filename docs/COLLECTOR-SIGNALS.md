@@ -41,18 +41,20 @@ Schema declared in [`METRICS_SCHEMA`](../src/scripts/lib/metrics-collector.ts) a
 
 | Instrument | Type | Unit | Labels | When recorded |
 |------------|------|------|--------|---------------|
-| `nio.tool_use.count` | Counter | `{invocations}` | `tool_name`, `event`, `platform` | Each `PreToolUse` and `PostToolUse` (and `TaskCreated`/`TaskCompleted` if fired) |
-| `nio.turn.count` | Counter | `{turns}` | `platform` | Each `Stop` / `SubagentStop` / `SessionEnd` (turn boundary) |
-| `nio.decision.count` | Counter | `{decisions}` | `decision`, `risk_level`, `tool_name`, `platform` | Each guard decision (allow / deny / ask) |
-| `nio.risk.score` | Histogram | `{score}` | `tool_name`, `platform` | Each guard evaluation; 0–1 distribution for avg/p50/p99 |
+| `nio.tool_use.count` | Counter | `{invocations}` | `gen_ai.tool.name`, `nio.event`, `nio.platform` | Each `PreToolUse` and `PostToolUse` (and `TaskCreated`/`TaskCompleted` if fired) |
+| `nio.turn.count` | Counter | `{turns}` | `nio.platform` | Each `Stop` / `SubagentStop` / `SessionEnd` (turn boundary) |
+| `nio.decision.count` | Counter | `{decisions}` | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` | Each guard decision (allow / deny / ask) |
+| `nio.risk.score` | Histogram | `{score}` | `gen_ai.tool.name`, `nio.platform` | Each guard evaluation; 0–1 distribution for avg/p50/p99 |
+
+Label keys are aligned with the matching trace span attributes (`gen_ai.tool.name` matches the tool span; `nio.guard.*` matches the OpenClaw tool span guard attrs via `nioGuardAttributes`). Cross-signal queries (metrics ⇌ traces ⇌ logs) use the same key names.
 
 **Label values:**
 
-- `platform` ∈ `claude-code` | `hermes` | `openclaw`
-- `event` ∈ `PreToolUse` | `PostToolUse` | `TaskCreated` | `TaskCompleted`
-- `decision` ∈ `allow` | `deny` | `ask`
-- `risk_level` ∈ `low` | `medium` | `high` | `critical`
-- `tool_name` — host-platform tool name. Claude Code reports the canonical hook-payload tool name (`Bash`, `Write`, `WebFetch`, etc.). One quirk: the user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent`. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
+- `nio.platform` ∈ `claude-code` | `hermes` | `openclaw`
+- `nio.event` ∈ `PreToolUse` | `PostToolUse` | `TaskCreated` | `TaskCompleted`
+- `nio.guard.decision` ∈ `allow` | `deny` | `ask`
+- `nio.guard.risk_level` ∈ `low` | `medium` | `high` | `critical`
+- `gen_ai.tool.name` — host-platform tool name. Claude Code reports the canonical hook-payload tool name (`Bash`, `Write`, `WebFetch`, etc.). One quirk: the user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent`. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
 
 Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.endpoint` is empty, metrics drop on the floor (the meter provider returns `null`).
 
@@ -234,16 +236,37 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 
 ### OTEL LogRecord projection
 
-[`emitAuditLog`](../src/scripts/lib/logs-collector.ts) maps the entry above onto an OTEL LogRecord:
+[`emitAuditLog`](../src/scripts/lib/logs-collector.ts) maps the entry above onto an OTEL LogRecord. The flat attribute set is built by [`auditEntryAttributes`](../src/scripts/lib/logs-collector.ts) and aligns with the trace span schema where concepts overlap — same key names work across logs and traces in dashboards.
 
 - `body` = JSON-stringified entry (full content)
 - `severityNumber` / `severityText` = derived from `risk_level` (`low`→INFO, `medium`→WARN, `high`→ERROR, `critical`→FATAL); INFO when no `risk_level`
-- Attributes (extracted for indexing — note these still use legacy `nio.*` keys, not GenAI; alignment with trace schema is a separate follow-up):
-  - `nio.event`, `nio.platform`, `nio.session_id`
-  - `nio.decision`, `nio.risk_level`, `nio.max_finding_severity`, `nio.risk_score`, `nio.risk_tags` (comma-joined)
-  - `nio.tool_name`, `nio.action_type`, `nio.event_type`
-  - `nio.phase_stopped`, `nio.explanation`
-  - Per-phase: `nio.phases.{name}.score`, `.finding_count`, `.duration_ms`
+- Attributes (extracted for indexing). Cross-signal alignment column shows where the same key appears in the traces signal:
+
+| Attribute | Source field | Cross-signal alignment |
+| --------- | ------------ | ---------------------- |
+| `gen_ai.tool.name` | `tool_name` | matches tool-span attribute |
+| `gen_ai.tool.call.id` | `tool_use_id` | matches tool-span attribute |
+| `gen_ai.conversation.id` | `session_id` | matches turn-span attribute |
+| `session.id` | `session_id` | matches turn-span attribute |
+| `nio.guard.decision` | `decision` | matches OpenClaw tool-span guard attr (`nioGuardAttributes`) |
+| `nio.guard.risk_level` | `risk_level` | same |
+| `nio.guard.risk_score` | `risk_score` | same |
+| `nio.guard.risk_tags` | `risk_tags` (comma-joined) | same |
+| `nio.event` | `event` | logs-only — discriminator for hook event vs guard / lifecycle / scan |
+| `nio.platform` | `platform` | matches turn-span and tool-span attribute |
+| `nio.event_type` | `event_type` | logs-only — `pre` / `post` for guard entries |
+| `nio.action_type` | `action_type` | logs-only — `exec_command` / `write_file` / `network_request` / `read_file` |
+| `nio.max_finding_severity` | `max_finding_severity` | logs-only |
+| `nio.phase_stopped` | `phase_stopped` | logs-only |
+| `nio.explanation` | `explanation` | logs-only |
+| `nio.tool_summary` | `tool_summary` | matches tool-span attribute |
+| `nio.task_id` | `task_id` | matches task-span attribute |
+| `nio.task_summary` | `task_summary` | matches task-span attribute |
+| `nio.cwd` | `cwd` | matches tool-span / turn-span attribute |
+| `nio.transcript_path` | `transcript_path` | logs-only |
+| `nio.phases.{name}.score` | `phases[name].score` | logs-only — per-phase Phase 0–6 telemetry |
+| `nio.phases.{name}.finding_count` | `phases[name].finding_count` | same |
+| `nio.phases.{name}.duration_ms` | `phases[name].duration_ms` | same |
 
 Local JSONL path: `collector.logs.path` (default `~/.nio/audit.jsonl`). Rotation kicks in at `collector.logs.max_size_mb` (default 100 MB) — the live file is renamed to `<path>.1`.
 
@@ -282,7 +305,7 @@ Per-signal gating: when `collector.endpoint` is empty, the corresponding provide
 | Trace span attributes (all `gen_ai.*` and `nio.*` keys) | [`src/scripts/lib/traces-collector.ts`](../src/scripts/lib/traces-collector.ts) | All span attribute keys via builder helpers (`genAi*Attributes`, `nio*Attributes`, `record*` operations) |
 | Trace state shape | [`src/scripts/lib/traces-state-store.ts`](../src/scripts/lib/traces-state-store.ts) | `CollectorState`, `PendingToolSpan`, `PendingTaskSpan` |
 | Audit log entry types | [`src/adapters/audit-types.ts`](../src/adapters/audit-types.ts) | All entry shapes (guard / scan / lifecycle / config_error / hook) |
-| OTEL log attribute projection | [`src/scripts/lib/logs-collector.ts`](../src/scripts/lib/logs-collector.ts) (`emitAuditLog`) | Legacy `nio.*` flat attribute keys for log indexing |
+| OTEL log attribute projection | [`src/scripts/lib/logs-collector.ts`](../src/scripts/lib/logs-collector.ts) (`auditEntryAttributes`) | Flat attribute keys for log indexing — shared GenAI / `nio.*` keys with the trace signal |
 | Collector config schema | [`src/adapters/config-schema.ts`](../src/adapters/config-schema.ts) (`CollectorConfigSchema`, `CollectorLogsConfigSchema`) | YAML field validation + defaults |
 
 When schema drifts, update the source file and re-run `pnpm run build` — the helper functions in `traces-collector.ts` are the single point of change for trace attribute keys, so most edits don't ripple beyond one file.
