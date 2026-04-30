@@ -101,6 +101,121 @@ export function genAiToolAttributes(
 }
 
 // ---------------------------------------------------------------------------
+// Tool / turn attribute builders (single source of truth)
+//
+// Every literal `gen_ai.*` / `nio.*` attribute key string lives inside
+// one of these helpers. Consumers (collector-core, openclaw-plugin) call
+// the helpers and never see the keys directly — schema changes happen in
+// one place.
+// ---------------------------------------------------------------------------
+
+/** Tool-call input attrs (PreToolUse). Used by both deferred (CC/Hermes) and eager (OpenClaw) flows. */
+export function genAiToolCallInputAttributes(
+  toolInput: unknown,
+  toolCallId?: string,
+): Record<string, unknown> {
+  return {
+    'gen_ai.tool.call.arguments': redactAndTruncate(toolInput),
+    ...(toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {}),
+  };
+}
+
+/** Tool-call output attrs (PostToolUse). All fields optional; missing fields produce no key. */
+export function genAiToolCallOutputAttributes(opts: {
+  result?: unknown;
+  error?: string | null;
+  durationMs?: number;
+}): Record<string, unknown> {
+  return {
+    ...(opts.result !== undefined ? { 'gen_ai.tool.call.result': redactAndTruncate(opts.result) } : {}),
+    ...(opts.error ? { 'nio.tool.error': redactAndTruncate(opts.error) } : {}),
+    ...(typeof opts.durationMs === 'number' ? { 'nio.tool.duration_ms': opts.durationMs } : {}),
+  };
+}
+
+/** Nio guard-decision attrs (vendor extension). Decision in {allow, deny, confirm_allowed, confirm_denied}. */
+export function nioGuardAttributes(
+  decision: string,
+  riskLevel: string,
+  riskScore: number,
+  riskTags?: string[],
+): Record<string, unknown> {
+  return {
+    'nio.guard.decision': decision,
+    'nio.guard.risk_level': riskLevel,
+    'nio.guard.risk_score': riskScore,
+    ...(riskTags?.length ? { 'nio.guard.risk_tags': riskTags.join(',') } : {}),
+  };
+}
+
+/** Token usage attrs (turn span). Absolute values; missing fields default to 0. */
+export function genAiUsageAttributes(usage: {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+}): Record<string, unknown> {
+  return {
+    'gen_ai.usage.input_tokens': usage.input ?? 0,
+    'gen_ai.usage.output_tokens': usage.output ?? 0,
+    'gen_ai.usage.cache_creation.input_tokens': usage.cacheWrite ?? 0,
+    'gen_ai.usage.cache_read.input_tokens': usage.cacheRead ?? 0,
+  };
+}
+
+/** OpenClaw run-id extension. Single-key wrapper so the literal lives here, not in openclaw-plugin. */
+export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
+  return { 'nio.tool.run_id': runId };
+}
+
+// ---------------------------------------------------------------------------
+// Turn-state operation helpers (state-in / state-out)
+// ---------------------------------------------------------------------------
+
+/** Record user prompt onto turn state (UserPromptSubmit / before_agent_reply). */
+export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
+  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(prompt) });
+}
+
+/** Record assistant reply onto turn state (currently OpenClaw llm_output). */
+export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
+  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(reply) });
+}
+
+/** Add per-event LLM usage delta to state.turn_attributes. */
+export function accumulateGenAiUsage(
+  state: CollectorState,
+  delta: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
+): CollectorState {
+  const a = state.turn_attributes ?? {};
+  return setTurnAttributes(state, {
+    'gen_ai.usage.input_tokens':
+      ((a['gen_ai.usage.input_tokens'] as number) ?? 0) + (delta.input ?? 0),
+    'gen_ai.usage.output_tokens':
+      ((a['gen_ai.usage.output_tokens'] as number) ?? 0) + (delta.output ?? 0),
+    'gen_ai.usage.cache_creation.input_tokens':
+      ((a['gen_ai.usage.cache_creation.input_tokens'] as number) ?? 0) + (delta.cacheWrite ?? 0),
+    'gen_ai.usage.cache_read.input_tokens':
+      ((a['gen_ai.usage.cache_read.input_tokens'] as number) ?? 0) + (delta.cacheRead ?? 0),
+  });
+}
+
+/** Internal: cache hit rate = cache_read / (input + cache_creation + cache_read). */
+function computeCacheHitRate(state: CollectorState): number {
+  const a = state.turn_attributes ?? {};
+  const input = (a['gen_ai.usage.input_tokens'] as number) ?? 0;
+  const cacheRead = (a['gen_ai.usage.cache_read.input_tokens'] as number) ?? 0;
+  const cacheWrite = (a['gen_ai.usage.cache_creation.input_tokens'] as number) ?? 0;
+  const total = input + cacheRead + cacheWrite;
+  return total > 0 ? Math.round((cacheRead / total) * 1000) / 1000 : 0;
+}
+
+/** Compute and write cache hit rate onto turn state (called at endTurn). */
+export function recordCacheHitRate(state: CollectorState): CollectorState {
+  return setTurnAttributes(state, { 'nio.turn.cache_hit_rate': computeCacheHitRate(state) });
+}
+
+// ---------------------------------------------------------------------------
 // Trace ID derivation
 // ---------------------------------------------------------------------------
 
@@ -457,6 +572,22 @@ export async function endTurn(
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
+  // If usage came via a transcript file (CC pattern), accumulate it onto
+  // turn_attributes so the spread below picks it up — same code path as
+  // OpenClaw, which feeds turn_attributes incrementally via llm_output.
+  if (transcriptPath) {
+    const usage = parseTranscriptUsage(transcriptPath, state.turn_start_ms);
+    if (usage) {
+      state = accumulateGenAiUsage(state, {
+        input: usage.input_tokens,
+        output: usage.output_tokens,
+        cacheRead: usage.cache_read_input_tokens,
+        cacheWrite: usage.cache_creation_input_tokens,
+      });
+      state = recordCacheHitRate(state);
+    }
+  }
+
   const endMs = Date.now();
   const traceId = state.turn_trace_id;
 
@@ -484,17 +615,6 @@ export async function endTurn(
     },
     rootCtx,
   );
-  // Attach token usage from transcript
-  if (transcriptPath) {
-    const usage = parseTranscriptUsage(transcriptPath, state.turn_start_ms);
-    if (usage) {
-      span.setAttribute('nio.turn.cache_hit_rate', usage.cache_hit_rate);
-      span.setAttribute('gen_ai.usage.input_tokens', usage.input_tokens);
-      span.setAttribute('gen_ai.usage.output_tokens', usage.output_tokens);
-      span.setAttribute('gen_ai.usage.cache_creation.input_tokens', usage.cache_creation_input_tokens);
-      span.setAttribute('gen_ai.usage.cache_read.input_tokens', usage.cache_read_input_tokens);
-    }
-  }
 
   // Force the turn span's own spanId to match the synthetic parent spanId that
   // child tool/task spans use (traceId.slice(0,16)). This makes the turn span

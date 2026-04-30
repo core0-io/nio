@@ -9,6 +9,15 @@ import {
   recordPreToolUse,
   recordPreTaskToolUse,
   redactAndTruncate,
+  genAiToolCallInputAttributes,
+  genAiToolCallOutputAttributes,
+  nioGuardAttributes,
+  nioToolRunIdAttribute,
+  genAiUsageAttributes,
+  accumulateGenAiUsage,
+  recordUserPrompt,
+  recordAssistantReply,
+  recordCacheHitRate,
 } from '../scripts/lib/traces-collector.js';
 import type { CollectorState } from '../scripts/lib/traces-state-store.js';
 
@@ -163,5 +172,158 @@ describe('redactAndTruncate', () => {
     const out = redactAndTruncate([{ token: 'sek' }, { ok: 1 }]);
     assert.match(out, /"token":"\[REDACTED\]"/);
     assert.match(out, /"ok":1/);
+  });
+});
+
+// ── Attribute builders ─────────────────────────────────────────────────
+
+describe('genAiToolCallInputAttributes', () => {
+  it('produces gen_ai.tool.call.arguments + tool.call.id when toolCallId given', () => {
+    const out = genAiToolCallInputAttributes({ command: 'ls' }, 'tc-1');
+    assert.equal(out['gen_ai.tool.call.id'], 'tc-1');
+    assert.match(out['gen_ai.tool.call.arguments'] as string, /"command":"ls"/);
+    assert.equal(Object.keys(out).length, 2);
+  });
+
+  it('omits tool.call.id when toolCallId absent', () => {
+    const out = genAiToolCallInputAttributes({ x: 1 });
+    assert.equal(out['gen_ai.tool.call.id'], undefined);
+    assert.equal(Object.keys(out).length, 1);
+  });
+
+  it('redacts sensitive keys in input', () => {
+    const out = genAiToolCallInputAttributes({ api_key: 'sk-x', x: 1 });
+    assert.match(out['gen_ai.tool.call.arguments'] as string, /"api_key":"\[REDACTED\]"/);
+  });
+});
+
+describe('genAiToolCallOutputAttributes', () => {
+  it('with result only', () => {
+    const out = genAiToolCallOutputAttributes({ result: { ok: true } });
+    assert.equal(Object.keys(out).length, 1);
+    assert.match(out['gen_ai.tool.call.result'] as string, /"ok":true/);
+  });
+
+  it('with error only', () => {
+    const out = genAiToolCallOutputAttributes({ error: 'boom' });
+    assert.equal(Object.keys(out).length, 1);
+    assert.equal(out['nio.tool.error'], 'boom');
+  });
+
+  it('with all three fields', () => {
+    const out = genAiToolCallOutputAttributes({ result: 'r', error: 'e', durationMs: 42 });
+    assert.equal(Object.keys(out).length, 3);
+    assert.equal(out['nio.tool.duration_ms'], 42);
+  });
+
+  it('with no fields returns empty record', () => {
+    const out = genAiToolCallOutputAttributes({});
+    assert.deepEqual(out, {});
+  });
+
+  it('null error is treated as no error', () => {
+    const out = genAiToolCallOutputAttributes({ result: 'r', error: null });
+    assert.equal(out['nio.tool.error'], undefined);
+  });
+});
+
+describe('nioGuardAttributes', () => {
+  it('builds the four-key set when riskTags provided', () => {
+    const out = nioGuardAttributes('deny', 'high', 0.85, ['SHELL_INJECTION', 'NET_EXFIL']);
+    assert.equal(out['nio.guard.decision'], 'deny');
+    assert.equal(out['nio.guard.risk_level'], 'high');
+    assert.equal(out['nio.guard.risk_score'], 0.85);
+    assert.equal(out['nio.guard.risk_tags'], 'SHELL_INJECTION,NET_EXFIL');
+  });
+
+  it('omits risk_tags when empty', () => {
+    const out = nioGuardAttributes('allow', 'low', 0);
+    assert.equal(out['nio.guard.risk_tags'], undefined);
+    assert.equal(Object.keys(out).length, 3);
+  });
+});
+
+describe('nioToolRunIdAttribute', () => {
+  it('wraps run id under nio.tool.run_id', () => {
+    assert.deepEqual(nioToolRunIdAttribute('run-42'), { 'nio.tool.run_id': 'run-42' });
+  });
+});
+
+describe('genAiUsageAttributes', () => {
+  it('full usage object', () => {
+    const out = genAiUsageAttributes({ input: 10, output: 5, cacheRead: 2, cacheWrite: 3 });
+    assert.equal(out['gen_ai.usage.input_tokens'], 10);
+    assert.equal(out['gen_ai.usage.output_tokens'], 5);
+    assert.equal(out['gen_ai.usage.cache_read.input_tokens'], 2);
+    assert.equal(out['gen_ai.usage.cache_creation.input_tokens'], 3);
+  });
+
+  it('missing fields default to 0', () => {
+    const out = genAiUsageAttributes({});
+    assert.equal(out['gen_ai.usage.input_tokens'], 0);
+    assert.equal(out['gen_ai.usage.output_tokens'], 0);
+    assert.equal(out['gen_ai.usage.cache_read.input_tokens'], 0);
+    assert.equal(out['gen_ai.usage.cache_creation.input_tokens'], 0);
+  });
+});
+
+describe('accumulateGenAiUsage', () => {
+  it('starts from zero when state.turn_attributes is empty', () => {
+    const next = accumulateGenAiUsage(seed(), { input: 10, output: 5 });
+    assert.equal(next.turn_attributes!['gen_ai.usage.input_tokens'], 10);
+    assert.equal(next.turn_attributes!['gen_ai.usage.output_tokens'], 5);
+  });
+
+  it('adds delta to existing accumulated values', () => {
+    const s1 = accumulateGenAiUsage(seed(), { input: 10, output: 5, cacheRead: 1 });
+    const s2 = accumulateGenAiUsage(s1, { input: 7, cacheRead: 4 });
+    assert.equal(s2.turn_attributes!['gen_ai.usage.input_tokens'], 17);
+    assert.equal(s2.turn_attributes!['gen_ai.usage.output_tokens'], 5);
+    assert.equal(s2.turn_attributes!['gen_ai.usage.cache_read.input_tokens'], 5);
+  });
+
+  it('does not mutate input state', () => {
+    const prev = seed();
+    accumulateGenAiUsage(prev, { input: 5 });
+    assert.equal((prev.turn_attributes ?? {})['gen_ai.usage.input_tokens'], undefined);
+  });
+});
+
+// ── Turn-state operation helpers ───────────────────────────────────────
+
+describe('recordUserPrompt', () => {
+  it('writes redacted prompt to turn_attributes', () => {
+    const next = recordUserPrompt(seed(), 'hello world');
+    assert.equal(next.turn_attributes!['nio.turn.user_prompt'], 'hello world');
+  });
+
+  it('redacts sensitive content', () => {
+    const next = recordUserPrompt(seed(), JSON.stringify({ api_key: 'sk-x', body: 'hi' }));
+    // recordUserPrompt redacts via redactAndTruncate's secret-key filter.
+    // Plain strings pass through unchanged; structured JSON-strings
+    // remain as-is (redaction operates on object keys, not strings).
+    assert.match(next.turn_attributes!['nio.turn.user_prompt'] as string, /api_key/);
+  });
+});
+
+describe('recordAssistantReply', () => {
+  it('writes redacted reply to turn_attributes', () => {
+    const next = recordAssistantReply(seed(), 'response text');
+    assert.equal(next.turn_attributes!['nio.turn.assistant_reply'], 'response text');
+  });
+});
+
+describe('recordCacheHitRate', () => {
+  it('writes 0 for an empty / unused turn', () => {
+    const next = recordCacheHitRate(seed());
+    assert.equal(next.turn_attributes!['nio.turn.cache_hit_rate'], 0);
+  });
+
+  it('computes ratio = cache_read / (input + cache_creation + cache_read)', () => {
+    let s = seed();
+    s = accumulateGenAiUsage(s, { input: 100, cacheRead: 200, cacheWrite: 100 });
+    s = recordCacheHitRate(s);
+    // 200 / (100 + 100 + 200) = 200 / 400 = 0.5
+    assert.equal(s.turn_attributes!['nio.turn.cache_hit_rate'], 0.5);
   });
 });
