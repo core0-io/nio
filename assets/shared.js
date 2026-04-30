@@ -22,6 +22,9 @@
     { id: 'configuration', title: 'Configuration', openByDefault: true, items: [
       { label: 'Config reference', path: '/docs/configuration.html' },
     ]},
+    { id: 'observability', title: 'Observability', openByDefault: false, items: [
+      { label: 'Collector Signals', path: '/docs/collector-signals.html' },
+    ]},
     { id: 'mcp', title: 'MCP', openByDefault: false, items: [
       { label: 'MCP Detection', path: '/docs/mcp-detection.html' },
     ]},
