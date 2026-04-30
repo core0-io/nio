@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Traces — Collector Signals — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio's OTEL trace signal — one trace per conversation turn, with child spans per tool call and per subagent dispatch. Span names follow GenAI semantic conventions; full attribute schema for invoke_agent, execute_tool, and task:execute spans.">
+<meta name="keywords" content="nio, otel, opentelemetry, traces, spans, gen_ai, invoke_agent, execute_tool, agent observability, claude code, openclaw, hermes">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: docs/COLLECTOR-SIGNALS.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Telemetry · Traces</div>
+        <h1><em>Traces</em> — one trace per conversation turn</h1>
+        <p class="lead">Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> wherever a spec equivalent exists; Nio-specific extensions use the <code>nio.*</code> prefix. Three span shapes — turn root, tool call, subagent task — covered below with their full attribute schemas.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2 id="hierarchy">Span hierarchy</h2>
+        <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
+  ├─ Span: execute_tool &lt;name&gt;   (PreToolUse → PostToolUse)
+  ├─ Span: execute_tool &lt;name&gt;   (...)
+  └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)</code></pre>
+
+        <h2 id="span-turn">Span: <code>invoke_agent UserPromptSubmit</code> <span style="color: var(--fg-3); font-weight: 400;">— turn root</span></h2>
+        <p>One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>invoke_agent</code></td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.provider.name</code></td><td>Constant <code>nio</code></td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.conversation.id</code></td><td>Host session ID</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.agent.name</code></td><td>Platform name acting as agent identifier</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>session.id</code></td><td>Mirror of <code>gen_ai.conversation.id</code> for OTel base-spec consumers</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.usage.input_tokens</code></td><td>Input tokens consumed across the turn</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
+            <tr><td><code>gen_ai.usage.output_tokens</code></td><td>Output tokens generated across the turn</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
+            <tr><td><code>gen_ai.usage.cache_creation.input_tokens</code></td><td>Cache-creation input tokens</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
+            <tr><td><code>gen_ai.usage.cache_read.input_tokens</code></td><td>Cache-read input tokens</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>Per-session counter, starts at 1</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.cwd</code></td><td>Working dir at turn start</td><td>turn close (when set)</td><td>all</td></tr>
+            <tr><td><code>nio.turn.user_prompt</code></td><td>First user message of the turn, redacted, ≤2 KB</td><td>UserPromptSubmit</td><td>all</td></tr>
+            <tr><td><code>nio.turn.assistant_reply</code></td><td>First assistant reply of the turn, redacted, ≤2 KB</td><td><code>llm_output</code> (OpenClaw-native)</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.turn.cache_hit_rate</code></td><td><code>cache_read / (input + cache_creation + cache_read)</code>, 0–1</td><td>turn close</td><td>all</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads the transcript JSONL and sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as CC if the transcript path is included in the <code>post_llm_call</code> payload; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries usage directly; accumulated incrementally.</p>
+
+        <h2 id="span-tool">Span: <code>execute_tool &lt;name&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— tool span</span></h2>
+        <p>One per tool invocation. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on CC/Hermes since the pre-side process is gone).</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>execute_tool</code></td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name (<code>Bash</code>, <code>WebFetch</code>, …)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.type</code></td><td>Tool type, when known</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on CC, <code>toolCallId</code> on OpenClaw)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.tool.error</code></td><td>Error message when the tool failed</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.tool.duration_ms</code></td><td>Wall-clock tool execution time (ms)</td><td>PostToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.tool.run_id</code></td><td>OpenClaw-internal run identifier</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>PostToolUse (when set)</td><td>all</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>confirm_allowed</code> / <code>confirm_denied</code></td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code> / <code>unknown</code></td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise. <strong><code>nio.guard.*</code> on Claude Code?</strong> Not yet — CC's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.</p>
+
+        <h2 id="span-task">Span: <code>task:execute</code> <span style="color: var(--fg-3); font-weight: 400;">— task span</span></h2>
+        <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (CC, Teammates / cloud-agent flows) or <code>subagent_spawning</code> (OpenClaw); closes at the matching completion event.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.task_id</code></td><td>Task id from the dispatch event</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.task_summary</code></td><td>Derived from task input (CC: <code>task_input.prompt</code>; OpenClaw: empty)</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>openclaw</code></td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.session_id</code></td><td>Host session id</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.cwd</code></td><td>Working dir at task start</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+          </tbody>
+        </table>
+        <div class="callout warn">
+          <div class="title">Known gap · not yet GenAI-aligned</div>
+          <p>Span name is the literal <code>task:execute</code> (not <code>execute_tool task</code>); session id uses <code>nio.session_id</code> instead of <code>gen_ai.conversation.id</code> + <code>session.id</code>. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until CC and OpenClaw can migrate in lockstep.</p>
+        </div>
+
+        <h2 id="state">Trace state lifecycle</h2>
+        <p>Claude Code and Hermes spawn a fresh node process per hook event, so a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B can't share an OTEL <code>Span</code> object. Both platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw runs as a single daemon, so the equivalent state lives in an in-memory <code>Map&lt;sessionId, State&gt;</code> instead. All three platforms route through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="collector-signals.html">
+          <span class="dir">← Overview</span>
+          <span class="label">Collector Signals</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="collector-signals-metrics.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Metrics</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

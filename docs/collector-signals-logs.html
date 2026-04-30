@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Logs — Collector Signals — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio's OTEL logs signal — audit-log entries dual-written to OTLP and a local JSONL file. Five entry types (guard, session_scan, lifecycle, config_error, hook event) with full per-event field schemas and the OTEL LogRecord projection.">
+<meta name="keywords" content="nio, otel, opentelemetry, logs, audit log, log records, gen_ai, agent observability, claude code, openclaw, hermes">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: docs/COLLECTOR-SIGNALS.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Telemetry · Logs</div>
+        <h1><em>Logs</em> — audit-log entries, dual-written</h1>
+        <p class="lead">Audit entries are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2 id="entry-types">Entry types</h2>
+        <p>Discriminated by the <code>event</code> field. Five shapes — four named entry types plus the catch-all "hook event" record.</p>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "guard"</span>
+            <span>Guard decision per PreToolUse / PostToolUse</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td><code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>cwd</code></td><td>string?</td><td>working dir</td></tr>
+              <tr><td><code>tool_name</code></td><td>string</td><td>host tool name</td></tr>
+              <tr><td><code>action_type</code></td><td>string?</td><td><code>exec_command</code> / <code>write_file</code> / <code>network_request</code> / <code>read_file</code></td></tr>
+              <tr><td><code>tool_input_summary</code></td><td>string</td><td>redacted ≤200-char summary of tool input</td></tr>
+              <tr><td><code>decision</code></td><td>string</td><td><code>allow</code> / <code>deny</code> / <code>ask</code></td></tr>
+              <tr><td><code>risk_level</code></td><td>string</td><td><code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td></tr>
+              <tr><td><code>max_finding_severity</code></td><td>string</td><td>highest finding severity</td></tr>
+              <tr><td><code>risk_score</code></td><td>number</td><td>0–1 final score</td></tr>
+              <tr><td><code>risk_tags</code></td><td>string[]</td><td>rule IDs hit (deduped)</td></tr>
+              <tr><td><code>phase_stopped</code></td><td>number | null</td><td>which Phase 0–6 produced the decision</td></tr>
+              <tr><td><code>scores</code></td><td>Record&lt;string, number&gt;</td><td>per-phase score (<code>runtime</code>, <code>static</code>, <code>behavioural</code>, <code>llm</code>, <code>external</code>, <code>final</code>)</td></tr>
+              <tr><td><code>phases</code></td><td>AuditPhaseMap?</td><td>per-phase <code>{score, finding_count, duration_ms}</code></td></tr>
+              <tr><td><code>top_findings</code></td><td>AuditFindingSummary[]</td><td>up to 5: <code>{rule_id, severity, category, title, confidence}</code></td></tr>
+              <tr><td><code>explanation</code></td><td>string?</td><td>human-readable reason</td></tr>
+              <tr><td><code>initiating_skill</code></td><td>string?</td><td>which skill scope the action originated from</td></tr>
+              <tr><td><code>event_type</code></td><td>"pre" | "post"?</td><td>which hook side fired</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "session_scan"</span>
+            <span>Skill scan (on-demand or session-start)</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>skill_name</code></td><td>string</td><td>scanned skill / dir</td></tr>
+              <tr><td><code>risk_level</code></td><td>string</td><td>aggregated severity</td></tr>
+              <tr><td><code>risk_tags</code></td><td>string[]</td><td>rule IDs hit</td></tr>
+              <tr><td><code>finding_count</code></td><td>number?</td><td>total findings</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "lifecycle"</span>
+            <span>Subagent / agent / session lifecycle</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>lifecycle_type</code></td><td>string</td><td><code>subagent_spawning</code> / <code>subagent_ended</code> / <code>agent_end</code> / <code>session_start</code> / <code>session_end</code></td></tr>
+              <tr><td><code>details</code></td><td>Record&lt;string, unknown&gt;?</td><td>platform-specific (e.g. OpenClaw: <code>{subagent_id, run_id}</code>)</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: "config_error"</span>
+            <span>Config load failure</span>
+          </div>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>config_path</code></td><td>string</td><td>path that failed to load</td></tr>
+              <tr><td><code>error_message</code></td><td>string</td><td>parser / IO error</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <span class="tag">event: &lt;hook event&gt;</span>
+            <span>Collector hook record (one entry per dispatched hook event)</span>
+          </div>
+          <p style="margin: 4px 0 10px; font-size: 13px; color: var(--fg-2);">Discriminator is the canonical hook event name itself: <code>UserPromptSubmit</code> · <code>PreToolUse</code> · <code>PostToolUse</code> · <code>TaskCreated</code> · <code>TaskCompleted</code> · <code>Stop</code> · <code>SubagentStop</code> · <code>SessionStart</code> · <code>SessionEnd</code>.</p>
+          <table>
+            <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
+            <tbody>
+              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
+              <tr><td><code>cwd</code></td><td>string | null</td><td>working dir</td></tr>
+              <tr><td><code>transcript_path</code></td><td>string?</td><td>CC-only — path to session transcript JSONL</td></tr>
+              <tr><td><code>tool_name</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>tool_use_id</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>tool_summary</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
+              <tr><td><code>task_id</code></td><td>string?</td><td>for TaskCreated / TaskCompleted</td></tr>
+              <tr><td><code>task_summary</code></td><td>string?</td><td>for TaskCreated</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h2 id="otel-projection">OTEL LogRecord projection</h2>
+        <p>The flat attribute set used for OTEL Logs indexing. Same key names as the matching trace span attributes wherever a concept overlaps (tool name, conversation id, guard decision, …) — same query keys work across logs and traces.</p>
+        <ul>
+          <li><code>body</code> = JSON-stringified entry (full content of the JSONL line)</li>
+          <li><code>severityNumber</code> / <code>severityText</code> derived from <code>risk_level</code>: <code>low</code>→INFO, <code>medium</code>→WARN, <code>high</code>→ERROR, <code>critical</code>→FATAL; INFO when no <code>risk_level</code></li>
+        </ul>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name; same key as the tool-span attribute</td><td>PreToolUse · PostToolUse · guard decision</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id; same key as the tool-span attribute</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.conversation.id</code></td><td>Host session id; same key as the turn-span attribute</td><td>every audit entry with a session</td><td>all</td></tr>
+            <tr><td><code>session.id</code></td><td>Mirror of <code>gen_ai.conversation.id</code> for OTel base-spec consumers</td><td>every audit entry with a session</td><td>all</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>ask</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.task_id</code></td><td>Task id from the dispatch event</td><td>TaskCreated · TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.task_summary</code></td><td>Derived from task input</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>every audit entry</td><td>all</td></tr>
+            <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>every audit entry with cwd</td><td>all</td></tr>
+            <tr><td><code>nio.event</code></td><td>Discriminator — hook event name vs guard / lifecycle / scan / config_error</td><td>every audit entry</td><td>all</td></tr>
+            <tr><td><code>nio.event_type</code></td><td><code>pre</code> / <code>post</code> for guard entries</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.action_type</code></td><td><code>exec_command</code> / <code>write_file</code> / <code>network_request</code> / <code>read_file</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.max_finding_severity</code></td><td>Highest finding severity surfaced this run</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.phase_stopped</code></td><td>Which Phase 0–6 produced the decision</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.explanation</code></td><td>Human-readable reason for the verdict</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.transcript_path</code></td><td>CC-only — path to session transcript JSONL</td><td>hook events with transcript</td><td>Claude Code only</td></tr>
+            <tr><td><code>nio.phases.{name}.score</code></td><td>Per-phase score (Phase 0–6)</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.phases.{name}.finding_count</code></td><td>Per-phase finding count</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.phases.{name}.duration_ms</code></td><td>Per-phase wall-clock cost (ms)</td><td>guard decision</td><td>all</td></tr>
+          </tbody>
+        </table>
+
+        <p style="font-size: 13px; color: var(--fg-2);">Local JSONL path: <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). Rotation kicks in at <code>collector.logs.max_size_mb</code> (default 100 MB) — the live file is renamed to <code>&lt;path&gt;.1</code>.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="collector-signals-metrics.html">
+          <span class="dir">← Metrics</span>
+          <span class="label">Metrics signal</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="mcp-detection.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">MCP Detection</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

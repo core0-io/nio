@@ -2,59 +2,102 @@
 
 What Nio captures while an agent runs, organised by OTEL signal. This is the schema-of-record; if reality drifts from this doc, the source is wrong.
 
+Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (logs signal) is the only one with a local backup; metrics and traces are OTLP-only.
+
+## Architecture
+
+The three host platforms each have their own runtime model — Claude Code and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
+
+```text
+   ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
+   │ Claude Code │     │     Hermes     │     │   OpenClaw    │
+   │             │     │                │     │               │
+   │ per-hook    │     │ per-hook spawn │     │ single daemon │
+   │ spawn       │     │ (node hook-cli)│     │ process       │
+   └──────┬──────┘     └────────┬───────┘     └───────┬───────┘
+          │                     │                     │
+          ▼                     ▼                     ▼
+   ┌──────────────────────────────────────┐   ┌──────────────┐
+   │   on-disk state cache                │   │ in-memory    │
+   │   bridges span lifecycle across      │   │ Map<sessionId│
+   │   short-lived hook processes         │   │  ,State>     │
+   └──────────────────┬───────────────────┘   └──────┬───────┘
+                      │                              │
+                      └──────────────┬───────────────┘
+                                     ▼
+              ┌──────────────────────────────────────┐
+              │   Canonical hook event vocabulary    │
+              │   UserPromptSubmit · PreToolUse ·    │
+              │   PostToolUse · TaskCreated ·        │
+              │   TaskCompleted · Stop · Subagent    │
+              │   Stop · SessionStart · SessionEnd   │
+              └─────────────────┬────────────────────┘
+                                ▼
+              ┌──────────────────────────────────────┐
+              │   Three collector modules unify      │
+              │   the attribute schema:              │
+              │                                      │
+              │     trace-collector                  │
+              │     metrics-collector                │
+              │     logs-collector                   │
+              │                                      │
+              │   shared keys: gen_ai.* · nio.*      │
+              │   shared values: span names,         │
+              │   metric instruments                 │
+              └────────┬─────────┬───────────┬───────┘
+                       │         │           │
+                       ▼         ▼           ▼
+                    Metrics   Traces       Logs
+                    (OTLP)    (OTLP)    (OTLP + local audit log)
 ```
-                ┌─ collector-hook.ts (per hook)
-Claude Code  ──►│
-                └─ guard-hook.ts    (per PreToolUse)
 
-                ┌─ hook-cli.ts      (per shell hook)
-Hermes       ──►│
-                └─ pre_tool_call    routes both guard + collector through hook-cli
+CC and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
 
-                ┌─ openclaw-plugin.ts.before_tool_call / after_tool_call
-OpenClaw     ──►│
-                └─ openclaw-plugin.ts.{subagent_*, before_agent_reply, llm_output, agent_end, session_*}
+## Naming conventions
 
-                              │
-                              ▼
-              ┌──────────────────────────────────┐
-              │  dispatchCollectorEvent          │ ← collector-core.ts (CC, Hermes)
-              │  (OpenClaw bypasses, calls       │
-              │   traces-collector directly)     │
-              └────────┬───────────┬──────────┬──┘
-                       │           │          │
-                       ▼           ▼          ▼
-                 ┌─────────┐ ┌─────────┐ ┌─────────┐
-                 │ Metrics │ │ Traces  │ │  Logs   │
-                 │ (OTLP)  │ │ (OTLP)  │ │ (OTLP + │
-                 │         │ │         │ │  local) │
-                 └─────────┘ └─────────┘ └─────────┘
-```
+- `gen_ai.*` — keys that follow the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.
+- `nio.*` — vendor extensions for concepts the GenAI spec doesn't cover: guard decisions, per-phase scoring, platform tag, redacted prompt / reply previews, per-task subagent metadata.
+- `session.id` — mirrored alongside `gen_ai.conversation.id` for OTel base-spec consumers that key off session id rather than conversation id. Same value.
 
-Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (logs signal) is the only one with a local JSONL backup; metrics and traces are OTLP-only.
+Cross-signal: the same key name carries the same meaning across metrics, traces, and logs. `gen_ai.tool.name` on a metric label is the same string as the matching trace span attribute, which is the same string as the matching audit-log attribute. Joining signals in dashboards Just Works.
 
 ---
 
 ## Metrics
 
-Schema declared in [`METRICS_SCHEMA`](../src/scripts/lib/metrics-collector.ts) and emitted via the OTLP exporter to `<endpoint>/v1/metrics`.
+Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 
-| Instrument | Type | Unit | Labels | When recorded |
-|------------|------|------|--------|---------------|
-| `nio.tool_use.count` | Counter | `{invocations}` | `gen_ai.tool.name`, `nio.event`, `nio.platform` | Each `PreToolUse` and `PostToolUse` (and `TaskCreated`/`TaskCompleted` if fired) |
-| `nio.turn.count` | Counter | `{turns}` | `nio.platform` | Each `Stop` / `SubagentStop` / `SessionEnd` (turn boundary) |
-| `nio.decision.count` | Counter | `{decisions}` | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` | Each guard decision (allow / deny / ask) |
-| `nio.risk.score` | Histogram | `{score}` | `gen_ai.tool.name`, `nio.platform` | Each guard evaluation; 0–1 distribution for avg/p50/p99 |
+### Instruments
 
-Label keys are aligned with the matching trace span attributes (`gen_ai.tool.name` matches the tool span; `nio.guard.*` matches the OpenClaw tool span guard attrs via `nioGuardAttributes`). Cross-signal queries (metrics ⇌ traces ⇌ logs) use the same key names.
+| Instrument | Type | Unit | When recorded |
+| --- | --- | --- | --- |
+| `nio.tool_use.count` | Counter | `{invocations}` | Each `PreToolUse` and `PostToolUse` (and `TaskCreated` / `TaskCompleted` if fired) |
+| `nio.turn.count` | Counter | `{turns}` | Each `Stop` / `SubagentStop` / `SessionEnd` (turn boundary) |
+| `nio.decision.count` | Counter | `{decisions}` | Each guard decision (allow / deny / ask) |
+| `nio.risk.score` | Histogram | `{score}` | Each guard evaluation; 0–1 distribution for avg / p50 / p99 |
 
-**Label values:**
+### Labels
 
-- `nio.platform` ∈ `claude-code` | `hermes` | `openclaw`
-- `nio.event` ∈ `PreToolUse` | `PostToolUse` | `TaskCreated` | `TaskCompleted`
-- `nio.guard.decision` ∈ `allow` | `deny` | `ask`
-- `nio.guard.risk_level` ∈ `low` | `medium` | `high` | `critical`
-- `gen_ai.tool.name` — host-platform tool name. Claude Code reports the canonical hook-payload tool name (`Bash`, `Write`, `WebFetch`, etc.). One quirk: the user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent`. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …); same key as the tool-span attribute | PreToolUse · PostToolUse · guard decision | all |
+| `nio.event` | Hook event firing this counter — `PreToolUse` / `PostToolUse` / `TaskCreated` / `TaskCompleted` | PreToolUse · PostToolUse · TaskCreated · TaskCompleted | all |
+| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | every metric | all |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
+| `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+
+### Label sets per instrument
+
+| Instrument | Labels |
+| --- | --- |
+| `nio.tool_use.count` | `gen_ai.tool.name` · `nio.event` · `nio.platform` |
+| `nio.turn.count` | `nio.platform` |
+| `nio.decision.count` | `nio.guard.decision` · `nio.guard.risk_level` · `gen_ai.tool.name` · `nio.platform` |
+| `nio.risk.score` | `gen_ai.tool.name` · `nio.platform` |
+
+> **Claude Code · Task → Agent**
+>
+> The user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent` as the `gen_ai.tool.name` label. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
 
 Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.endpoint` is empty, metrics drop on the floor (the meter provider returns `null`).
 
@@ -62,9 +105,9 @@ Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.en
 
 ## Traces
 
-One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix. Schema lives in [`traces-collector.ts`](../src/scripts/lib/traces-collector.ts) — every literal attribute key string is owned by one helper there; consumers (`collector-core.ts`, `openclaw-plugin.ts`) only call helpers.
+One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix.
 
-```
+```text
 Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
   ├─ Span: execute_tool <name>   (PreToolUse → PostToolUse)
   ├─ Span: execute_tool <name>   (...)
@@ -73,95 +116,89 @@ Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at St
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
-Built by [`endTurn`](../src/scripts/lib/traces-collector.ts) at turn close. Span ID is deterministic (`traceId.slice(0,16)`) so child spans can parent to it before it exists.
+One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.
 
-| Attribute | Source | Helper |
-|-----------|--------|--------|
-| `gen_ai.operation.name` | constant `invoke_agent` | `genAiInvokeAgentAttributes` |
-| `gen_ai.provider.name` | constant `nio` | `genAiInvokeAgentAttributes` |
-| `gen_ai.conversation.id` | session ID | `genAiInvokeAgentAttributes` |
-| `gen_ai.agent.name` | platform name (acts as agent identifier) | `genAiInvokeAgentAttributes` |
-| `session.id` | session ID (mirror of conversation.id for OTel base-spec consumers) | `genAiInvokeAgentAttributes` |
-| `gen_ai.usage.input_tokens` | accumulated across turn | `genAiUsageAttributes` / `accumulateGenAiUsage` |
-| `gen_ai.usage.output_tokens` | accumulated across turn | same |
-| `gen_ai.usage.cache_creation.input_tokens` | accumulated across turn | same |
-| `gen_ai.usage.cache_read.input_tokens` | accumulated across turn | same |
-| `nio.platform` | `claude-code` / `hermes` / `openclaw` | inline in endTurn |
-| `nio.turn_number` | per-session counter, starts at 1 | inline in endTurn |
-| `nio.cwd` | working dir at turn start | inline in endTurn (when set) |
-| `nio.turn.user_prompt` | first user message of the turn (redacted, ≤2 KB) | `recordUserPrompt` |
-| `nio.turn.assistant_reply` | OpenClaw only — captured at `llm_output` (redacted, ≤2 KB) | `recordAssistantReply` |
-| `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | `recordCacheHitRate` |
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `gen_ai.operation.name` | Constant `invoke_agent` | turn close | all |
+| `gen_ai.provider.name` | Constant `nio` | turn close | all |
+| `gen_ai.conversation.id` | Host session ID | turn close | all |
+| `gen_ai.agent.name` | Platform name acting as agent identifier | turn close | all |
+| `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | turn close | all |
+| `gen_ai.usage.input_tokens` | Input tokens consumed across the turn | Stop · SubagentStop · SessionEnd | all |
+| `gen_ai.usage.output_tokens` | Output tokens generated across the turn | Stop · SubagentStop · SessionEnd | all |
+| `gen_ai.usage.cache_creation.input_tokens` | Cache-creation input tokens | Stop · SubagentStop · SessionEnd | all |
+| `gen_ai.usage.cache_read.input_tokens` | Cache-read input tokens | Stop · SubagentStop · SessionEnd | all |
+| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | turn close | all |
+| `nio.turn_number` | Per-session counter, starts at 1 | turn close | all |
+| `nio.cwd` | Working dir at turn start | turn close (when set) | all |
+| `nio.turn.user_prompt` | First user message of the turn, redacted, ≤2 KB | UserPromptSubmit | all |
+| `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw-native) | OpenClaw only |
+| `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
-**Token usage source** differs by platform:
-- **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
-- **Hermes**: same code path as CC — if `transcriptPath` is included in the post_llm_call payload, parsed identically; otherwise empty.
-- **OpenClaw**: `llm_output` event payload carries `usage` directly; accumulated incrementally into `state.turn_attributes`.
+**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as CC if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
 
 ### Span: `execute_tool <name>` (tool span)
 
-Built by [`recordPostToolUse`](../src/scripts/lib/traces-collector.ts) at PostToolUse time. Span name is literally `execute_tool ${toolName || 'unknown'}`.
+One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on CC/Hermes since the pre-side process is gone).
 
-| Attribute | Source | Helper |
-|-----------|--------|--------|
-| `gen_ai.operation.name` | constant `execute_tool` | `genAiToolAttributes` |
-| `gen_ai.tool.name` | host tool name (`Bash`, `WebFetch`, etc.) | `genAiToolAttributes` |
-| `gen_ai.tool.type` | optional, when known | `genAiToolAttributes` |
-| `gen_ai.tool.call.id` | host tool-call id (`tool_use_id` for CC, `toolCallId` for OpenClaw) | `genAiToolCallInputAttributes` / `genAiToolAttributes` |
-| `gen_ai.tool.call.arguments` | tool input (redacted, ≤2 KB) | `genAiToolCallInputAttributes` |
-| `gen_ai.tool.call.result` | tool output (redacted, ≤2 KB) | `genAiToolCallOutputAttributes` |
-| `nio.tool.error` | error message (when tool failed) | `genAiToolCallOutputAttributes` |
-| `nio.tool.duration_ms` | OpenClaw only — wall-clock duration | `genAiToolCallOutputAttributes` |
-| `nio.tool.run_id` | OpenClaw only — runId from event | `nioToolRunIdAttribute` |
-| `nio.tool_summary` | one-line summary derived from tool input | inline in recordPostToolUse |
-| `nio.platform` | `claude-code` / `hermes` / `openclaw` | inline in recordPostToolUse |
-| `nio.turn_number` | parent turn's number | inline in recordPostToolUse |
-| `nio.cwd` | working dir at hook fire | inline in recordPostToolUse (when set) |
-| `nio.guard.decision` | OpenClaw only — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | `nioGuardAttributes` |
-| `nio.guard.risk_level` | OpenClaw only — `low` / `medium` / `high` / `critical` / `unknown` | `nioGuardAttributes` |
-| `nio.guard.risk_score` | OpenClaw only — 0–1 | `nioGuardAttributes` |
-| `nio.guard.risk_tags` | OpenClaw only — comma-joined rule IDs | `nioGuardAttributes` |
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `gen_ai.operation.name` | Constant `execute_tool` | PostToolUse | all |
+| `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
+| `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
+| `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on CC, `toolCallId` on OpenClaw) | PreToolUse · PostToolUse | all |
+| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
+| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
+| `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
+| `nio.tool.duration_ms` | Wall-clock tool execution time (ms) | PostToolUse | OpenClaw only |
+| `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
+| `nio.tool_summary` | One-line summary derived from tool input | PostToolUse | all |
+| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | PostToolUse | all |
+| `nio.turn_number` | Parent turn's number | PostToolUse | all |
+| `nio.cwd` | Working dir at hook fire | PostToolUse (when set) | all |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | PreToolUse | OpenClaw only |
+| `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` / `unknown` | PreToolUse | OpenClaw only |
+| `nio.guard.risk_score` | Guard risk score, 0–1 | PreToolUse | OpenClaw only |
+| `nio.guard.risk_tags` | Comma-joined rule IDs that fired | PreToolUse | OpenClaw only |
 
-**Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied/confirm-denied; `OK` otherwise.
+**Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
-**`nio.guard.*` on CC?** Not yet — CC's guard decisions go to the audit log only. The `nioGuardAttributes` helper is exported and ready; symmetric CC adoption is a follow-up.
+**`nio.guard.*` on Claude Code?** Not yet — CC's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.
 
 ### Span: `task:execute` (task span)
 
-Built by [`recordPostTaskToolUse`](../src/scripts/lib/traces-collector.ts) at TaskCompleted (CC, currently never fired in normal sessions) or `subagent_ended` (OpenClaw). Span name is literal `task:execute` — not yet migrated to GenAI conventions.
+One per subagent dispatch. Opens at `TaskCreated` (CC, Teammates / cloud-agent flows) or `subagent_spawning` (OpenClaw); closes at the matching completion event.
 
-| Attribute | Source |
-|-----------|--------|
-| `nio.task_id` | task id from event |
-| `nio.task_summary` | derived from task input (CC: `task_input.prompt`; OpenClaw: empty) |
-| `nio.platform` | `claude-code` / `openclaw` |
-| `nio.session_id` | session id |
-| `nio.turn_number` | parent turn's number |
-| `nio.cwd` | working dir at task start |
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `nio.task_id` | Task id from the dispatch event | TaskCreated | Claude Code + OpenClaw |
+| `nio.task_summary` | Derived from task input (CC: `task_input.prompt`; OpenClaw: empty) | TaskCreated | Claude Code + OpenClaw |
+| `nio.platform` | Source platform — `claude-code` / `openclaw` | TaskCompleted | Claude Code + OpenClaw |
+| `nio.session_id` | Host session id | TaskCompleted | Claude Code + OpenClaw |
+| `nio.turn_number` | Parent turn's number | TaskCompleted | Claude Code + OpenClaw |
+| `nio.cwd` | Working dir at task start | TaskCompleted | Claude Code + OpenClaw |
 
-### Trace state and span lifecycle
+> **Known gap · not yet GenAI-aligned**
+>
+> Span name is the literal `task:execute` (not `execute_tool task`); session id uses `nio.session_id` instead of `gen_ai.conversation.id` + `session.id`. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until CC and OpenClaw can migrate in lockstep.
 
-All three platforms route span construction through [`traces-collector.ts`](../src/scripts/lib/traces-collector.ts) pure functions (`ensureTurn`, `recordPreToolUse`, `recordPostToolUse`, `recordPreTaskToolUse`, `recordPostTaskToolUse`, `setTurnAttributes`, `endTurn`). The only platform difference is **where `CollectorState` lives**:
+### Trace state lifecycle
 
-- **Claude Code / Hermes** (cross-process spawn-per-hook): bridged via [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) on disk. `PreToolUse` writes pending span data; `PostToolUse` reads it and emits the span retroactively with the original start time. `Stop` (or `SubagentStop` / `SessionEnd`) emits the turn root span.
-- **OpenClaw** (in-process daemon): per-session `Map<sessionId, CollectorState>` in memory inside [`openclaw-plugin.ts`](../src/adapters/openclaw-plugin.ts). No disk bridging; same lifecycle methods.
-
-State file path: `dirname(collector.logs.path) / traces-state-store.json` (defaults to `${NIO_HOME ?? ~/.nio}/traces-state-store.json`).
+Claude Code and Hermes spawn a fresh node process per hook event, so a `PreToolUse` in process A and the matching `PostToolUse` in process B can't share an OTEL `Span` object. Both platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw runs as a single daemon, so the equivalent state lives in an in-memory `Map<sessionId, State>` instead. All three platforms route through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.
 
 ---
 
 ## Logs (audit log)
 
-Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). Schema is the discriminated union [`AuditEntry`](../src/adapters/audit-types.ts) + the OTEL log attribute mapping in [`emitAuditLog`](../src/scripts/lib/logs-collector.ts).
-
-The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute list for indexing.
+Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing.
 
 ### Entry types (discriminated by `event`)
 
 #### `event: "guard"` — guard decision (per PreToolUse / PostToolUse)
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `event` | `"guard"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | `claude-code` / `hermes` / `openclaw` |
@@ -186,7 +223,7 @@ The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.strin
 #### `event: "session_scan"` — skill scan (on-demand or session-start)
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `event` | `"session_scan"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
@@ -199,7 +236,7 @@ The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.strin
 #### `event: "lifecycle"` — subagent / agent / session lifecycle
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `event` | `"lifecycle"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
@@ -210,7 +247,7 @@ The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.strin
 #### `event: "config_error"` — config load failure
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `event` | `"config_error"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `config_path` | string | path that failed to load |
@@ -221,7 +258,7 @@ The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.strin
 Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`. One entry written per dispatched hook event.
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `event` | `HookEventName` | one of the 9 above |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
@@ -236,43 +273,42 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 
 ### OTEL LogRecord projection
 
-[`emitAuditLog`](../src/scripts/lib/logs-collector.ts) maps the entry above onto an OTEL LogRecord. The flat attribute set is built by [`auditEntryAttributes`](../src/scripts/lib/logs-collector.ts) and aligns with the trace span schema where concepts overlap — same key names work across logs and traces in dashboards.
+The flat attribute set used for OTEL Logs indexing. Same key names as the matching trace span attributes wherever a concept overlaps (tool name, conversation id, guard decision, …) — same query keys work across logs and traces.
 
-- `body` = JSON-stringified entry (full content)
-- `severityNumber` / `severityText` = derived from `risk_level` (`low`→INFO, `medium`→WARN, `high`→ERROR, `critical`→FATAL); INFO when no `risk_level`
-- Attributes (extracted for indexing). Cross-signal alignment column shows where the same key appears in the traces signal:
+- `body` = JSON-stringified entry (full content of the JSONL line)
+- `severityNumber` / `severityText` derived from `risk_level`: `low`→INFO, `medium`→WARN, `high`→ERROR, `critical`→FATAL; INFO when no `risk_level`
 
-| Attribute | Source field | Cross-signal alignment |
-| --------- | ------------ | ---------------------- |
-| `gen_ai.tool.name` | `tool_name` | matches tool-span attribute |
-| `gen_ai.tool.call.id` | `tool_use_id` | matches tool-span attribute |
-| `gen_ai.conversation.id` | `session_id` | matches turn-span attribute |
-| `session.id` | `session_id` | matches turn-span attribute |
-| `nio.guard.decision` | `decision` | matches OpenClaw tool-span guard attr (`nioGuardAttributes`) |
-| `nio.guard.risk_level` | `risk_level` | same |
-| `nio.guard.risk_score` | `risk_score` | same |
-| `nio.guard.risk_tags` | `risk_tags` (comma-joined) | same |
-| `nio.event` | `event` | logs-only — discriminator for hook event vs guard / lifecycle / scan |
-| `nio.platform` | `platform` | matches turn-span and tool-span attribute |
-| `nio.event_type` | `event_type` | logs-only — `pre` / `post` for guard entries |
-| `nio.action_type` | `action_type` | logs-only — `exec_command` / `write_file` / `network_request` / `read_file` |
-| `nio.max_finding_severity` | `max_finding_severity` | logs-only |
-| `nio.phase_stopped` | `phase_stopped` | logs-only |
-| `nio.explanation` | `explanation` | logs-only |
-| `nio.tool_summary` | `tool_summary` | matches tool-span attribute |
-| `nio.task_id` | `task_id` | matches task-span attribute |
-| `nio.task_summary` | `task_summary` | matches task-span attribute |
-| `nio.cwd` | `cwd` | matches tool-span / turn-span attribute |
-| `nio.transcript_path` | `transcript_path` | logs-only |
-| `nio.phases.{name}.score` | `phases[name].score` | logs-only — per-phase Phase 0–6 telemetry |
-| `nio.phases.{name}.finding_count` | `phases[name].finding_count` | same |
-| `nio.phases.{name}.duration_ms` | `phases[name].duration_ms` | same |
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `gen_ai.tool.name` | Host tool name; same key as the tool-span attribute | PreToolUse · PostToolUse · guard decision | all |
+| `gen_ai.tool.call.id` | Host tool-call id; same key as the tool-span attribute | PreToolUse · PostToolUse | all |
+| `gen_ai.conversation.id` | Host session id; same key as the turn-span attribute | every audit entry with a session | all |
+| `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
+| `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+| `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
+| `nio.guard.risk_tags` | Comma-joined rule IDs that fired | guard decision | all |
+| `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |
+| `nio.task_id` | Task id from the dispatch event | TaskCreated · TaskCompleted | Claude Code + OpenClaw |
+| `nio.task_summary` | Derived from task input | TaskCreated | Claude Code + OpenClaw |
+| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | every audit entry | all |
+| `nio.cwd` | Working dir at hook fire | every audit entry with cwd | all |
+| `nio.event` | Discriminator — hook event name vs guard / lifecycle / scan / config_error | every audit entry | all |
+| `nio.event_type` | `pre` / `post` for guard entries | guard decision | all |
+| `nio.action_type` | `exec_command` / `write_file` / `network_request` / `read_file` | guard decision | all |
+| `nio.max_finding_severity` | Highest finding severity surfaced this run | guard decision | all |
+| `nio.phase_stopped` | Which Phase 0–6 produced the decision | guard decision | all |
+| `nio.explanation` | Human-readable reason for the verdict | guard decision | all |
+| `nio.transcript_path` | CC-only — path to session transcript JSONL | hook events with transcript | Claude Code only |
+| `nio.phases.{name}.score` | Per-phase score (Phase 0–6) | guard decision | all |
+| `nio.phases.{name}.finding_count` | Per-phase finding count | guard decision | all |
+| `nio.phases.{name}.duration_ms` | Per-phase wall-clock cost (ms) | guard decision | all |
 
 Local JSONL path: `collector.logs.path` (default `~/.nio/audit.jsonl`). Rotation kicks in at `collector.logs.max_size_mb` (default 100 MB) — the live file is renamed to `<path>.1`.
 
 ---
 
-## Configuration knobs (collector section)
+## Configuration
 
 Full config reference: [configuration.html](configuration.html). Quick summary of what gates each signal:
 
@@ -294,18 +330,3 @@ collector:
 ```
 
 Per-signal gating: when `collector.endpoint` is empty, the corresponding provider factory returns `null` and the platform code skips emit. The audit-log local JSONL still works (controlled by `collector.logs.local`) even without an endpoint — handy for offline / air-gapped use.
-
----
-
-## Source-of-truth files
-
-| Schema | File | What it owns |
-|--------|------|-------------|
-| Metrics catalog | [`src/scripts/lib/metrics-collector.ts`](../src/scripts/lib/metrics-collector.ts) (`METRICS_SCHEMA`) | Instrument names, types, labels, descriptions |
-| Trace span attributes (all `gen_ai.*` and `nio.*` keys) | [`src/scripts/lib/traces-collector.ts`](../src/scripts/lib/traces-collector.ts) | All span attribute keys via builder helpers (`genAi*Attributes`, `nio*Attributes`, `record*` operations) |
-| Trace state shape | [`src/scripts/lib/traces-state-store.ts`](../src/scripts/lib/traces-state-store.ts) | `CollectorState`, `PendingToolSpan`, `PendingTaskSpan` |
-| Audit log entry types | [`src/adapters/audit-types.ts`](../src/adapters/audit-types.ts) | All entry shapes (guard / scan / lifecycle / config_error / hook) |
-| OTEL log attribute projection | [`src/scripts/lib/logs-collector.ts`](../src/scripts/lib/logs-collector.ts) (`auditEntryAttributes`) | Flat attribute keys for log indexing — shared GenAI / `nio.*` keys with the trace signal |
-| Collector config schema | [`src/adapters/config-schema.ts`](../src/adapters/config-schema.ts) (`CollectorConfigSchema`, `CollectorLogsConfigSchema`) | YAML field validation + defaults |
-
-When schema drifts, update the source file and re-run `pnpm run build` — the helper functions in `traces-collector.ts` are the single point of change for trace attribute keys, so most edits don't ripple beyond one file.

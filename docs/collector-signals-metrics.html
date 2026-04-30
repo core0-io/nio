@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Metrics — Collector Signals — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio's OTEL metrics signal — four instruments covering tool invocations, turn boundaries, guard decisions, and risk-score distribution. Full per-label catalog with allowed values.">
+<meta name="keywords" content="nio, otel, opentelemetry, metrics, counters, histograms, gen_ai, agent observability, claude code, openclaw, hermes">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: docs/COLLECTOR-SIGNALS.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Telemetry · Metrics</div>
+        <h1><em>Metrics</em> — three counters and one histogram</h1>
+        <p class="lead">Four instruments emitted via OTLP to <code>&lt;endpoint&gt;/v1/metrics</code>. Label keys align with matching trace span attributes (<code>gen_ai.tool.name</code> matches the tool span, <code>nio.guard.*</code> matches the OpenClaw tool-span guard attrs) so cross-signal queries use the same key names.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2 id="instruments">Instruments</h2>
+        <table>
+          <thead><tr><th>Instrument</th><th>Type</th><th>Unit</th><th>When recorded</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.tool_use.count</code></td><td>Counter</td><td><code>{invocations}</code></td><td>Each <code>PreToolUse</code> and <code>PostToolUse</code> (and <code>TaskCreated</code> / <code>TaskCompleted</code> if fired)</td></tr>
+            <tr><td><code>nio.turn.count</code></td><td>Counter</td><td><code>{turns}</code></td><td>Each <code>Stop</code> / <code>SubagentStop</code> / <code>SessionEnd</code> (turn boundary)</td></tr>
+            <tr><td><code>nio.decision.count</code></td><td>Counter</td><td><code>{decisions}</code></td><td>Each guard decision (allow / deny / ask)</td></tr>
+            <tr><td><code>nio.risk.score</code></td><td>Histogram</td><td><code>{score}</code></td><td>Each guard evaluation; 0–1 distribution for avg / p50 / p99</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="labels">Labels</h2>
+        <p>Five label keys, used across the four instruments above. Each row below is a unique label.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name (<code>Bash</code>, <code>WebFetch</code>, …); same key as the tool-span attribute</td><td>PreToolUse · PostToolUse · guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.event</code></td><td>Hook event firing this counter — <code>PreToolUse</code> / <code>PostToolUse</code> / <code>TaskCreated</code> / <code>TaskCompleted</code></td><td>PreToolUse · PostToolUse · TaskCreated · TaskCompleted</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>every metric</td><td>all</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>ask</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td><td>guard decision</td><td>all</td></tr>
+          </tbody>
+        </table>
+
+        <h2 id="label-instruments">Label sets per instrument</h2>
+        <table>
+          <thead><tr><th>Instrument</th><th>Labels</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio.tool_use.count</code></td><td><code>gen_ai.tool.name</code> · <code>nio.event</code> · <code>nio.platform</code></td></tr>
+            <tr><td><code>nio.turn.count</code></td><td><code>nio.platform</code></td></tr>
+            <tr><td><code>nio.decision.count</code></td><td><code>nio.guard.decision</code> · <code>nio.guard.risk_level</code> · <code>gen_ai.tool.name</code> · <code>nio.platform</code></td></tr>
+            <tr><td><code>nio.risk.score</code></td><td><code>gen_ai.tool.name</code> · <code>nio.platform</code></td></tr>
+          </tbody>
+        </table>
+
+        <div class="callout warn">
+          <div class="title">Claude Code · Task → Agent</div>
+          <p>The user-facing <strong>Task</strong> tool (subagent dispatch) is reported as <code>tool_name="Agent"</code> in CC hook payloads, so PreToolUse / PostToolUse counters use <code>Agent</code> as the <code>gen_ai.tool.name</code> label. The literal value <code>Task</code> only appears as a counter label when <code>TaskCreated</code> / <code>TaskCompleted</code> fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see <a href="https://github.com/core0-io/nio/blob/main/e2e-test/hook-subagent-e2e-task.md"><code>e2e-test/hook-subagent-e2e-task.md</code></a>). OpenClaw and Hermes use their own native tool names.</p>
+        </div>
+
+        <p>Metrics have <strong>no local file</strong> — there is no <code>metrics.jsonl</code>. If <code>collector.endpoint</code> is empty, metrics drop on the floor (the meter provider returns <code>null</code>).</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="collector-signals-traces.html">
+          <span class="dir">← Traces</span>
+          <span class="label">Trace signal</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="collector-signals-logs.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Logs</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.1.0">v2.1.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>
