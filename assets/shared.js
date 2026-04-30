@@ -23,7 +23,10 @@
       { label: 'Config reference', path: '/docs/configuration.html' },
     ]},
     { id: 'observability', title: 'Observability', openByDefault: false, items: [
-      { label: 'Collector Signals', path: '/docs/collector-signals.html' },
+      { label: 'Overview', path: '/docs/collector-signals.html' },
+      { label: 'Traces', path: '/docs/collector-signals-traces.html' },
+      { label: 'Metrics', path: '/docs/collector-signals-metrics.html' },
+      { label: 'Logs', path: '/docs/collector-signals-logs.html' },
     ]},
     { id: 'mcp', title: 'MCP', openByDefault: false, items: [
       { label: 'MCP Detection', path: '/docs/mcp-detection.html' },
