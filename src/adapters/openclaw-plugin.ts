@@ -28,14 +28,20 @@ import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import {
   createTracerProvider,
-  redactAndTruncate,
   ensureTurn,
-  setTurnAttributes,
   recordPreToolUse,
   recordPreTaskToolUse,
   recordPostToolUse,
   recordPostTaskToolUse,
   endTurn,
+  recordUserPrompt,
+  recordAssistantReply,
+  recordCacheHitRate,
+  accumulateGenAiUsage,
+  genAiToolCallInputAttributes,
+  genAiToolCallOutputAttributes,
+  nioGuardAttributes,
+  nioToolRunIdAttribute,
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
@@ -55,39 +61,6 @@ import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
 const sessionState = new Map<string, CollectorState>();
 const pendingGuardAttrs = new Map<string, Record<string, unknown>>();   // key: `${sessionId}:${spanKey}`
-
-/**
- * Accumulate per-event LLM usage counters into the turn's `gen_ai.usage.*`
- * attributes. OpenClaw delivers usage incrementally via `llm_output`
- * events; CC reads it once at endTurn from the transcript file. Both
- * paths converge on the same attribute keys spread onto the turn span by
- * `endTurn`.
- */
-function accumulateUsage(
-  state: CollectorState,
-  usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
-): CollectorState {
-  const a = state.turn_attributes ?? {};
-  return setTurnAttributes(state, {
-    'gen_ai.usage.input_tokens':
-      ((a['gen_ai.usage.input_tokens'] as number) ?? 0) + (usage.input ?? 0),
-    'gen_ai.usage.output_tokens':
-      ((a['gen_ai.usage.output_tokens'] as number) ?? 0) + (usage.output ?? 0),
-    'gen_ai.usage.cache_creation.input_tokens':
-      ((a['gen_ai.usage.cache_creation.input_tokens'] as number) ?? 0) + (usage.cacheWrite ?? 0),
-    'gen_ai.usage.cache_read.input_tokens':
-      ((a['gen_ai.usage.cache_read.input_tokens'] as number) ?? 0) + (usage.cacheRead ?? 0),
-  });
-}
-
-function computeCacheHitRate(state: CollectorState): number {
-  const a = state.turn_attributes ?? {};
-  const input = (a['gen_ai.usage.input_tokens'] as number) ?? 0;
-  const cacheRead = (a['gen_ai.usage.cache_read.input_tokens'] as number) ?? 0;
-  const cacheWrite = (a['gen_ai.usage.cache_creation.input_tokens'] as number) ?? 0;
-  const total = input + cacheRead + cacheWrite;
-  return total > 0 ? Math.round((cacheRead / total) * 1000) / 1000 : 0;
-}
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -220,9 +193,8 @@ export function registerOpenClawPlugin(
         state = ensureTurn(state, sessionId);
         const params = (toolEvent.params ?? {}) as Record<string, unknown>;
         const preAttrs: Record<string, unknown> = {
-          'gen_ai.tool.call.arguments': redactAndTruncate(params),
-          ...(toolEvent.toolCallId ? { 'gen_ai.tool.call.id': toolEvent.toolCallId } : {}),
-          ...(toolEvent.runId ? { 'nio.tool.run_id': toolEvent.runId } : {}),
+          ...genAiToolCallInputAttributes(params, toolEvent.toolCallId),
+          ...(toolEvent.runId ? nioToolRunIdAttribute(toolEvent.runId) : {}),
         };
         state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
         sessionState.set(sessionId, state);
@@ -261,12 +233,12 @@ export function registerOpenClawPlugin(
               ? 'confirm_denied'
               : 'confirm_allowed'
             : 'allow';
-      const guardAttrs: Record<string, unknown> = {
-        'nio.guard.decision': decisionTag,
-        'nio.guard.risk_level': result.riskLevel || (decisionTag === 'allow' ? 'low' : 'unknown'),
-        'nio.guard.risk_score': result.riskScore ?? 0,
-        ...(result.riskTags?.length ? { 'nio.guard.risk_tags': result.riskTags.join(',') } : {}),
-      };
+      const guardAttrs = nioGuardAttributes(
+        decisionTag,
+        result.riskLevel || (decisionTag === 'allow' ? 'low' : 'unknown'),
+        result.riskScore ?? 0,
+        result.riskTags,
+      );
       pendingGuardAttrs.set(fullKey, guardAttrs);
 
       // Block path: after_tool_call won't fire because the tool didn't
@@ -325,15 +297,11 @@ export function registerOpenClawPlugin(
           pendingGuardAttrs.delete(fullKey);
           const postAttrs: Record<string, unknown> = {
             ...guardAttrs,
-            ...(toolEvent.result !== undefined
-              ? { 'gen_ai.tool.call.result': redactAndTruncate(toolEvent.result) }
-              : {}),
-            ...(toolEvent.error
-              ? { 'nio.tool.error': redactAndTruncate(toolEvent.error) }
-              : {}),
-            ...(typeof toolEvent.durationMs === 'number'
-              ? { 'nio.tool.duration_ms': toolEvent.durationMs }
-              : {}),
+            ...genAiToolCallOutputAttributes({
+              result: toolEvent.result,
+              error: toolEvent.error ?? null,
+              durationMs: toolEvent.durationMs,
+            }),
           };
           const r = await recordPostToolUse(
             tracerProvider, state, spanKey, 'openclaw', cwd,
@@ -423,9 +391,7 @@ export function registerOpenClawPlugin(
       if (tracerProvider && e.cleanedBody) {
         let state = sessionState.get(sessionId) ?? null;
         state = ensureTurn(state, sessionId);
-        state = setTurnAttributes(state, {
-          'nio.turn.user_prompt': redactAndTruncate(e.cleanedBody),
-        });
+        state = recordUserPrompt(state, e.cleanedBody);
         sessionState.set(sessionId, state);
       }
     } catch { /* non-critical */ }
@@ -442,7 +408,7 @@ export function registerOpenClawPlugin(
       state = ensureTurn(state, sessionId);
 
       if (e.usage) {
-        state = accumulateUsage(state, {
+        state = accumulateGenAiUsage(state, {
           input: e.usage['input'] as number,
           output: e.usage['output'] as number,
           cacheRead: e.usage['cacheRead'] as number,
@@ -451,9 +417,7 @@ export function registerOpenClawPlugin(
       }
 
       if (tracerProvider && e.assistantTexts?.length) {
-        state = setTurnAttributes(state, {
-          'nio.turn.assistant_reply': redactAndTruncate(e.assistantTexts.join('\n')),
-        });
+        state = recordAssistantReply(state, e.assistantTexts.join('\n'));
       }
 
       sessionState.set(sessionId, state);
@@ -471,9 +435,7 @@ export function registerOpenClawPlugin(
     let state = sessionState.get(sessionId);
     if (!state) return;
 
-    state = setTurnAttributes(state, {
-      'nio.turn.cache_hit_rate': computeCacheHitRate(state),
-    });
+    state = recordCacheHitRate(state);
 
     for (const k of Object.keys(state.pending_spans)) {
       const r = await recordPostToolUse(tracerProvider, state, k, 'openclaw', process.cwd(), {}, null);

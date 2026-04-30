@@ -51,8 +51,9 @@ import {
   recordPreTaskToolUse,
   recordPostTaskToolUse,
   endTurn,
-  redactAndTruncate,
-  setTurnAttributes,
+  recordUserPrompt,
+  genAiToolCallInputAttributes,
+  genAiToolCallOutputAttributes,
 } from './traces-collector.js';
 import { loadState, saveState } from './traces-state-store.js';
 
@@ -199,9 +200,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (tracerProvider && input.prompt) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
-        state = setTurnAttributes(state, {
-          'nio.turn.user_prompt': redactAndTruncate(input.prompt),
-        });
+        state = recordUserPrompt(state, input.prompt);
         saveState(logsConfig, state);
       }
 
@@ -214,11 +213,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
-        const preAttrs: Record<string, unknown> = {
-          'gen_ai.tool.call.arguments': redactAndTruncate(toolInput),
-        };
-        if (input.tool_use_id) preAttrs['gen_ai.tool.call.id'] = input.tool_use_id;
-        state = recordPreToolUse(state, key, toolName, summary, preAttrs);
+        state = recordPreToolUse(
+          state, key, toolName, summary,
+          genAiToolCallInputAttributes(toolInput, input.tool_use_id),
+        );
         saveState(logsConfig, state);
       }
 
@@ -235,13 +233,11 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
-        const postAttrs: Record<string, unknown> = {
-          'gen_ai.tool.call.result': redactAndTruncate(resp),
-        };
         const err = (resp.error ?? resp.stderr) as string | undefined;
-        if (err) postAttrs['nio.tool.error'] = redactAndTruncate(err);
         const result = await recordPostToolUse(
-          tracerProvider, state, key, platform, cwd, postAttrs, err ?? null,
+          tracerProvider, state, key, platform, cwd,
+          genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+          err ?? null,
         );
         saveState(logsConfig, result.state);
       }
