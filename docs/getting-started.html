@@ -59,33 +59,6 @@
           </ul>
         </div>
 
-        <h2>Telemetry · OTLP collector</h2>
-        <p>Every hook event Nio sees is shaped into <strong>OpenTelemetry</strong> data and exported through the bundled async collector. Three signals are emitted:</p>
-        <table>
-          <thead><tr><th>Signal</th><th>What's emitted</th></tr></thead>
-          <tbody>
-            <tr><td><strong>Metrics</strong></td><td><code>nio.tool_use.count</code> · <code>nio.turn.count</code> · <code>nio.decision.count</code> · <code>nio.risk.score</code> (histogram)</td></tr>
-            <tr><td><strong>Traces</strong></td><td>One trace per conversation turn. Spans: <code>turn:&lt;N&gt;</code>, <code>tool:&lt;name&gt;</code> (PreToolUse → PostToolUse), <code>task:execute</code> (TaskCreated → TaskCompleted)</td></tr>
-            <tr><td><strong>Logs</strong></td><td>Audit entries — guard decisions, scans, lifecycle events. Read via <code>/nio report</code>.</td></tr>
-          </tbody>
-        </table>
-
-        <h3>Where the data goes</h3>
-        <ul>
-          <li><strong>Local first</strong> — by default each signal is also written to <code>~/.nio/*.jsonl</code> so you have a copy even with no remote collector. Files rotate at 100 MB.</li>
-          <li><strong>Remote OTLP</strong> — set <code>collector.endpoint</code> in config and Nio POSTs to <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> on that base URL. Bearer auth via <code>collector.api_key</code>.</li>
-          <li><strong>Protocol</strong> — <code>http</code> on port 4318 (default) or <code>grpc</code> on port 4317.</li>
-          <li><strong>Per-signal switches</strong> — turn metrics / traces / logs on or off independently. Disable everything (no endpoint + all locals off) and the collector becomes a no-op.</li>
-        </ul>
-        <p>Full field reference: <a href="configuration.html#collector"><code>collector.*</code> config</a>.</p>
-
-        <h3>What you can do with it</h3>
-        <ul>
-          <li>Pipe into Grafana / Honeycomb / Datadog / Tempo to watch live agent activity.</li>
-          <li>Aggregate <code>nio.risk.score</code> histograms across a fleet to spot drifting protection levels.</li>
-          <li>Replay <code>~/.nio/audit.jsonl</code> for incident review without needing the collector running.</li>
-        </ul>
-
         <h2>Pick your agent</h2>
         <p>Nio ships as a plugin for each supported platform. The scan, guard, and audit logic is the same across all platforms; only the wiring differs.</p>
         <ul>
@@ -104,6 +77,34 @@
 /nio report                 # last 50 guard decisions from the audit log</code></pre>
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
+
+        <h2>Telemetry · OTLP collector</h2>
+        <p>Optional but useful for observability. Every hook event Nio sees is shaped into <strong>OpenTelemetry</strong> data and exported through the bundled async collector. Three signals are emitted:</p>
+        <table>
+          <thead><tr><th>Signal</th><th>What's emitted</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Metrics</strong></td><td><code>nio.tool_use.count</code> · <code>nio.turn.count</code> · <code>nio.decision.count</code> · <code>nio.risk.score</code> (histogram)</td></tr>
+            <tr><td><strong>Traces</strong></td><td>One trace per conversation turn. Spans: <code>invoke_agent UserPromptSubmit</code> (turn root), <code>execute_tool &lt;name&gt;</code> (PreToolUse → PostToolUse), <code>task:execute</code> (subagent dispatch). Span names follow the OTel GenAI semantic conventions.</td></tr>
+            <tr><td><strong>Logs</strong></td><td>Audit entries — guard decisions, skill scans, lifecycle events, hook events. Read via <code>/nio report</code>.</td></tr>
+          </tbody>
+        </table>
+
+        <h3>Where the data goes</h3>
+        <ul>
+          <li><strong>Audit log is dual-written</strong> — every guard decision and lifecycle event ships to OTLP and a local JSONL at <code>~/.nio/audit.jsonl</code> (rotates at 100 MB). Even with no remote collector you keep a full local trail.</li>
+          <li><strong>Metrics and traces are OTLP-only</strong> — no local file. If <code>collector.endpoint</code> is empty they drop on the floor.</li>
+          <li><strong>Remote OTLP</strong> — set <code>collector.endpoint</code> and Nio POSTs to <code>/v1/metrics</code>, <code>/v1/traces</code>, <code>/v1/logs</code> on that base URL. Bearer auth via <code>collector.api_key</code>.</li>
+          <li><strong>Protocol</strong> — <code>http</code> on port 4318 (default) or <code>grpc</code> on port 4317.</li>
+          <li><strong>Per-signal switches</strong> — metrics / traces / logs can be turned on or off independently. Empty endpoint + <code>logs.local: false</code> turns the collector into a no-op.</li>
+        </ul>
+        <p>Full schema (every metric, every span attribute, every audit field): <a href="collector-signals.html">Collector Signals</a>. Config field reference: <a href="configuration.html#collector"><code>collector.*</code> config</a>.</p>
+
+        <h3>What you can do with it</h3>
+        <ul>
+          <li>Pipe into Grafana / Honeycomb / Datadog / Tempo to watch live agent activity.</li>
+          <li>Aggregate <code>nio.risk.score</code> histograms across a fleet to spot drifting protection levels.</li>
+          <li>Replay <code>~/.nio/audit.jsonl</code> for incident review without needing the collector running.</li>
+        </ul>
 
         <h2>Next</h2>
         <ul>

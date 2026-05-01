@@ -148,11 +148,20 @@ body.no-grid::before { display: none; }
   position: sticky;
   top: 0;
   z-index: 10;
+  /* Two-layer behavior on wide screens: the bar's background + border
+     stretch full-viewport (escape .app's max-width: 1720 cap via the
+     full-bleed trick), while the inner flex content stays aligned with
+     .app's 1720-wide centered column via calc-based padding-inline. */
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
   background: color-mix(in oklch, var(--bg-0) 72%, transparent);
   backdrop-filter: blur(10px) saturate(1.2);
   -webkit-backdrop-filter: blur(10px) saturate(1.2);
   display: flex; align-items: center; justify-content: space-between;
-  padding: 20px 40px;
+  /* viewport <= 1720: 40px gutter each side (matches body-grid).
+     viewport >  1720: padding scales so inner content stays in the 1720
+     centered area (= 40px inside .app's content edge). */
+  padding: 20px max(40px, calc((100vw - 1640px) / 2));
   border-bottom: 1px solid var(--line-soft);
   margin-bottom: 32px;
 }
@@ -226,7 +235,9 @@ body.no-grid::before { display: none; }
   padding: 0 40px 80px;
 }
 .body-grid > * { min-width: 0; }
-.main { min-width: 0; overflow-x: clip; }
+/* No overflow-x clip here — body has its own (line 114), and we want
+   negative-left positioned heading anchors to render in the column-gap. */
+.main { min-width: 0; }
 
 /* ── sidebar ── */
 .sidebar {
@@ -374,18 +385,33 @@ body.no-grid::before { display: none; }
 }
 
 /* ── heading anchors (rendered by shared.js wireAnchors) ── */
-.doc h2, .doc h3 { position: relative; }
+/* Offset hash-target scroll position by the sticky topbar height
+   (~65px) plus a little breathing room so the heading clears the bar
+   instead of sitting flush under it. */
+.doc h2, .doc h3 { position: relative; scroll-margin-top: 80px; }
 .doc h2 .anchor, .doc h3 .anchor {
-  margin-left: 8px;
+  /* Float to the left of heading text without reserving space in the flow.
+     Sits in the column-gap between sidebar and .main on wide screens; on
+     narrow screens it overlaps into body-grid's left padding area.
+     Inherits font-size/family from the parent heading so the # baseline
+     aligns with the heading text. */
+  position: absolute;
+  top: 0;
+  right: 100%;
+  margin-right: 8px;       /* gap between # and text — outside the box, so a hover text-decoration on the link doesn't extend through it */
+  font-weight: normal;
+  letter-spacing: 0;
   color: var(--fg-3);
   text-decoration: none;
-  font-weight: normal;
   opacity: 0;
   transition: opacity .15s ease, color .15s ease;
 }
 .doc h2:hover .anchor, .doc h3:hover .anchor,
 .doc h2 .anchor:focus, .doc h3 .anchor:focus { opacity: 1; }
 .doc h2 .anchor:hover, .doc h3 .anchor:hover { color: var(--fg-0); }
+/* When the URL hash points at a heading (e.g. #pick-your-agent), keep its
+   anchor visible and brightened so the user sees where they landed. */
+.doc h2:target .anchor, .doc h3:target .anchor { opacity: 1; color: var(--fg-0); }
 
 .doc p { margin: 0 0 14px; }
 .doc a {
@@ -634,11 +660,22 @@ body.no-grid::before { display: none; }
   .doc-hero h1 { font-size: 32px; }
   .doc h2 { font-size: 19px; }
 }
+@media (max-width: 960px) {
+  /* Drop the Core0 home pill earlier than the rest — the parent-company link
+     is least useful when space is already tight. Identified by href since
+     the markup has no per-pill class. */
+  .topbar-right .pill[href*="core0.io"] { display: none; }
+}
 @media (max-width: 560px) {
   /* Narrow-screen topbar-right: hide the secondary pills (Core0 home, version
      tag) but keep the protection-level dropdown (.pill-select on index.html)
      and the GitHub link (the one with the inline svg). */
   .topbar-right .pill:not(.status):not(.pill-select):not(:has(svg)) { display: none; }
+  /* GitHub pill: keep the icon, drop the "GitHub" text. The svg's intrinsic
+     width/height attrs are independent of font-size so the icon survives.
+     Zero the flex gap (.pill has gap: 6px) so the icon centers without
+     reserving space for the now-invisible text item. */
+  .topbar-right .pill.link:has(svg) { font-size: 0; padding: 0 8px; gap: 0; }
   .page-nav { flex-direction: column; }
   .page-nav a.next { text-align: left; align-items: flex-start; margin-left: 0; }
 }

@@ -663,7 +663,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .pill-select-wrap::before { animation: none; }
+    .pill-select-wrap::before,
+    .scenario.selected::before { animation: none; }
   }
 
   /* hero */
@@ -945,7 +946,7 @@
     margin-top: 18px;
     display: grid;
     grid-template-columns: 260px 1fr;
-    column-gap: 28px;
+    gap: 14px 28px;   /* row-gap kicks in only at <=1100px when this becomes single-column */
     align-items: stretch;
   }
   .verdict-calc {
@@ -1224,9 +1225,46 @@
     display: flex; flex-direction: column; gap: 8px;
   }
   .scenario:hover { border-color: var(--fg-3); background: var(--bg-2); }
+  /* Selected card uses the same rotating-conic shine border as the protection
+     dropdown (see .pill-select-wrap). The card's per-scenario --sc-color
+     drives the halo. ::before is the rotating gradient, ::after is the
+     opaque inner mask that leaves only a thin halo visible at the border. */
   .scenario.selected {
-    border-color: var(--sc-color);
+    /* Static border-color removed — the rotating ::before halo now draws the
+       visible edge. Keep the 1px slot so layout doesn't shift on selection. */
+    border-color: transparent;
+    background: transparent;        /* let ::after paint the tinted surface */
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+  .scenario.selected::before {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 240%; aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    background: conic-gradient(
+      from 0deg,
+      transparent 0deg,
+      color-mix(in oklch, var(--sc-color) 60%, transparent) 30deg,
+      var(--sc-color) 60deg,
+      color-mix(in oklch, var(--sc-color) 60%, transparent) 90deg,
+      transparent 130deg,
+      transparent 360deg
+    );
+    animation: pill-shine-spin 3.6s linear infinite;
+    z-index: -2;
+    pointer-events: none;
+  }
+  .scenario.selected::after {
+    content: '';
+    position: absolute;
+    inset: 1.5px;
+    border-radius: inherit;
     background: color-mix(in oklch, var(--sc-color) 6%, var(--bg-1));
+    z-index: -1;
+    pointer-events: none;
   }
   .scenario-head {
     display: flex; align-items: center; justify-content: space-between;
@@ -1349,8 +1387,23 @@
      viewport the right column gets crushed and the pipe layer cards
      overlap the scenarios/detail panel, so collapse to single col. */
   @media (max-width: 1660px) {
-    .stage { grid-template-columns: minmax(0, 1fr); }
+    /* Single-column layout: scenarios on top (pick first), then the pipeline
+       panel runs the simulation, then the per-phase detail card lands below.
+       The right-column wrapper has no class — flatten it into the grid via
+       display:contents so we can order scenarios and detail independently. */
+    .stage {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 28px;          /* was 56px (designed for desktop columns) */
+    }
     .detail { position: static; }
+    /* `.scenarios + .detail` margin-top + divider was for the old desktop
+       right-column where the two were stacked adjacent; in single-column
+       they're no longer visually adjacent (pipe-wrap is between them). */
+    .scenarios + .detail { margin-top: 0; border-top: none; }
+    .stage > div:not(.pipe-wrap) { display: contents; }
+    .stage .scenarios { order: 1; }
+    .stage > .pipe-wrap { order: 2; }
+    .stage .detail { order: 3; }
   }
 
   @media (max-width: 1100px) {
@@ -1359,6 +1412,11 @@
     .pipe { grid-template-columns: 1fr; }
     .rail { display: none; }
     .verdict { grid-template-columns: 1fr; }
+  }
+
+  @media (max-width: 600px) {
+    /* Scenario buttons stop compressing usefully below ~600px — stack them. */
+    .scenario-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -1447,7 +1505,7 @@
         <div class="verdict-calc">
           <div class="calc-label">scoring</div>
           <div class="calc-body" id="calc-body">
-            <span class="op">idle — press</span> <span class="val">▶ simulate</span>
+            <span class="op">idle — press</span> <span class="val">▶ replay</span>
           </div>
         </div>
         <div class="verdict-box" id="verdict-box">
@@ -1461,8 +1519,7 @@
       </div>
 
       <div class="controls">
-        <button class="btn primary" id="btn-play">▶ simulate</button>
-        <button class="btn" id="btn-reset">↺ reset</button>
+        <button class="btn primary" id="btn-play">▶ replay</button>
         <div class="spacer"></div>
         <span class="status" id="status">idle</span>
       </div>
@@ -1471,7 +1528,7 @@
     <!-- RIGHT — scenarios on top, phase detail panel below -->
     <div>
       <div class="scenarios">
-        <h2>Scenarios — pick a command to simulate</h2>
+        <h2>Scenarios — pick a command to replay</h2>
         <div class="scenario-grid" id="scenarios"></div>
       </div>
       <div class="detail" id="detail"></div>
@@ -1972,9 +2029,9 @@ function resetAnim() {
   verdictBox.className = 'verdict-box';
   vIcon.textContent = '◌';
   vTitle.textContent = 'awaiting evaluation';
-  vSub.textContent = 'ready to simulate';
+  vSub.textContent = 'ready to replay';
   vScore.textContent = '—';
-  calcBody.innerHTML = `<span class="op">idle — press</span> <span class="val">▶ simulate</span>`;
+  calcBody.innerHTML = `<span class="op">idle — press</span> <span class="val">▶ replay</span>`;
   statusEl.textContent = 'ready';
   renderDetail(0);
 }
@@ -2096,7 +2153,6 @@ function applyVerdict() {
 
 // ——— controls ———
 document.getElementById('btn-play').addEventListener('click', () => { resetAnim(); play(); });
-document.getElementById('btn-reset').addEventListener('click', resetAnim);
 
 // ——— tweaks + host protocol ———
 const state = { ...TWEAK_DEFAULTS };

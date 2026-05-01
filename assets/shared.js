@@ -192,7 +192,7 @@
       a.href = `#${h.id}`;
       a.setAttribute('aria-label', `Link to ${h.id}`);
       a.textContent = '#';
-      h.appendChild(a);
+      h.prepend(a);
     }
   }
 
