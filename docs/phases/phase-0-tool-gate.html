@@ -157,13 +157,13 @@
             <tr><td>U2</td><td>variable shell</td><td><code>$SHELL/$BASH/${SHELL} -c "..."</code></td></tr>
             <tr><td>U3</td><td>eval</td><td><code>eval "..."</code>, <code>eval $(...)</code></td></tr>
             <tr><td>U4</td><td>heredoc / here-string</td><td><code>&lt;&lt;EOF...EOF</code>, <code>&lt;&lt;&lt;'...'</code></td></tr>
-            <tr><td>U5</td><td>process substitution</td><td><code>&lt;(...)</code>, <code>&gt;(...)</code></td></tr>
+            <tr><td>U5</td><td>process substitution</td><td><code>&lt;(...)</code>, <code>&gt;(...)</code> — additionally decodes <code>bash|sh|zsh|dash|ksh|source|. &lt;(echo "X")</code> to expose the inner X (the consumer executes echo's output, so X is the real command)</td></tr>
             <tr><td>U6</td><td>command substitution</td><td><code>$(...)</code>, backticks</td></tr>
             <tr><td>U7</td><td>source / script exec</td><td><code>source &lt;(...)</code>, <code>. &lt;(...)</code>, <code>bash &lt;(...)</code></td></tr>
             <tr><td>U8</td><td>interpreter inline</td><td><code>python/python3/node/bun/deno/ruby/perl/php/lua/Rscript/tclsh/osascript/pwsh -c|-e|-r|--eval</code> (sets <code>inline=true</code>)</td></tr>
             <tr><td>U9</td><td>encoded-pipe decoder</td><td><code>echo '&lt;b64&gt;' | base64 -d | &lt;interp&gt;</code>, <code>xxd -r -p</code>, <code>openssl base64 -d</code></td></tr>
             <tr><td>U10</td><td>string-concat / variable folding</td><td><code>c=cu; c=$c"rl"; $c URL</code> (best-effort static fold)</td></tr>
-            <tr><td>U11</td><td>indirect executor</td><td><code>xargs &lt;cmd&gt;</code>, <code>find -exec &lt;cmd&gt;</code>, <code>parallel/watch/time/env &lt;cmd&gt;</code></td></tr>
+            <tr><td>U11</td><td>indirect executor</td><td><code>xargs &lt;cmd&gt;</code>, <code>find -exec &lt;cmd&gt;</code>, <code>parallel/watch/time/env &lt;cmd&gt;</code> — for <code>echo X | xargs CMD</code> / <code>printf X | xargs CMD</code> also synthesizes <code>CMD X</code> so detectors see the appended argument xargs would deliver</td></tr>
             <tr><td>U12</td><td>remote shell</td><td><code>ssh user@host '...'</code>, <code>docker exec C ...</code>, <code>kubectl exec ... -- ...</code>, <code>podman exec ...</code> (sets <code>remote=true</code>)</td></tr>
             <tr><td>U13</td><td>editor escape</td><td><code>vim/nvim/ed/ex -c '!...'</code>, <code>emacs --batch ...</code></td></tr>
             <tr><td>U14</td><td>build/orchestration inline shell</td><td><code>make -f /dev/stdin</code>, <code>ansible -m shell -a '...'</code></td></tr>

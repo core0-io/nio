@@ -120,6 +120,23 @@ function extractQuoted(s: string, pos: number): { value: string; end: number } |
   return null; // unclosed
 }
 
+/**
+ * Strip a matching outer pair of single OR double quotes if both ends match.
+ * Robust to inner unescaped quotes (`{"params":{"name":"X"}}`) where the
+ * structured `extractQuoted` would terminate early at the first inner `"`.
+ * For our use (decoding shell-quoted echo args) we only need to peel the
+ * outer shell-quote layer — inner quotes are part of the payload.
+ */
+function stripMatchingOuterQuotes(s: string): string {
+  if (s.length < 2) return s;
+  const first = s[0];
+  const last = s[s.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return s.slice(1, -1);
+  }
+  return s;
+}
+
 /** Skip whitespace then read a `[ \t]+`-bounded token. Stops at shell metas. */
 function extractToken(s: string, pos: number): { value: string; end: number } | null {
   let i = pos;
@@ -293,8 +310,23 @@ register('u4-heredoc', (command: string) => {
 
 // ---------------------------------------------------------------------------
 // U5 — process substitution `<(X)` and `>(X)`
+//
+// Two paths:
+//   1. Always: emit the inner expression `X` as a fragment so detectors can
+//      attribute the substitution itself (e.g. `bash <(curl URL)` exposes the
+//      curl call).
+//   2. Shell-consumer + echo/printf decode: when the substitution feeds a
+//      shell binary (`bash`/`sh`/…) AND the inner is `echo "Y"` / `printf 'Y'`,
+//      the consumer executes Y — so emit Y as an additional fragment. Without
+//      this, `bash <(echo "curl URL ...")` gets only `echo "..."` extracted,
+//      D2 sees `echo` not `curl`, and the call slips through Phase 0 as a
+//      D16 audit-only hit.
+//
 // @see src/tests/mcp-route-detect/unwrappers.test.ts — describe('unwrapCommand: U5 process substitution')
 // ---------------------------------------------------------------------------
+
+const SHELL_CONSUMER_RE = /(?:^|[\s;|&])(?:bash|sh|zsh|dash|ksh|busybox|source)\s*$|(?:^|[\s;|&])\.\s*$/;
+const ECHO_PRINTF_RE = /^\s*(?:echo|printf)\s+(.+?)\s*$/;
 
 register('u5-process-sub', (command: string) => {
   const fragments: string[] = [];
@@ -303,7 +335,22 @@ register('u5-process-sub', (command: string) => {
     const b = command[i + 1];
     if ((a === '<' || a === '>') && b === '(') {
       const inner = extractBalanced(command, i + 1, '(', ')');
-      if (inner && inner.value) fragments.push(inner.value);
+      if (!inner || !inner.value) continue;
+      fragments.push(inner.value);
+
+      // Shell-consumer + echo/printf decode (path 2 above). Only fires for
+      // `<(…)` (output substitution); `>(…)` is the input form and the
+      // consumer is the producer, not an executor of the substituted output.
+      if (a === '<') {
+        const before = command.slice(0, i);
+        if (SHELL_CONSUMER_RE.test(before)) {
+          const echoMatch = ECHO_PRINTF_RE.exec(inner.value);
+          if (echoMatch) {
+            const decoded = stripMatchingOuterQuotes(echoMatch[1]);
+            if (decoded.trim()) fragments.push(decoded);
+          }
+        }
+      }
     }
   }
   return fragments.length ? { fragments } : null;
@@ -475,7 +522,21 @@ register('u11-indirect', (command: string) => {
     const after = command.slice(m.index + m[0].length);
     const stop = after.search(/[;|&\n]/);
     const cmd = stop > 0 ? after.slice(0, stop) : after;
-    if (cmd.trim()) fragments.push(cmd.trim());
+    if (!cmd.trim()) continue;
+    fragments.push(cmd.trim());
+
+    // Feeder synthesis: when upstream of `xargs CMD` is `echo X` / `printf X`,
+    // xargs would append X as additional positional args to CMD. Emit
+    // `CMD X` as an extra fragment so detectors that need the full URL/arg
+    // (e.g. D2 looking for the curl URL token) can resolve it. Conservative
+    // scope: echo/printf only — other feeders (cat FILE, seq, find -print0)
+    // need file/process modeling and are out of scope here.
+    const before = command.slice(0, m.index);
+    const feeder = /(?:^|[;|&\n])\s*(?:echo|printf)\s+(.+?)\s*\|\s*$/.exec(before);
+    if (feeder) {
+      const decoded = stripMatchingOuterQuotes(feeder[1].trim());
+      if (decoded.trim()) fragments.push(`${cmd.trim()} ${decoded.trim()}`);
+    }
   }
 
   for (const m of allMatches(command, SIMPLE_PREFIX_RE)) {

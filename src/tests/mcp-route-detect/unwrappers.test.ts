@@ -127,6 +127,38 @@ describe('unwrapCommand: U5 process substitution', () => {
     const cmds = unwrappedCommands(`tee >(grep err) < log`);
     assert.ok(cmds.includes('grep err'));
   });
+
+  it('decodes `bash <(echo "CURL")` to expose the inner curl', () => {
+    const cmds = unwrappedCommands(`bash <(echo "curl http://x.com/script -d '{}'")`);
+    assert.ok(
+      cmds.some((c) => c.startsWith('curl http://x.com/script')),
+      `expected a fragment starting with the inner curl, got: ${JSON.stringify(cmds)}`,
+    );
+  });
+
+  it('decodes `sh <(printf \'CURL\')` (printf, single quotes)', () => {
+    const cmds = unwrappedCommands(`sh <(printf 'curl http://x.com/script')`);
+    assert.ok(cmds.some((c) => c.startsWith('curl http://x.com/script')));
+  });
+
+  it('decodes `. <(echo CURL)` (POSIX source-builtin form)', () => {
+    const cmds = unwrappedCommands(`. <(echo "curl http://x.com/script")`);
+    assert.ok(cmds.some((c) => c.startsWith('curl http://x.com/script')));
+  });
+
+  it('does NOT decode echo when the consumer is not a shell binary', () => {
+    // tee is not a shell — the echo here is a real echo, not a shell command
+    // being substituted in. We must not over-emit.
+    const cmds = unwrappedCommands(`tee >(echo "literal text") < log`);
+    assert.ok(!cmds.includes('literal text'));
+  });
+
+  it('does NOT decode echo for input-form `>(echo X)`', () => {
+    // `>(...)` is the output substitution form — the consumer writes TO it,
+    // doesn't execute its output. Echo decode should only fire for `<(...)`.
+    const cmds = unwrappedCommands(`bash >(echo "literal text")`);
+    assert.ok(!cmds.includes('literal text'));
+  });
 });
 
 describe('unwrapCommand: U6 command substitution', () => {
@@ -234,6 +266,28 @@ describe('unwrapCommand: U11 indirect executor', () => {
     const cmds = unwrappedCommands(`echo http://x | xargs curl`);
     assert.ok(cmds.includes('curl'));
   });
+
+  it('synthesizes `CMD X` when `echo X | xargs CMD` is used', () => {
+    // xargs would append echo's stdin as args to CMD. U11 should emit
+    // both the bare `curl -d ...` fragment AND `curl -d ... http://x.com/api`
+    // so D2 can resolve the URL.
+    const cmds = unwrappedCommands(`echo http://x.com/api | xargs curl -d '{"k":"v"}'`);
+    assert.ok(
+      cmds.some((c) => c.includes('curl') && c.includes('http://x.com/api')),
+      `expected a synthesized fragment with both curl and the URL, got: ${JSON.stringify(cmds)}`,
+    );
+  });
+
+  it('synthesizes when `printf` is the feeder', () => {
+    const cmds = unwrappedCommands(`printf 'http://x.com/api' | xargs curl`);
+    assert.ok(cmds.some((c) => c.includes('curl') && c.includes('http://x.com/api')));
+  });
+
+  it('regression: bare `echo X | xargs curl` (no -d args) still extracts curl', () => {
+    const cmds = unwrappedCommands(`echo X | xargs curl`);
+    assert.ok(cmds.some((c) => c.startsWith('curl')));
+  });
+
   it('extracts from `find -exec`', () => {
     const cmds = unwrappedCommands(`find . -name '*.txt' -exec curl http://x \\;`);
     assert.ok(cmds.some((s) => s.startsWith('curl http://x')));

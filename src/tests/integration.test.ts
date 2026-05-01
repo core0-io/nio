@@ -1564,3 +1564,54 @@ describe('Integration: 6-vector e2e regression (user CC audit, denylist mode)', 
     assert.match(r.reason ?? '', /hass__HassTurnOff/);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U/D composition closures: Steps 29 / 31 from the user's full e2e audit
+// — surfaced after the 6-vector regression landed. Both fail in the same
+// way pre-fix (only D16 obfuscation_fallback hits, audit-only, filtered out).
+// Fix lives in U5 (process-sub + echo decode) and U11 (xargs + echo feeder).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: U/D composition closures (Steps 29 / 31)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  it('Step 29: `bash <(echo "curl ...")` denies via http_client (U5 echo decode)', async () => {
+    ctx = createTestContext({
+      guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+      mcpRegistry: buildIntegrationRegistry(),
+    });
+    // Build body without manual JS-side escapes — the runtime command should
+    // contain a parseable JSON-RPC body literal so D2's tool extraction
+    // succeeds. Backslash-escaped `\"` would defeat JSON.parse and fall back
+    // to the matcher's ambiguous-server bias (deny via hass__*), which is
+    // also correct but a less precise verification of the U5 fix.
+    const body = `{"params":{"name":"HassTurnOff"}}`;
+    const innerCurl = `curl -X POST http://localhost:5173/mcp -d '${body}'`;
+    const cmd = `bash <(echo "${innerCurl}")`;
+    const r = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: cmd },
+    }, ctx.options);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via http_client/);
+    assert.match(r.reason ?? '', /hass__HassTurnOff/);
+  });
+
+  it('Step 31: `echo URL | xargs curl ...` denies via http_client (U11 feeder synth)', async () => {
+    ctx = createTestContext({
+      guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+      mcpRegistry: buildIntegrationRegistry(),
+    });
+    const cmd = `echo http://localhost:5173/mcp | xargs curl -d '{"params":{"name":"HassTurnOff"}}'`;
+    const r = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: cmd },
+    }, ctx.options);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via http_client/);
+    assert.match(r.reason ?? '', /hass__HassTurnOff/);
+  });
+});
