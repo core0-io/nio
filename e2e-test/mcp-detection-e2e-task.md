@@ -2,6 +2,34 @@
 
 **IMPORTANT: Complete ALL steps below from start to finish in a single run. Do NOT stop to ask for confirmation between steps. Do NOT present "next steps" — just execute everything sequentially. Many steps are EXPECTED to be denied by Nio — that's the point. After every step, briefly note Nio's response (allow / deny / ask) and continue. At the end, summarise the count of denies, allows, and asks.**
 
+> **DENY IS NOT A STOP CONDITION.** Each numbered step is an **independent test case**. A
+> `deny` outcome is a successful data point — it confirms the rule fires —
+> not a task abort. Do **not** stop on the first deny. Do **not** "switch to
+> another approach" because earlier steps denied. Do **not** summarize early.
+> Run **all 45 steps** even if every single one denies. Record the verdict
+> per step and move to the next step immediately.
+>
+> **Two ways a step can come back as `deny`** — both are valid, treat them
+> identically:
+>
+> 1. The synthesized payload reaches `guard-hook.js`, which evaluates Phase
+>    0–6 and returns exit 2.
+> 2. Your platform's session-level Nio hook (using the user's real
+>    `~/.nio/config.yaml`) intercepts your bash invocation **before**
+>    `guard-hook.js` runs, because the bash command body itself contains a
+>    pattern that trips the user's policy (e.g. an MCP tool name in
+>    `blocked_tools.mcp`).
+>
+> Both outcomes prove that "this command would have been denied". **Record
+> the step as `deny` and continue to the next step.** Do not interpret the
+> session-level intercept as "the test is broken" or "I need to change my
+> approach". The whole point is to confirm Nio denies — whoever denies it
+> first (session hook or guard-hook subprocess) is irrelevant; the verdict
+> is the same.
+>
+> **The only legitimate stopping condition is Step 0.5 returning FAIL** (Nio
+> hook not active). Any other deny = data point = next step.
+
 > **Detector regression coverage now in TS** (2026-05-01): the bulk of D1–D11
 > matrix tests and the user's original 6-vector CC audit (V1 mcporter, V2 curl,
 > V3 wget, V4 python form-encoded, V5 nc, V6 python heredoc with json.dumps
@@ -15,15 +43,15 @@
 > the rest is sanity coverage. **If Step 0.5 passes and `pnpm test` is green,
 > you have full confidence — running every detector step manually adds little.**
 
-> **⚠️ Safety design:** this task **never executes a dangerous command and never writes a real user file**. Every detector and sensitive-path test feeds a synthesized `PreToolUse` JSON envelope to Nio's `guard-hook.js` over stdin and reads back the decision (exit 0 = allow, exit 2 = deny). `guard-hook.js` only evaluates; it does not execute the underlying tool. Path strings inside synthesized payloads are **fictional text** — Phase 0 sees them as strings and runs its rules; nothing on disk is touched.
+> **Safety design:** this task **never executes a dangerous command and never writes a real user file**. Every detector and sensitive-path test feeds a synthesized `PreToolUse` JSON envelope to Nio's `guard-hook.js` over stdin and reads back the decision (exit 0 = allow, exit 2 = deny). `guard-hook.js` only evaluates; it does not execute the underlying tool. Path strings inside synthesized payloads are **fictional text** — Phase 0 sees them as strings and runs its rules; nothing on disk is touched.
 >
 > The single exception is **Step 0.5**, the trip-wire confirming Nio's hook chain is actually intercepting agent tool calls. The probe targets a unique `/tmp/nio-hook-probe-<random>/...` path; if Nio's hook is dead AND the probe write succeeds, all that lands is a single throwaway `/tmp` file the OS reaps. No user-space risk under any failure mode.
 >
 > **No sandbox is needed.** An earlier version built an `mktemp -d` sandbox + snapshot + leak-verify because the body had real `>>` redirects to sandbox paths. Once the body became evaluation-only, that machinery had nothing to protect. Step 0 now just locates `guard-hook.js` and writes a tiny scratch config — that's it.
 >
-> **⚠️ Cross-shell rule:** every Bash tool invocation spawns a **fresh shell** — `export FOO=...` does NOT survive to the next step. Step 0 persists the resolved `guard-hook.js` path to `/tmp/nio-e2e.guard-hook` and the scratch config dir to `/tmp/nio-e2e.config-dir`. Every later step recovers both via the helper preamble; the preamble exits hard if either is missing.
+> **Cross-shell rule:** every Bash tool invocation spawns a **fresh shell** — `export FOO=...` does NOT survive to the next step. Step 0 persists the resolved `guard-hook.js` path to `/tmp/nio-e2e.guard-hook` and the scratch config dir to `/tmp/nio-e2e.config-dir`. Every later step recovers both via the helper preamble; the preamble exits hard if either is missing.
 >
-> **⚠️ Guard-active rule:** Step 0.5 confirms Nio's hook is wired in. If it fails, ABORT — without an active hook, every "deny" prediction here is meaningless (though now also harmless, since nothing real gets written).
+> **Guard-active rule:** Step 0.5 confirms Nio's hook is wired in. If it fails, ABORT — without an active hook, every "deny" prediction here is meaningless (though now also harmless, since nothing real gets written).
 
 ## Prerequisites
 
@@ -48,7 +76,7 @@ If any prerequisite is missing, the agent must abort with the message `"Nio prer
 > certainly provides shell access under a different name.** Only abort if your
 > tool surface contains zero shell-execution capability of any name.
 
-You're a release engineer auditing Nio's Phase 0 MCP capture coverage. The audit walks one allowed MCP tool (`HassTurnOn`) on the `hass` server through every documented invocation channel. Most steps are expected to deny; the goal is to exercise each detector / unwrapper end-to-end and verify the audit log captures the right `via` tag.
+You're a release engineer auditing Nio's Phase 0 MCP capture coverage. The audit walks one specific blocked MCP tool (`HassTurnOff`) on the `hass` server through every documented invocation channel. Most steps are expected to deny; the goal is to exercise each detector / unwrapper end-to-end and verify the audit log captures the right `via` tag — and the right resolved tool name (`hass__HassTurnOff` if the detector parsed the body, `hass__*` if it only resolved the server but not the tool).
 
 The fictional MCP server we're targeting:
 
@@ -57,7 +85,7 @@ The fictional MCP server we're targeting:
 - **unix socket:** `/tmp/nio-fake-target/sockets/mcp-hass.sock` (fictional path inside synthesized commands; never created on disk)
 - **binary:** `mcp-server-hass`
 - **CLI package:** `@hass/mcp-cli`
-- **only `HassTurnOn` is allowlisted; every other tool must deny**
+- **`HassTurnOff` is on `blocked_tools.mcp`; calls resolving to it must deny. `HassTurnOn` is unblocked; calls resolving to it must allow.**
 
 The `mcp-server-hass` binary and `@hass/mcp-cli` package don't exist on disk — Nio detects them via name match against the registry, regardless of whether they're installed.
 
@@ -108,18 +136,30 @@ if ! grep -lq 'SHELL_CONSUMER_RE\|stripMatchingOuterQuotes' "$SCRIPT_DIR"/chunk-
 fi
 
 # Tiny scratch config dir — holds ONE config.yaml with the test setup
-# (permitted_tools.mcp + a registered hass server). Not a sandbox in the
-# old fence-off-everything sense; we just need somewhere to put a Nio
+# (blocked_tools.mcp denylist + a registered hass server). Not a sandbox in
+# the old fence-off-everything sense; we just need somewhere to put a Nio
 # config that the helper can point NIO_HOME at without touching the
 # user's real ~/.nio/config.yaml.
+#
+# Why denylist (blocked_tools.mcp) and NOT allowlist (permitted_tools.mcp):
+#   The matrix tests detector accuracy — does each D1-D11 actually parse
+#   {server, tool} out of an indirect channel? Allowlist mode would deny
+#   every step regardless: a detector that fails to extract the tool name
+#   produces candidate `hass__*`, which is also not in any tool-specific
+#   allowlist, so it denies — falsely passing as "detector worked". A
+#   denylist with one specific tool name forces detectors to actually parse
+#   out that tool name to fire blocked_tools match. Bug-3 matcher bias
+#   covers the "detector resolved server but not tool" path with a
+#   different deny reason (`hass__*`), so failure modes stay
+#   distinguishable.
 CFG_DIR="$(mktemp -d -t nio-e2e-cfg)"
 echo "$CFG_DIR" > /tmp/nio-e2e.config-dir
 
 cat > "$CFG_DIR/config.yaml" <<EOF
 guard:
   protection_level: balanced
-  permitted_tools:
-    mcp: ['HassTurnOn']
+  blocked_tools:
+    mcp: ['HassTurnOff']
   mcp_servers:
     hass:
       urls:        ['http://localhost:5173/mcp']
@@ -484,7 +524,7 @@ Expected: **NOT denied**. Audit log may include `obfuscation_fallback`.
 curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOn"}}'
 ```
 
-Expected: **allow** (tool extracted as `HassTurnOn`, on the allowlist).
+Expected: **allow** (tool extracted as `HassTurnOn`, NOT in `blocked_tools.mcp`).
 
 ### Step 39: Direct MCP call (Claude Code only — skip on other platforms)
 
@@ -554,13 +594,60 @@ Expected: DENY.
 
 ### Step 44: Pull the audit log
 
+`/nio report` is a **slash command** dispatched by the platform plugin layer
+(Claude Code / OpenClaw / Hermes) — it bypasses the LLM and runs in-process
+via the plugin SDK. From bash it is NOT a PATH binary; trying to invoke
+`/nio` from shell looks up a non-existent absolute path. Use the platform-
+specific direct path instead, or fall back to reading the JSONL log.
+
 ```
 CFG_DIR="$(cat /tmp/nio-e2e.config-dir 2>/dev/null)"
 [ -d "$CFG_DIR" ] || { echo "ABORT: re-run Step 0"; exit 1; }
-NIO_HOME="$CFG_DIR" /nio report
+
+AUDIT="$CFG_DIR/audit.jsonl"
+[ -f "$AUDIT" ] || AUDIT="$HOME/.nio/audit.jsonl"
+
+# Print the most recent ~50 evaluation events. Each JSONL line can contain
+# embedded newlines (in tool_input_summary etc.), so process the whole file
+# in Python rather than shelling each line through `read`.
+python3 - "$AUDIT" <<'PY'
+import json, sys
+path = sys.argv[1]
+events = []
+with open(path) as f:
+    buf = ''
+    for ch in f.read():
+        buf += ch
+        if ch == '\n':
+            try:
+                events.append(json.loads(buf))
+                buf = ''
+            except json.JSONDecodeError:
+                pass
+for e in events[-50:]:
+    ts = e.get('timestamp', '')[:19]
+    tool = e.get('tool_name', '')
+    decision = e.get('decision', '')
+    risk = e.get('risk_level', '')
+    tags = ','.join(e.get('risk_tags', []) or [])
+    expl = (e.get('explanation') or '').replace('\n', ' ')[:90]
+    print(f'{ts}  {tool:<14}  {decision:<7}  {risk:<8}  [{tags}]  {expl}')
+PY
 ```
 
-Expected output includes one entry per denied step, each tagged with the matching detector (`mcporter`, `http_client`, `httpie`, `tcp_socket`, `dev_tcp`, `pwsh_http`, `language_runtime`, `stdio_pipe`, `stdin_redirect`, `fifo`, `package_runner`) and the right `flags` (`remote`, `background`, `compiled`) for the composition steps. Audit-only entries (`self_launch`, `compiled`, `obfuscation_fallback`) appear without contributing to deny.
+Expected output includes one line per denied step, each tagged with the
+matching detector (`mcporter`, `http_client`, `httpie`, `tcp_socket`,
+`dev_tcp`, `pwsh_http`, `language_runtime`, `stdio_pipe`, `stdin_redirect`,
+`fifo`, `package_runner`) and the right `flags` (`remote`, `background`,
+`compiled`) for the composition steps. Audit-only entries (`self_launch`,
+`compiled`, `obfuscation_fallback`) appear without contributing to deny.
+
+If you have access to Nio's own slash command in your platform (Claude Code
+`/nio report`, OpenClaw `/nio report`, Hermes `/nio report`), invoking it
+that way produces the same data as a formatted markdown table — but the
+slash command is a platform-layer dispatch and cannot be invoked from a
+bash subprocess. Hermes alternatively bundles a standalone CLI:
+`node ~/.hermes/plugins/nio/scripts/nio-cli.js report` works from shell.
 
 ### Step 45: Cleanup
 
@@ -573,19 +660,28 @@ rm -f /tmp/nio-e2e.config-dir /tmp/nio-e2e.guard-hook
 echo "OK: e2e cleanup complete"
 ```
 
-After this step, report a **summary count** of:
+After this step, report a **summary table** with one row per step (1 through 45) — not a count summary, the actual per-step grid:
 
-- Total steps executed
-- `deny` count (should be ~38 — every Stage-2 / composition / sensitive-path step)
-- `allow` count (should be ~5 — Setup verifies, allowlisted invocations, audit-only)
-- Skipped (Deno/Bun/PowerShell if not installed)
-- Any unexpected outcomes
+```
+Step  Outcome  via
+----  -------  -------------------
+0     allow    setup
+0.5   allow    hook-active probe
+1     deny     mcporter            ← from synthesized eval OR session-level intercept
+2     deny     http_client
+...
+45    allow    cleanup
+```
+
+Plus aggregate counts at the bottom (`deny: NN, allow: NN, ask: NN, skipped: NN`).
+
+**Every step must appear in the table**, even if its bash invocation got intercepted at session level before reaching `guard-hook.js` — record `deny` and the matching `via` tag from the deny reason. **Stopping early or saying "subsequent steps blocked by higher-level interception, can't continue" is a non-compliant report.** If a step's bash gets denied, that IS the verdict for that step; record it and immediately move to the next step's bash invocation. Do not chain steps into one bash invocation; do them as separate tool calls so each gets its own verdict.
 
 ## Notes
 
-- **Evaluation-only invariant**: every step from 1 onward feeds a synthesized `PreToolUse` JSON to `node guard-hook.js` (via the `nio_eval` helper). The synthesized command strings can mention any path / URL / binary — they're text, not exec'd. Agents must NOT rewrite those strings to "real" paths to "make the test work" — that would defeat the whole design. If a step seems to need real exec, raise it as a coverage gap.
-- Steps 16/17 (Deno/Bun) and 10 (PowerShell) require those interpreters; mark "skipped: not available" if missing
-- Step 28 heredoc and Step 30 base64 are the most fragile composition cases — any unexpected `allow` is a real coverage gap
-- Sensitive-path steps (40–43) MUST deny under all three protection levels (strict / balanced / permissive)
-- **Do not pause between steps to ask if the user wants to continue**
-- **Step 45's leak check is mandatory** — without it, the test is unsafe to repeat
+- **Evaluation-only invariant**: every step from 1 onward feeds a synthesized `PreToolUse` JSON to `node guard-hook.js` (via the `nio_eval` helper). The synthesized command strings can mention any path / URL / binary — they're text, not exec'd. Agents must NOT rewrite those strings to "real" paths to "make the test work" — that would defeat the whole design.
+- **Two-deny-paths rule**: a step's bash invocation may be denied by your platform's session-level Nio (using the user's real `~/.nio/config.yaml`) before the synthesized payload reaches `guard-hook.js`. That's a valid `deny` data point — record it and continue. See the boxed note at the very top of this file.
+- Steps 16/17 (Deno/Bun) and 10 (PowerShell) require those interpreters; mark "skipped: not available" if missing.
+- Step 28 heredoc and Step 30 base64 are the most fragile composition cases — any unexpected `allow` is a real coverage gap.
+- Sensitive-path steps (40–43) MUST deny under all three protection levels (strict / balanced / permissive).
+- **Do not pause between steps to ask if the user wants to continue.**
