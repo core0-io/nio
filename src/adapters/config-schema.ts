@@ -91,15 +91,15 @@ export const GuardConfigSchema = z.object({
   external_analyser: ExternalAnalyserConfigSchema.optional(),
   allowed_commands: z.array(z.string()).optional(),
   allowlist_mode: z.enum(['exit', 'continue']).optional(),
-  available_tools: z.record(z.string(), z.array(z.string())).optional(),
+  permitted_tools: z.record(z.string(), z.array(z.string())).optional(),
   blocked_tools: z.record(z.string(), z.array(z.string())).optional(),
-  mcp_endpoints: z.record(z.string(), z.object({
+  mcp_servers: z.record(z.string(), z.object({
     urls:        z.array(z.string()).optional(),
     sockets:     z.array(z.string()).optional(),
     binaries:    z.array(z.string()).optional(),
     cliPackages: z.array(z.string()).optional(),
   })).optional(),
-  guarded_tools: z.record(
+  native_tool_mapping: z.record(
     z.string(),
     z.record(z.string(), z.enum(['exec_command', 'write_file', 'network_request', 'read_file'])),
   ).optional(),

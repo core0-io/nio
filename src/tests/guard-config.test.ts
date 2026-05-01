@@ -12,7 +12,7 @@
  *                              src/adapters/openclaw-plugin.ts; not
  *                              unit-testable without refactoring an
  *                              extraction. Covered via manual adapter paths.
- *   - available_tools / blocked_tools / guarded_tools — already covered
+ *   - permitted_tools / blocked_tools / native_tool_mapping — already covered
  *                              in integration.test.ts (B2/B3) and
  *                              adapter.test.ts.
  *   - llm_analyser / external_analyser — config flags, covered implicitly

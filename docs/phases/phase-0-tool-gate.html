@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../../assets/shared.css">
 </head>
 <body>
-<!-- source: index.html LAYERS[0], plugins/shared/config.default.yaml (available_tools/blocked_tools/guarded_tools), MCP routing material absorbed from former mcp-detection.html -->
+<!-- source: index.html LAYERS[0], plugins/shared/config.default.yaml (permitted_tools/blocked_tools/native_tool_mapping), MCP routing material absorbed from former mcp-detection.html -->
 
 <div class="app">
   <div class="topbar">
@@ -41,8 +41,8 @@
 
       <div class="doc-hero">
         <div class="eyebrow">Pipeline · Phase 0</div>
-        <h1><em>Tool Gate</em> — is this tool blocked, available, or guarded?</h1>
-        <p class="lead">The first checkpoint. Looks at the tool name only — no command, no file content. Decides whether to deny outright (blocked), pass through without further analysis (available, not guarded), or hand the call to Phase 1+ (guarded).</p>
+        <h1><em>Tool Gate</em> — is this tool blocked, permitted, or analysed?</h1>
+        <p class="lead">The first checkpoint. Looks at the tool name only — no command, no file content. Decides whether to deny outright (blocked or not on a non-empty allowlist), pass through without further analysis (permitted but not in the native-tool mapping), or hand the call to Phase 1+ (mapped to an action type for deeper analysis).</p>
       </div>
 
       <div class="doc">
@@ -54,15 +54,15 @@
             <tr><td>Scope</td><td>All tools</td></tr>
             <tr><td>Type</td><td>Gate (no score emitted)</td></tr>
             <tr><td>Weight</td><td>—</td></tr>
-            <tr><td>Short-circuit</td><td>blocked → deny · available (not guarded) → allow</td></tr>
+            <tr><td>Short-circuit</td><td>blocked → deny · permitted (no native mapping) → allow</td></tr>
           </tbody>
         </table>
 
         <h2>How the gate decides</h2>
         <ol>
           <li>Look up the tool name in <a href="../configuration.html#guard.blocked_tools"><code>guard.blocked_tools</code></a> for the active platform (and <code>mcp</code> if it's an MCP tool). Match → <strong>deny</strong>.</li>
-          <li>If <a href="../configuration.html#guard.available_tools"><code>guard.available_tools</code></a> for the platform is non-empty AND the tool isn't on it → <strong>deny</strong> (whitelist mode).</li>
-          <li>Look up the tool in <a href="../configuration.html#guard.guarded_tools"><code>guard.guarded_tools</code></a>. Found → continue to Phase 1 with the mapped action type. Not found → <strong>allow</strong> (auto-approve, log only).</li>
+          <li>If <a href="../configuration.html#guard.permitted_tools"><code>guard.permitted_tools</code></a> for the platform is non-empty AND the tool isn't on it → <strong>deny</strong> (strict allowlist).</li>
+          <li>Look up the tool in <a href="../configuration.html#guard.native_tool_mapping"><code>guard.native_tool_mapping</code></a>. Mapped → continue to Phase 1 with the mapped action type. Unmapped → <strong>allow</strong> (auto-approve, log only).</li>
         </ol>
 
         <h2>Rules</h2>
@@ -70,20 +70,21 @@
           <thead><tr><th>Rule</th><th>Description</th></tr></thead>
           <tbody>
             <tr><td><code>blocked_tools</code></td><td>Hard-deny list — never runs.</td></tr>
-            <tr><td><code>available_tools</code></td><td>Known tools, skip the rest of the guard.</td></tr>
-            <tr><td><code>guarded_tools</code></td><td>Hand off to Phase 1+ deep analysis.</td></tr>
+            <tr><td><code>permitted_tools</code></td><td>Strict allowlist — when non-empty, only listed tools may run; everything else is denied.</td></tr>
+            <tr><td><code>native_tool_mapping</code></td><td>Native tool → action-type classification. Mapped tools enter Phase 1–6 deep analysis with the chosen action type; unmapped tools auto-allow (log only).</td></tr>
           </tbody>
         </table>
 
         <h2>Configuration that affects this phase</h2>
         <ul>
           <li><a href="../configuration.html#guard.blocked_tools"><code>guard.blocked_tools</code></a> — per-platform + <code>mcp</code> denylist.</li>
-          <li><a href="../configuration.html#guard.available_tools"><code>guard.available_tools</code></a> — per-platform + <code>mcp</code> allowlist (whitelist mode when non-empty).</li>
-          <li><a href="../configuration.html#guard.guarded_tools"><code>guard.guarded_tools</code></a> — per-platform tool → action type mapping.</li>
+          <li><a href="../configuration.html#guard.permitted_tools"><code>guard.permitted_tools</code></a> — per-platform + <code>mcp</code> strict allowlist (only listed tools pass when non-empty).</li>
+          <li><a href="../configuration.html#guard.native_tool_mapping"><code>guard.native_tool_mapping</code></a> — per-platform native tool → action-type classification table (decides which Phase 1–6 rule set runs).</li>
+          <li><a href="../configuration.html#guard.mcp_servers"><code>guard.mcp_servers</code></a> — manual MCP server registry, used by the indirect-invocation detectors below.</li>
         </ul>
 
         <h2 id="mcp-routing">MCP Tool Routing — direct and indirect, one allowlist</h2>
-        <p>An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist.</p>
+        <p>An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist.</p>
 
         <h3>Why the indirect path needs handling</h3>
         <p>From the platform's point of view, when an agent shells out, the tool name is just <code>Bash</code> — the actual MCP invocation lives in the command's content. Without further inspection, indirect calls escape the allowlist that direct calls obey. Nio closes that gap by adding <strong>content detection at Phase 0</strong>: unwrap nested forms, run detectors against each fragment, map every hit back to <code>{server, tool}</code> via an endpoint registry, and feed the resulting candidates into the same allowlist check. The policy layer is unchanged.</p>
@@ -119,12 +120,12 @@
                 ▼                                                 ▼
             ┌────────────────────────────────────────────────────────┐
             │ Combined candidate list →                              │
-            │   available_tools.mcp / blocked_tools.mcp              │
+            │   permitted_tools.mcp / blocked_tools.mcp              │
             └────────────────────────────────────────────────────────┘</code></pre>
         <p>Stage 1 unwraps shells, heredocs, evals, encodings, package wrappers, and remote-shell prefixes until each fragment is plain enough that a detector can match it. Pass-through flags (<code>remote</code>, <code>background</code>, <code>compiled</code>) propagate from outer wrappers so the audit log can name the channel. Stage 2 runs every detector against every fragment; hits become <code>RoutedMcpCall { server, tool?, via, evidence, flags?, auditOnly? }</code>. Stage 3 flattens hits to <code>{tool, server__tool}</code> candidates and runs the existing allowlist check.</p>
         <p>Allowlist entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
 
-        <h3 id="endpoint-registry">MCP endpoint registry</h3>
+        <h3 id="endpoint-registry">MCP server registry</h3>
         <p>For Stage 2 to know that <code>http://localhost:5173/mcp</code> <em>is</em> an MCP server, Phase 0 loads a registry on hook entry. Sources are auto-discovered:</p>
         <table>
           <thead><tr><th>Source</th><th>Path</th></tr></thead>
@@ -133,7 +134,7 @@
             <tr><td>Claude Desktop</td><td><code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), <code>$XDG_CONFIG_HOME/Claude/</code>, <code>%APPDATA%\Claude\</code></td></tr>
             <tr><td>Hermes</td><td><code>~/.hermes/config.yaml</code> <code>mcp_servers.*</code></td></tr>
             <tr><td>OpenClaw</td><td><code>~/.openclaw/openclaw.json</code> <code>mcp.servers.*</code></td></tr>
-            <tr><td>Manual override</td><td><code>~/.nio/config.yaml</code> <a href="../configuration.html#guard.mcp_endpoints"><code>guard.mcp_endpoints.*</code></a></td></tr>
+            <tr><td>Manual override</td><td><code>~/.nio/config.yaml</code> <a href="../configuration.html#guard.mcp_servers"><code>guard.mcp_servers.*</code></a></td></tr>
           </tbody>
         </table>
         <p>Every server is indexed by every reachable handle:</p>
@@ -197,23 +198,23 @@
         </table>
 
         <h4>Conservative fallback</h4>
-        <p>When a detector resolves a <code>server</code> but cannot resolve a <code>tool</code> (e.g. JSON-RPC body isn't statically parseable), Phase 0 treats the call as a "whole-server invocation" — the candidate is <code>${server}__*</code>, which fails any <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist that doesn't whitelist the server entire. This biases toward denial when in doubt.</p>
+        <p>When a detector resolves a <code>server</code> but cannot resolve a <code>tool</code> (e.g. JSON-RPC body isn't statically parseable), Phase 0 treats the call as a "whole-server invocation" — the candidate is <code>${server}__*</code>, which fails any <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist that doesn't whitelist the server entire. This biases toward denial when in doubt.</p>
 
         <h4>Audit-only detectors</h4>
         <p>D12, D15, and D16 emit calls with <code>auditOnly: true</code>. Phase 0 filters these out before the allowlist check — they inform the audit log but never deny. D12 because dev workflows commonly start a local MCP server; D15 because compile-and-run is a normal build pattern (the compiled binary's runtime HTTP behaviour is properly an OS-sandbox concern); D16 because the fallback is heuristic and prone to false positives.</p>
 
         <h3 id="config-restrict">Restricting MCP tools via <code>~/.nio/config.yaml</code></h3>
-        <p>The capture model just feeds the existing <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist. To restrict an agent to a single MCP tool — direct or indirect — set:</p>
+        <p>The capture model just feeds the existing <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist. To restrict an agent to a single MCP tool — direct or indirect — set:</p>
         <pre><code>guard:
   protection_level: balanced
-  available_tools:
+  permitted_tools:
     mcp: ['HassTurnOn']     # only this tool is available, on any server
     # or:
     # mcp: ['hass__HassTurnOn']  # server-qualified — only on the hass server</code></pre>
         <p>Once set, Phase 0 denies <em>every</em> indirect channel that resolves to a different tool: a <code>curl</code> POST to the registered MCP URL, a <code>python3 -c "fetch(...)"</code> one-liner, a <code>npx</code> of the server's CLI package, an <code>echo '...' | mcp-server-bin</code> stdio injection, and so on.</p>
         <p>Servers Nio doesn't auto-discover (e.g. a SaaS MCP not declared in any of the known config files) can be declared manually:</p>
         <pre><code>guard:
-  mcp_endpoints:
+  mcp_servers:
     hass:
       urls:        ['http://localhost:5173/mcp']
       sockets:     ['/tmp/mcp-hass.sock']
@@ -227,10 +228,10 @@
         <pre><code>guard:
   blocked_tools:
     claude_code: ['WebSearch', 'WebFetch']
-  available_tools:
+  permitted_tools:
     claude_code: []         # empty → no whitelist mode
     mcp: ['hass__*']        # whitelist of MCP tools (any platform)
-  guarded_tools:
+  native_tool_mapping:
     claude_code:
       Bash: exec_command
       Write: write_file

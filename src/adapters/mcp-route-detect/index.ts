@@ -7,7 +7,7 @@
  * Maps Bash commands that indirectly invoke MCP tools (via mcporter, HTTP
  * clients, language runtimes, stdio pipes, package runners, …) back to
  * `{server, tool}` so Phase 0 can re-apply the existing
- * `available_tools.mcp` / `blocked_tools.mcp` allowlist.
+ * `permitted_tools.mcp` / `blocked_tools.mcp` allowlist.
  *
  * Two-stage pipeline:
  *   Stage 1: recursive unwrap (handles nesting, obfuscation, encoding)

@@ -95,7 +95,7 @@ function selectAdapter(
   switch (platform) {
     case 'hermes':
       return new HermesAdapter({
-        guardedTools: config.guard?.guarded_tools?.hermes,
+        nativeToolMapping: config.guard?.native_tool_mapping?.hermes,
       });
     default:
       console.error(

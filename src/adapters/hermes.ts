@@ -5,12 +5,12 @@ import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
- * Default tool name → action type mapping for Hermes.
+ * Default native-tool → action-type mapping for Hermes.
  *
  * Keyed on Hermes built-in tool names (see the Hermes agent docs).
- * Users can override via `guard.guarded_tools.hermes` in config.yaml.
+ * Users can override via `guard.native_tool_mapping.hermes` in config.yaml.
  */
-const DEFAULT_TOOL_ACTION_MAP: Record<string, string> = {
+const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, string> = {
   terminal: 'exec_command',   // Hermes's shell tool
   exec: 'exec_command',       // alt naming in some builds
   shell: 'exec_command',
@@ -23,7 +23,7 @@ const DEFAULT_TOOL_ACTION_MAP: Record<string, string> = {
 
 export interface HermesAdapterOptions {
   /** Config-driven tool → action type mapping, overrides the built-in default. */
-  guardedTools?: Record<string, string>;
+  nativeToolMapping?: Record<string, string>;
 }
 
 /**
@@ -55,10 +55,10 @@ export interface HermesAdapterOptions {
  */
 export class HermesAdapter implements HookAdapter {
   readonly name = 'hermes';
-  private toolActionMap: Record<string, string>;
+  private nativeToolMapping: Record<string, string>;
 
   constructor(opts?: HermesAdapterOptions) {
-    this.toolActionMap = opts?.guardedTools ?? DEFAULT_TOOL_ACTION_MAP;
+    this.nativeToolMapping = opts?.nativeToolMapping ?? DEFAULT_NATIVE_TOOL_MAPPING;
   }
 
   parseInput(raw: unknown): HookInput {
@@ -75,11 +75,11 @@ export class HermesAdapter implements HookAdapter {
   }
 
   mapToolToActionType(toolName: string): string | null {
-    if (this.toolActionMap[toolName]) {
-      return this.toolActionMap[toolName];
+    if (this.nativeToolMapping[toolName]) {
+      return this.nativeToolMapping[toolName];
     }
     // Prefix match for tool families (e.g. "terminal_python" → "exec_command")
-    for (const [prefix, actionType] of Object.entries(this.toolActionMap)) {
+    for (const [prefix, actionType] of Object.entries(this.nativeToolMapping)) {
       if (toolName.startsWith(prefix)) {
         return actionType;
       }

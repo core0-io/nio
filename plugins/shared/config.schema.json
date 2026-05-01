@@ -60,21 +60,21 @@
         "scoring_api_key": { "type": "string", "default": "", "description": "Bearer token for scoring endpoint authentication." },
         "scoring_timeout": { "type": "number", "minimum": 1, "default": 3000, "description": "Scoring endpoint timeout in milliseconds." },
         "extra_allowlist": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional safe command prefixes injected into Phase 1 allowlist." },
-        "available_tools": {
+        "permitted_tools": {
           "type": "object",
-          "description": "Tool-level allowlist (Phase 0), keyed by platform (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key for cross-platform MCP tool names. When a list is non-empty, only listed tools are available. MCP entries accept bare local names or `server__tool` form.",
+          "description": "Phase 0 strict allowlist, keyed by platform (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key for cross-platform MCP tool names. When a list is non-empty, ONLY listed tools pass on that platform. MCP entries accept bare local names or `server__tool` form.",
           "additionalProperties": { "type": "array", "items": { "type": "string" } },
           "default": {}
         },
         "blocked_tools": {
           "type": "object",
-          "description": "Tool-level denylist (Phase 0), keyed by platform or the reserved `mcp` key. Listed tools are unconditionally blocked.",
+          "description": "Phase 0 denylist, keyed by platform or the reserved `mcp` key. Listed tools are unconditionally blocked. Takes precedence over permitted_tools.",
           "additionalProperties": { "type": "array", "items": { "type": "string" } },
           "default": {}
         },
-        "guarded_tools": {
+        "native_tool_mapping": {
           "type": "object",
-          "description": "Tool → action type mapping. Tools listed here enter Phase 1-6 deep analysis. Others pass through Phase 0 only.",
+          "description": "Native tool → action type mapping, per platform. Classification table that decides which Phase 1-6 rule set runs. Tools absent from the map skip Phase 1-6 (auto-allow, log only). MCP tools are dynamic and not categorised here.",
           "additionalProperties": { "type": "string", "enum": ["exec_command", "write_file", "network_request"] },
           "default": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" }
         },

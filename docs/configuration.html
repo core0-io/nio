@@ -180,32 +180,32 @@
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>continue</code> · <strong>Values:</strong> <code>continue</code> | <code>exit</code></p>
         <p>What happens when a command matches an allowlist entry. <code>continue</code> records a hint but still runs Phases 2–6 (so external/LLM policy can't be bypassed). <code>exit</code> returns immediately — fastest path, skips later phases.</p>
 
-        <h3 id="guard.available_tools"><code>guard.available_tools</code></h3>
+        <h3 id="guard.permitted_tools"><code>guard.permitted_tools</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
-        <p>Phase 0 allowlist, per platform. When non-empty for a platform, ONLY listed tools are available to the agent. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
+        <p>Phase 0 strict allowlist, per platform. When non-empty for a namespace, ONLY listed tools pass on that platform; everything else is denied. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
         <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive.</p>
-        <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the endpoint registry. The full capture model lives at <a href="phases/phase-0-tool-gate.html#mcp-routing">Phase 0 — Tool Gate · MCP Tool Routing</a>.</p>
+        <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the MCP server registry. The full capture model lives at <a href="phases/phase-0-tool-gate.html#mcp-routing">Phase 0 — Tool Gate · MCP Tool Routing</a>.</p>
 
         <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
-        <p>Same shape as <code>available_tools</code>; listed tools are unconditionally blocked. <code>mcp</code> covers MCP tools on every platform in one place.</p>
+        <p>Same shape as <code>permitted_tools</code>; listed tools are unconditionally blocked. <code>mcp</code> covers MCP tools on every platform in one place. Takes precedence over <code>permitted_tools</code>.</p>
 
-        <h3 id="guard.mcp_endpoints"><code>guard.mcp_endpoints</code></h3>
+        <h3 id="guard.mcp_servers"><code>guard.mcp_servers</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{}</code></p>
-        <p>Manual override / addition for the MCP endpoint registry. Phase 0 auto-discovers servers from <code>~/.claude.json</code>, Claude Desktop, <code>~/.hermes/config.yaml</code>, and <code>~/.openclaw/openclaw.json</code>; this field is for SaaS or otherwise non-discoverable servers. Each entry indexes a server by every reachable handle so detectors can route indirect calls back to it.</p>
+        <p>Manual override / addition for the MCP server registry. Phase 0 auto-discovers servers from <code>~/.claude.json</code>, Claude Desktop, <code>~/.hermes/config.yaml</code>, and <code>~/.openclaw/openclaw.json</code>; this field is for SaaS or otherwise non-discoverable servers. Each entry's key is the server name; its value indexes the server by every reachable handle so detectors can route indirect calls back to it.</p>
         <pre><code>guard:
-  mcp_endpoints:
+  mcp_servers:
     hass:
       urls:        ['http://localhost:5173/mcp', 'wss://saas.example/mcp']
       sockets:     ['/tmp/mcp-hass.sock']
       binaries:    ['mcp-server-hass']
       cliPackages: ['@hass/mcp-cli']</code></pre>
-        <p>All four arrays are optional. URLs are normalized (case-insensitive host, trailing slash stripped); origin matching covers any sub-path of the registered URL. Binary and CLI-package lookups are case-insensitive and basename-aware. See <a href="phases/phase-0-tool-gate.html#endpoint-registry">Phase 0 — Tool Gate · Endpoint Registry</a> for full semantics.</p>
+        <p>All four arrays are optional. URLs are normalized (case-insensitive host, trailing slash stripped); origin matching covers any sub-path of the registered URL. Binary and CLI-package lookups are case-insensitive and basename-aware. See <a href="phases/phase-0-tool-gate.html#endpoint-registry">Phase 0 — Tool Gate · MCP Server Registry</a> for full semantics.</p>
 
-        <h3 id="guard.guarded_tools"><code>guard.guarded_tools</code></h3>
+        <h3 id="guard.native_tool_mapping"><code>guard.native_tool_mapping</code></h3>
         <p><strong>Type:</strong> object</p>
-        <p>Per-platform tool → action type mapping. Tools listed here enter Phases 1–6 deep analysis. Other tools pass through Phase 0 only (if allowed) and are auto-approved.</p>
-        <pre><code>guarded_tools:
+        <p>Native tool → action type classification, per platform. <em>Not a third allow/deny list</em> — this is the table that decides which Phase 1–6 rule set runs for each platform-native tool. Mapped tools enter Phase 1–6 with the chosen action type; tools absent from the map skip Phase 1–6 (auto-allow, log only). MCP tools are dynamic and not categorised here.</p>
+        <pre><code>native_tool_mapping:
   claude_code:
     Bash: exec_command
     Write: write_file

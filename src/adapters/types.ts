@@ -77,14 +77,14 @@ export interface EngineOptions {
   config: {
     guard?: {
       protection_level?: string;
-      available_tools?: Record<string, string[]>;
+      permitted_tools?: Record<string, string[]>;
       blocked_tools?: Record<string, string[]>;
     };
   };
   /** Runtime Nio engine (scanner + registry facade) */
   nio: NioInstance;
   /**
-   * Optional pre-loaded MCP endpoint registry. When omitted, the engine
+   * Optional pre-loaded MCP server registry. When omitted, the engine
    * loads it from disk via `loadMCPRegistry()` on each hook entry. Tests
    * inject a fixture-built registry to avoid touching real config files.
    */

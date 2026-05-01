@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * MCP endpoint registry.
+ * MCP server registry.
  *
  * Discovers configured MCP servers from known config files (Claude Code,
  * Claude Desktop, Hermes, OpenClaw) plus manual overrides in
- * `~/.nio/config.yaml` `guard.mcp_endpoints`. Each registered server is
+ * `~/.nio/config.yaml` `guard.mcp_servers`. Each registered server is
  * indexed by every reachable handle (URL, unix socket, server binary,
  * CLI package) so downstream detectors can map an indirect shell-side
  * invocation back to the server name and re-apply the existing
- * `available_tools.mcp` / `blocked_tools.mcp` allowlist.
+ * `permitted_tools.mcp` / `blocked_tools.mcp` allowlist.
  *
  * Caching: per-source file mtime. `loadMCPRegistry()` checks each source's
  * mtime on every call and only re-parses changed sources.
@@ -262,7 +262,7 @@ function loadManualOverride(configLoader: () => NioConfig): MCPServerEntry[] {
   } catch {
     return [];
   }
-  const decl = cfg.guard?.mcp_endpoints;
+  const decl = cfg.guard?.mcp_servers;
   if (!decl) return [];
 
   const entries: MCPServerEntry[] = [];

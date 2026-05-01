@@ -199,9 +199,10 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
     "llm_analyser": { "enabled": false, "api_key": "" },
     "external_analyser": { "enabled": false, "endpoint": "" },
     "allowed_commands": [],
-    "available_tools": {},
+    "permitted_tools": {},
     "blocked_tools": {},
-    "guarded_tools": {
+    "mcp_servers": {},
+    "native_tool_mapping": {
       "claude_code": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" },
       "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" }
     },
@@ -230,9 +231,10 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.external_analyser.enabled` | boolean | `true` | Enable/disable Phase 6 external scoring |
 | `guard.external_analyser.endpoint` | string | `""` | Phase 6 external scoring API URL |
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
-| `guard.available_tools` | object | `{}` | Phase 0 allowlist. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
-| `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `available_tools`; the `mcp` key covers MCP tools on every platform in one place. |
-| `guard.guarded_tools` | object | *(see above)* | Per-platform tool → action type mapping |
+| `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
+| `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |
+| `guard.mcp_servers` | object | `{}` | Manual MCP server registry. Keyed by server name; each value lists the URLs / sockets / binaries / CLI packages that identify the server, so indirect-invocation detectors can route a shell command back to a server name and re-apply `permitted_tools.mcp` / `blocked_tools.mcp`. Auto-discovered servers from `~/.claude.json` etc. don't need to be declared here. |
+| `guard.native_tool_mapping` | object | *(see above)* | Native tool → action type mapping, per platform. Classification table (NOT a third allow/deny list) that decides which Phase 1-6 rule set runs for each platform-native tool. Tools absent from the map skip Phase 1-6 (auto-allow, log only). MCP tools are dynamic and not categorised here. |
 | `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
 | `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |

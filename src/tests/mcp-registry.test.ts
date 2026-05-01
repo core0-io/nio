@@ -138,11 +138,11 @@ describe('loadMCPRegistry: Claude Desktop config', () => {
   });
 });
 
-describe('loadMCPRegistry: manual override (guard.mcp_endpoints)', () => {
+describe('loadMCPRegistry: manual override (guard.mcp_servers)', () => {
   it('declares a server with all four handle types', () => {
     const cfg: NioConfig = {
       guard: {
-        mcp_endpoints: {
+        mcp_servers: {
           hass: {
             urls: ['http://localhost:5173/mcp'],
             sockets: ['/tmp/mcp-hass.sock'],
@@ -167,7 +167,7 @@ describe('loadMCPRegistry: manual override (guard.mcp_endpoints)', () => {
       mcpServers: { hass: { url: 'http://homeassistant.local:8123/api/mcp' } },
     });
     const cfg: NioConfig = {
-      guard: { mcp_endpoints: { hass: { sockets: ['/tmp/extra.sock'] } } },
+      guard: { mcp_servers: { hass: { sockets: ['/tmp/extra.sock'] } } },
     };
     const reg = loadMCPRegistry({ home: HOME, configLoader: () => cfg });
     assert.equal(reg.entries.length, 1);
@@ -213,7 +213,7 @@ describe('loadMCPRegistry: lookup APIs', () => {
 
   it('lookupBySocket matches exact path', () => {
     const cfg: NioConfig = {
-      guard: { mcp_endpoints: { x: { sockets: ['/tmp/x.sock'] } } },
+      guard: { mcp_servers: { x: { sockets: ['/tmp/x.sock'] } } },
     };
     const reg = loadMCPRegistry({ home: HOME, configLoader: () => cfg });
     assert.equal(reg.lookupBySocket('/tmp/x.sock')?.serverName, 'x');
@@ -221,7 +221,7 @@ describe('loadMCPRegistry: lookup APIs', () => {
 
   it('lookupBySocket matches by basename (different dir)', () => {
     const cfg: NioConfig = {
-      guard: { mcp_endpoints: { x: { sockets: ['/tmp/x.sock'] } } },
+      guard: { mcp_servers: { x: { sockets: ['/tmp/x.sock'] } } },
     };
     const reg = loadMCPRegistry({ home: HOME, configLoader: () => cfg });
     assert.equal(reg.lookupBySocket('/run/user/501/x.sock')?.serverName, 'x');
@@ -248,7 +248,7 @@ describe('loadMCPRegistry: lookup APIs', () => {
 
   it('lookups return null on empty input', () => {
     const cfg: NioConfig = {
-      guard: { mcp_endpoints: { x: { urls: ['http://x'] } } },
+      guard: { mcp_servers: { x: { urls: ['http://x'] } } },
     };
     const reg = loadMCPRegistry({ home: HOME, configLoader: () => cfg });
     assert.equal(reg.lookupByUrl(''), null);

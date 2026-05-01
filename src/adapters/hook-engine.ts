@@ -109,7 +109,7 @@ export function parseMcpToolName(toolName: string, platform: string): ParsedMcpT
   }
 
   // Hermes uses the same `<server>__<tool>` format as OpenClaw — see
-  // plugins/hermes/config.default.yaml notes on `available_tools.mcp`.
+  // plugins/hermes/config.default.yaml notes on `permitted_tools.mcp`.
   if (platform === 'openclaw' || platform === 'hermes') {
     const idx = name.indexOf('__');
     if (idx > 0 && idx < name.length - 2) {
@@ -129,9 +129,9 @@ function matchesCaseInsensitive(list: readonly string[], candidates: readonly st
 /**
  * Phase 0: Tool-level gate.
  *
- * Checks `blocked_tools` and `available_tools` from config before any
+ * Checks `blocked_tools` and `permitted_tools` from config before any
  * content-level analysis. Returns a deny HookOutput if the tool is
- * blocked or not in the available list; null to proceed to Phase 1-6.
+ * blocked or not in the permitted list; null to proceed to Phase 1-6.
  *
  * The `mcp` namespace under each list applies when the incoming tool is an
  * MCP tool (detected by platform-specific naming convention). Entries may
@@ -152,9 +152,9 @@ function checkToolGate(
 ): HookOutput | null {
   const platformKey = platform.replace(/-/g, '_');
   const blockedPlatform = config.guard?.blocked_tools?.[platformKey] ?? [];
-  const availablePlatform = config.guard?.available_tools?.[platformKey] ?? [];
+  const permittedPlatform = config.guard?.permitted_tools?.[platformKey] ?? [];
   const blockedMcp = config.guard?.blocked_tools?.['mcp'] ?? [];
-  const availableMcp = config.guard?.available_tools?.['mcp'] ?? [];
+  const permittedMcp = config.guard?.permitted_tools?.['mcp'] ?? [];
 
   const parsed = parseMcpToolName(toolName, platform);
   const nameMcpCandidates = parsed.isMcp && parsed.local && parsed.server
@@ -196,31 +196,31 @@ function checkToolGate(
     };
   }
 
-  // --- Available (namespaced: mcp and platform lists gate independently) ---
+  // --- Permitted (namespaced: mcp and platform lists gate independently) ---
   if (hasMcpContext) {
-    if (availableMcp.length > 0) {
-      if (!matchesCaseInsensitive(availableMcp, allMcpCandidates)) {
-        return denyUnavailable(toolName);
+    if (permittedMcp.length > 0) {
+      if (!matchesCaseInsensitive(permittedMcp, allMcpCandidates)) {
+        return denyNotPermitted(toolName);
       }
-    } else if (availablePlatform.length > 0 && !matchesCaseInsensitive(availablePlatform, [toolName])) {
-      return denyUnavailable(toolName);
+    } else if (permittedPlatform.length > 0 && !matchesCaseInsensitive(permittedPlatform, [toolName])) {
+      return denyNotPermitted(toolName);
     }
-  } else if (availablePlatform.length > 0 && !matchesCaseInsensitive(availablePlatform, [toolName])) {
-    return denyUnavailable(toolName);
+  } else if (permittedPlatform.length > 0 && !matchesCaseInsensitive(permittedPlatform, [toolName])) {
+    return denyNotPermitted(toolName);
   }
 
   return null;
 }
 
-function denyUnavailable(toolName: string): HookOutput {
+function denyNotPermitted(toolName: string): HookOutput {
   return {
     decision: 'deny',
     reason: policyHookReason(
-      `Tool "${toolName}" is not available (available_tools)`, '', ['TOOL_GATE_UNAVAILABLE'], 'critical', 1.0
+      `Tool "${toolName}" is not permitted (permitted_tools)`, '', ['TOOL_GATE_NOT_PERMITTED'], 'critical', 1.0
     ),
     riskLevel: 'critical',
     riskScore: 1.0,
-    riskTags: ['TOOL_GATE_UNAVAILABLE'],
+    riskTags: ['TOOL_GATE_NOT_PERMITTED'],
   };
 }
 

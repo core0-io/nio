@@ -66,7 +66,7 @@ export const SENSITIVE_FILE_PATHS = [
   '.kube/config',
 
   // ── MCP server configuration (writes here can register a new server
-  //    that bypasses the available_tools.mcp allowlist) ──────────────
+  //    that bypasses the permitted_tools.mcp allowlist) ──────────────
   '.claude.json',
   '.claude/mcp',
   'Library/Application Support/Claude/claude_desktop_config.json',

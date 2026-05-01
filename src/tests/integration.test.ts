@@ -233,7 +233,7 @@ describe('Integration: OpenClaw registerOpenClawPlugin', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B2: Phase 0 — Tool Gate (blocked_tools / available_tools)
+// B2: Phase 0 — Tool Gate (blocked_tools / permitted_tools)
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('Integration: Phase 0 Tool Gate', () => {
@@ -262,19 +262,19 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('should DENY a tool not in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Read', 'Grep'] } } });
+  it('should DENY a tool not in permitted_tools', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { claude_code: ['Read', 'Grep'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
       tool_input: { command: 'echo hello' },
     }, ctx.options);
     assert.equal(result.decision, 'deny');
-    assert.ok(result.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+    assert.ok(result.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
   });
 
-  it('should ALLOW a tool in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Read', 'Bash'] } } });
+  it('should ALLOW a tool in permitted_tools', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { claude_code: ['Read', 'Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -283,9 +283,9 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('blocked_tools should take precedence over available_tools', async () => {
+  it('blocked_tools should take precedence over permitted_tools', async () => {
     ctx = createTestContext({
-      guard: { available_tools: { claude_code: ['Bash'] }, blocked_tools: { claude_code: ['Bash'] } },
+      guard: { permitted_tools: { claude_code: ['Bash'] }, blocked_tools: { claude_code: ['Bash'] } },
     });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
@@ -306,8 +306,8 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'deny');
   });
 
-  it('should DENY unmapped tool (Read) when not in available_tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: { claude_code: ['Bash'] } } });
+  it('should DENY unmapped tool (Read) when not in permitted_tools', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { claude_code: ['Bash'] } } });
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Read',
@@ -349,8 +349,8 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
   });
 
-  it('available_tools.mcp gates Hermes MCP tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+  it('permitted_tools.mcp gates Hermes MCP tools', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { mcp: ['HassTurnOn'] } } });
     const allowed = await evaluateHook(ctx.hermesAdapter, {
       hook_event_name: 'pre_tool_call',
       tool_name: 'hass__HassTurnOn',
@@ -412,8 +412,8 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'deny');
   });
 
-  it('available_tools.mcp allows a listed MCP tool and denies others', async () => {
-    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+  it('permitted_tools.mcp allows a listed MCP tool and denies others', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { mcp: ['HassTurnOn'] } } });
     const allowed = await evaluateHook(ctx.openclawAdapter, {
       toolName: 'hass__HassTurnOn',
       params: {},
@@ -424,11 +424,11 @@ describe('Integration: Phase 0 Tool Gate', () => {
       params: {},
     }, ctx.options);
     assert.equal(denied.decision, 'deny');
-    assert.ok(denied.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+    assert.ok(denied.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
   });
 
-  it('available_tools.mcp does not restrict native tools', async () => {
-    ctx = createTestContext({ guard: { available_tools: { mcp: ['HassTurnOn'] } } });
+  it('permitted_tools.mcp does not restrict native tools', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { mcp: ['HassTurnOn'] } } });
     // Native Bash is not MCP; should pass through (no platform allowlist configured)
     const result = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
@@ -438,10 +438,10 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(result.decision, 'allow');
   });
 
-  it('mixed available_tools: platform + mcp lists gate independently', async () => {
+  it('mixed permitted_tools: platform + mcp lists gate independently', async () => {
     ctx = createTestContext({
       guard: {
-        available_tools: {
+        permitted_tools: {
           claude_code: ['Bash'],
           mcp: ['create_issue'],
         },
@@ -477,9 +477,9 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(mcpDeny.decision, 'deny');
   });
 
-  it('backward compat: available_tools.<platform> alone gates MCP tools by raw name', async () => {
+  it('backward compat: permitted_tools.<platform> alone gates MCP tools by raw name', async () => {
     // No `mcp` key → fall back to platform list, raw tool name matching.
-    ctx = createTestContext({ guard: { available_tools: { openclaw: ['hass__HassTurnOn'] } } });
+    ctx = createTestContext({ guard: { permitted_tools: { openclaw: ['hass__HassTurnOn'] } } });
     const allow = await evaluateHook(ctx.openclawAdapter, {
       toolName: 'hass__HassTurnOn',
       params: {},
@@ -533,8 +533,8 @@ describe('Integration: Phase 0 Tool Gate', () => {
     assert.equal(otherServer.decision, 'allow');
   });
 
-  it('available_tools.mcp applies to mcporter invocations', async () => {
-    ctx = createTestContext({ guard: { available_tools: { mcp: ['hass__HassTurnOn'] } } });
+  it('permitted_tools.mcp applies to mcporter invocations', async () => {
+    ctx = createTestContext({ guard: { permitted_tools: { mcp: ['hass__HassTurnOn'] } } });
     const allowed = await evaluateHook(ctx.claudeAdapter, {
       hook_event_name: 'PreToolUse',
       tool_name: 'Bash',
@@ -548,7 +548,7 @@ describe('Integration: Phase 0 Tool Gate', () => {
       tool_input: { command: 'mcporter call hass.HassTurnOff' },
     }, ctx.options);
     assert.equal(denied.decision, 'deny');
-    assert.ok(denied.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+    assert.ok(denied.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
 
     // Native Bash without mcporter is unaffected by the mcp allowlist.
     const native = await evaluateHook(ctx.claudeAdapter, {
@@ -571,18 +571,18 @@ describe('Integration: Phase 0 Tool Gate', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// B3: Configurable guarded_tools
+// B3: Configurable native_tool_mapping
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('Integration: Configurable guarded_tools', () => {
+describe('Integration: Configurable native_tool_mapping', () => {
   let ctx: ReturnType<typeof createTestContext>;
 
   afterEach(() => ctx?.cleanup());
 
-  it('should skip Phase 1-6 for tool removed from guarded_tools', async () => {
+  it('should skip Phase 1-6 for tool removed from native_tool_mapping', async () => {
     ctx = createTestContext({
       guard: {
-        guarded_tools: { Bash: 'exec_command' }, // Write not guarded
+        native_tool_mapping: { Bash: 'exec_command' }, // Write not guarded
       },
     });
     const result = await evaluateHook(ctx.claudeAdapter, {
@@ -590,14 +590,14 @@ describe('Integration: Configurable guarded_tools', () => {
       tool_name: 'Write',
       tool_input: { file_path: '/project/.env' },
     }, ctx.options);
-    // Write is not in guarded_tools → buildEnvelope returns null → auto-allow
+    // Write is not in native_tool_mapping → buildEnvelope returns null → auto-allow
     assert.equal(result.decision, 'allow');
   });
 
-  it('should still analyse tools that remain in guarded_tools', async () => {
+  it('should still analyse tools that remain in native_tool_mapping', async () => {
     ctx = createTestContext({
       guard: {
-        guarded_tools: { Bash: 'exec_command', Write: 'write_file' },
+        native_tool_mapping: { Bash: 'exec_command', Write: 'write_file' },
       },
     });
     const result = await evaluateHook(ctx.claudeAdapter, {
@@ -934,7 +934,7 @@ describe('Integration: Hermes adapter evaluateHook', () => {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // MCP indirect-invocation routing (groups B-J: HTTP, runtime, TCP, /dev/tcp,
-// pwsh, language one-liners). Verifies that available_tools.mcp denies via
+// pwsh, language one-liners). Verifies that permitted_tools.mcp denies via
 // the new mcp-route-detect content detection in Phase 0.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -943,7 +943,7 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
   afterEach(() => ctx?.cleanup());
 
   const allowOnlyHassTurnOn = () => createTestContext({
-    guard: { available_tools: { mcp: ['HassTurnOn'] } },
+    guard: { permitted_tools: { mcp: ['HassTurnOn'] } },
     mcpRegistry: buildIntegrationRegistry(),
   });
 
@@ -955,7 +955,7 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
       tool_input: { command: `curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOff"}}'` },
     }, ctx.options);
     assert.equal(result.decision, 'deny');
-    assert.ok(result.riskTags?.includes('TOOL_GATE_UNAVAILABLE'));
+    assert.ok(result.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
   });
 
   it('C: curl --unix-socket targeting registry socket is denied', async () => {
@@ -1230,7 +1230,7 @@ describe('Integration: D16 obfuscation fallback is audit-only', () => {
   afterEach(() => ctx?.cleanup());
 
   const allowOnlyHassTurnOn = () => createTestContext({
-    guard: { available_tools: { mcp: ['HassTurnOn'] } },
+    guard: { permitted_tools: { mcp: ['HassTurnOn'] } },
     mcpRegistry: buildIntegrationRegistry(),
   });
 

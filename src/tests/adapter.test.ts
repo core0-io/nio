@@ -83,17 +83,17 @@ describe('ClaudeCodeAdapter', () => {
     });
   });
 
-  describe('custom guarded_tools', () => {
+  describe('custom native_tool_mapping', () => {
     it('should use custom mapping when provided', () => {
       const custom = new ClaudeCodeAdapter({
-        guardedTools: { Agent: 'exec_command', Bash: 'exec_command' },
+        nativeToolMapping: { Agent: 'exec_command', Bash: 'exec_command' },
       });
       assert.equal(custom.mapToolToActionType('Agent'), 'exec_command');
       assert.equal(custom.mapToolToActionType('Bash'), 'exec_command');
       assert.equal(custom.mapToolToActionType('Write'), null); // not in custom map
     });
 
-    it('should use defaults when no guardedTools provided', () => {
+    it('should use defaults when no nativeToolMapping provided', () => {
       const defaultAdapter = new ClaudeCodeAdapter();
       assert.equal(defaultAdapter.mapToolToActionType('Bash'), 'exec_command');
       assert.equal(defaultAdapter.mapToolToActionType('Write'), 'write_file');
@@ -427,9 +427,9 @@ describe('HermesAdapter', () => {
       assert.equal(adapter.mapToolToActionType('delegate_task'), null);
     });
 
-    it('should respect custom guardedTools override', () => {
+    it('should respect custom nativeToolMapping override', () => {
       const custom = new HermesAdapter({
-        guardedTools: { my_exec: 'exec_command' },
+        nativeToolMapping: { my_exec: 'exec_command' },
       });
       assert.equal(custom.mapToolToActionType('my_exec'), 'exec_command');
       // Built-ins are overridden, not merged

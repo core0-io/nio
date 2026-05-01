@@ -1581,18 +1581,18 @@ const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
 // ——— layer data — execution order (phase 0 first) ———
 const LAYERS = [
   {
-    phase: 0, name: "Tool Gate", sub: "Is this tool blocked, available, or guarded?",
+    phase: 0, name: "Tool Gate", sub: "Is this tool blocked, permitted, or analysed?",
     latency: "<1ms", scope: "all tools", isGate: true,
-    meta: [ { k: 'CHECK', v: 'blocked / available / guarded' }, { k: 'WEIGHT', v: '—' }, { k: 'RUNS ON', v: '100%' } ],
+    meta: [ { k: 'CHECK', v: 'blocked / permitted / native mapping' }, { k: 'WEIGHT', v: '—' }, { k: 'RUNS ON', v: '100%' } ],
     rules: [
-      { id: 'blocked_tools',   desc: 'Hard-deny list — never runs',     sev: 'CRIT' },
-      { id: 'available_tools', desc: 'Known tools, skip guard',         sev: 'LOW' },
-      { id: 'guarded_tools',   desc: 'Everything else → pipeline',     sev: 'MED' },
+      { id: 'blocked_tools',       desc: 'Hard-deny list — never runs',                          sev: 'CRIT' },
+      { id: 'permitted_tools',     desc: 'Strict allowlist — only listed tools pass when set',   sev: 'LOW'  },
+      { id: 'native_tool_mapping', desc: 'Mapped native tools → Phase 1+ pipeline',              sev: 'MED'  },
     ],
     example: { title: 'config.yaml', body:
 `<span class="comment"># gate any tool matching these globs</span>
 <span>blocked_tools:</span> <span class="bad">['WebSearch','WebFetch']</span>
-<span>guarded_tools:</span> <span>['Bash','Write','Edit']</span>` },
+<span>native_tool_mapping:</span> <span>{ Bash: exec_command, Write: write_file, Edit: write_file }</span>` },
   },
   {
     phase: 1, name: "Allowlist Gate", sub: "Known-safe commands pass instantly, no scoring.",

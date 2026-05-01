@@ -47,13 +47,13 @@ if it exceeds the deny threshold for the active protection level.
 │   tool_name ──► in blocked_tools? ──YES──► DENY (exit)             │
 │                    │ NO                                              │
 │                    ▼                                                 │
-│              available_tools non-empty?                              │
+│              permitted_tools non-empty?                              │
 │                    │ YES                                             │
 │                    ▼                                                 │
-│              tool_name in available_tools? ──NO──► DENY (exit)     │
+│              tool_name in permitted_tools? ──NO──► DENY (exit)     │
 │                    │ YES                                             │
 │                    ▼                                                 │
-│              tool_name in guarded_tools? ──NO──► ALLOW (exit)      │
+│              tool_name in native_tool_mapping? ──NO──► ALLOW (exit) │
 │                    │ YES                                             │
 │                    ▼                                                 │
 │              Build ActionEnvelope                                    │
@@ -190,15 +190,15 @@ if it exceeds the deny threshold for the active protection level.
 | 5 LLM (optional) | yes | yes | yes | skip |
 | 6 External API (optional) | yes | yes | yes | skip |
 
-Tools not in `guarded_tools` pass Phase 0 but skip Phases 1–6 (auto-allow).
+Tools not in `native_tool_mapping` pass Phase 0 but skip Phases 1–6 (auto-allow).
 
 ### Phase 0: Tool Gate (<1ms)
 
 Runs in `hook-engine.ts` before envelope building. Three checks in order:
 
 1. **blocked_tools** — if tool is listed → DENY
-2. **available_tools** — if list is non-empty and tool is not listed → DENY
-3. **guarded_tools** — if tool is not mapped → ALLOW (skip Phase 1–6)
+2. **permitted_tools** — if list is non-empty and tool is not listed → DENY
+3. **native_tool_mapping** — if tool is not mapped → ALLOW (skip Phase 1–6)
 
 After Phase 0 and envelope construction (but before Phase 1), a further
 short-circuit fires when the incoming `exec_command` is Nio invoking its
@@ -212,14 +212,14 @@ Detection is a strict regex on the command shape
 (`isNioSelfInvocation` in [src/adapters/self-invocation.ts](../src/adapters/self-invocation.ts));
 any shell metacharacter in the command disqualifies the match.
 
-`available_tools` and `blocked_tools` are keyed by platform (`claude_code`,
+`permitted_tools` and `blocked_tools` are keyed by platform (`claude_code`,
 `openclaw`, …) with one reserved cross-platform key `mcp`. Incoming MCP tool
 names are parsed into `{server, local}` — OpenClaw uses `<server>__<tool>`,
 Claude Code uses `mcp__<server>__<tool>` — and matched against the `mcp` list
 in either bare (`HassTurnOn` — any server) or server-qualified
 (`hass__HassTurnOn` — that server only) form. Blocked lists across namespaces
-are additive; available lists are independent per namespace, with the
-platform list acting as fallback when `available_tools.mcp` is absent.
+are additive; permitted lists are independent per namespace, with the
+platform list acting as fallback when `permitted_tools.mcp` is absent.
 Matching is case-insensitive throughout.
 
 The `mcp` list also covers **indirect shell invocations** that target an
@@ -227,9 +227,10 @@ MCP server without going through the platform's MCP tool surface
 (mcporter, raw HTTP clients, language-runtime one-liners, stdio pipes,
 package runners, …). Phase 0 unwraps the shell command, runs a battery
 of detectors against every fragment, maps each hit back to a registered
-MCP server, and re-applies the same `available_tools.mcp` /
-`blocked_tools.mcp` lists. The full capture model — 16 unwrappers + 16
-detectors + the endpoint registry — is documented in
+MCP server (auto-discovered or declared in `mcp_servers`), and re-applies
+the same `permitted_tools.mcp` / `blocked_tools.mcp` lists. The full
+capture model — 16 unwrappers + 16 detectors + the MCP server registry —
+is documented in
 [Phase 0 — Tool Gate · MCP Tool Routing](phases/phase-0-tool-gate.html#mcp-routing).
 
 ### Phase 1: Allowlist Gate (<1ms)

@@ -168,7 +168,8 @@ guard:
   allowlist_mode: continue
 
   # Phase 0 tool gate, per platform. Checked before any content analysis.
-  # When non-empty, ONLY listed tools are available to the agent on that platform.
+  # Strict allowlist: when non-empty for a namespace, ONLY listed tools pass
+  # Phase 0 on that platform; everything else is denied.
   # The `mcp` list is platform-agnostic and applies whenever the incoming tool
   # is an MCP tool. Entries accept either a bare local name (`HassTurnOn` —
   # matches any MCP server) or a server-qualified name (`hass__HassTurnOn` —
@@ -180,9 +181,9 @@ guard:
   # exec, …) and runs detectors (mcporter, curl/wget/HTTPie,
   # language-runtime one-liners, TCP/socket multiplexers, stdio
   # JSON-RPC pipes, package runners, etc.) against every fragment,
-  # mapping each hit back to {server, tool} via the endpoint registry.
+  # mapping each hit back to {server, tool} via the MCP server registry.
   # See docs/phases/phase-0-tool-gate.html for the full capture model.
-  available_tools:
+  permitted_tools:
     claude_code: []
     openclaw: []
     hermes: []
@@ -194,25 +195,30 @@ guard:
     hermes: []
     mcp: []
 
-  # Manual additions to the MCP endpoint registry, for SaaS or otherwise
+  # Manual additions to the MCP server registry, for SaaS or otherwise
   # non-discoverable servers (Phase 0 auto-discovers from ~/.claude.json,
   # Claude Desktop, ~/.hermes/config.yaml, ~/.openclaw/openclaw.json by
-  # default — declare here only what's missing). Every handle indexes the
-  # server so indirect detectors can route a curl URL / unix socket /
-  # binary name / npx package back to the server name.
+  # default — declare here only what's missing). Each entry's key is the
+  # server name; its value lists every handle (URL / unix socket / server
+  # binary / npx package) that identifies the server, so indirect
+  # detectors can route a curl URL / unix socket / binary name / npx
+  # package back to the server name.
   #
-  # mcp_endpoints:
+  # mcp_servers:
   #   hass:
   #     urls:        ['http://localhost:5173/mcp']
   #     sockets:     ['/tmp/mcp-hass.sock']
   #     binaries:    ['mcp-server-hass']
   #     cliPackages: ['@hass/mcp-cli']
-  mcp_endpoints: {}
+  mcp_servers: {}
 
-  # Tool → action type mapping, per platform.
-  # Tools listed here enter Phase 1-6 deep analysis.
-  # Others pass through Phase 0 only (if allowed) and are auto-approved.
-  guarded_tools:
+  # Native tool name → action type mapping, per platform. NOT a third
+  # allow/deny list — this is the classification table that decides which
+  # Phase 1-6 rule set runs for each platform-native tool. Tools listed
+  # here enter Phase 1-6 deep analysis with the mapped action type;
+  # others pass Phase 0 (if permitted) and skip Phase 1-6 (auto-approved,
+  # log only). MCP tools are dynamic and not categorised here.
+  native_tool_mapping:
     claude_code:
       Bash: exec_command
       Write: write_file

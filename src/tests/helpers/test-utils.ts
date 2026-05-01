@@ -21,9 +21,9 @@ import type { MCPRegistry } from '../../adapters/mcp-registry.js';
 export interface TestContextOptions {
   level?: string;
   guard?: {
-    available_tools?: Record<string, string[]>;
+    permitted_tools?: Record<string, string[]>;
     blocked_tools?: Record<string, string[]>;
-    guarded_tools?: Record<string, string>;
+    native_tool_mapping?: Record<string, string>;
     action_guard_rules?: GuardRulesConfig;
     file_scan_rules?: Partial<Record<string, string[]>>;
     allowed_commands?: string[];
@@ -54,7 +54,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
   const config: EngineOptions['config'] = {
     guard: {
       protection_level: opts.level ?? 'balanced',
-      available_tools: opts.guard?.available_tools,
+      permitted_tools: opts.guard?.permitted_tools,
       blocked_tools: opts.guard?.blocked_tools,
     },
   };
@@ -69,7 +69,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     nio,
     config,
     options,
-    claudeAdapter: new ClaudeCodeAdapter({ guardedTools: opts.guard?.guarded_tools }),
+    claudeAdapter: new ClaudeCodeAdapter({ nativeToolMapping: opts.guard?.native_tool_mapping }),
     openclawAdapter: new OpenClawAdapter(),
     hermesAdapter: new HermesAdapter(),
     cleanup() {

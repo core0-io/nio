@@ -5,10 +5,10 @@ import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
 
 /**
- * Default tool name → action type mapping for OpenClaw.
- * Used when config does not provide guard.guarded_tools.openclaw.
+ * Default native-tool → action-type mapping for OpenClaw.
+ * Used when config does not provide guard.native_tool_mapping.openclaw.
  */
-const DEFAULT_TOOL_ACTION_MAP: Record<string, string> = {
+const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, string> = {
   exec: 'exec_command',
   write: 'write_file',
   read: 'read_file',
@@ -18,7 +18,7 @@ const DEFAULT_TOOL_ACTION_MAP: Record<string, string> = {
 
 export interface OpenClawAdapterOptions {
   /** Config-driven tool → action type mapping, overrides the built-in default. */
-  guardedTools?: Record<string, string>;
+  nativeToolMapping?: Record<string, string>;
 }
 
 /**
@@ -35,10 +35,10 @@ export interface OpenClawAdapterOptions {
  */
 export class OpenClawAdapter implements HookAdapter {
   readonly name = 'openclaw';
-  private toolActionMap: Record<string, string>;
+  private nativeToolMapping: Record<string, string>;
 
   constructor(opts?: OpenClawAdapterOptions) {
-    this.toolActionMap = opts?.guardedTools ?? DEFAULT_TOOL_ACTION_MAP;
+    this.nativeToolMapping = opts?.nativeToolMapping ?? DEFAULT_NATIVE_TOOL_MAPPING;
   }
 
   parseInput(raw: unknown): HookInput {
@@ -53,11 +53,11 @@ export class OpenClawAdapter implements HookAdapter {
 
   mapToolToActionType(toolName: string): string | null {
     // Direct match
-    if (this.toolActionMap[toolName]) {
-      return this.toolActionMap[toolName];
+    if (this.nativeToolMapping[toolName]) {
+      return this.nativeToolMapping[toolName];
     }
     // Prefix match for tool families (e.g. "exec_python" → "exec_command")
-    for (const [prefix, actionType] of Object.entries(this.toolActionMap)) {
+    for (const [prefix, actionType] of Object.entries(this.nativeToolMapping)) {
       if (toolName.startsWith(prefix)) {
         return actionType;
       }

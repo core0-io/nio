@@ -6,7 +6,7 @@
  *
  * The pipeline reconstructs *which* MCP server and tool a Bash command is
  * invoking — directly (mcporter) or indirectly (HTTP, stdio, package
- * runner, …) — so Phase 0 can re-apply `available_tools.mcp` /
+ * runner, …) — so Phase 0 can re-apply `permitted_tools.mcp` /
  * `blocked_tools.mcp` against indirect channels.
  */
 

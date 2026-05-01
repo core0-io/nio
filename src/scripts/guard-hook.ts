@@ -78,8 +78,8 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
-  const guardedTools = config.guard?.guarded_tools?.claude_code;
-  const adapter = new ClaudeCodeAdapter({ guardedTools });
+  const nativeToolMapping = config.guard?.native_tool_mapping?.claude_code;
+  const adapter = new ClaudeCodeAdapter({ nativeToolMapping });
   const nio = createNio();
 
   // Set up OTEL providers for metrics + audit logs

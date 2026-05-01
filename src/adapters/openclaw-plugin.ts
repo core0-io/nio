@@ -124,7 +124,7 @@ export function registerOpenClawPlugin(
   const guard = config.guard;
   if (options.level && guard) guard.protection_level = options.level as typeof guard.protection_level;
 
-  const adapter = new OpenClawAdapter({ guardedTools: guard?.guarded_tools?.openclaw });
+  const adapter = new OpenClawAdapter({ nativeToolMapping: guard?.native_tool_mapping?.openclaw });
   const confirmAction = guard?.confirm_action ?? 'allow';
 
   const collectorConfig = loadCollectorConfig();

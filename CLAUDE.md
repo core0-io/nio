@@ -75,9 +75,10 @@ guard:
   llm_analyser: { enabled: false, api_key: "" }       # Phase 5 LLM analyser
   external_analyser: { enabled: false, endpoint: "" }  # Phase 6 external scoring API
   allowed_commands: []      # Phase 1 safe command prefixes
-  available_tools: {}       # Per-platform + `mcp` tool allowlist (Phase 0)
-  blocked_tools: {}         # Per-platform + `mcp` tool denylist (Phase 0)
-  guarded_tools:            # Per-platform tool → action type mapping
+  permitted_tools: {}       # Per-platform + `mcp` strict allowlist (Phase 0)
+  blocked_tools: {}         # Per-platform + `mcp` denylist (Phase 0; takes precedence)
+  mcp_servers: {}           # Manual MCP server registry (server name → URLs / sockets / binaries / cliPackages)
+  native_tool_mapping:      # Per-platform native tool → action type classification
     claude_code: { Bash: exec_command, Write: write_file, Edit: write_file, WebFetch: network_request, WebSearch: network_request }
     openclaw: { exec: exec_command, write: write_file, web_fetch: network_request, browser: network_request }
   scoring_weights: {}       # Phase score aggregation weights
