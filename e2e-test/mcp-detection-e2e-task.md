@@ -68,15 +68,44 @@ The `mcp-server-hass` binary and `@hass/mcp-cli` package don't exist on disk —
 Run **exactly** these commands. If any line fails, stop and report — do not proceed.
 
 ```
-# Locate the bundled guard-hook.js across plugin layouts. Every later
-# step pipes synthesized PreToolUse JSON to this script for Phase 0-6
-# evaluation; nothing is ever exec'd from those payloads.
+# Locate the bundled guard-hook.js. Order matters: prefer the dev-repo path
+# (refreshed by `pnpm run build`) over plugin caches (which freeze at install
+# time and don't reflect local source changes). Every later step pipes
+# synthesized PreToolUse JSON to this script for Phase 0-6 evaluation;
+# nothing is ever exec'd from those payloads.
+#
+# Override priority:
+#   1. $NIO_DEV_REPO env var if set (set this to your repo root if the
+#      agent's CWD isn't the repo root)
+#   2. $(pwd)/plugins/claude-code/... (works when run from repo root)
+#   3. ~/.openclaw/workspace/skills/nio/scripts/guard-hook.js
+#   4. ~/.claude/plugins/cache/.../skills/nio/scripts/guard-hook.js (LAST
+#      resort — these caches freeze at install time, so they may lack
+#      recent fixes)
 GUARD_HOOK=""
-for c in "$HOME/.claude/plugins/cache"/*/skills/nio/scripts/guard-hook.js "$HOME/.openclaw/workspace/skills/nio/scripts/guard-hook.js" "$(pwd)/plugins/claude-code/skills/nio/scripts/guard-hook.js"; do
+for c in ${NIO_DEV_REPO:+"$NIO_DEV_REPO/plugins/claude-code/skills/nio/scripts/guard-hook.js"} \
+         "$(pwd)/plugins/claude-code/skills/nio/scripts/guard-hook.js" \
+         "$HOME/.openclaw/workspace/skills/nio/scripts/guard-hook.js" \
+         "$HOME/.claude/plugins/cache"/*/*/*/skills/nio/scripts/guard-hook.js; do
   [ -f "$c" ] && GUARD_HOOK="$c" && break
 done
 [ -n "$GUARD_HOOK" ] || { echo "ABORT: guard-hook.js not found — run pnpm run build"; exit 1; }
 echo "$GUARD_HOOK" > /tmp/nio-e2e.guard-hook
+echo "Picked: $GUARD_HOOK"
+
+# Freshness check: a guard-hook from before commit 6fb85c8 lacks Bugs 1/2/3
+# fixes; from before the U5/U11 unwrapper fix lacks closure of Steps 29/31.
+# Probe a representative fix marker so the agent fails fast on a stale pick
+# instead of silently producing wrong allow/deny verdicts.
+SCRIPT_DIR="$(dirname "$GUARD_HOOK")"
+if ! grep -lq 'SHELL_CONSUMER_RE\|stripMatchingOuterQuotes' "$SCRIPT_DIR"/chunk-*.js 2>/dev/null; then
+  echo "ABORT: $GUARD_HOOK is stale (missing the U5/U11 unwrapper fix)."
+  echo "       Refresh by either:"
+  echo "         a) cd into the repo root and re-run (so \$(pwd) finds the dev-build)"
+  echo "         b) export NIO_DEV_REPO=/path/to/repo before running"
+  echo "         c) cp -r <repo>/plugins/claude-code/skills/nio/scripts/* into the cached install path"
+  exit 1
+fi
 
 # Tiny scratch config dir — holds ONE config.yaml with the test setup
 # (permitted_tools.mcp + a registered hass server). Not a sandbox in the
