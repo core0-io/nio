@@ -1,5 +1,201 @@
 # @core0-io/nio
 
+## 2.2.0
+
+### Minor Changes
+
+- Phase 0 gains a new MCP Tool Routing layer that detects MCP-style tool
+  invocations across every documented invocation channel (D1 through D16)
+  and unwraps every documented composition style (U1 through U16). Combined
+  with the renamed permitted_tools.mcp allowlist and blocked_tools.mcp
+  denylist, this enforces fine-grained MCP server / tool gating regardless
+  of how a call is dressed up.
+
+  This release also unifies the Collector pipeline: audit-log routing,
+  attribute / label keys across logs / metrics / traces, and the OpenClaw
+  trace surface all align with the same single-source-of-truth helpers.
+  Cross-signal queries and cross-platform dashboards no longer need to
+  OR-query parallel schemas.
+
+  ## MCP Tool Routing (Phase 0)
+
+  A new server registry under guard.mcp_servers resolves MCP servers from
+  URL, unix socket, binary name, and CLI package. Detectors then walk
+  every known channel (D1 mcporter, D2 HTTP clients including unix-socket,
+  D3 HTTPie, D4 raw TCP / unix-domain, D5 Bash builtin TCP socket, D6
+  PowerShell HTTP, D7 language runtimes for Python / Node / Ruby / Perl /
+  PHP / Deno / Bun, D8 stdio JSON-RPC pipe, D9 stdin redirect / here-string,
+  D10 FIFO cross-command, D11 package runners npx / uvx / pipx, D12 MCP
+  server self-launch audit-only, D15 compile-and-run audit-only, D16 plain
+  registry-URL mention audit-only obfuscation fallback).
+
+  Detectors run after Stage 1 unwrappers (U1 through U16) so wrapped
+  invocations also fire across shell wrappers, heredoc / here-string,
+  process and command substitution, source / script, encoded-decode pipes,
+  string-concat folding, xargs / find / parallel / watch / time / env,
+  remote-shell tools, editor command escapes, background tools, and
+  compile-and-run combos.
+
+  ### Phase 0 detector closures (post-launch fixes)
+
+  A user e2e audit found indirect channels still bypassed
+  blocked_tools.mcp deny-by-tool-name. Five compounding bugs are fixed:
+
+  - D7 now extracts tool names from inline source bodies (formerly only
+    walked URLs), so language-runtime hits no longer collapse to
+    ${server}\_\_\*.
+  - The body-extraction parser falls back to single-quote to double-quote
+    substitution before giving up, so Python single-quoted dict literals
+    (the shape json.dumps({...}) produces in source) are recognised.
+  - The blocked_tools.mcp matcher is biased toward deny when a detector
+    resolves a server but cannot extract the tool. Trade-off: over-denies
+    indirect calls to non-blocked tools on the same server (use
+    permitted_tools.mcp for fine-grained allow + deny on one server).
+  - Latent: the body parser's slice-start position is now reset between
+    scan attempts so multi-blob bodies do not mis-slice.
+  - U5 process-substitution + echo-decode and U11 xargs feeder synthesis
+    now emit the inner / appended text as an executable fragment so
+    detectors see the synthesized argv. Previously these slipped through
+    with only audit-only D16 hits, filtered out before the deny gate.
+
+  ### Sensitive-path coverage
+
+  Phase 3's SENSITIVE_FILE_PATHS rule expands to fragment-match MCP
+  config and persistence paths regardless of prefix - the Claude Code MCP
+  config, shell rc files, the macOS LaunchAgents directory, and others.
+  These deny under all three protection levels (strict / balanced /
+  permissive).
+
+  ## Breaking: Phase 0 config schema rename
+
+  Existing ~/.nio/config.yaml files using the old names continue to load
+  (unknown fields are stripped, not rejected), but settings under the old
+  keys are silently ignored - update any custom config to the new keys.
+
+  | Old key               | New key                   |
+  | --------------------- | ------------------------- |
+  | guard.available_tools | guard.permitted_tools     |
+  | guard.guarded_tools   | guard.native_tool_mapping |
+  | guard.mcp_endpoints   | guard.mcp_servers         |
+
+  Rationale: permitted_tools pairs naturally with blocked_tools and
+  expresses the strict-allowlist semantic; native_tool_mapping is a
+  tool-name to action-type classification table for native tools (not a
+  third allow/deny list); mcp_servers is a server registry keyed by
+  server name (entries also list binaries and CLI packages, neither of
+  which are endpoints, and the new name matches upstream config field
+  naming).
+
+  Adapter constructor option also renames: the guardedTools field on
+  ClaudeCodeAdapter, OpenClawAdapter, and HermesAdapter constructors is
+  now nativeToolMapping.
+
+  The Phase 0 deny risk tag TOOL_GATE_UNAVAILABLE is now
+  TOOL_GATE_NOT_PERMITTED, with the deny reason updated to match.
+
+  ## Breaking: OTLP signal attribute alignment
+
+  OTLP logs and metrics signal attribute / label keys now align with
+  the trace signal. Cross-signal queries work with the same key names.
+
+  Metrics (nio.tool_use.count, nio.turn.count, nio.decision.count,
+  nio.risk.score):
+
+  - tool_name to gen_ai.tool.name
+  - decision to nio.guard.decision
+  - risk_level to nio.guard.risk_level
+  - event to nio.event
+  - platform to nio.platform
+
+  Metric instrument names are unchanged.
+
+  Audit log (emitAuditLog OTEL LogRecord projection):
+
+  - nio.tool_name to gen_ai.tool.name
+  - nio.session_id to gen_ai.conversation.id + session.id
+  - nio.decision to nio.guard.decision
+  - nio.risk_level to nio.guard.risk_level
+  - nio.risk_score to nio.guard.risk_score
+  - nio.risk_tags to nio.guard.risk_tags
+  - New: gen_ai.tool.call.id (from tool_use_id)
+  - New: nio.tool_summary, nio.task_id, nio.task_summary, nio.cwd,
+    nio.transcript_path (previously inside the JSON body only)
+  - New: nio.event_type
+
+  The flat-attribute set is now built by a shared auditEntryAttributes
+  helper that pulls guard-decision keys from nioGuardAttributes in
+  traces-collector - same single-source-of-truth pattern the trace
+  signal uses.
+
+  The local audit.jsonl JSONL line shape is unchanged (still the verbatim
+  AuditEntry); only the OTEL flat-attribute projection moved.
+
+  Action required: any saved dashboard query / alert filtering on the
+  old keys must be updated before upgrading.
+
+  ## Audit log routing fix
+
+  Claude Code and Hermes hook event audit records (PreToolUse,
+  PostToolUse, TaskCreated, TaskCompleted, Stop, SubagentStop,
+  SessionStart, SessionEnd, UserPromptSubmit) now route to audit.jsonl
+  instead of the misnamed metrics.jsonl. They flow through the same
+  writeAuditLog pipeline as guard, scan, and lifecycle entries, picking
+  up OTEL Logs export and rotation for free.
+
+  Audit-log path now reads consistently from collector.logs.path. The
+  cross-process trace state file (traces-state-store.json) sits next to
+  the audit log so a single config setting controls both.
+
+  The obsolete collector.metrics.{local,log,max_size_mb} config keys are
+  removed; pre-cleanup config.yaml files continue to load. After updating,
+  ~/.nio/metrics.jsonl and (if upgrading from a build that wrote it)
+  ~/.nio/collector-state.json can safely be deleted.
+
+  Internal: traces-collector is now a pure-function module - all state
+  IO moved to a new traces-state-store module that owns the persistence.
+
+  ## Cross-platform trace pipeline unification
+
+  OpenClaw plugin trace emission now routes through the same
+  traces-collector pure functions used by Claude Code and Hermes. Span
+  names and attribute keys are unified across all three platforms
+  (invoke_agent UserPromptSubmit, execute_tool tool-name, gen_ai.\*
+  semantic-convention attributes); cross-platform observability
+  dashboards no longer have to OR-query two parallel schemas.
+
+  Internal: OpenClaw holds per-session CollectorState in memory (no
+  on-disk state file - single process); Claude Code and Hermes continue
+  to bridge state across hook processes via traces-state-store.json.
+
+  ## Other fixes
+
+  - parseMcpToolName now handles the Hermes platform.
+  - hermes-setup script handles the --reset-config flag.
+  - Default collector service entry removed from the config template
+    (leftover from early scaffolding).
+
+  ## Tests, tooling, docs
+
+  - New Integration: 6-vector e2e regression block in
+    src/tests/integration.test.ts locks in the user's CC audit table
+    (V1 through V6).
+  - Steps 29 / 31 composition closures locked in as integration tests
+    under denylist mode.
+  - Roughly thirty new unit / integration tests across detectors,
+    unwrappers, parsers, and matcher bias.
+  - e2e-test/mcp-detection-e2e-task.md rewritten as full
+    synthesized-eval - every step from 1 onward feeds a base64-encoded
+    PreToolUse envelope to a local helper that pipes to guard-hook.js
+    against a scratch config. No real exec; reproducible matrix across
+    Claude Code, OpenClaw, and Hermes.
+  - Added Biome as the project formatter and linter.
+  - Refreshed README, ARCHITECTURE, COLLECTOR-SIGNALS,
+    install-claude-code, install-openclaw, install-hermes.
+  - New GitHub Pages content: MCP Tool Routing material merged into the
+    Phase 0 page; Collector Signals split into four pages (overview,
+    traces, metrics, logs) with unified attribute tables; section anchor
+    links; responsive layout for narrow viewports.
+
 ## 2.1.0
 
 ### Minor Changes
