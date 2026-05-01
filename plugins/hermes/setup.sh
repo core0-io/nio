@@ -6,13 +6,17 @@
 # Hermes will spawn hook-cli.js on every pre_tool_call event. Idempotent.
 #
 # Usage:
-#   bash plugins/hermes/setup.sh                # normal install
-#   bash plugins/hermes/setup.sh --dry-run      # print resulting YAML, no write
-#   bash plugins/hermes/setup.sh --yes          # skip interactive merge prompts
-#   bash plugins/hermes/setup.sh --accept-hooks # also pre-approve in Hermes's
-#                                               # allowlist (so the hook fires
-#                                               # immediately, non-interactive)
-#   bash plugins/hermes/setup.sh --uninstall    # remove the Nio entry
+#   bash plugins/hermes/setup.sh                  # normal install
+#   bash plugins/hermes/setup.sh --dry-run        # print resulting YAML, no write
+#   bash plugins/hermes/setup.sh --yes            # skip interactive merge prompts
+#   bash plugins/hermes/setup.sh --accept-hooks   # also pre-approve in Hermes's
+#                                                 # allowlist (so the hook fires
+#                                                 # immediately, non-interactive)
+#   bash plugins/hermes/setup.sh --reset-config   # overwrite ~/.nio/config.yaml
+#                                                 # with the bundled defaults
+#                                                 # (Nio runtime config; does
+#                                                 # not touch ~/.hermes/config.yaml)
+#   bash plugins/hermes/setup.sh --uninstall      # remove the Nio entry
 #
 # Environment:
 #   HERMES_CONFIG_PATH   override target (default: ~/.hermes/config.yaml)
@@ -39,16 +43,22 @@ fi
 SNIPPET="$SCRIPT_DIR/config-snippet.yaml"
 HERMES_CONFIG="${HERMES_CONFIG_PATH:-$HOME/.hermes/config.yaml}"
 
-# Partition args: `--accept-hooks` is ours (handled post-install below);
-# everything else is forwarded to install-hook.py verbatim.
+# Partition args: `--accept-hooks` and `--reset-config` are ours (handled
+# locally below); everything else is forwarded to install-hook.py verbatim.
+# `--reset-config` resets the Nio runtime config at ~/.nio/config.yaml — it
+# has nothing to do with Hermes's own ~/.hermes/config.yaml hook entries,
+# so it must NOT be forwarded to install-hook.py (which rejects it).
 ACCEPT_HOOKS=0
 DRY_RUN=0
 UNINSTALL=0
+RESET_CONFIG=0
 FORWARD_ARGS=()
 for arg in "$@"; do
   case "$arg" in
     --accept-hooks|--approve)
       ACCEPT_HOOKS=1 ;;
+    --reset-config)
+      RESET_CONFIG=1 ;;
     --dry-run)
       DRY_RUN=1
       FORWARD_ARGS+=("$arg") ;;
@@ -59,6 +69,8 @@ for arg in "$@"; do
       FORWARD_ARGS+=("$arg") ;;
   esac
 done
+
+NIO_DIR="$HOME/.nio"
 
 # ── Pre-flight checks ───────────────────────────────────────────────────
 
@@ -197,6 +209,22 @@ if [ "$UNINSTALL" -eq 1 ]; then
   uninstall_python_plugin
 elif [ "$DRY_RUN" -eq 0 ]; then
   install_python_plugin
+fi
+
+# ── Nio runtime config (~/.nio/config.yaml) ─────────────────────────────
+# Same behaviour as the Claude Code + OpenClaw plugin setup scripts:
+# copy the bundled defaults if the user has no config yet, or if they
+# passed --reset-config. Independent of the Hermes hook merge above.
+if [ "$DRY_RUN" -eq 0 ] && [ "$UNINSTALL" -eq 0 ]; then
+  mkdir -p "$NIO_DIR"
+  if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
+    if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
+      cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
+      [ "$RESET_CONFIG" -eq 1 ] \
+        && echo "[nio-hermes] Nio config reset to defaults at $NIO_DIR/config.yaml" \
+        || echo "[nio-hermes] Default Nio config written to $NIO_DIR/config.yaml"
+    fi
+  fi
 fi
 
 # Dry-run and uninstall skip the approval flow.
