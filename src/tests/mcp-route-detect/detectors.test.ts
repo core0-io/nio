@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { detectMcpCalls } from '../../adapters/mcp-route-detect/index.js';
+import { extractToolFromJsonBody } from '../../adapters/mcp-route-detect/detectors.js';
 import type { MCPRegistry, MCPServerEntry } from '../../adapters/mcp-registry.js';
 
 // Helper: build an in-memory registry without touching disk.
@@ -327,6 +328,46 @@ describe('detectMcpCalls: D7 Language-runtime HTTP', () => {
     const calls = detectMcpCalls(cmd, HASS_REG);
     assert.equal(calls.filter((c) => c.via === 'language_runtime').length, 0);
   });
+
+  it('extracts tool from JSON-RPC body in python heredoc (strict JSON)', () => {
+    // Heredoc avoids the shell-escape complexity of `python -c "..."` —
+    // U4 hands the body to D7 verbatim, so legal JSON parses cleanly.
+    const cmd = [
+      `python3 << 'PY'`,
+      `import urllib.request`,
+      `urllib.request.urlopen('http://localhost:5173/mcp', data=b'{"name":"HassTurnOff"}')`,
+      `PY`,
+    ].join('\n');
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'language_runtime' && c.server === 'hass');
+    assert.ok(hit, 'expected a language_runtime hit on hass');
+    assert.equal(hit?.tool, 'HassTurnOff');
+  });
+
+  it('extracts tool from Python single-quoted dict literal in heredoc body', () => {
+    // V6 from the user's e2e audit: json.dumps({'name':'X'}) — a Python
+    // dict literal with single-quoted keys/values. The parser fallback
+    // substitutes single→double quote before JSON.parse retries.
+    const cmd = [
+      `python3 << 'PY'`,
+      `import urllib.request, json`,
+      `data = json.dumps({'jsonrpc':'2.0','method':'tools/call','params':{'name':'HassTurnOff'}}).encode()`,
+      `urllib.request.urlopen('http://localhost:5173/mcp', data=data)`,
+      `PY`,
+    ].join('\n');
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'language_runtime' && c.server === 'hass');
+    assert.ok(hit);
+    assert.equal(hit?.tool, 'HassTurnOff');
+  });
+
+  it('emits tool: undefined when inline source has no parseable JSON body', () => {
+    const cmd = `python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5173/mcp')"`;
+    const calls = detectMcpCalls(cmd, HASS_REG);
+    const hit = calls.find((c) => c.via === 'language_runtime' && c.server === 'hass');
+    assert.ok(hit);
+    assert.equal(hit?.tool, undefined);
+  });
 });
 
 describe('detectMcpCalls: D8 stdio JSON-RPC pipe', () => {
@@ -510,5 +551,44 @@ describe('detectMcpCalls: D16 obfuscation fallback (audit-only)', () => {
     const cmd = `echo hello world`;
     const calls = detectMcpCalls(cmd, HASS_REG);
     assert.equal(calls.filter((c) => c.via === 'obfuscation_fallback').length, 0);
+  });
+});
+
+describe('extractToolFromJsonBody', () => {
+  it('extracts params.name from strict JSON', () => {
+    assert.equal(extractToolFromJsonBody('{"params":{"name":"HassTurnOff"}}'), 'HassTurnOff');
+  });
+
+  it('extracts top-level name when params is absent', () => {
+    assert.equal(extractToolFromJsonBody('{"name":"X"}'), 'X');
+  });
+
+  it('extracts top-level tool field as fallback', () => {
+    assert.equal(extractToolFromJsonBody('{"tool":"Y"}'), 'Y');
+  });
+
+  it('extracts from Python single-quoted dict literal (params.name)', () => {
+    assert.equal(extractToolFromJsonBody(`{'params':{'name':'HassTurnOff'}}`), 'HassTurnOff');
+  });
+
+  it('extracts from mixed Python literal embedded in larger source', () => {
+    const src = `data = json.dumps({'jsonrpc':'2.0','method':'tools/call','params':{'name':'HassTurnOff','arguments':{}}})`;
+    assert.equal(extractToolFromJsonBody(src), 'HassTurnOff');
+  });
+
+  it('returns undefined when no parseable {...} blob exists', () => {
+    assert.equal(extractToolFromJsonBody('name=HassTurnOff'), undefined);
+    assert.equal(extractToolFromJsonBody('plain text'), undefined);
+    assert.equal(extractToolFromJsonBody(''), undefined);
+  });
+
+  it('returns undefined when the blob has no name/params/tool key', () => {
+    assert.equal(extractToolFromJsonBody('{"foo":"bar"}'), undefined);
+    assert.equal(extractToolFromJsonBody(`{'foo':'bar'}`), undefined);
+  });
+
+  it('skips first malformed blob and tries the next one', () => {
+    const body = `prefix {invalid python: 'broken'} {"name":"WorksHere"}`;
+    assert.equal(extractToolFromJsonBody(body), 'WorksHere');
   });
 });

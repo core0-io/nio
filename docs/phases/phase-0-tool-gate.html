@@ -184,7 +184,7 @@
             <tr><td>D4</td><td>TCP / socket multiplex</td><td><code>nc/netcat/ncat/socat/openssl s_client/websocat/grpcurl</code> host:port or <code>-U /sock</code></td><td><code>tcp_socket</code></td></tr>
             <tr><td>D5</td><td>Bash builtin networking</td><td><code>/dev/tcp/&lt;host&gt;/&lt;port&gt;</code>, <code>/dev/udp/...</code>, <code>exec N&lt;&gt;/dev/tcp/...</code></td><td><code>dev_tcp</code></td></tr>
             <tr><td>D6</td><td>PowerShell HTTP</td><td><code>Invoke-WebRequest</code>, <code>Invoke-RestMethod</code>, <code>System.Net.WebClient</code>, <code>HttpClient</code> URL</td><td><code>pwsh_http</code></td></tr>
-            <tr><td>D7</td><td>Language-runtime HTTP</td><td>URL literals inside U8 inline code (urllib/requests/httpx, fetch/http.request, Net::HTTP/open-uri, LWP, file_get_contents/curl_exec, deno/bun fetch, net/http, reqwest)</td><td><code>language_runtime</code></td></tr>
+            <tr><td>D7</td><td>Language-runtime HTTP</td><td>URL literals inside U8 inline code (urllib/requests/httpx, fetch/http.request, Net::HTTP/open-uri, LWP, file_get_contents/curl_exec, deno/bun fetch, net/http, reqwest), plus tool name extracted from any JSON-RPC body literal in the inline source — handles Python single-quoted dict literals via fallback parse</td><td><code>language_runtime</code></td></tr>
             <tr><td>D8</td><td>Stdio JSON-RPC pipe</td><td><code>&lt;echo|printf|cat|jq|tee|yes&gt; ... | &lt;bin&gt;</code> where bin matches a registry binary</td><td><code>stdio_pipe</code></td></tr>
             <tr><td>D9</td><td>Stdin redirect</td><td><code>&lt;bin&gt; &lt; file.json</code>, <code>&lt;bin&gt; &lt;&lt;EOF</code>, <code>&lt;bin&gt; &lt;&lt;&lt;'json'</code></td><td><code>stdin_redirect</code></td></tr>
             <tr><td>D10</td><td>FIFO / named pipe</td><td><code>mkfifo PATH; &lt;bin&gt; &lt; PATH &amp;; ... &gt; PATH</code></td><td><code>fifo</code></td></tr>
@@ -198,7 +198,11 @@
         </table>
 
         <h4>Conservative fallback</h4>
-        <p>When a detector resolves a <code>server</code> but cannot resolve a <code>tool</code> (e.g. JSON-RPC body isn't statically parseable), Phase 0 treats the call as a "whole-server invocation" — the candidate is <code>${server}__*</code>, which fails any <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist that doesn't whitelist the server entire. This biases toward denial when in doubt.</p>
+        <p>When a detector resolves a <code>server</code> but cannot resolve a <code>tool</code> (e.g. raw TCP via <code>nc</code>, or a body shape no extractor can decode), Phase 0 treats the call as a "whole-server invocation" — the candidate is <code>${server}__*</code>. This biases toward denial in two ways:</p>
+        <ul>
+          <li><strong>Allowlist mode</strong> (<a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a>): <code>${server}__*</code> fails any allowlist that doesn't whitelist the server entire — the call is denied.</li>
+          <li><strong>Denylist mode</strong> (<a href="../configuration.html#guard.blocked_tools"><code>blocked_tools.mcp</code></a>): if the denylist contains any entry that <em>could</em> be a tool on the resolved server (a bare tool name like <code>HassTurnOff</code>, or a server-qualified entry like <code>hass__HassTurnOff</code>), the ambiguous call is denied. Trade-off: legitimate indirect calls to non-blocked tools on the same server are also denied. Users who need fine-grained allow + deny on one server should switch to <code>permitted_tools.mcp</code> allowlist mode.</li>
+        </ul>
 
         <h4>Audit-only detectors</h4>
         <p>D12, D15, and D16 emit calls with <code>auditOnly: true</code>. Phase 0 filters these out before the allowlist check — they inform the audit log but never deny. D12 because dev workflows commonly start a local MCP server; D15 because compile-and-run is a normal build pattern (the compiled binary's runtime HTTP behaviour is properly an OS-sandbox concern); D16 because the fallback is heuristic and prone to false positives.</p>

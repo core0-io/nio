@@ -111,12 +111,20 @@ function extractUrls(text: string): string[] {
   return urls;
 }
 
-/** Try to pull a JSON-RPC `params.name` (the MCP tool name) out of a body string. */
-function extractToolFromJsonBody(body: string): string | undefined {
+/**
+ * Try to pull a JSON-RPC `params.name` (the MCP tool name) out of a body string.
+ *
+ * Falls back to a single→double-quote substitution before giving up on a
+ * `{...}` slice, so Python dict literals like `{'name':'X'}` parse correctly
+ * (these show up in `python -c "..."` and heredoc bodies that build the JSON
+ * via `json.dumps({'name': 'X'})`). The fallback only fires after strict JSON
+ * has already failed, so legal-JSON bodies are unaffected.
+ */
+export function extractToolFromJsonBody(body: string): string | undefined {
   if (!body) return undefined;
   // Greedy scan for {...} substrings; parse each. Cheap heuristic; intentionally
   // ignores escaped quotes since the goal is best-effort attribution.
-  const open = body.indexOf('{');
+  let open = body.indexOf('{');
   if (open === -1) return undefined;
   for (let depth = 1, i = open + 1; i < body.length; i++) {
     if (body[i] === '\\') { i++; continue; }
@@ -125,18 +133,19 @@ function extractToolFromJsonBody(body: string): string | undefined {
       depth--;
       if (depth === 0) {
         const slice = body.slice(open, i + 1);
-        try {
-          const obj = JSON.parse(slice) as Record<string, unknown>;
-          const params = obj['params'] as Record<string, unknown> | undefined;
+        const parsed = tryParseJsonOrPyDict(slice);
+        if (parsed) {
+          const params = parsed['params'] as Record<string, unknown> | undefined;
           if (params && typeof params['name'] === 'string') return params['name'] as string;
-          if (typeof obj['name'] === 'string') return obj['name'] as string;
-          if (typeof obj['tool'] === 'string') return obj['tool'] as string;
-        } catch {
-          // ignore
+          if (typeof parsed['name'] === 'string') return parsed['name'] as string;
+          if (typeof parsed['tool'] === 'string') return parsed['tool'] as string;
         }
-        // Try to find a later top-level object
+        // Try to find a later top-level object. Reset `open` to the new
+        // position so the next slice starts at the new `{`, not the original
+        // (otherwise concatenated multi-blob bodies break later parses).
         const next = body.indexOf('{', i + 1);
         if (next === -1) return undefined;
+        open = next;
         i = next;
         depth = 1;
         continue;
@@ -144,6 +153,27 @@ function extractToolFromJsonBody(body: string): string | undefined {
     }
   }
   return undefined;
+}
+
+/**
+ * Best-effort parse: try strict JSON first, fall back to single→double-quote
+ * substitution for Python dict literals. Returns undefined if both fail.
+ */
+function tryParseJsonOrPyDict(slice: string): Record<string, unknown> | undefined {
+  try {
+    return JSON.parse(slice) as Record<string, unknown>;
+  } catch {
+    // ignore
+  }
+  // Python dict literal fallback: `{'name': 'X'}` → `{"name": "X"}`. We only
+  // substitute single quotes that look like they delimit strings, leaving
+  // legal apostrophes inside other contexts alone is best-effort — a slice
+  // mixing both would already have failed strict JSON.
+  try {
+    return JSON.parse(slice.replace(/'/g, '"')) as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Take a token string ($'...' / "..." / unquoted) and unwrap surrounding quotes. */
@@ -476,21 +506,28 @@ export function detectPwshHttp(fragment: UnwrappedFragment, registry: MCPRegistr
 // ---------------------------------------------------------------------------
 
 /**
- * D7 — Language-runtime HTTP. Runs against `inline=true` fragments
- * captured by U8 (`python -c`, `node -e`, …) or U4-tagged
- * interpreter-fed heredocs (`python3 <<EOF`). Scans for URL literals.
+ * D7 — Language-runtime HTTP. Runs against `inline=true` fragments captured
+ * by U8 (`python -c`, `node -e`, …) or U4-tagged interpreter-fed heredocs
+ * (`python3 <<EOF`). Scans for URL literals AND extracts the JSON-RPC tool
+ * name from any `params.name` / `name` / `tool` body literal embedded in the
+ * inline source — covers Python `json.dumps({'name': 'X'})`, Node `JSON.stringify`,
+ * inline POST bodies, and any other `{...}` blob the runtime constructs.
  *
  * @see src/tests/mcp-route-detect/detectors.test.ts — describe('detectMcpCalls: D7 Language-runtime HTTP')
  * @see src/tests/integration.test.ts — groups H (Python), I (Node), J (Ruby/Perl/PHP/Deno), heredoc composition
  */
 export function detectLanguageRuntime(fragment: UnwrappedFragment, registry: MCPRegistry): RoutedMcpCall[] {
   if (!fragment.inline) return [];
+  // Body extraction is shared across all URL hits in this fragment — the
+  // inline source is the whole "body" the runtime would send.
+  const tool = extractToolFromJsonBody(fragment.command);
   const results: RoutedMcpCall[] = [];
   for (const url of extractUrls(fragment.command)) {
     const entry = registry.lookupByUrl(url);
     if (!entry) continue;
     results.push({
       server: entry.serverName,
+      tool,
       via: 'language_runtime',
       evidence: url,
       flags: fragment.flags,

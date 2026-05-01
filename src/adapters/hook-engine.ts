@@ -127,6 +127,23 @@ function matchesCaseInsensitive(list: readonly string[], candidates: readonly st
 }
 
 /**
+ * Used when a shell-side detector resolves an MCP server but cannot extract
+ * the tool name (e.g. raw TCP, body shape we can't decode). Returns true if
+ * any entry in `mcpList` could plausibly be a tool on `server`:
+ *   - bare entries (no `__`) are candidate tool names regardless of server
+ *   - `server__tool` entries only count if the prefix matches this server
+ * Used by blocked_tools (bias toward deny on ambiguous hits).
+ */
+function ambiguousServerHit(server: string, mcpList: readonly string[]): boolean {
+  const serverLower = server.toLowerCase();
+  return mcpList.some(entry => {
+    const lower = entry.toLowerCase();
+    if (!lower.includes('__')) return true;
+    return lower.startsWith(`${serverLower}__`);
+  });
+}
+
+/**
  * Phase 0: Tool-level gate.
  *
  * Checks `blocked_tools` and `permitted_tools` from config before any
@@ -179,7 +196,18 @@ function checkToolGate(
   const shellMcpBlockHit: RoutedMcpCall | undefined = blockedMcp.length > 0 && shellHits.length > 0
     ? shellHits.find(h => {
         const cands = h.tool ? [h.tool, `${h.server}__${h.tool}`] : [`${h.server}__*`, h.server];
-        return matchesCaseInsensitive(blockedMcp, cands);
+        if (matchesCaseInsensitive(blockedMcp, cands)) return true;
+        // Bias toward deny when detector resolved a server but not a tool
+        // (e.g. `nc host port`, `python urlopen(URL)` with a body shape we
+        // can't statically decode). Any blocked_tools.mcp entry that *could*
+        // be a tool on this server triggers — bare entries (no `__`) might
+        // match any server; server-qualified entries (`server__tool`) only
+        // count if they target THIS server. Trade-off: also denies legit
+        // indirect calls to non-blocked tools on the same server. Users who
+        // need fine-grained allow/deny on the same server should switch to
+        // permitted_tools.mcp allowlist mode.
+        if (h.tool) return false;
+        return ambiguousServerHit(h.server, blockedMcp);
       })
     : undefined;
 

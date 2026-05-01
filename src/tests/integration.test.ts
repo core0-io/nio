@@ -568,6 +568,73 @@ describe('Integration: Phase 0 Tool Gate', () => {
     }, ctx.options);
     assert.equal(result.decision, 'allow');
   });
+
+  // ── Bug 3: ambiguous-server bias for blocked_tools.mcp ──────────────────
+  // When a shell-side detector resolves an MCP server but cannot statically
+  // extract the tool name (raw TCP, opaque body shape), Phase 0 must still
+  // deny if blocked_tools.mcp lists any entry that *could* be a tool on
+  // that server. Bias toward deny — the indirect channel might be invoking
+  // the blocked tool and we have no way to confirm or deny.
+  describe('blocked_tools.mcp: ambiguous-server bias', () => {
+    it('denies nc host:port when blocked_tools.mcp has a bare tool name (no body to extract)', async () => {
+      // V5 from the user's e2e audit: `nc host port` opens a TCP socket
+      // with no JSON-RPC body in the command. Detector resolves server but
+      // tool stays undefined. Bias-toward-deny must still trigger.
+      ctx = createTestContext({
+        guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+        mcpRegistry: buildIntegrationRegistry(),
+      });
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'nc localhost 5173' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+      assert.match(result.reason ?? '', /hass__\*/);
+      assert.match(result.reason ?? '', /via tcp_socket/);
+    });
+
+    it('denies nc when blocked_tools.mcp has a server-qualified entry on the same server', async () => {
+      ctx = createTestContext({
+        guard: { blocked_tools: { mcp: ['hass__HassTurnOff'] } },
+        mcpRegistry: buildIntegrationRegistry(),
+      });
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'nc localhost 5173' },
+      }, ctx.options);
+      assert.equal(result.decision, 'deny');
+    });
+
+    it('does NOT deny nc when blocked_tools.mcp has only entries for a different server', async () => {
+      // `other__SomeTool` should not deny a hass-resolved channel — bias is
+      // scoped to entries that could be tools on the resolved server.
+      ctx = createTestContext({
+        guard: { blocked_tools: { mcp: ['other__SomeTool'] } },
+        mcpRegistry: buildIntegrationRegistry(),
+      });
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'nc localhost 5173' },
+      }, ctx.options);
+      assert.equal(result.decision, 'allow');
+    });
+
+    it('does NOT deny when blocked_tools.mcp is empty (no bias to apply)', async () => {
+      ctx = createTestContext({
+        guard: { blocked_tools: { mcp: [] } },
+        mcpRegistry: buildIntegrationRegistry(),
+      });
+      const result = await evaluateHook(ctx.claudeAdapter, {
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'nc localhost 5173' },
+      }, ctx.options);
+      assert.equal(result.decision, 'allow');
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1208,6 +1275,58 @@ describe('Integration: MCP indirect invocation (groups B-J)', () => {
     assert.equal(result.decision, 'deny');
   });
 
+  it('python heredoc with json.dumps Python literal denies via language_runtime + tool', async () => {
+    // V6 from the user's e2e audit: python heredoc that builds a JSON-RPC
+    // payload via json.dumps with Python single-quote dict literal. The body
+    // construction is what actually controlled real Home Assistant lights —
+    // detector must extract `HassTurnOff` from the {'name':'HassTurnOff'}
+    // literal and match it against blocked_tools.mcp.
+    ctx = createTestContext({
+      guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+      mcpRegistry: buildIntegrationRegistry(),
+    });
+    const heredoc = [
+      `python3 <<'PY'`,
+      `import urllib.request, json`,
+      `data = json.dumps({'jsonrpc':'2.0','method':'tools/call','params':{'name':'HassTurnOff','arguments':{}}}).encode()`,
+      `req = urllib.request.Request('http://localhost:5173/mcp', data=data, headers={'Content-Type':'application/json'})`,
+      `urllib.request.urlopen(req).read()`,
+      `PY`,
+    ].join('\n');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: heredoc },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.match(result.reason ?? '', /via language_runtime/);
+    assert.match(result.reason ?? '', /hass__HassTurnOff/);
+  });
+
+  it('python heredoc with strict-JSON body denies via language_runtime + tool', async () => {
+    // Strict-JSON variant of the V6 case: heredoc body contains a literal
+    // {"name":"HassTurnOff"} (legal JSON, no Python single quotes). Verifies
+    // the tool extraction path independent of the single-quote fallback.
+    ctx = createTestContext({
+      guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+      mcpRegistry: buildIntegrationRegistry(),
+    });
+    const cmd = [
+      `python3 << 'PY'`,
+      `import urllib.request`,
+      `urllib.request.urlopen('http://localhost:5173/mcp', data=b'{"name":"HassTurnOff"}')`,
+      `PY`,
+    ].join('\n');
+    const result = await evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: cmd },
+    }, ctx.options);
+    assert.equal(result.decision, 'deny');
+    assert.match(result.reason ?? '', /via language_runtime/);
+    assert.match(result.reason ?? '', /hass__HassTurnOff/);
+  });
+
   it('curl wrapped in nohup runs through Phase 0 with background flag', async () => {
     ctx = allowOnlyHassTurnOn();
     const result = await evaluateHook(ctx.claudeAdapter, {
@@ -1350,4 +1469,98 @@ describe('Integration: MCP config & persistence write protection (groups X, Y)',
       assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// E2E regression: the user's 6-vector CC audit table
+//
+// In a previous CC session the user configured `blocked_tools.mcp:
+// ['HassTurnOff']` and ran six indirect-channel vectors against a real Home
+// Assistant MCP server. V6 actually controlled the light. This block locks
+// in the post-fix expectation: ALL six vectors must deny under the same
+// denylist config that was bypassed in production. Each test names the bug
+// it's the regression test for.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: 6-vector e2e regression (user CC audit, denylist mode)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  // Same registry shape as the user's real ~/.claude.json (URL-based hass MCP),
+  // narrowed to localhost:5173/mcp so the integration registry helper resolves it.
+  const denylistOnly = () => createTestContext({
+    guard: { blocked_tools: { mcp: ['HassTurnOff'] } },
+    mcpRegistry: buildIntegrationRegistry(),
+  });
+
+  const evalBash = async (command: string) => {
+    return evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command },
+    }, ctx.options);
+  };
+
+  it('V1: `mcporter call hass.HassTurnOff` denies via mcporter', async () => {
+    ctx = denylistOnly();
+    const r = await evalBash('mcporter call hass.HassTurnOff');
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via mcporter/);
+    assert.match(r.reason ?? '', /hass__HassTurnOff/);
+  });
+
+  it('V2: curl POST with strict JSON-RPC body denies via http_client', async () => {
+    ctx = denylistOnly();
+    const r = await evalBash(`curl -X POST http://localhost:5173/mcp -d '{"params":{"name":"HassTurnOff"}}'`);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via http_client/);
+    assert.match(r.reason ?? '', /hass__HassTurnOff/);
+  });
+
+  it('V3: wget --post-data with strict JSON-RPC body denies via http_client', async () => {
+    ctx = denylistOnly();
+    const r = await evalBash(`wget --post-data='{"params":{"name":"HassTurnOff"}}' http://localhost:5173/mcp`);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via http_client/);
+  });
+
+  it('V4: python urlopen with form-encoded body denies via language_runtime (Bug 3 ambiguous-server bias)', async () => {
+    // Form-encoded body has no JSON-RPC blob to extract a tool name from.
+    // Bug 1 (D7 calls extractToolFromJsonBody) helps for JSON bodies but
+    // not for `name=X`. Bug 3 (matcher-side ambiguous-server bias) catches
+    // this — server resolves to hass, tool stays undefined, blocked_tools
+    // has a bare tool name → deny on `hass__*`.
+    ctx = denylistOnly();
+    const r = await evalBash(`python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:5173/mcp', data=b'name=HassTurnOff')"`);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via language_runtime/);
+    assert.match(r.reason ?? '', /hass__\*/);
+  });
+
+  it('V5: nc host:port denies via tcp_socket (Bug 3 ambiguous-server bias)', async () => {
+    ctx = denylistOnly();
+    const r = await evalBash('nc localhost 5173');
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via tcp_socket/);
+    assert.match(r.reason ?? '', /hass__\*/);
+  });
+
+  it('V6: python heredoc + json.dumps Python single-quote literal denies via language_runtime + tool (Bug 1 + Bug 2)', async () => {
+    // The actual reported security failure — controlled real lights pre-fix.
+    // Requires both:
+    //   - Bug 1: D7 calls extractToolFromJsonBody on the inline source
+    //   - Bug 2: parser handles Python single-quoted dict literals
+    ctx = denylistOnly();
+    const heredoc = [
+      `python3 << 'PY'`,
+      `import urllib.request, json`,
+      `data = json.dumps({'jsonrpc':'2.0','method':'tools/call','params':{'name':'HassTurnOff'}}).encode()`,
+      `urllib.request.urlopen('http://localhost:5173/mcp', data=data)`,
+      `PY`,
+    ].join('\n');
+    const r = await evalBash(heredoc);
+    assert.equal(r.decision, 'deny');
+    assert.match(r.reason ?? '', /via language_runtime/);
+    assert.match(r.reason ?? '', /hass__HassTurnOff/);
+  });
 });
