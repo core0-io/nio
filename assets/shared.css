@@ -635,7 +635,10 @@ body.no-grid::before { display: none; }
   .doc h2 { font-size: 19px; }
 }
 @media (max-width: 560px) {
-  .topbar-right .pill:not(.status) { display: none; }
+  /* Narrow-screen topbar-right: hide the secondary pills (Core0 home, version
+     tag) but keep the protection-level dropdown (.pill-select on index.html)
+     and the GitHub link (the one with the inline svg). */
+  .topbar-right .pill:not(.status):not(.pill-select):not(:has(svg)) { display: none; }
   .page-nav { flex-direction: column; }
   .page-nav a.next { text-align: left; align-items: flex-start; margin-left: 0; }
 }
