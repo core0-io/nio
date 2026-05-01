@@ -181,7 +181,7 @@ guard:
   # language-runtime one-liners, TCP/socket multiplexers, stdio
   # JSON-RPC pipes, package runners, etc.) against every fragment,
   # mapping each hit back to {server, tool} via the endpoint registry.
-  # See docs/MCP-DETECTION.md for the full capture model.
+  # See docs/phases/phase-0-tool-gate.html for the full capture model.
   available_tools:
     claude_code: []
     openclaw: []

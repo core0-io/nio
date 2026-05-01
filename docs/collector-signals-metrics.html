@@ -84,7 +84,7 @@
 
         <div class="callout warn">
           <div class="title">Claude Code · Task → Agent</div>
-          <p>The user-facing <strong>Task</strong> tool (subagent dispatch) is reported as <code>tool_name="Agent"</code> in CC hook payloads, so PreToolUse / PostToolUse counters use <code>Agent</code> as the <code>gen_ai.tool.name</code> label. The literal value <code>Task</code> only appears as a counter label when <code>TaskCreated</code> / <code>TaskCompleted</code> fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see <a href="https://github.com/core0-io/nio/blob/main/e2e-test/hook-subagent-e2e-task.md"><code>e2e-test/hook-subagent-e2e-task.md</code></a>). OpenClaw and Hermes use their own native tool names.</p>
+          <p>The user-facing <strong>Task</strong> tool (subagent dispatch) is reported as <code>tool_name="Agent"</code> in Claude Code hook payloads, so PreToolUse / PostToolUse counters use <code>Agent</code> as the <code>gen_ai.tool.name</code> label. The literal value <code>Task</code> only appears as a counter label when <code>TaskCreated</code> / <code>TaskCompleted</code> fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current Claude Code builds — see <a href="https://github.com/core0-io/nio/blob/main/e2e-test/hook-subagent-e2e-task.md"><code>e2e-test/hook-subagent-e2e-task.md</code></a>). OpenClaw and Hermes use their own native tool names.</p>
         </div>
 
         <p>Metrics have <strong>no local file</strong> — there is no <code>metrics.jsonl</code>. If <code>collector.endpoint</code> is empty, metrics drop on the floor (the meter provider returns <code>null</code>).</p>

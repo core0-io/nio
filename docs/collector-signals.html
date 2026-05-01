@@ -90,7 +90,7 @@
                     Metrics   Traces       Logs
                     (OTLP)    (OTLP)    (OTLP + local audit log)</code></pre>
 
-        <p style="font-size: 13px; color: var(--fg-2);">CC and Hermes have to bridge span lifecycle across short-lived hook processes — a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.</p>
+        <p style="font-size: 13px; color: var(--fg-2);">Claude Code and Hermes have to bridge span lifecycle across short-lived hook processes — a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.</p>
 
         <h2 id="naming">Naming conventions</h2>
         <ul>

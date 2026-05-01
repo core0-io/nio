@@ -232,7 +232,7 @@ Note: `(i)` = case insensitive search, `(multiline)` = enable multiline matching
 
 In addition to the file-content scan rules above, Phase 0 inspects every
 `exec_command` action for indirect MCP tool invocations. The capture
-model is documented at [docs/MCP-DETECTION.md](../../../../docs/MCP-DETECTION.md);
+model is documented at [Phase 0 — Tool Gate · MCP Tool Routing](../../../../docs/phases/phase-0-tool-gate.html#mcp-routing);
 the runtime path is summarized below.
 
 | Stage | Layer | Coverage |

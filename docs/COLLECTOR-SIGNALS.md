@@ -51,7 +51,7 @@ The three host platforms each have their own runtime model — Claude Code and H
                     (OTLP)    (OTLP)    (OTLP + local audit log)
 ```
 
-CC and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
+Claude Code and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
 
 ## Naming conventions
 
@@ -97,7 +97,7 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 
 > **Claude Code · Task → Agent**
 >
-> The user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in CC hook payloads, so PreToolUse / PostToolUse counters use `Agent` as the `gen_ai.tool.name` label. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current CC builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
+> The user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in Claude Code hook payloads, so PreToolUse / PostToolUse counters use `Agent` as the `gen_ai.tool.name` label. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current Claude Code builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
 
 Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.endpoint` is empty, metrics drop on the floor (the meter provider returns `null`).
 
@@ -136,18 +136,18 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw-native) | OpenClaw only |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
-**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as CC if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
+**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
 
 ### Span: `execute_tool <name>` (tool span)
 
-One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on CC/Hermes since the pre-side process is gone).
+One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
 | `gen_ai.operation.name` | Constant `execute_tool` | PostToolUse | all |
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
-| `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on CC, `toolCallId` on OpenClaw) | PreToolUse · PostToolUse | all |
+| `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
 | `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
@@ -164,16 +164,16 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
-**`nio.guard.*` on Claude Code?** Not yet — CC's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.
+**`nio.guard.*` on Claude Code?** Not yet — Claude Code's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.
 
 ### Span: `task:execute` (task span)
 
-One per subagent dispatch. Opens at `TaskCreated` (CC, Teammates / cloud-agent flows) or `subagent_spawning` (OpenClaw); closes at the matching completion event.
+One per subagent dispatch. Opens at `TaskCreated` (Claude Code, Teammates / cloud-agent flows) or `subagent_spawning` (OpenClaw); closes at the matching completion event.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
 | `nio.task_id` | Task id from the dispatch event | TaskCreated | Claude Code + OpenClaw |
-| `nio.task_summary` | Derived from task input (CC: `task_input.prompt`; OpenClaw: empty) | TaskCreated | Claude Code + OpenClaw |
+| `nio.task_summary` | Derived from task input (Claude Code: `task_input.prompt`; OpenClaw: empty) | TaskCreated | Claude Code + OpenClaw |
 | `nio.platform` | Source platform — `claude-code` / `openclaw` | TaskCompleted | Claude Code + OpenClaw |
 | `nio.session_id` | Host session id | TaskCompleted | Claude Code + OpenClaw |
 | `nio.turn_number` | Parent turn's number | TaskCompleted | Claude Code + OpenClaw |
@@ -181,7 +181,7 @@ One per subagent dispatch. Opens at `TaskCreated` (CC, Teammates / cloud-agent f
 
 > **Known gap · not yet GenAI-aligned**
 >
-> Span name is the literal `task:execute` (not `execute_tool task`); session id uses `nio.session_id` instead of `gen_ai.conversation.id` + `session.id`. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until CC and OpenClaw can migrate in lockstep.
+> Span name is the literal `task:execute` (not `execute_tool task`); session id uses `nio.session_id` instead of `gen_ai.conversation.id` + `session.id`. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until Claude Code and OpenClaw can migrate in lockstep.
 
 ### Trace state lifecycle
 
@@ -264,7 +264,7 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 | `platform` | string | host |
 | `session_id` | string? | host session id |
 | `cwd` | string \| null | working dir |
-| `transcript_path` | string? | CC-only — path to session transcript JSONL |
+| `transcript_path` | string? | Claude Code-only — path to session transcript JSONL |
 | `tool_name` | string? | for PreToolUse / PostToolUse |
 | `tool_use_id` | string? | for PreToolUse / PostToolUse |
 | `tool_summary` | string? | for PreToolUse / PostToolUse |
@@ -299,7 +299,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `nio.max_finding_severity` | Highest finding severity surfaced this run | guard decision | all |
 | `nio.phase_stopped` | Which Phase 0–6 produced the decision | guard decision | all |
 | `nio.explanation` | Human-readable reason for the verdict | guard decision | all |
-| `nio.transcript_path` | CC-only — path to session transcript JSONL | hook events with transcript | Claude Code only |
+| `nio.transcript_path` | Claude Code-only — path to session transcript JSONL | hook events with transcript | Claude Code only |
 | `nio.phases.{name}.score` | Per-phase score (Phase 0–6) | guard decision | all |
 | `nio.phases.{name}.finding_count` | Per-phase finding count | guard decision | all |
 | `nio.phases.{name}.duration_ms` | Per-phase wall-clock cost (ms) | guard decision | all |

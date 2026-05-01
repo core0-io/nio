@@ -145,7 +145,7 @@
               <tr><td><code>platform</code></td><td>string</td><td>host</td></tr>
               <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
               <tr><td><code>cwd</code></td><td>string | null</td><td>working dir</td></tr>
-              <tr><td><code>transcript_path</code></td><td>string?</td><td>CC-only — path to session transcript JSONL</td></tr>
+              <tr><td><code>transcript_path</code></td><td>string?</td><td>Claude Code-only — path to session transcript JSONL</td></tr>
               <tr><td><code>tool_name</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
               <tr><td><code>tool_use_id</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
               <tr><td><code>tool_summary</code></td><td>string?</td><td>for PreToolUse / PostToolUse</td></tr>
@@ -183,7 +183,7 @@
             <tr><td><code>nio.max_finding_severity</code></td><td>Highest finding severity surfaced this run</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.phase_stopped</code></td><td>Which Phase 0–6 produced the decision</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.explanation</code></td><td>Human-readable reason for the verdict</td><td>guard decision</td><td>all</td></tr>
-            <tr><td><code>nio.transcript_path</code></td><td>CC-only — path to session transcript JSONL</td><td>hook events with transcript</td><td>Claude Code only</td></tr>
+            <tr><td><code>nio.transcript_path</code></td><td>Claude Code-only — path to session transcript JSONL</td><td>hook events with transcript</td><td>Claude Code only</td></tr>
             <tr><td><code>nio.phases.{name}.score</code></td><td>Per-phase score (Phase 0–6)</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.phases.{name}.finding_count</code></td><td>Per-phase finding count</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.phases.{name}.duration_ms</code></td><td>Per-phase wall-clock cost (ms)</td><td>guard decision</td><td>all</td></tr>
@@ -200,9 +200,9 @@
           <span class="label">Metrics signal</span>
         </a>
         <div class="spacer"></div>
-        <a href="mcp-detection.html" class="next">
+        <a href="phases/" class="next">
           <span class="dir">Next →</span>
-          <span class="label">MCP Detection</span>
+          <span class="label">Pipeline</span>
         </a>
       </div>
 

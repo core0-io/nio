@@ -75,17 +75,17 @@
             <tr><td><code>nio.turn.cache_hit_rate</code></td><td><code>cache_read / (input + cache_creation + cache_read)</code>, 0–1</td><td>turn close</td><td>all</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads the transcript JSONL and sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as CC if the transcript path is included in the <code>post_llm_call</code> payload; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries usage directly; accumulated incrementally.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads the transcript JSONL and sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as Claude Code if the transcript path is included in the <code>post_llm_call</code> payload; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries usage directly; accumulated incrementally.</p>
 
         <h2 id="span-tool">Span: <code>execute_tool &lt;name&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— tool span</span></h2>
-        <p>One per tool invocation. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on CC/Hermes since the pre-side process is gone).</p>
+        <p>One per tool invocation. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
             <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>execute_tool</code></td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name (<code>Bash</code>, <code>WebFetch</code>, …)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.type</code></td><td>Tool type, when known</td><td>PostToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on CC, <code>toolCallId</code> on OpenClaw)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on Claude Code, <code>toolCallId</code> on OpenClaw)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.tool.error</code></td><td>Error message when the tool failed</td><td>PostToolUse</td><td>all</td></tr>
@@ -101,15 +101,15 @@
             <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise. <strong><code>nio.guard.*</code> on Claude Code?</strong> Not yet — CC's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise. <strong><code>nio.guard.*</code> on Claude Code?</strong> Not yet — Claude Code's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.</p>
 
         <h2 id="span-task">Span: <code>task:execute</code> <span style="color: var(--fg-3); font-weight: 400;">— task span</span></h2>
-        <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (CC, Teammates / cloud-agent flows) or <code>subagent_spawning</code> (OpenClaw); closes at the matching completion event.</p>
+        <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (Claude Code, Teammates / cloud-agent flows) or <code>subagent_spawning</code> (OpenClaw); closes at the matching completion event.</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
             <tr><td><code>nio.task_id</code></td><td>Task id from the dispatch event</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
-            <tr><td><code>nio.task_summary</code></td><td>Derived from task input (CC: <code>task_input.prompt</code>; OpenClaw: empty)</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.task_summary</code></td><td>Derived from task input (Claude Code: <code>task_input.prompt</code>; OpenClaw: empty)</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>openclaw</code></td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.session_id</code></td><td>Host session id</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
@@ -118,7 +118,7 @@
         </table>
         <div class="callout warn">
           <div class="title">Known gap · not yet GenAI-aligned</div>
-          <p>Span name is the literal <code>task:execute</code> (not <code>execute_tool task</code>); session id uses <code>nio.session_id</code> instead of <code>gen_ai.conversation.id</code> + <code>session.id</code>. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until CC and OpenClaw can migrate in lockstep.</p>
+          <p>Span name is the literal <code>task:execute</code> (not <code>execute_tool task</code>); session id uses <code>nio.session_id</code> instead of <code>gen_ai.conversation.id</code> + <code>session.id</code>. The other two spans use GenAI semantic conventions; the task span is intentionally on the legacy schema until Claude Code and OpenClaw can migrate in lockstep.</p>
         </div>
 
         <h2 id="state">Trace state lifecycle</h2>

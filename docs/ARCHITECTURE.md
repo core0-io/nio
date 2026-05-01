@@ -230,7 +230,7 @@ of detectors against every fragment, maps each hit back to a registered
 MCP server, and re-applies the same `available_tools.mcp` /
 `blocked_tools.mcp` lists. The full capture model — 16 unwrappers + 16
 detectors + the endpoint registry — is documented in
-[MCP-DETECTION.md](MCP-DETECTION.md).
+[Phase 0 — Tool Gate · MCP Tool Routing](phases/phase-0-tool-gate.html#mcp-routing).
 
 ### Phase 1: Allowlist Gate (<1ms)
 
@@ -602,7 +602,7 @@ For the full per-signal schema (every metric instrument, every span attribute, e
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-All three platforms feed the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for CC / Hermes, memory for OpenClaw).
+All three platforms feed the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for Claude Code / Hermes, memory for OpenClaw).
 
 ### Metrics
 
@@ -685,7 +685,7 @@ across platforms; what differs is only **where the per-session
   bridging; otherwise identical lifecycle (the same pure-function calls
   are used at the same lifecycle points).
 
-State file location (CC / Hermes only): derived from
+State file location (Claude Code / Hermes only): derived from
 `collector.logs.path` (sits in the same directory as `audit.jsonl`);
 falls back to `${NIO_HOME ?? ~/.nio}/`.
 
@@ -693,7 +693,7 @@ falls back to `${NIO_HOME ?? ~/.nio}/`.
 
 The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for CC / Hermes; not user-facing observability data.
+Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Hermes; not user-facing observability data.
 
 ---
 

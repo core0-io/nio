@@ -265,7 +265,7 @@ package runners, …) by mapping each channel back to a registered server
 via the MCP endpoint registry (auto-discovered from Claude Code, Claude
 Desktop, Hermes, OpenClaw configs). The full capture model — 16 unwrap
 stages + 16 detectors + the registry — is documented at
-[docs/MCP-DETECTION.md](../../../../docs/MCP-DETECTION.md).
+[Phase 0 — Tool Gate · MCP Tool Routing](../../../../docs/phases/phase-0-tool-gate.html#mcp-routing).
 
 Residual gaps are unavoidable at the shell-pattern layer:
 self-launching an off-registry MCP binary, network calls inside a

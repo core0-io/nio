@@ -32,7 +32,6 @@
       { label: 'Overview', path: '/docs/phases/' },
       { label: 'Scoring', path: '/docs/phases/scoring.html' },
       { label: 'Phase 0 — Tool Gate', path: '/docs/phases/phase-0-tool-gate.html' },
-      { label: 'MCP Tool Routing', path: '/docs/mcp-detection.html' },
       { label: 'Phase 1 — Allowlist', path: '/docs/phases/phase-1-allowlist.html' },
       { label: 'Phase 2 — Pattern', path: '/docs/phases/phase-2-pattern.html' },
       { label: 'Phase 3 — Static', path: '/docs/phases/phase-3-static.html' },

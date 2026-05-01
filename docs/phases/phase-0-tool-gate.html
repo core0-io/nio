@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../../assets/shared.css">
 </head>
 <body>
-<!-- source: index.html LAYERS[0], plugins/shared/config.default.yaml (available_tools/blocked_tools/guarded_tools) -->
+<!-- source: index.html LAYERS[0], plugins/shared/config.default.yaml (available_tools/blocked_tools/guarded_tools), MCP routing material absorbed from former mcp-detection.html -->
 
 <div class="app">
   <div class="topbar">
@@ -82,9 +82,146 @@
           <li><a href="../configuration.html#guard.guarded_tools"><code>guard.guarded_tools</code></a> — per-platform tool → action type mapping.</li>
         </ul>
 
-        <h2>MCP nuance</h2>
-        <p>The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool — both direct calls (<code>mcp__hass__HassTurnOn</code> on Claude Code, <code>hass__HassTurnOn</code> on OpenClaw / Hermes) and <strong>indirect</strong> ones embedded in shell commands. Phase 0 unwraps the command and runs a battery of content detectors (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket pipes, package runners, stdio JSON-RPC, …), mapping each hit back to <code>{server, tool}</code> via an auto-discovered MCP endpoint registry, and re-applies the same allowlist. See <a href="../mcp-detection.html">MCP Detection</a> for the full capture model.</p>
-        <p>Entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
+        <h2 id="mcp-routing">MCP Tool Routing — direct and indirect, one allowlist</h2>
+        <p>An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist.</p>
+
+        <h3>Why the indirect path needs handling</h3>
+        <p>From the platform's point of view, when an agent shells out, the tool name is just <code>Bash</code> — the actual MCP invocation lives in the command's content. Without further inspection, indirect calls escape the allowlist that direct calls obey. Nio closes that gap by adding <strong>content detection at Phase 0</strong>: unwrap nested forms, run detectors against each fragment, map every hit back to <code>{server, tool}</code> via an endpoint registry, and feed the resulting candidates into the same allowlist check. The policy layer is unchanged.</p>
+
+        <h3>Capture model</h3>
+        <pre><code>┌──────────────────────────────────────────────────────────────────────┐
+│  Phase 0: checkToolGate(toolName, toolInput, config, registry)       │
+└────────────────────────────────────────┬─────────────────────────────┘
+                                         │
+                ┌────────────────────────┴──────────────────────┐
+                ▼                                                ▼
+       ┌─────────────────┐                             ┌──────────────────┐
+       │ Direct call     │                             │ Indirect call    │
+       │ parseMcpToolName│                             │ extractCommand   │
+       │ → {server,tool} │                             │ → command string │
+       └────────┬────────┘                             └─────────┬────────┘
+                │                                                 │
+                │                              ┌──────────────────▼─────┐
+                │                              │ Stage 1: unwrapCommand │
+                │                              │ U1-U16 (recursive)     │
+                │                              └──────────────────┬─────┘
+                │                                                 │
+                │                              ┌──────────────────▼─────┐
+                │                              │ Stage 2: runDetectors  │
+                │                              │ D1-D16 (per-fragment)  │
+                │                              └──────────────────┬─────┘
+                │                                                 │
+                │                              ┌──────────────────▼─────┐
+                │                              │ Filter audit-only      │
+                │                              │ (D12, D15, D16)        │
+                │                              └──────────────────┬─────┘
+                │                                                 │
+                ▼                                                 ▼
+            ┌────────────────────────────────────────────────────────┐
+            │ Combined candidate list →                              │
+            │   available_tools.mcp / blocked_tools.mcp              │
+            └────────────────────────────────────────────────────────┘</code></pre>
+        <p>Stage 1 unwraps shells, heredocs, evals, encodings, package wrappers, and remote-shell prefixes until each fragment is plain enough that a detector can match it. Pass-through flags (<code>remote</code>, <code>background</code>, <code>compiled</code>) propagate from outer wrappers so the audit log can name the channel. Stage 2 runs every detector against every fragment; hits become <code>RoutedMcpCall { server, tool?, via, evidence, flags?, auditOnly? }</code>. Stage 3 flattens hits to <code>{tool, server__tool}</code> candidates and runs the existing allowlist check.</p>
+        <p>Allowlist entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
+
+        <h3 id="endpoint-registry">MCP endpoint registry</h3>
+        <p>For Stage 2 to know that <code>http://localhost:5173/mcp</code> <em>is</em> an MCP server, Phase 0 loads a registry on hook entry. Sources are auto-discovered:</p>
+        <table>
+          <thead><tr><th>Source</th><th>Path</th></tr></thead>
+          <tbody>
+            <tr><td>Claude Code</td><td><code>~/.claude.json</code> <code>mcpServers.*</code></td></tr>
+            <tr><td>Claude Desktop</td><td><code>~/Library/Application Support/Claude/claude_desktop_config.json</code> (macOS), <code>$XDG_CONFIG_HOME/Claude/</code>, <code>%APPDATA%\Claude\</code></td></tr>
+            <tr><td>Hermes</td><td><code>~/.hermes/config.yaml</code> <code>mcp_servers.*</code></td></tr>
+            <tr><td>OpenClaw</td><td><code>~/.openclaw/openclaw.json</code> <code>mcp.servers.*</code></td></tr>
+            <tr><td>Manual override</td><td><code>~/.nio/config.yaml</code> <a href="../configuration.html#guard.mcp_endpoints"><code>guard.mcp_endpoints.*</code></a></td></tr>
+          </tbody>
+        </table>
+        <p>Every server is indexed by every reachable handle:</p>
+        <pre><code>type MCPServerEntry = {
+  serverName:  string
+  urls:        string[]   // http(s)://, ws(s)://
+  sockets:     string[]   // unix socket paths
+  binaries:    string[]   // mcp-server-X, X-mcp
+  cliPackages: string[]   // @scope/mcp-cli, npx package names
+  source:      'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'manual'
+}</code></pre>
+        <p>Lookups: <code>lookupByUrl()</code>, <code>lookupBySocket()</code>, <code>lookupByBinary()</code>, <code>lookupByCliPackage()</code>. URLs are normalized (host lower-cased, trailing slash stripped); origin matching captures sub-paths of the registered URL. Binary and package lookups are case-insensitive and basename-aware. Caching is per-source by file mtime — only changed sources re-parse.</p>
+
+        <h3>Stage 1 — Unwrappers (U1–U16)</h3>
+        <p>Each unwrapper either returns inner fragments or emits flags that decorate the current fragment. Recursion goes up to <code>MAX_UNWRAP_DEPTH = 8</code> levels.</p>
+        <table>
+          <thead><tr><th>#</th><th>Channel</th><th>Example trigger</th></tr></thead>
+          <tbody>
+            <tr><td>U1</td><td>shell <code>-c</code></td><td><code>bash/sh/zsh/dash/ksh/fish/busybox -c "..."</code></td></tr>
+            <tr><td>U2</td><td>variable shell</td><td><code>$SHELL/$BASH/${SHELL} -c "..."</code></td></tr>
+            <tr><td>U3</td><td>eval</td><td><code>eval "..."</code>, <code>eval $(...)</code></td></tr>
+            <tr><td>U4</td><td>heredoc / here-string</td><td><code>&lt;&lt;EOF...EOF</code>, <code>&lt;&lt;&lt;'...'</code></td></tr>
+            <tr><td>U5</td><td>process substitution</td><td><code>&lt;(...)</code>, <code>&gt;(...)</code></td></tr>
+            <tr><td>U6</td><td>command substitution</td><td><code>$(...)</code>, backticks</td></tr>
+            <tr><td>U7</td><td>source / script exec</td><td><code>source &lt;(...)</code>, <code>. &lt;(...)</code>, <code>bash &lt;(...)</code></td></tr>
+            <tr><td>U8</td><td>interpreter inline</td><td><code>python/python3/node/bun/deno/ruby/perl/php/lua/Rscript/tclsh/osascript/pwsh -c|-e|-r|--eval</code> (sets <code>inline=true</code>)</td></tr>
+            <tr><td>U9</td><td>encoded-pipe decoder</td><td><code>echo '&lt;b64&gt;' | base64 -d | &lt;interp&gt;</code>, <code>xxd -r -p</code>, <code>openssl base64 -d</code></td></tr>
+            <tr><td>U10</td><td>string-concat / variable folding</td><td><code>c=cu; c=$c"rl"; $c URL</code> (best-effort static fold)</td></tr>
+            <tr><td>U11</td><td>indirect executor</td><td><code>xargs &lt;cmd&gt;</code>, <code>find -exec &lt;cmd&gt;</code>, <code>parallel/watch/time/env &lt;cmd&gt;</code></td></tr>
+            <tr><td>U12</td><td>remote shell</td><td><code>ssh user@host '...'</code>, <code>docker exec C ...</code>, <code>kubectl exec ... -- ...</code>, <code>podman exec ...</code> (sets <code>remote=true</code>)</td></tr>
+            <tr><td>U13</td><td>editor escape</td><td><code>vim/nvim/ed/ex -c '!...'</code>, <code>emacs --batch ...</code></td></tr>
+            <tr><td>U14</td><td>build/orchestration inline shell</td><td><code>make -f /dev/stdin</code>, <code>ansible -m shell -a '...'</code></td></tr>
+            <tr><td>U15</td><td>background / scheduled</td><td><code>nohup ... &amp;</code>, trailing <code>&amp;</code>, <code>disown</code>, <code>setsid</code>, <code>at &lt;&lt;&lt;'...'</code>, <code>crontab -</code>, <code>systemd-run</code>, <code>launchctl bsexec</code> (sets <code>background=true</code>)</td></tr>
+            <tr><td>U16</td><td>compile-and-run</td><td><code>gcc/clang -x c -; ./a.out</code>, <code>go run -</code>, <code>rustc -; ./a</code> (sets <code>compiled=true</code>)</td></tr>
+          </tbody>
+        </table>
+        <p>Composition: layers stack freely. <code>bash -c "echo &lt;b64&gt; | base64 -d | sh"</code> unwraps through U1 → U9 → final fragment, and any detector match is attributed correctly.</p>
+
+        <h3>Stage 2 — Detectors (D1–D16)</h3>
+        <p>Each detector consumes one fragment and emits zero or more <code>RoutedMcpCall</code>. D2–D11 require the registry; D1 (mcporter) parses the target out of the command directly.</p>
+        <table>
+          <thead><tr><th>#</th><th>Channel</th><th>Match rule</th><th><code>via</code> tag</th></tr></thead>
+          <tbody>
+            <tr><td>D1</td><td>mcporter CLI</td><td><code>mcporter [call] &lt;server&gt;.&lt;tool&gt;</code> (incl. <code>npx mcporter</code>, absolute paths, after separators)</td><td><code>mcporter</code></td></tr>
+            <tr><td>D2</td><td>curl-class</td><td><code>curl/wget/aria2c/fetch/lwp-request</code> hitting registry URL or <code>--unix-socket</code></td><td><code>http_client</code></td></tr>
+            <tr><td>D3</td><td>HTTPie-class</td><td><code>http/https/httpie/xh [METHOD]? URL</code> hitting registry URL</td><td><code>httpie</code></td></tr>
+            <tr><td>D4</td><td>TCP / socket multiplex</td><td><code>nc/netcat/ncat/socat/openssl s_client/websocat/grpcurl</code> host:port or <code>-U /sock</code></td><td><code>tcp_socket</code></td></tr>
+            <tr><td>D5</td><td>Bash builtin networking</td><td><code>/dev/tcp/&lt;host&gt;/&lt;port&gt;</code>, <code>/dev/udp/...</code>, <code>exec N&lt;&gt;/dev/tcp/...</code></td><td><code>dev_tcp</code></td></tr>
+            <tr><td>D6</td><td>PowerShell HTTP</td><td><code>Invoke-WebRequest</code>, <code>Invoke-RestMethod</code>, <code>System.Net.WebClient</code>, <code>HttpClient</code> URL</td><td><code>pwsh_http</code></td></tr>
+            <tr><td>D7</td><td>Language-runtime HTTP</td><td>URL literals inside U8 inline code (urllib/requests/httpx, fetch/http.request, Net::HTTP/open-uri, LWP, file_get_contents/curl_exec, deno/bun fetch, net/http, reqwest)</td><td><code>language_runtime</code></td></tr>
+            <tr><td>D8</td><td>Stdio JSON-RPC pipe</td><td><code>&lt;echo|printf|cat|jq|tee|yes&gt; ... | &lt;bin&gt;</code> where bin matches a registry binary</td><td><code>stdio_pipe</code></td></tr>
+            <tr><td>D9</td><td>Stdin redirect</td><td><code>&lt;bin&gt; &lt; file.json</code>, <code>&lt;bin&gt; &lt;&lt;EOF</code>, <code>&lt;bin&gt; &lt;&lt;&lt;'json'</code></td><td><code>stdin_redirect</code></td></tr>
+            <tr><td>D10</td><td>FIFO / named pipe</td><td><code>mkfifo PATH; &lt;bin&gt; &lt; PATH &amp;; ... &gt; PATH</code></td><td><code>fifo</code></td></tr>
+            <tr><td>D11</td><td>Package runners</td><td><code>npx/bunx/pnpm dlx|exec/yarn dlx|exec/pipx run/uv run/uvx/deno run/go run &lt;pkg&gt;</code> against registry CLI packages</td><td><code>package_runner</code></td></tr>
+            <tr><td>D12</td><td>MCP server self-launch — <strong>audit-only</strong></td><td><code>&lt;registry-binary&gt; --transport http|sse</code>, <code>--port</code>, <code>--listen</code>, <code>--bind</code>, <code>--host</code>, <code>--address</code></td><td><code>self_launch</code></td></tr>
+            <tr><td>D13</td><td>Remote-shell pass-through</td><td>Emergent from U12 — <code>flags.remote=true</code> on any inner D2–D11 hit</td><td>(carried by <code>flags</code>)</td></tr>
+            <tr><td>D14</td><td>Background pass-through</td><td>Emergent from U15 — <code>flags.background=true</code></td><td>(carried by <code>flags</code>)</td></tr>
+            <tr><td>D15</td><td>Compile-and-run — <strong>audit-only</strong></td><td>Fragment carries <code>flags.compiled=true</code> (from U16); compiled binary's runtime is opaque</td><td><code>compiled</code></td></tr>
+            <tr><td>D16</td><td>Obfuscation fallback — <strong>audit-only</strong></td><td>Registry URL or binary literal appears in fragment text without any other detector firing</td><td><code>obfuscation_fallback</code></td></tr>
+          </tbody>
+        </table>
+
+        <h4>Conservative fallback</h4>
+        <p>When a detector resolves a <code>server</code> but cannot resolve a <code>tool</code> (e.g. JSON-RPC body isn't statically parseable), Phase 0 treats the call as a "whole-server invocation" — the candidate is <code>${server}__*</code>, which fails any <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist that doesn't whitelist the server entire. This biases toward denial when in doubt.</p>
+
+        <h4>Audit-only detectors</h4>
+        <p>D12, D15, and D16 emit calls with <code>auditOnly: true</code>. Phase 0 filters these out before the allowlist check — they inform the audit log but never deny. D12 because dev workflows commonly start a local MCP server; D15 because compile-and-run is a normal build pattern (the compiled binary's runtime HTTP behaviour is properly an OS-sandbox concern); D16 because the fallback is heuristic and prone to false positives.</p>
+
+        <h3 id="config-restrict">Restricting MCP tools via <code>~/.nio/config.yaml</code></h3>
+        <p>The capture model just feeds the existing <a href="../configuration.html#guard.available_tools"><code>available_tools.mcp</code></a> allowlist. To restrict an agent to a single MCP tool — direct or indirect — set:</p>
+        <pre><code>guard:
+  protection_level: balanced
+  available_tools:
+    mcp: ['HassTurnOn']     # only this tool is available, on any server
+    # or:
+    # mcp: ['hass__HassTurnOn']  # server-qualified — only on the hass server</code></pre>
+        <p>Once set, Phase 0 denies <em>every</em> indirect channel that resolves to a different tool: a <code>curl</code> POST to the registered MCP URL, a <code>python3 -c "fetch(...)"</code> one-liner, a <code>npx</code> of the server's CLI package, an <code>echo '...' | mcp-server-bin</code> stdio injection, and so on.</p>
+        <p>Servers Nio doesn't auto-discover (e.g. a SaaS MCP not declared in any of the known config files) can be declared manually:</p>
+        <pre><code>guard:
+  mcp_endpoints:
+    hass:
+      urls:        ['http://localhost:5173/mcp']
+      sockets:     ['/tmp/mcp-hass.sock']
+      binaries:    ['mcp-server-hass']
+      cliPackages: ['@hass/mcp-cli']</code></pre>
+
+        <h4 id="sensitive-paths">Sensitive-path write protection</h4>
+        <p>The detector pipeline can be sidestepped if the agent registers a new MCP server (changing the registry under our feet) or installs a persistence hook that runs at next launch. <code>SENSITIVE_FILE_PATHS</code> rejects writes to the relevant paths unconditionally: MCP configuration files (<code>.claude.json</code>, Claude Desktop config, <code>.hermes/config.yaml</code>, <code>.openclaw/</code>) and persistence channels (LaunchAgents/LaunchDaemons, cron files, systemd units, shell rc files, <code>authorized_keys</code>). <code>write_file</code> actions hitting any of these → critical reject, regardless of content.</p>
 
         <h2>Examples</h2>
         <pre><code>guard:

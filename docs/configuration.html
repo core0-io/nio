@@ -184,7 +184,7 @@
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Phase 0 allowlist, per platform. When non-empty for a platform, ONLY listed tools are available to the agent. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
         <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive.</p>
-        <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the endpoint registry. The full capture model lives at <a href="mcp-detection.html">MCP Detection</a>.</p>
+        <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the endpoint registry. The full capture model lives at <a href="phases/phase-0-tool-gate.html#mcp-routing">Phase 0 — Tool Gate · MCP Tool Routing</a>.</p>
 
         <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
@@ -200,7 +200,7 @@
       sockets:     ['/tmp/mcp-hass.sock']
       binaries:    ['mcp-server-hass']
       cliPackages: ['@hass/mcp-cli']</code></pre>
-        <p>All four arrays are optional. URLs are normalized (case-insensitive host, trailing slash stripped); origin matching covers any sub-path of the registered URL. Binary and CLI-package lookups are case-insensitive and basename-aware. See <a href="mcp-detection.html#endpoint-registry">MCP Detection — Endpoint Registry</a> for full semantics.</p>
+        <p>All four arrays are optional. URLs are normalized (case-insensitive host, trailing slash stripped); origin matching covers any sub-path of the registered URL. Binary and CLI-package lookups are case-insensitive and basename-aware. See <a href="phases/phase-0-tool-gate.html#endpoint-registry">Phase 0 — Tool Gate · Endpoint Registry</a> for full semantics.</p>
 
         <h3 id="guard.guarded_tools"><code>guard.guarded_tools</code></h3>
         <p><strong>Type:</strong> object</p>
