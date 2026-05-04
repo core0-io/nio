@@ -11,19 +11,15 @@
 
 [![Agent Skills](https://img.shields.io/badge/Agent_Skills-compatible-purple.svg)](https://agentskills.io)
 
-## Who Nio Is For
+## At a glance
 
-Nio is built for agents operating beyond the development environment — agents with access to production infrastructure, live databases, business systems, and workflows where a wrong action has real consequences.
+- **What it does:** Nio hooks into your agent platform (Claude Code, OpenClaw, Hermes) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
+- **Config:** Policy lives in **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**). Audit events append to **`~/.nio/audit.jsonl`** by default.
+- **Critical:** The plugin reads config **once when the host process starts**. After you edit `config.yaml`, you must **restart the process that loads Nio** so changes apply. There is no separate `nio reload` command — use your platform’s restart flow (commands below).
 
-If your agent can change a configuration, trigger an approval, modify a record, provision a resource, or call an external API in production, Nio is the evaluation layer that sits between the agent's intention and its execution.
+### Architecture at a glance
 
-> **Agentic automation moves at machine speed. Nio is the gate that ensures every action is safe to take before it happens — not investigated after the fact.**
-
-For coding agents working in sandboxed development environments, the stakes are lower. Nio is designed for the higher-stakes context: autonomous agents in production automation pipelines where actions are consequential, often irreversible, and operating at a speed and scale that makes human review impractical without a risk gate.
-
-## Architecture
-
-Nio is a Claude Code / OpenClaw plugin with two core systems:
+Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-time Phases 0–6 + on-demand static/behavioural/LLM engines):
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -33,132 +29,81 @@ Nio is a Claude Code / OpenClaw plugin with two core systems:
 │  │       Collector          │    │            Guard              │  │
 │  │                          │    │                               │  │
 │  │  Hook events             │    │  ┌─────────────────────────┐  │  │
-│  │  → metrics + traces      │    │  │    Dynamic Guard        │  │  │
-│  │  → OTLP export           │    │  │    (real-time hooks)    │  │  │
-│  │                          │    │  │    Phase 0–6 pipeline   │  │  │
-│  │  PreToolUse              │    │  │    → allow/deny/confirm │  │  │
-│  │  PostToolUse             │    │  └─────────────────────────┘  │  │
-│  │  TaskCreated             │    │                               │  │
-│  │  TaskCompleted           │    │  ┌─────────────────────────┐  │  │
-│  │  Stop / SubagentStop     │    │  │    Static Scan          │  │  │
-│  │                          │    │  │    (on-demand)          │  │  │
-│  └──────────────────────────┘    │  │    Static + Behavioural │  │  │
-│                                  │  │    + LLM engines        │  │  │
-│                                  │  └─────────────────────────┘  │  │
-│                                  └───────────────────────────────┘  │
+│  │  → metrics               │    │  │    Dynamic Guard        │  │  │
+│  │  → traces                │    │  │    (real-time hooks)    │  │  │
+│  │  → logs (audit)          │    │  │    Phase 0–6 pipeline   │  │  │
+│  │  → OTLP export           │    │  │    → allow/deny/confirm │  │  │
+│  │                          │    │  └─────────────────────────┘  │  │
+│  │  PreToolUse              │    │                               │  │
+│  │  PostToolUse             │    │  ┌─────────────────────────┐  │  │
+│  │  TaskCreated             │    │  │    Static Scan          │  │  │
+│  │  TaskCompleted           │    │  │    (on-demand)          │  │  │
+│  │  Stop / SubagentStop     │    │  │    Static + Behavioural │  │  │
+│  │  SessionStart / End      │    │  │    + LLM engines        │  │  │
+│  │  UserPromptSubmit        │    │  └─────────────────────────┘  │  │
+│  └──────────────────────────┘    └───────────────────────────────┘  │
+│                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Collector
+[Interactive pipeline diagram →](https://core0-io.github.io/nio/) · [Architecture details ↓](#architecture)
 
-> **Optional — but strongly recommended for enterprise deployments.** The Collector works out of the box with no configuration: audit log entries are written to a local JSONL backup at `~/.nio/audit.jsonl` regardless of OTLP setup. To export full telemetry to an observability platform, set `collector.endpoint` in your config. For enterprise customers running agents on production systems, exporting to a centralised observability platform is strongly recommended — it gives you a complete, queryable record of every action every agent took, across every session.
+---
 
-Captures agent activity as **OpenTelemetry** signals — metrics, traces, and logs — across every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`). All three signals are exported over OTLP (gRPC or HTTP); the logs signal additionally has a local JSONL backup at `collector.logs.path`.
+## Quick start
 
-For the full schema (every metric, every span attribute, every audit entry field) see [docs/COLLECTOR-SIGNALS.md](docs/COLLECTOR-SIGNALS.md). Quick reference:
+### 1. Install
 
-**Metrics:**
+1. Download the zip for your platform from the [**Releases page**](https://github.com/core0-io/nio/releases).
+2. Unzip and run **`./setup.sh`** from the extracted folder (see table below for zip names).
 
-| Metric | Type | Labels |
-|--------|------|--------|
-| `nio.tool_use.count` | Counter | `gen_ai.tool.name`, `nio.event`, `nio.platform` |
-| `nio.turn.count` | Counter | `nio.platform` |
-| `nio.decision.count` | Counter | `nio.guard.decision`, `nio.guard.risk_level`, `gen_ai.tool.name`, `nio.platform` |
-| `nio.risk.score` | Histogram | `gen_ai.tool.name`, `nio.platform` |
-
-**Traces** — one trace per conversation turn (OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/)):
-
-| Span | Trigger | Key Attributes |
-|------|---------|----------------|
-| `invoke_agent UserPromptSubmit` | `Stop` / `SubagentStop` | `gen_ai.conversation.id`, `gen_ai.agent.name`, `gen_ai.usage.input_tokens`, `gen_ai.usage.output_tokens`, `nio.turn_number`, `nio.platform`, `nio.cwd`, `nio.turn.cache_hit_rate` |
-| `execute_tool <name>` | `PreToolUse` → `PostToolUse` | `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result`, `nio.tool_summary`, `nio.platform` |
-| `task:execute` | `TaskCreated` → `TaskCompleted` | `nio.task_id`, `nio.task_summary` |
-
-**Logs (audit log)** — discriminated by the `event` field; dual-written to OTLP and `~/.nio/audit.jsonl`:
-
-| `event` | What |
-|---------|------|
-| `guard` | Per-PreToolUse / PostToolUse guard decision (decision, risk level, score, top findings, per-phase scores) |
-| `session_scan` | On-demand or session-start skill scan result |
-| `lifecycle` | Subagent / agent / session lifecycle (`session_start` / `session_end` / `agent_end` / `subagent_spawning` / `subagent_ended`) |
-| Hook event names (`PreToolUse`, `PostToolUse`, `TaskCreated`, `Stop`, …) | One audit entry per dispatched hook, with tool / task metadata |
-| `config_error` | Config load failure (path + parser error) |
-
-### Guard
-
-Execution risk evaluation with two modes:
-
-**Dynamic Guard** — real-time, runs on every `PreToolUse` hook event via a Phase 0–6 pipeline:
-
-| Phase | Name | Latency | Applies To |
-|-------|------|---------|------------|
-| 0 | **Tool Gate** | <1ms | All tools (`blocked_tools` / `permitted_tools` / `native_tool_mapping`); also reroutes [indirect MCP invocations](docs/phases/phase-0-tool-gate.html#mcp-routing) through `permitted_tools.mcp` |
-| 1 | **Allowlist Gate** | <1ms | Guarded tools only |
-| 2 | **Pattern Analysis** | <5ms | Guarded tools only |
-| 3 | **Static Analysis** | <50ms | Write/Edit only |
-| 4 | **Behavioural Analysis** | <200ms | Write/Edit (.js/.ts/.py/.sh/.rb/.php/.go) |
-| 5 | **LLM Analysis** | 2–10s | All (optional, needs `guard.llm_analyser.enabled` + `api_key`) |
-| 6 | **External Scoring API** | configurable | All (optional, needs `guard.external_analyser.enabled` + `endpoint`) |
-
-Each phase produces a 0–1 score and can short-circuit on critical findings. Final score is a **weighted average** across all phases that ran:
-
-```
-final = Σ(weight × score) / Σ(weight)
-```
-
-Default weights: `runtime: 1.0`, `static: 1.0`, `behavioural: 2.0`, `llm: 1.0`, `external: 2.0`
-
-**Phases 5 and 6 are optional.** The core pipeline (Phases 0–4) runs fully offline with no external dependencies. Phase 5 (LLM Analysis) and Phase 6 (External Scoring API) are opt-in enhancements.
-
-Phase 6 in particular is strongly recommended for enterprise deployments. It connects Nio's pre-execution gate to an external risk intelligence platform — so the allow/deny/confirm decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it is operating on. [FFWD Agent Assurance](https://core0.io) is designed for exactly this role: it exposes a scoring API that Nio can call at Phase 6, combining full-stack anomaly correlation, infrastructure health, and agent behavioural telemetry into a single risk score that Nio uses to gate execution.
-
-**Static Scan** — on-demand multi-engine code analysis triggered by `/nio scan <path>`:
-- **StaticAnalyser**: 15 regex rules + base64 decode pass
-- **BehaviouralAnalyser**: multi-language source→sink dataflow tracking
-- **LLMAnalyser**: Claude semantic analysis (optional)
-
-### Multi-Language Behavioural Analysis
-
-Both pipelines share the BehaviouralAnalyser, which uses pluggable `LanguageExtractor` modules for dataflow tracking:
-
-| Language | Parser | Extensions |
-|----------|--------|------------|
-| JavaScript/TypeScript | Babel AST | .js .ts .jsx .tsx .mjs .cjs |
-| Python | Regex | .py .pyw |
-| Shell | Regex | .sh .bash .zsh .fish .ksh |
-| Ruby | Regex | .rb .rake .gemspec |
-| PHP | Regex | .php .phtml |
-| Go | Regex | .go |
-
-### Protection Levels
-
-| Level | allow | confirm | deny |
-|-------|-------|---------|------|
-| **strict** | 0 — 0.5 | _(none)_ | 0.5 — 1.0 |
-| **balanced** (default) | 0 — 0.5 | 0.5 — 0.8 | 0.8 — 1.0 |
-| **permissive** | 0 — 0.9 | _(none)_ | 0.9 — 1.0 |
-
-The `confirm_action` config controls what happens when the decision is "confirm": `allow` (default, let through with audit log), `deny` (block), or `ask` (use platform confirm if available, else allow).
-
-## Install
-
-Grab a pre-built plugin from the [**Releases page**](https://github.com/core0-io/nio/releases), unzip it, and run the bundled `setup.sh`.
-
-| Platform | Download | Extract & run |
-|----------|----------|---------------|
-| **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
+| Platform | Zip name (pattern) | Commands |
+|----------|-------------------|----------|
 | **OpenClaw** | `nio-openclaw-v<version>.zip` | `unzip … -d nio-openclaw && cd nio-openclaw && ./setup.sh` |
+| **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
 | **Hermes** | `nio-hermes-v<version>.zip` | `unzip … -d nio-hermes && cd nio-hermes && ./setup.sh` |
-| **All** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
+| **All platforms** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
 
-`setup.sh` installs the skill (Claude Code / OpenClaw), merges shell-hook entries into the platform config (Hermes), and writes the Nio default config to `~/.nio/`. Pick the platform-specific zip if you only use one agent — it's smaller and the script is platform-scoped.
+`setup.sh` registers the plugin with your platform, installs the skill where needed, and writes the default Nio config under **`~/.nio/`**.
 
-**More frameworks coming.** Nio currently supports Claude Code, OpenClaw, and Hermes. Support for additional agent frameworks is progressively being added.
+### 2. Run
+
+**There is no standalone Nio daemon.** “Running Nio” means **running your agent with the platform that loads the Nio plugin**:
+
+- **OpenClaw:** start or keep running your **OpenClaw gateway** (and connect the TUI / clients as you usually do). The Nio plugin loads with that process.
+- **Claude Code:** open Claude Code with the plugin/skill installed per `setup.sh`.
+- **Hermes:** use Hermes with shell hooks merged by `setup.sh`.
+
+Use the **platform-specific zip** when you only need one stack — it is smaller and the installer is scoped to that platform.
+
+### 3. Configure
+
+- Edit **`~/.nio/config.yaml`** (template and comments ship with the release; defaults are also described in `config.default.yaml` in this repo).
+- Override the config directory with **`NIO_HOME`** if needed (`$NIO_HOME/config.yaml`).
+- **Optional — AI-assisted editing:** Point your coding LLM or agent at this file (and `config.default.yaml` if needed), and **describe the policy in plain language** — what to **allow**, **block**, **permit**, **deny**, patterns for commands or DB/SQL, MCP tools to gate, paths to protect, and so on — and ask it to **propose or apply YAML edits** that match those intents. **Always review** the result (and restart the host per §4), since mistakes in config directly affect what runs in production.
+
+### 4. Apply changes after editing config
+
+1. Save **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**).
+2. **Restart the agent host** so the Nio plugin loads the file again (same process = stale policy).
+3. Confirm behaviour in **`~/.nio/audit.jsonl`** or your OTEL backend.
+
+**Why a restart is required:** Nio loads YAML and builds the guard **at plugin registration**. The running process does not watch the file or reload config on each tool call.
+
+**Typical restart commands** (use whatever matches how you run the platform):
+
+| Platform | When the gateway / agent runs as a **background service** | When you run it in the **foreground** (dev/tmux) |
+|----------|--------------------------------------------------------------|--------------------------------------------------|
+| **OpenClaw** | `openclaw gateway restart` | Stop the process (e.g. **Ctrl+C**) and run `openclaw gateway run` again. |
+| **Hermes** | `hermes gateway restart` — multiple profiles: `hermes gateway restart --all` | Stop `hermes gateway run` and start it again (often in **tmux** on WSL). See [Hermes CLI](https://hermes-agent.nousresearch.com/docs/user-guide/cli/). |
+| **Claude Code** | *(no gateway)* — **quit and reopen** Claude Code (or reload the window / extension host) so hooks pick up changes. | Same: full host restart is the reliable way. |
+
+Useful checks: `openclaw gateway status`, `openclaw gateway health`, `hermes gateway status` (add `--system` on Linux for the systemd unit).
 
 <details>
-<summary><b>One-liner install</b></summary>
+<summary><b>One-liner install (latest release from GitHub)</b></summary>
 
-Each block is self-contained — copy, paste, done. `VERSION` is resolved to the latest release tag via the GitHub API.
+Each block is self-contained — copy, paste, done. `VERSION` is the latest release tag from the GitHub API.
 
 **Claude Code:**
 
@@ -236,7 +181,9 @@ Use this if you want to hack on Nio or track `main`. The release zips ship with 
 
 </details>
 
-## Usage
+---
+
+## Usage (skill commands)
 
 ```
 /nio scan ./src              # Scan code for execution risks
@@ -244,6 +191,31 @@ Use this if you want to hack on Nio or track `main`. The release zips ship with 
 /nio report                  # View agent execution audit log
 /nio config balanced         # Set protection level
 ```
+
+---
+
+## Architecture
+
+High-level layout: **[Architecture at a glance](#architecture-at-a-glance)** (top of this README). Nio integrates as a **Claude Code / OpenClaw / Hermes** plugin with two subsystems behind the hook events.
+
+### Collector
+
+Captures every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`) as **OpenTelemetry** signals — metrics, traces, and logs — exported over OTLP (gRPC or HTTP). Audit log entries are also dual-written to a local JSONL backup at `~/.nio/audit.jsonl`, so you have a queryable record even when no OTLP endpoint is configured.
+
+> **Optional but strongly recommended for enterprise deployments.** The local JSONL backup works out of the box; to export full telemetry to an observability platform, set `collector.endpoint` in your config.
+
+### Guard
+
+Pre-execution risk evaluation in two modes:
+
+- **Dynamic Guard** runs on every `PreToolUse` hook through a **Phase 0–6** pipeline (Tool Gate → Allowlist → Pattern → Static → Behavioural → LLM → External). Each phase produces a 0–1 score; a weighted average decides allow / deny / confirm before the tool runs. Phases 0–4 run fully offline; Phases 5 (LLM) and 6 (External Scoring API) are opt-in.
+- **Static Scan** — on-demand multi-engine code analysis triggered by `/nio scan <path>`, combining the static, behavioural, and LLM analysers.
+
+Phase 6 connects Nio's pre-execution gate to an external risk intelligence platform — so the decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it operates on. [FFWD Agent Assurance](https://core0.io) is designed for exactly this role.
+
+---
+
+**For full architecture detail** — every phase, score aggregation, multi-language extractors, protection-level decision mapping, every metric, every span attribute, every audit entry field — see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** and **[docs/COLLECTOR-SIGNALS.md](docs/COLLECTOR-SIGNALS.md)**.
 
 ## Evaluation Coverage
 
@@ -298,7 +270,7 @@ Detection rules cover both malicious intent and unintentional agent misbehaviour
 
 ## Compatibility
 
-Nio currently provides full hook-based execution assurance for Claude Code, OpenClaw, and Hermes. Skill-based scan and action evaluation is available across a broader set of platforms today. Full hook support for additional agent frameworks is progressively being added.
+Nio provides full hook-based execution assurance for Claude Code, OpenClaw, and Hermes today; skill-only scan/action flows work on several other CLIs. Full hook support for additional agent frameworks is in progress.
 
 | Platform | Support | Features |
 |----------|---------|----------|
