@@ -211,62 +211,13 @@ Pre-execution risk evaluation in two modes:
 - **Dynamic Guard** runs on every `PreToolUse` hook through a **Phase 0–6** pipeline (Tool Gate → Allowlist → Pattern → Static → Behavioural → LLM → External). Each phase produces a 0–1 score; a weighted average decides allow / deny / confirm before the tool runs. Phases 0–4 run fully offline; Phases 5 (LLM) and 6 (External Scoring API) are opt-in.
 - **Static Scan** — on-demand multi-engine code analysis triggered by `/nio scan <path>`, combining the static, behavioural, and LLM analysers.
 
+Detection coverage spans **15 static regex rules**, **7 source→sink behavioural rules** across 6 languages, and runtime command / network / sensitive-path heuristics. Per-rule reference: **[SCAN-RULES.md](plugins/shared/skill/SCAN-RULES.md)** for the static-rule patterns, **[ACTION-POLICIES.md](plugins/shared/skill/ACTION-POLICIES.md)** for runtime-detector policies.
+
 Phase 6 connects Nio's pre-execution gate to an external risk intelligence platform — so the decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it operates on. [FFWD Agent Assurance](https://core0.io) is designed for exactly this role.
 
 ---
 
 **For full architecture detail** — every phase, score aggregation, multi-language extractors, protection-level decision mapping, every metric, every span attribute, every audit entry field — see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** and **[docs/COLLECTOR-SIGNALS.md](docs/COLLECTOR-SIGNALS.md)**.
-
-## Evaluation Coverage
-
-Every agent action passes through Nio's evaluation pipeline before execution. Low-risk actions pass instantly. High-risk actions are blocked or escalated for human confirmation.
-
-**Layer 1 — Allowlist Gate**: Known-safe commands (`git status`, `ls`, `npm test`, etc.) pass instantly with no overhead.
-
-**Layer 2 — Pattern Analysis**: Flags dangerous commands and unintended data flows.
-- Destructive commands (`rm -rf /`, fork bombs), pipe-to-shell patterns (`curl | bash`)
-- Writes to sensitive paths (`.env`, `.ssh/`, credentials files)
-- Data exfiltration to external webhooks
-- Base64-encoded payloads decoded and re-evaluated
-
-**Layer 3 — Static + Behavioural Analysis** (Write/Edit only):
-- 15 static regex rules on file content (SHELL_EXEC, OBFUSCATION, PROMPT_INJECTION, etc.)
-- 7 behavioural rules via source→sink dataflow tracking across 6 languages
-- Detects env→network exfiltration, network→eval RCE, capability combinations (C2)
-
-**Layer 4 — LLM + External** (optional):
-- LLM semantic analysis catches sophisticated patterns missed by regex/AST
-- External HTTP scoring API for custom enterprise policies and full-stack risk intelligence
-
-## Detection Rules
-
-### Static Rules (15)
-
-Pattern-based detection via regex matching on file content.
-
-| Category | Rules | Severity |
-|----------|-------|----------|
-| **Execution** | SHELL_EXEC, AUTO_UPDATE, REMOTE_LOADER | HIGH–CRITICAL |
-| **Secrets** | READ_ENV_SECRETS, READ_SSH_KEYS, READ_KEYCHAIN, PRIVATE_KEY_PATTERN | MEDIUM–CRITICAL |
-| **Exfiltration** | NET_EXFIL_UNRESTRICTED, WEBHOOK_EXFIL | HIGH–CRITICAL |
-| **Obfuscation** | OBFUSCATION, PROMPT_INJECTION | HIGH–CRITICAL |
-| **Trojan & Social Engineering** | TROJAN_DISTRIBUTION, SUSPICIOUS_PASTE_URL, SUSPICIOUS_IP, SOCIAL_ENGINEERING | MEDIUM–CRITICAL |
-
-### Behavioural Rules (7)
-
-Dataflow-based detection via source→sink taint tracking (JS/TS/Python/Shell/Ruby/PHP/Go).
-
-Detection rules cover both malicious intent and unintentional agent misbehaviour — the two failure modes that matter in production autonomous systems.
-
-| Rule | Severity | Detection |
-|------|----------|-----------|
-| DATAFLOW_EXFIL | CRITICAL | Secret or credential flows to network sink |
-| DATAFLOW_RCE | CRITICAL | Network response flows to eval/exec |
-| DATAFLOW_CMD_INJECT | HIGH | User input flows to command execution |
-| DATAFLOW_EVAL | HIGH | Data flows to eval/Function |
-| CAPABILITY_C2 | HIGH | Skill has both exec + network capabilities |
-| CAPABILITY_EVAL | HIGH | Skill uses dynamic code evaluation |
-| CROSS_FILE_FLOW | MEDIUM | Data crosses file boundaries |
 
 ## Compatibility
 
