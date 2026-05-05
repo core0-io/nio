@@ -1,0 +1,14 @@
+{
+  "session_id": "019df6db-9baa-7771-aac9-c44a1aa0d6db",
+  "turn_id": "019df6db-9bd0-77c3-9247-11e65c0cdee1",
+  "transcript_path": "/tmp/codex-test-home/sessions/2026/05/05/rollout-2026-05-05T16-38-00-019df6db-9baa-7771-aac9-c44a1aa0d6db.jsonl",
+  "cwd": "/private/tmp",
+  "hook_event_name": "PreToolUse",
+  "model": "gpt-5.4",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "ls /etc | head -5"
+  },
+  "tool_use_id": "call_TR5sXpGT01sqDzX3OSUvDHWI"
+}
