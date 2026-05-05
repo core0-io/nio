@@ -1,0 +1,9 @@
+{
+  "session_id": "019df6db-9baa-7771-aac9-c44a1aa0d6db",
+  "transcript_path": "/tmp/codex-test-home/sessions/2026/05/05/rollout-2026-05-05T16-38-00-019df6db-9baa-7771-aac9-c44a1aa0d6db.jsonl",
+  "cwd": "/private/tmp",
+  "hook_event_name": "SessionStart",
+  "model": "gpt-5.4",
+  "permission_mode": "bypassPermissions",
+  "source": "startup"
+}
