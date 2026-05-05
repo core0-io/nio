@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
+import { CodexAdapter } from '../adapters/codex.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
 import {
@@ -538,6 +542,161 @@ describe('HermesAdapter', () => {
         tool_name: 'terminal',
         tool_input: {},
       });
+      const skill = await adapter.inferInitiatingSkill(input);
+      assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CodexAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Test runs from dist/tests/, fixtures live in src/tests/fixtures/.
+// Resolve from project root so tests work regardless of compiled layout.
+// dist/tests/adapter.test.js → up 2 dirs → project root.
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = join(TEST_DIR, '..', '..');
+const FIXTURES_DIR = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'codex');
+const loadFixture = (name: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(FIXTURES_DIR, name), 'utf-8'));
+
+describe('CodexAdapter', () => {
+  const adapter = new CodexAdapter();
+
+  it('should have name "codex"', () => {
+    assert.equal(adapter.name, 'codex');
+  });
+
+  describe('parseInput', () => {
+    it('parses real PreToolUse fixture (Bash)', () => {
+      const raw = loadFixture('pre-tool-use-bash.json');
+      const input = adapter.parseInput(raw);
+      assert.equal(input.toolName, 'Bash');
+      assert.equal(input.eventType, 'pre');
+      assert.deepEqual(input.toolInput, { command: 'ls /etc | head -5' });
+      assert.equal(input.cwd, '/private/tmp');
+      assert.equal(input.sessionId, '019df6db-9baa-7771-aac9-c44a1aa0d6db');
+    });
+
+    it('parses real PostToolUse fixture', () => {
+      const raw = loadFixture('post-tool-use-bash.json');
+      const input = adapter.parseInput(raw);
+      assert.equal(input.eventType, 'post');
+      assert.equal(input.toolName, 'Bash');
+    });
+
+    it('parses real SessionStart fixture', () => {
+      const raw = loadFixture('session-start.json');
+      const input = adapter.parseInput(raw);
+      assert.equal(input.eventType, 'pre');
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+    });
+
+    it('parses real UserPromptSubmit fixture', () => {
+      const raw = loadFixture('user-prompt-submit.json');
+      const input = adapter.parseInput(raw);
+      assert.equal(input.eventType, 'pre');
+      assert.equal((input.raw as Record<string, unknown>).prompt,
+        'Use the shell tool to run: ls /etc | head -5. Do not write any files.');
+    });
+
+    it('parses real Stop fixture', () => {
+      const raw = loadFixture('stop.json');
+      const input = adapter.parseInput(raw);
+      assert.equal(input.eventType, 'pre');
+      assert.equal((input.raw as Record<string, unknown>).stop_hook_active, false);
+    });
+
+    it('handles missing fields gracefully', () => {
+      const input = adapter.parseInput({});
+      assert.equal(input.toolName, '');
+      assert.deepEqual(input.toolInput, {});
+      assert.equal(input.eventType, 'pre');
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('maps Bash to exec_command', () => {
+      assert.equal(adapter.mapToolToActionType('Bash'), 'exec_command');
+    });
+
+    it('returns null for tools not in the default map (Codex has no native Write/Edit/WebFetch)', () => {
+      assert.equal(adapter.mapToolToActionType('Write'), null);
+      assert.equal(adapter.mapToolToActionType('Edit'), null);
+      assert.equal(adapter.mapToolToActionType('WebFetch'), null);
+      assert.equal(adapter.mapToolToActionType('Read'), null);
+    });
+  });
+
+  describe('custom native_tool_mapping', () => {
+    it('uses custom mapping when provided', () => {
+      const custom = new CodexAdapter({
+        nativeToolMapping: { Write: 'write_file', WebFetch: 'network_request' },
+      });
+      assert.equal(custom.mapToolToActionType('Write'), 'write_file');
+      assert.equal(custom.mapToolToActionType('WebFetch'), 'network_request');
+      // Custom map fully replaces default — Bash no longer mapped
+      assert.equal(custom.mapToolToActionType('Bash'), null);
+    });
+
+    it('uses defaults when no nativeToolMapping provided', () => {
+      const defaultAdapter = new CodexAdapter();
+      assert.equal(defaultAdapter.mapToolToActionType('Bash'), 'exec_command');
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('builds exec_command envelope from a real Bash fixture', () => {
+      const raw = loadFixture('pre-tool-use-bash.json');
+      const input = adapter.parseInput(raw);
+      const envelope = adapter.buildEnvelope(input);
+      assert.ok(envelope);
+      assert.equal(envelope!.action.type, 'exec_command');
+      const data = envelope!.action.data as unknown as Record<string, unknown>;
+      assert.equal(data.command, 'ls /etc | head -5');
+      assert.equal(data.cwd, '/private/tmp');
+      assert.equal(envelope!.actor.skill.source, 'codex');
+    });
+
+    it('uses session_id from stdin in context', () => {
+      const raw = loadFixture('pre-tool-use-bash.json');
+      const input = adapter.parseInput(raw);
+      const envelope = adapter.buildEnvelope(input);
+      assert.equal(envelope!.context.session_id, '019df6db-9baa-7771-aac9-c44a1aa0d6db');
+    });
+
+    it('falls back to codex-hook-* prefix when sessionId is missing', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'true' },
+      });
+      const envelope = adapter.buildEnvelope(input);
+      assert.match(envelope!.context.session_id, /^codex-hook-\d+$/);
+    });
+
+    it('returns null for unmapped tools (e.g. plugin Write without custom mapping)', () => {
+      const input = adapter.parseInput({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Write',
+        tool_input: { file_path: '/tmp/test.txt' },
+      });
+      assert.equal(adapter.buildEnvelope(input), null);
+    });
+
+    it('threads initiating skill into actor', () => {
+      const input = adapter.parseInput(loadFixture('pre-tool-use-bash.json'));
+      const envelope = adapter.buildEnvelope(input, 'my-skill');
+      assert.equal(envelope!.actor.skill.id, 'my-skill');
+      assert.equal(envelope!.actor.skill.source, 'my-skill');
+    });
+  });
+
+  describe('inferInitiatingSkill', () => {
+    it('returns null in v1 (codex transcript parsing deferred to phase 2)', async () => {
+      const input = adapter.parseInput(loadFixture('pre-tool-use-bash.json'));
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
     });

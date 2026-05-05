@@ -47,6 +47,22 @@ describe('parseMcpToolName: OpenClaw', () => {
   });
 });
 
+describe('parseMcpToolName: Codex', () => {
+  it('parses mcp__server__tool (same prefix as Claude Code)', () => {
+    const r = parseMcpToolName('mcp__hass__HassTurnOn', 'codex');
+    assert.deepEqual(r, { isMcp: true, server: 'hass', local: 'HassTurnOn' });
+  });
+
+  it('does not parse native Codex tool names', () => {
+    assert.deepEqual(parseMcpToolName('Bash', 'codex'), { isMcp: false });
+  });
+
+  it('rejects malformed mcp__ strings', () => {
+    assert.deepEqual(parseMcpToolName('mcp__hass', 'codex'), { isMcp: false });
+    assert.deepEqual(parseMcpToolName('mcp__hass__', 'codex'), { isMcp: false });
+  });
+});
+
 describe('parseMcpToolName: Hermes', () => {
   it('parses server__tool (same format as OpenClaw)', () => {
     const r = parseMcpToolName('hass__HassTurnOn', 'hermes');

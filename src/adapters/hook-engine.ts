@@ -92,14 +92,14 @@ export interface ParsedMcpToolName {
  * Parse a platform-specific tool name into a normalized `{ server, local }`
  * pair when it refers to an MCP tool.
  *
- * - Claude Code exposes MCP tools as `mcp__<server>__<tool>`.
+ * - Claude Code and Codex expose MCP tools as `mcp__<server>__<tool>`.
  * - OpenClaw exposes MCP tools as `<safeServerName>__<tool>` (native tools
  *   never contain `__`, so the separator is a reliable marker).
  */
 export function parseMcpToolName(toolName: string, platform: string): ParsedMcpToolName {
   const name = toolName ?? '';
 
-  if (platform === 'claude-code' && name.startsWith('mcp__')) {
+  if ((platform === 'claude-code' || platform === 'codex') && name.startsWith('mcp__')) {
     const rest = name.slice(5);
     const idx = rest.indexOf('__');
     if (idx > 0 && idx < rest.length - 2) {

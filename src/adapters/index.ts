@@ -3,6 +3,7 @@
 
 export type { HookAdapter, HookInput, HookOutput, EngineOptions, NioInstance } from './types.js';
 export { ClaudeCodeAdapter } from './claude-code.js';
+export { CodexAdapter, type CodexAdapterOptions } from './codex.js';
 export { OpenClawAdapter } from './openclaw.js';
 export { HermesAdapter, type HermesAdapterOptions } from './hermes.js';
 export { evaluateHook } from './hook-engine.js';
