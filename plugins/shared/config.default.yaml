@@ -187,18 +187,21 @@ guard:
     claude_code: []
     openclaw: []
     hermes: []
+    codex: []
     mcp: []
   # Listed tools are unconditionally blocked.
   blocked_tools:
     claude_code: []
     openclaw: []
     hermes: []
+    codex: []
     mcp: []
 
   # Manual additions to the MCP server registry, for SaaS or otherwise
   # non-discoverable servers (Phase 0 auto-discovers from ~/.claude.json,
-  # Claude Desktop, ~/.hermes/config.yaml, ~/.openclaw/openclaw.json by
-  # default — declare here only what's missing). Each entry's key is the
+  # Claude Desktop, ~/.hermes/config.yaml, ~/.codex/config.toml,
+  # ~/.openclaw/openclaw.json by default — declare here only what's
+  # missing). Each entry's key is the
   # server name; its value lists every handle (URL / unix socket / server
   # binary / npx package) that identifies the server, so indirect
   # detectors can route a curl URL / unix socket / binary name / npx
@@ -239,6 +242,12 @@ guard:
       read_file: read_file
       fetch: network_request
       http_request: network_request
+    codex:
+      # Codex's only first-party tool is Bash; all writes/reads/fetches
+      # surface as shell commands and route through Phase 1-6 via
+      # exec_command. Plugin- and MCP-provided tools (Write, Edit, etc.)
+      # are dynamic and handled separately.
+      Bash: exec_command
 
   # Phase scoring weights for weighted score aggregation.
   #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
