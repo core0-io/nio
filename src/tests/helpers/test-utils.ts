@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ClaudeCodeAdapter } from '../../adapters/claude-code.js';
+import { CodexAdapter } from '../../adapters/codex.js';
 import { OpenClawAdapter } from '../../adapters/openclaw.js';
 import { HermesAdapter } from '../../adapters/hermes.js';
 import { ActionOrchestrator } from '../../core/action-orchestrator.js';
@@ -70,6 +71,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     config,
     options,
     claudeAdapter: new ClaudeCodeAdapter({ nativeToolMapping: opts.guard?.native_tool_mapping }),
+    codexAdapter: new CodexAdapter({ nativeToolMapping: opts.guard?.native_tool_mapping }),
     openclawAdapter: new OpenClawAdapter(),
     hermesAdapter: new HermesAdapter(),
     cleanup() {

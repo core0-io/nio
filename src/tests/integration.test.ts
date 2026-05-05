@@ -1000,6 +1000,145 @@ describe('Integration: Hermes adapter evaluateHook', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Codex adapter — full evaluateHook chain with real stdin shapes
+// ─────────────────────────────────────────────────────────────────────────────
+// Codex's PreToolUse stdin is essentially the same shape as Claude Code's
+// (Bash → exec_command), but the platform key differs and the only native
+// tool we map is Bash — write/read/fetch all flow through shell.
+
+describe('Integration: Codex adapter evaluateHook', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  function codexPayload(toolName: string, toolInput: Record<string, unknown>, eventName = 'PreToolUse') {
+    return {
+      hook_event_name: eventName,
+      tool_name: toolName,
+      tool_input: toolInput,
+      session_id: 'codex-sess-test',
+      turn_id: 'codex-turn-test',
+      cwd: '/tmp',
+      model: 'gpt-5.4',
+      permission_mode: 'untrusted',
+    };
+  }
+
+  it('DENIES dangerous shell command via Bash', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'rm -rf /' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  it('ALLOWS safe shell command via Bash', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'ls /tmp' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('Phase 0: blocked_tools.codex denies a listed tool', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { blocked_tools: { codex: ['Bash'] } },
+    });
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'ls' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('Phase 0: permitted_tools.codex denies an unlisted tool', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { permitted_tools: { codex: ['Read'] } },
+    });
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'ls' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
+  });
+
+  it('Phase 0: permitted_tools.codex allows a listed tool', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { permitted_tools: { codex: ['Bash'] } },
+    });
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'ls' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('Phase 0: blocked_tools.mcp matches a Codex MCP tool by bare name', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { blocked_tools: { mcp: ['HassTurnOn'] } },
+    });
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('mcp__hass__HassTurnOn', { entity_id: 'light.kitchen' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'deny');
+  });
+
+  it('Phase 0: permitted_tools.mcp gates Codex MCP tools', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: { permitted_tools: { mcp: ['HassTurnOn'] } },
+    });
+    const allowed = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('mcp__hass__HassTurnOn', { entity_id: 'light.kitchen' }),
+      ctx.options,
+    );
+    assert.equal(allowed.decision, 'allow');
+    const denied = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('mcp__hass__HassTurnOff', { entity_id: 'light.kitchen' }),
+      ctx.options,
+    );
+    assert.equal(denied.decision, 'deny');
+  });
+
+  it('PostToolUse events bypass Phase 1-6 (decision: allow)', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Bash', { command: 'rm -rf /' }, 'PostToolUse'),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('Unmapped tool (Write — Codex has no native Write) passes Phase 0 and skips Phase 1-6', async () => {
+    ctx = createTestContext('balanced');
+    const result = await evaluateHook(
+      ctx.codexAdapter,
+      codexPayload('Write', { file_path: '/tmp/x.txt', content: 'hi' }),
+      ctx.options,
+    );
+    assert.equal(result.decision, 'allow');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // MCP indirect-invocation routing (groups B-J: HTTP, runtime, TCP, /dev/tcp,
 // pwsh, language one-liners). Verifies that permitted_tools.mcp denies via
 // the new mcp-route-detect content detection in Phase 0.
