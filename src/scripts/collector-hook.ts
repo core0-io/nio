@@ -5,16 +5,17 @@
 export {};
 
 /**
- * Nio — Collector Hook (Claude Code stdin wrapper)
+ * Nio — Collector Hook (Claude Code + Codex CLI)
  *
- * Reads a Claude Code hook event from stdin and forwards it to the
- * platform-agnostic [collector-core](./lib/collector-core.ts). Claude
- * Code already uses the canonical event names this dispatcher expects
- * (PreToolUse, PostToolUse, Stop, SessionStart, etc.), so no
- * translation is needed here. Hermes goes through the same core via
+ * Reads a hook event from stdin and forwards it to the platform-agnostic
+ * [collector-core](./lib/collector-core.ts). Both Claude Code and Codex
+ * CLI use the canonical PascalCase event names this dispatcher expects
+ * (PreToolUse, PostToolUse, Stop, SessionStart, …) so no translation is
+ * needed here. Hermes goes through the same core via
  * [hook-cli.ts](./hook-cli.ts), which adds a snake_case → canonical
  * translation step.
  *
+ * Platform tag is selected via `--platform <name>` (default: claude-code).
  * Always exits 0 — telemetry never blocks the agent.
  */
 
@@ -26,6 +27,18 @@ import {
   dispatchCollectorEvent,
   type HookStdinPayload,
 } from './lib/collector-core.js';
+
+// ---------------------------------------------------------------------------
+// CLI arg parsing
+// ---------------------------------------------------------------------------
+
+const argv = process.argv.slice(2);
+function getArg(name: string): string | undefined {
+  const idx = argv.indexOf(`--${name}`);
+  if (idx === -1 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
+}
+const PLATFORM = getArg('platform') ?? 'claude-code';
 
 const config = loadCollectorConfig();
 const logsConfig = loadLogsConfig();
@@ -65,7 +78,7 @@ async function main(): Promise<void> {
   await dispatchCollectorEvent({
     event: input.hook_event_name ?? '',
     input,
-    platform: 'claude-code',
+    platform: PLATFORM,
     config,
     meterProvider,
     tracerProvider,

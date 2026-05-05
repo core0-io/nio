@@ -7,10 +7,13 @@ export {};
 /**
  * Nio — SessionStart Scanner Hook
  *
- * Async hook that runs on session startup. Discovers other installed skills
- * in ~/.claude/skills/ and ~/.openclaw/skills/, scans each with the
- * ScanOrchestrator, and writes results to scan-cache for the ActionOrchestrator
- * guard pipeline to consume.
+ * Async hook that runs on session startup. Discovers other installed
+ * skills (Claude Code, Codex, OpenClaw), scans each with the
+ * ScanOrchestrator, and writes results to scan-cache for the
+ * ActionOrchestrator guard pipeline to consume.
+ *
+ * Platform tag for the audit log entry is selected via
+ * `--platform <name>` (default: claude-code).
  *
  * Skips skills that are already cached and fresh (< 24h, same hash).
  * Always exits 0 — informational only, never blocks session startup.
@@ -37,11 +40,24 @@ interface AuditScanEntry {
 }
 
 // ---------------------------------------------------------------------------
+// CLI arg parsing
+// ---------------------------------------------------------------------------
+
+const argv = process.argv.slice(2);
+function getArg(name: string): string | undefined {
+  const idx = argv.indexOf(`--${name}`);
+  if (idx === -1 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
+}
+const PLATFORM = getArg('platform') ?? 'claude-code';
+
+// ---------------------------------------------------------------------------
 // Config
 // ---------------------------------------------------------------------------
 
 const SKILLS_DIRS = [
   join(homedir(), '.claude', 'skills'),
+  join(homedir(), '.codex', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
 const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
@@ -192,7 +208,7 @@ async function main(): Promise<void> {
       writeScanAuditLog({
         event: 'session_scan',
         timestamp: new Date().toISOString(),
-        platform: 'claude-code',
+        platform: PLATFORM,
         skill_name: skill.name,
         risk_level: result.risk_level,
         risk_tags: result.risk_tags,

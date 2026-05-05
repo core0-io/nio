@@ -47,6 +47,8 @@ export {
 // Export adapters (multi-platform hook support)
 export {
   ClaudeCodeAdapter,
+  CodexAdapter,
+  type CodexAdapterOptions,
   OpenClawAdapter,
   HermesAdapter,
   type HermesAdapterOptions,
