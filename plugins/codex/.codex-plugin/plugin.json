@@ -1,0 +1,29 @@
+{
+  "name": "nio",
+  "version": "2.2.0",
+  "description": "Nio — Execution assurance and observability for autonomous AI agents. Dynamic guard, static scan, OTEL collector.",
+  "author": {
+    "name": "core0-io",
+    "url": "https://github.com/core0-io"
+  },
+  "homepage": "https://github.com/core0-io/nio",
+  "repository": "https://github.com/core0-io/nio",
+  "license": "Apache-2.0",
+  "keywords": ["nio", "nio-agent-guard", "agent-guard", "ai-agent-security", "llm-agent-safety", "prompt-injection-defense", "mcp-security", "runtime-protection", "execution-assurance", "agent-observability", "codex", "scanner", "otel"],
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "Nio",
+    "shortDescription": "Execution assurance for autonomous AI agents",
+    "longDescription": "Real-time evaluation of every tool call before it executes (Phase 0–6 guard pipeline), static scanning of installed skills, and OTEL telemetry. Open-source, runs locally, no data leaves your machine.",
+    "developerName": "core0-io",
+    "category": "Security",
+    "capabilities": ["Read", "Interactive"],
+    "websiteURL": "https://core0-io.github.io/nio",
+    "defaultPrompt": [
+      "Scan this skill for execution risks",
+      "Show the agent execution audit log",
+      "Set the protection level to balanced"
+    ]
+  }
+}

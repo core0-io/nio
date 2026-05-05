@@ -1,0 +1,74 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/scanner-hook.js",
+            "timeout": 30,
+            "statusMessage": "Nio: scanning installed skills..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/collector-hook.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/guard-hook.js",
+            "timeout": 10,
+            "statusMessage": "Nio: checking tool safety..."
+          },
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/collector-hook.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/guard-hook.js",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/collector-hook.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/collector-hook.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
