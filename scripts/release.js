@@ -7,6 +7,7 @@
  *
  * Usage:
  *   node scripts/release.js claude-code   # Claude Code plugin zip
+ *   node scripts/release.js codex         # Codex CLI plugin zip
  *   node scripts/release.js openclaw      # OpenClaw plugin zip
  *   node scripts/release.js hermes        # Hermes plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
@@ -15,13 +16,15 @@
  *
  * Single-platform zips extract as a self-contained plugin directory:
  *   claude-code.zip → .claude-plugin/, hooks/, skills/, setup.sh, ...
+ *   codex.zip       → .codex-plugin/, .agents/, hooks/, skills/, setup.sh, ...
  *   openclaw.zip    → openclaw.plugin.json, plugin.js, setup.sh, ...
  *   hermes.zip      → config-snippet.yaml, install-hook.py, setup.sh,
  *                     scripts/hook-cli.js (self-contained single-file
  *                     bundle built by scripts/build.js)
  *
  * The all zip preserves the multi-plugin structure:
- *   all.zip → plugins/claude-code/, plugins/openclaw/, plugins/hermes/, setup.sh
+ *   all.zip → plugins/claude-code/, plugins/codex/, plugins/openclaw/,
+ *             plugins/hermes/, setup.sh
  */
 
 import { execSync } from 'node:child_process';
@@ -37,8 +40,8 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const version = pkg.version;
 
 const target = process.argv[2];
-if (!target || !['claude-code', 'openclaw', 'hermes', 'all'].includes(target)) {
-  console.error('Usage: node scripts/release.js <claude-code|openclaw|hermes|all>');
+if (!target || !['claude-code', 'codex', 'openclaw', 'hermes', 'all'].includes(target)) {
+  console.error('Usage: node scripts/release.js <claude-code|codex|openclaw|hermes|all>');
   process.exit(1);
 }
 
@@ -73,7 +76,7 @@ function zipFromRoot(outName, files) {
 }
 
 const targets = target === 'all'
-  ? ['claude-code', 'openclaw', 'hermes', 'all']
+  ? ['claude-code', 'codex', 'openclaw', 'hermes', 'all']
   : [target];
 
 for (const t of targets) {
@@ -83,6 +86,10 @@ for (const t of targets) {
   switch (t) {
     case 'claude-code':
       zipFromDir(name, 'plugins/claude-code');
+      break;
+
+    case 'codex':
+      zipFromDir(name, 'plugins/codex');
       break;
 
     case 'openclaw':

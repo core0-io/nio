@@ -2,7 +2,7 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import { cpSync, rmSync } from 'node:fs';
+import { cpSync, rmSync as purgeDir } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +29,7 @@ if (!openclaw.success) {
 
 const CC_SKILL_SCRIPTS = join(ROOT, 'plugins/claude-code/skills/nio/scripts');
 const OPENCLAW_SKILL_SCRIPTS = join(ROOT, 'plugins/openclaw/skills/nio/scripts');
+const CODEX_SKILL_SCRIPTS = join(ROOT, 'plugins/codex/skills/nio/scripts');
 
 const cc = await Bun.build({
   ...shared,
@@ -49,10 +50,12 @@ if (!cc.success) {
   process.exit(1);
 }
 
-// Mirror the compiled CC skill scripts to the OpenClaw skill dir so both
-// plugins ship identical scripts.
-rmSync(OPENCLAW_SKILL_SCRIPTS, { recursive: true, force: true });
-cpSync(CC_SKILL_SCRIPTS, OPENCLAW_SKILL_SCRIPTS, { recursive: true });
+// Mirror the compiled CC skill scripts to OpenClaw + Codex skill dirs
+// so all three plugins ship byte-identical scripts.
+for (const dst of [OPENCLAW_SKILL_SCRIPTS, CODEX_SKILL_SCRIPTS]) {
+  purgeDir(dst, { recursive: true, force: true });
+  cpSync(CC_SKILL_SCRIPTS, dst, { recursive: true });
+}
 
 // Hermes plugin needs self-contained CLIs at plugin-local paths so a
 // release zip of plugins/hermes/ works standalone (without reaching
@@ -80,5 +83,5 @@ for (const entry of ['hook-cli', 'nio-cli']) {
 }
 
 console.log(
-  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw skill), ${hermesOutputs} Hermes output(s)`,
+  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw + Codex skill), ${hermesOutputs} Hermes output(s)`,
 );
