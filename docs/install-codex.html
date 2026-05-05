@@ -72,19 +72,25 @@ cd nio-codex && ./setup.sh</code></pre>
         <p>If you use <strong>multiple</strong> agent platforms (Codex + Claude Code + OpenClaw + Hermes), grab <code>nio-all-v&lt;version&gt;.zip</code> instead — the bundled <code>setup.sh</code> auto-detects which agents you have and sets up all of them.</p>
 
         <h2>What setup.sh does</h2>
+        <p>Codex 0.128 has no <code>codex plugin install</code> subcommand and never auto-installs from a registered marketplace, so <code>setup.sh</code> performs a full <strong>nuke + cp install</strong> on every run:</p>
         <ol>
           <li>Verifies Node.js ≥ 18 is on <code>PATH</code> and <code>~/.codex/</code> exists.</li>
+          <li>Wipes and rewrites <code>~/.codex/plugins/cache/nio/nio/&lt;version&gt;/</code> from the unzipped plugin source (this is what Codex actually loads at session start).</li>
+          <li>Wipes and rewrites <code>~/.nio/codex-marketplace/</code> with a Codex-valid marketplace catalog (<code>.agents/plugins/marketplace.json</code> + a mirror of the plugin dir).</li>
+          <li>Writes a <code>hooks.json</code> into the cache dir with <strong>absolute paths</strong> — Codex runs hook commands with <code>cwd = session-cwd</code>, so plugin-relative <code>./skills/...</code> paths can't resolve at runtime.</li>
           <li>Edits <code>~/.codex/config.toml</code> in place (idempotent) to add:
             <ul>
-              <li><code>[marketplaces.nio]</code> pointing at the unzipped plugin dir</li>
+              <li><code>[marketplaces.nio]</code> pointing at <code>~/.nio/codex-marketplace</code></li>
               <li><code>[plugins."nio@nio"] enabled = true</code></li>
-              <li><code>codex_hooks = true</code> under <code>[features]</code> (required for hooks to fire in 0.118+)</li>
+              <li><code>codex_hooks = true</code> under <code>[features]</code> (stable; gates the global hook system)</li>
+              <li><code>plugin_hooks = true</code> under <code>[features]</code> (still under-development in 0.128, but required for plugin-bundled <code>hooks.json</code> to load)</li>
             </ul>
           </li>
           <li>Creates <code>~/.nio/</code> and writes <code>config.yaml</code> from the defaults (kept if it already exists, unless you pass <code>--reset-config</code>).</li>
         </ol>
 
-        <p>Codex CLI does <strong>not</strong> currently support a <code>codex plugin install</code> subcommand — plugin enablement is config-driven, which is what <code>setup.sh</code> handles for you.</p>
+        <p><strong>Dev iteration:</strong> after editing source files, re-run <code>setup.sh</code> — the nuke + cp cycle picks up everything fresh. No mtime tracking, no partial sync.</p>
+        <p><strong>Release-zip robustness:</strong> the cache and marketplace dirs are full copies, so deleting the unzipped source dir afterward does not break the install.</p>
 
         <h2>Flags</h2>
         <table>
@@ -107,7 +113,9 @@ cd nio-codex && ./setup.sh</code></pre>
           <tbody>
             <tr><td><code>~/.nio/config.yaml</code></td><td>Guard + collector config. See <a href="configuration.html">Config reference</a>.</td></tr>
             <tr><td><code>~/.nio/audit.jsonl</code></td><td>Append-only JSONL audit log: guard decisions, scans, lifecycle events. Read via <code>$nio report</code> in a Codex session.</td></tr>
-            <tr><td><code>~/.codex/config.toml</code></td><td>Codex's own config — Nio appends <code>[marketplaces.nio]</code>, <code>[plugins."nio@nio"]</code>, and <code>features.codex_hooks = true</code>.</td></tr>
+            <tr><td><code>~/.codex/config.toml</code></td><td>Codex's own config — Nio appends <code>[marketplaces.nio]</code>, <code>[plugins."nio@nio"]</code>, and toggles <code>features.codex_hooks</code> + <code>features.plugin_hooks</code>.</td></tr>
+            <tr><td><code>~/.codex/plugins/cache/nio/nio/&lt;version&gt;/</code></td><td>Plugin install cache — what Codex actually loads. Recreated on every <code>setup.sh</code> run.</td></tr>
+            <tr><td><code>~/.nio/codex-marketplace/</code></td><td>Generated marketplace catalog Codex reads to resolve the <code>nio@nio</code> plugin id. Recreated on every <code>setup.sh</code> run.</td></tr>
             <tr><td><code>~/.codex/sessions/&lt;date&gt;/rollout-*.jsonl</code></td><td>Codex transcript path passed to hooks via <code>transcript_path</code>. Used by the collector for span continuity.</td></tr>
           </tbody>
         </table>
@@ -132,7 +140,7 @@ cd nio-codex && ./setup.sh</code></pre>
 
         <h2>Uninstall</h2>
         <pre><code>./setup.sh --uninstall</code></pre>
-        <p>Removes the marketplace + plugin entries from <code>~/.codex/config.toml</code> and the <code>~/.nio/</code> directory. The <code>features.codex_hooks = true</code> line is left intact (harmless when nio is gone). Safe to re-run.</p>
+        <p>Removes <code>[marketplaces.nio]</code> + <code>[plugins."nio@nio"]</code> from <code>~/.codex/config.toml</code>, wipes <code>~/.codex/plugins/cache/nio/</code>, wipes <code>~/.nio/codex-marketplace/</code>, and removes <code>~/.nio/</code>. The <code>features.codex_hooks</code> and <code>features.plugin_hooks</code> entries are left intact (harmless when nio is gone). Safe to re-run.</p>
 
       </div>
 
