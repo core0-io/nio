@@ -5,15 +5,20 @@
 export {};
 
 /**
- * Nio PreToolUse / PostToolUse Hook (Claude Code)
+ * Nio PreToolUse / PostToolUse Hook (Claude Code + Codex CLI)
  *
- * Uses the common adapter + engine architecture.
- * Reads Claude Code hook input from stdin, delegates to evaluateHook(),
- * and outputs allow / deny / ask via Claude Code protocol.
+ * Reads hook input from stdin, delegates to evaluateHook(), and outputs
+ * allow / deny / ask via the Claude Code protocol (which Codex also
+ * accepts — both treat exit 2 as deny + stderr as reason). Selects the
+ * platform adapter via `--platform <name>` (default: claude-code).
+ *
+ * Usage:
+ *   node guard-hook.js                      # claude-code (default)
+ *   node guard-hook.js --platform codex     # codex CLI
  *
  * PreToolUse exit codes:
  *   0  = allow (or JSON with permissionDecision)
- *   2  = deny  (stderr = reason shown to Claude)
+ *   2  = deny  (stderr = reason shown to the agent)
  *
  * PostToolUse: appends audit log entry (async, always exits 0)
  */
@@ -21,7 +26,21 @@ export {};
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
-import { createNio, ClaudeCodeAdapter, evaluateHook, loadConfig } from '../index.js';
+import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
+import type { HookAdapter } from '../index.js';
+
+// ---------------------------------------------------------------------------
+// CLI arg parsing
+// ---------------------------------------------------------------------------
+
+const argv = process.argv.slice(2);
+function getArg(name: string): string | undefined {
+  const idx = argv.indexOf(`--${name}`);
+  if (idx === -1 || idx + 1 >= argv.length) return undefined;
+  return argv[idx + 1];
+}
+const PLATFORM = getArg('platform') ?? 'claude-code';
+const PLATFORM_KEY = PLATFORM.replace(/-/g, '_');
 
 // ---------------------------------------------------------------------------
 // Read stdin
@@ -78,8 +97,10 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
-  const nativeToolMapping = config.guard?.native_tool_mapping?.claude_code;
-  const adapter = new ClaudeCodeAdapter({ nativeToolMapping });
+  const nativeToolMapping = config.guard?.native_tool_mapping?.[PLATFORM_KEY];
+  const adapter: HookAdapter = PLATFORM === 'codex'
+    ? new CodexAdapter({ nativeToolMapping })
+    : new ClaudeCodeAdapter({ nativeToolMapping });
   const nio = createNio();
 
   // Set up OTEL providers for metrics + audit logs
@@ -104,7 +125,7 @@ async function main(): Promise<void> {
       result.riskLevel || 'low',
       result.riskScore ?? 0,
       toolName,
-      'claude-code',
+      PLATFORM,
     );
   }
 
