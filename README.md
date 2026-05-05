@@ -3,7 +3,7 @@
 </h1>
 <p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, OpenClaw, and Hermes. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, Codex CLI, OpenClaw, and Hermes. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
 
 <p align="center">
   <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
@@ -13,7 +13,7 @@
 
 ## At a glance
 
-- **What it does:** Nio hooks into your agent platform (Claude Code, OpenClaw, Hermes) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
+- **What it does:** Nio hooks into your agent platform (Claude Code, Codex CLI, OpenClaw, Hermes) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
 - **Config:** Policy lives in **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**). Audit events append to **`~/.nio/audit.jsonl`** by default.
 - **Critical:** The plugin reads config **once when the host process starts**. After you edit `config.yaml`, you must **restart the process that loads Nio** so changes apply. There is no separate `nio reload` command — use your platform’s restart flow (commands below).
 
@@ -61,6 +61,7 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 |----------|-------------------|----------|
 | **OpenClaw** | `nio-openclaw-v<version>.zip` | `unzip … -d nio-openclaw && cd nio-openclaw && ./setup.sh` |
 | **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
+| **Codex CLI** | `nio-codex-v<version>.zip` | `unzip … -d nio-codex && cd nio-codex && ./setup.sh` |
 | **Hermes** | `nio-hermes-v<version>.zip` | `unzip … -d nio-hermes && cd nio-hermes && ./setup.sh` |
 | **All platforms** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
 
@@ -72,6 +73,7 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 
 - **OpenClaw:** start or keep running your **OpenClaw gateway** (and connect the TUI / clients as you usually do). The Nio plugin loads with that process.
 - **Claude Code:** open Claude Code with the plugin/skill installed per `setup.sh`.
+- **Codex CLI:** start a Codex session (`codex` or `codex exec …`) — `setup.sh` enables `codex_hooks` and registers the plugin in `~/.codex/config.toml`. Codex's `stop` event is **turn-scoped** (not session-scoped) and there is no `SubagentStop` equivalent, so the audit log shows fewer per-session signals than Claude Code.
 - **Hermes:** use Hermes with shell hooks merged by `setup.sh`.
 
 Use the **platform-specific zip** when you only need one stack — it is smaller and the installer is scoped to that platform.
@@ -123,6 +125,8 @@ unzip -o "nio-openclaw-${VERSION}.zip" -d nio-openclaw && \
 cd nio-openclaw && ./setup.sh
 ```
 
+**Codex CLI:** substitute `codex` for `claude-code` / `openclaw` in the block above (i.e. `nio-codex-${VERSION}.zip` → `-d nio-codex && cd nio-codex && ./setup.sh`).
+
 **Hermes:** substitute `hermes` for `claude-code` / `openclaw` in the block above (i.e. `nio-hermes-${VERSION}.zip` → `-d nio-hermes && cd nio-hermes && ./setup.sh`).
 
 **All (all-in-one):**
@@ -148,22 +152,23 @@ cd nio && ./setup.sh
 <details>
 <summary><b>Custom install paths (.claude / .openclaw moved elsewhere)</b></summary>
 
-By default, setup looks for `~/.claude` and `~/.openclaw`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `OPENCLAW_STATE_DIR`, or manually), pass the path explicitly:
+By default, setup looks for `~/.claude`, `~/.codex`, `~/.openclaw`, and `~/.hermes`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENCLAW_STATE_DIR`, or manually), pass the path explicitly:
 
 ```bash
 # All-in-one zip
-./setup.sh --cc-home /path/to/.claude --openclaw-home /path/to/.openclaw
+./setup.sh --cc-home /path/to/.claude --codex-home /path/to/.codex --openclaw-home /path/to/.openclaw
 
 # Platform-specific zip
 ./setup.sh --cc-home /path/to/.claude         # inside nio-claude-code/
+./setup.sh --codex-home /path/to/.codex       # inside nio-codex/
 ./setup.sh --openclaw-home /path/to/.openclaw # inside nio-openclaw/
 ```
 
 Resolution order (first match wins):
 
-1. `--cc-home` / `--openclaw-home` flag
-2. `$CLAUDE_CONFIG_DIR` / `$OPENCLAW_STATE_DIR` environment variable
-3. `$HOME/.claude` / `$HOME/.openclaw` (default)
+1. `--cc-home` / `--codex-home` / `--openclaw-home` flag
+2. `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` / `$OPENCLAW_STATE_DIR` environment variable
+3. `$HOME/.claude` / `$HOME/.codex` / `$HOME/.openclaw` (default)
 
 The Nio config itself lives at `~/.nio/` by default, overridable via `$NIO_HOME`.
 
@@ -221,14 +226,14 @@ Phase 6 connects Nio's pre-execution gate to an external risk intelligence platf
 
 ## Compatibility
 
-Nio provides full hook-based execution assurance for Claude Code, OpenClaw, and Hermes today; skill-only scan/action flows work on several other CLIs. Full hook support for additional agent frameworks is in progress.
+Nio provides full hook-based execution assurance for Claude Code, Codex CLI, OpenClaw, and Hermes today; skill-only scan/action flows work on several other CLIs. Full hook support for additional agent frameworks is in progress.
 
 | Platform | Support | Features |
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard — see [install guide](docs/install-claude-code.html) |
+| **Codex CLI** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-codex.html). 5/7 lifecycle events covered (no `SessionEnd` / `SubagentStop` in Codex). |
 | **OpenClaw** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-openclaw.html) |
 | **Hermes Agent** | Full | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install-hermes.html) |
-| **OpenAI Codex CLI** | Skill | Scan/action commands |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |
 | **GitHub Copilot** | Skill | Scan/action commands |

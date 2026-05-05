@@ -181,18 +181,18 @@
         <p>What happens when a command matches an allowlist entry. <code>continue</code> records a hint but still runs Phases 2–6 (so external/LLM policy can't be bypassed). <code>exit</code> returns immediately — fastest path, skips later phases.</p>
 
         <h3 id="guard.permitted_tools"><code>guard.permitted_tools</code></h3>
-        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], codex: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Phase 0 strict allowlist, per platform. When non-empty for a namespace, ONLY listed tools pass on that platform; everything else is denied. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
         <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive.</p>
         <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the MCP server registry. The full capture model lives at <a href="phases/phase-0-tool-gate.html#mcp-routing">Phase 0 — Tool Gate · MCP Tool Routing</a>.</p>
 
         <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
-        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], openclaw: [], hermes: [], mcp: [] }</code></p>
+        <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], codex: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Same shape as <code>permitted_tools</code>; listed tools are unconditionally blocked. <code>mcp</code> covers MCP tools on every platform in one place. Takes precedence over <code>permitted_tools</code>.</p>
 
         <h3 id="guard.mcp_servers"><code>guard.mcp_servers</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{}</code></p>
-        <p>Manual override / addition for the MCP server registry. Phase 0 auto-discovers servers from <code>~/.claude.json</code>, Claude Desktop, <code>~/.hermes/config.yaml</code>, and <code>~/.openclaw/openclaw.json</code>; this field is for SaaS or otherwise non-discoverable servers. Each entry's key is the server name; its value indexes the server by every reachable handle so detectors can route indirect calls back to it.</p>
+        <p>Manual override / addition for the MCP server registry. Phase 0 auto-discovers servers from <code>~/.claude.json</code>, Claude Desktop, <code>~/.hermes/config.yaml</code>, <code>~/.codex/config.toml</code>, and <code>~/.openclaw/openclaw.json</code>; this field is for SaaS or otherwise non-discoverable servers. Each entry's key is the server name; its value indexes the server by every reachable handle so detectors can route indirect calls back to it.</p>
         <pre><code>guard:
   mcp_servers:
     hass:
@@ -212,6 +212,8 @@
     Edit: write_file
     WebFetch: network_request
     WebSearch: network_request
+  codex:
+    Bash: exec_command   # Codex's only native tool — writes/reads/fetches go through shell
   openclaw:
     exec: exec_command
     write: write_file

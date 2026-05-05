@@ -6,7 +6,9 @@ Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (log
 
 ## Architecture
 
-The three host platforms each have their own runtime model — Claude Code and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
+The four host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
+
+**Codex coverage caveat:** Codex CLI exposes only 6 lifecycle events (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PermissionRequest` / `Stop`) — it has **no `SessionEnd` and no `SubagentStop`** equivalent. Metrics and span boundaries that fire on those two events (e.g. `nio.turn.count` on `SessionEnd`, span close on `SubagentStop`) are reduced to the `Stop` event only on Codex. Audit-log entries for `SessionEnd` / `SubagentStop` simply do not appear for Codex sessions. `PermissionRequest` is currently not consumed by Nio (deferred to phase 2).
 
 ```text
    ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
@@ -82,7 +84,7 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 | --- | --- | --- | --- |
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …); same key as the tool-span attribute | PreToolUse · PostToolUse · guard decision | all |
 | `nio.event` | Hook event firing this counter — `PreToolUse` / `PostToolUse` / `TaskCreated` / `TaskCompleted` | PreToolUse · PostToolUse · TaskCreated · TaskCompleted | all |
-| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | every metric | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | every metric | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
 
@@ -129,7 +131,7 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `gen_ai.usage.output_tokens` | Output tokens generated across the turn | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-creation input tokens | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.cache_read.input_tokens` | Cache-read input tokens | Stop · SubagentStop · SessionEnd | all |
-| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | turn close | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | turn close | all |
 | `nio.turn_number` | Per-session counter, starts at 1 | turn close | all |
 | `nio.cwd` | Working dir at turn start | turn close (when set) | all |
 | `nio.turn.user_prompt` | First user message of the turn, redacted, ≤2 KB | UserPromptSubmit | all |
@@ -154,7 +156,7 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
 | `nio.tool_summary` | One-line summary derived from tool input | PostToolUse | all |
-| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | PostToolUse | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | PostToolUse | all |
 | `nio.turn_number` | Parent turn's number | PostToolUse | all |
 | `nio.cwd` | Working dir at hook fire | PostToolUse (when set) | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | PreToolUse | OpenClaw only |
@@ -201,7 +203,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | --- | --- | --- |
 | `event` | `"guard"` | discriminator |
 | `timestamp` | string | ISO-8601 |
-| `platform` | string | `claude-code` / `hermes` / `openclaw` |
+| `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` |
 | `session_id` | string? | host session id |
 | `cwd` | string? | working dir |
 | `tool_name` | string | host tool name |
@@ -291,7 +293,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |
 | `nio.task_id` | Task id from the dispatch event | TaskCreated · TaskCompleted | Claude Code + OpenClaw |
 | `nio.task_summary` | Derived from task input | TaskCreated | Claude Code + OpenClaw |
-| `nio.platform` | Source platform — `claude-code` / `hermes` / `openclaw` | every audit entry | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | every audit entry | all |
 | `nio.cwd` | Working dir at hook fire | every audit entry with cwd | all |
 | `nio.event` | Discriminator — hook event name vs guard / lifecycle / scan / config_error | every audit entry | all |
 | `nio.event_type` | `pre` / `post` for guard entries | guard decision | all |

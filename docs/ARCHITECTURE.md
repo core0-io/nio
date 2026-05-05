@@ -213,9 +213,10 @@ Detection is a strict regex on the command shape
 any shell metacharacter in the command disqualifies the match.
 
 `permitted_tools` and `blocked_tools` are keyed by platform (`claude_code`,
-`openclaw`, …) with one reserved cross-platform key `mcp`. Incoming MCP tool
-names are parsed into `{server, local}` — OpenClaw uses `<server>__<tool>`,
-Claude Code uses `mcp__<server>__<tool>` — and matched against the `mcp` list
+`codex`, `openclaw`, `hermes`) with one reserved cross-platform key `mcp`.
+Incoming MCP tool names are parsed into `{server, local}` — OpenClaw and
+Hermes use `<server>__<tool>`, Claude Code and Codex use
+`mcp__<server>__<tool>` — and matched against the `mcp` list
 in either bare (`HassTurnOn` — any server) or server-qualified
 (`hass__HassTurnOn` — that server only) form. Blocked lists across namespaces
 are additive; permitted lists are independent per namespace, with the
@@ -646,7 +647,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
 | `gen_ai.usage.cache_read.input_tokens` | Tokens read from prompt cache |
 | `nio.turn_number` | Auto-incrementing per session |
-| `nio.platform` | `claude-code`, `openclaw`, or `hermes` |
+| `nio.platform` | `claude-code`, `codex`, `openclaw`, or `hermes` |
 | `nio.cwd` | Working directory when the turn started |
 | `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
@@ -768,6 +769,7 @@ src/
 ├── adapters/                          # Platform integration
 │   ├── hook-engine.ts                # evaluateHook() — guard entry point (Phase 0 + dispatch)
 │   ├── claude-code.ts                # Claude Code adapter
+│   ├── codex.ts                      # Codex CLI adapter (5/6 events, Bash-only native)
 │   ├── openclaw.ts                   # OpenClaw adapter
 │   ├── openclaw-plugin.ts            # OpenClaw plugin registration
 │   ├── hermes.ts                     # Hermes adapter (shell-hook JSON protocol)
@@ -970,14 +972,15 @@ When a user types `/nio config show` in Hermes chat / Telegram / Discord:
 
 #### Contract at a glance
 
-|                  | Claude Code (LLM-driven) | OpenClaw (tool-dispatch) | Hermes (shell-hook) |
-|------------------|--------------------------|---------------------------|----------------------|
-| How registered   | LLM reads `SKILL.md`     | Plugin tool               | Shell-hooks: YAML in `~/.hermes/config.yaml`. `/nio` slash: Python plugin in `~/.hermes/plugins/nio/`. |
-| Invocation mode  | LLM → Bash → subprocess  | In-process method call    | Hot path (guard / collector): subprocess spawned by Hermes. `/nio`: in-process handler → subprocess. |
-| Language on path | JS (node subprocess)     | JS (in-process)           | JS (node subprocess) |
-| Latency          | 2–5 s                    | ~50 ms                    | ~100–200 ms          |
-| Model tokens     | Every call               | 0                         | 0                    |
-| Can block tools  | Yes (via hook)           | Yes (Phase 0–6)           | Yes (Phase 0–6)      |
-| `/nio` dispatch  | LLM-driven (skill)       | Tool-dispatch (`nio_command`) | Python plugin → `nio-cli.js` (bypass LLM) |
-| Phase 0 source   | `blocked_tools.claude_code` | `blocked_tools.openclaw` | `blocked_tools.hermes` |
-| Consent prompt   | N/A (implicit)           | N/A (implicit)            | First-run interactive, cached |
+|                  | Claude Code (LLM-driven) | Codex (lifecycle hooks) | OpenClaw (tool-dispatch) | Hermes (shell-hook) |
+|------------------|--------------------------|--------------------------|---------------------------|----------------------|
+| How registered   | LLM reads `SKILL.md`     | `[plugins."nio@nio"]` in `~/.codex/config.toml` + `codex_hooks` feature flag | Plugin tool               | Shell-hooks: YAML in `~/.hermes/config.yaml`. `/nio` slash: Python plugin in `~/.hermes/plugins/nio/`. |
+| Invocation mode  | LLM → Bash → subprocess  | Subprocess spawned by Codex on each lifecycle event | In-process method call    | Hot path (guard / collector): subprocess spawned by Hermes. `/nio`: in-process handler → subprocess. |
+| Language on path | JS (node subprocess)     | JS (node subprocess)     | JS (in-process)           | JS (node subprocess) |
+| Latency          | 2–5 s                    | ~100–200 ms              | ~50 ms                    | ~100–200 ms          |
+| Model tokens     | Every call               | 0                        | 0                         | 0                    |
+| Can block tools  | Yes (via hook)           | Yes (Phase 0–6, PreToolUse `permissionDecision: deny`) | Yes (Phase 0–6)           | Yes (Phase 0–6)      |
+| `/nio` dispatch  | LLM-driven (skill)       | LLM-driven (skill via `$nio` or natural-language match) | Tool-dispatch (`nio_command`) | Python plugin → `nio-cli.js` (bypass LLM) |
+| Phase 0 source   | `blocked_tools.claude_code` | `blocked_tools.codex`   | `blocked_tools.openclaw`  | `blocked_tools.hermes` |
+| Lifecycle events covered | 7 (full)         | 5 of 6 (no `SessionEnd` / `SubagentStop`; `PermissionRequest` deferred to phase 2) | Plugin hooks (full)       | 7 (full) |
+| Consent prompt   | N/A (implicit)           | N/A (implicit)           | N/A (implicit)            | First-run interactive, cached |

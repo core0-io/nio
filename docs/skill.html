@@ -51,6 +51,8 @@
         <pre><code>/nio &lt;subcommand&gt; [args...]
 /nio &lt;path&gt;                   # shorthand for `scan &lt;path&gt;`</code></pre>
 
+        <p><strong>Trigger by platform:</strong> Claude Code, OpenClaw, and Hermes route <code>/nio</code> through their slash-command surface. Codex CLI does not currently support custom slash commands — there, the same skill is reachable via Codex's skill-trigger conventions: type <code>$nio</code> to invoke explicitly, or describe the action in natural language and Codex picks the skill from <code>SKILL.md</code>. The subcommand grammar below is identical across all platforms.</p>
+
         <h2 id="scan"><code>scan &lt;path&gt;</code></h2>
         <p>Scan a directory or a single file for execution risks. Applies 15 static rules + base64 decode pass across all supported file types.</p>
 
