@@ -17,6 +17,7 @@ This project provides a unified Claude Code skill: `/nio`
 
 - `plugins/shared/` — Shared config + skill source of truth (`skill/SKILL.md`, `SCAN-RULES.md`, `ACTION-POLICIES.md`, `README.md`)
 - `plugins/claude-code/` — Claude Code plugin (hooks, `skills/nio/` synced from shared, setup)
+- `plugins/codex/` — Codex CLI plugin. Manifest at `.codex-plugin/plugin.json` (with `interface{displayName,category,…}`); marketplace manifest at `.agents/plugins/marketplace.json` (Codex's per-marketplace schema, `source: { source: "local", path: "./" }`); hooks at `hooks/hooks.json` covering 5 of 6 Codex events (SessionStart / UserPromptSubmit / PreToolUse / PostToolUse / Stop) — **no SessionEnd / SubagentStop equivalent in Codex**, and `PermissionRequest` is deferred to phase 2. Hook commands use plugin-relative `./skills/nio/scripts/*.js` (matches `figma` plugin convention). Skill content synced from `plugins/shared/skill/` via `scripts/sync-shared.js`; scripts mirrored from `plugins/claude-code/skills/nio/scripts/` by `scripts/build.js`. Codex CLI does **not** support custom slash commands — `/nio` is exposed only via `$nio` skill trigger or natural-language match. Adapter at `src/adapters/codex.ts` with `name='codex'` and default `native_tool_mapping = { Bash: exec_command }` (Codex's only first-party tool; writes/reads/fetches go through shell). `setup.sh` edits `~/.codex/config.toml` in place via a small Node helper (idempotent install/uninstall) — adds `[marketplaces.nio]`, `[plugins."nio@nio"] enabled=true`, and `codex_hooks = true` under `[features]` (required for hooks to fire in 0.118+). Respects `NIO_HOME`.
 - `plugins/openclaw/` — OpenClaw plugin (`plugin/` subdir holds manifest + bundled `plugin.js`; `skills/nio/` synced from shared; setup.sh orchestrates both)
 - `plugins/hermes/` — Hermes integration. Two surfaces:
   1. **Shell-hooks** (upstream PR #13296): `setup.sh` + `install-hook.py` merge **7 lifecycle event entries** into `~/.hermes/config.yaml` — all pointing at the same self-contained `scripts/hook-cli.js`, which internally dispatches `pre_tool_call` to the guard pipeline (Phase 0–6) and `post_tool_call` / `pre_llm_call` / `post_llm_call` / `on_session_start` / `on_session_end` / `subagent_stop` to the collector pipeline (OTEL traces + metrics + logs).
@@ -31,7 +32,7 @@ This project provides a unified Claude Code skill: `/nio`
 `pnpm run build` runs three passes in order:
 
 1. `tsc -p tsconfig.lib.json` — emits unbundled `dist/` + `.d.ts` for the npm library export.
-2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/nio/scripts/`, then mirrors the compiled scripts to `plugins/openclaw/skills/nio/scripts/`.
+2. `bun scripts/build.js` — bundles `dist/adapters/openclaw-plugin.js` → `plugins/openclaw/plugin/plugin.js` and `src/scripts/*.ts` → `plugins/claude-code/skills/nio/scripts/`, then mirrors the compiled scripts to `plugins/openclaw/skills/nio/scripts/` and `plugins/codex/skills/nio/scripts/`.
 3. `node scripts/sync-shared.js` — copies `plugins/shared/` config + `plugins/shared/skill/*` into each plugin's skill dir.
 
 ```bash
@@ -45,7 +46,9 @@ Per-platform zip builds:
 ```bash
 pnpm run release                   # All platforms
 pnpm run release:claude-code       # Claude Code only
+pnpm run release:codex             # Codex CLI only
 pnpm run release:openclaw          # OpenClaw only
+pnpm run release:hermes            # Hermes only
 ```
 
 Full release workflow (versioned, tagged, published to GitHub):
@@ -80,6 +83,7 @@ guard:
   mcp_servers: {}           # Manual MCP server registry (server name → URLs / sockets / binaries / cliPackages)
   native_tool_mapping:      # Per-platform native tool → action type classification
     claude_code: { Bash: exec_command, Write: write_file, Edit: write_file, WebFetch: network_request, WebSearch: network_request }
+    codex:       { Bash: exec_command }   # Codex's only native tool; everything else goes through shell
     openclaw: { exec: exec_command, write: write_file, web_fetch: network_request, browser: network_request }
   scoring_weights: {}       # Phase score aggregation weights
 

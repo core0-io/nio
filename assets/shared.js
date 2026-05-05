@@ -13,6 +13,7 @@
     ]},
     { id: 'install', title: 'Install', openByDefault: false, items: [
       { label: 'Claude Code', path: '/docs/install-claude-code.html' },
+      { label: 'Codex CLI', path: '/docs/install-codex.html' },
       { label: 'OpenClaw', path: '/docs/install-openclaw.html' },
       { label: 'Hermes', path: '/docs/install-hermes.html' },
     ]},
