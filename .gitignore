@@ -20,6 +20,8 @@ plugins/claude-code/skills/nio/scripts/*.js
 plugins/claude-code/skills/nio/scripts/*.js.map
 plugins/openclaw/skills/nio/scripts/*.js
 plugins/openclaw/skills/nio/scripts/*.js.map
+plugins/codex/skills/nio/scripts/*.js
+plugins/codex/skills/nio/scripts/*.js.map
 plugins/openclaw/plugin/plugin.js
 plugins/hermes/scripts/*.js
 plugins/hermes/scripts/*.js.map
@@ -30,6 +32,9 @@ plugins/claude-code/README.md
 plugins/openclaw/config.default.yaml
 plugins/openclaw/config.schema.json
 plugins/openclaw/README.md
+plugins/codex/config.default.yaml
+plugins/codex/config.schema.json
+plugins/codex/README.md
 plugins/hermes/config.default.yaml
 plugins/hermes/config.schema.json
 plugins/hermes/README.md

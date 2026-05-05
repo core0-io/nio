@@ -16,6 +16,7 @@
     "prepublishOnly": "npm run build",
     "release": "node scripts/release.js all",
     "release:claude-code": "node scripts/release.js claude-code",
+    "release:codex": "node scripts/release.js codex",
     "release:openclaw": "node scripts/release.js openclaw",
     "release:hermes": "node scripts/release.js hermes",
     "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes --verify-tag",

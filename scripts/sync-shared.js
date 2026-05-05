@@ -15,11 +15,13 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SHARED = join(ROOT, 'plugins', 'shared');
 const SHARED_SKILL = join(SHARED, 'skill');
 
-// Plugins that install as an agent skill (claude-code, openclaw) get the
-// shared SKILL.md + rule docs synced into their skills/nio/ subdirectory.
+// Plugins that install as an agent skill (claude-code, openclaw, codex)
+// get the shared SKILL.md + rule docs synced into their skills/nio/
+// subdirectory.
 const SKILL_PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'claude-code'),
   join(ROOT, 'plugins', 'openclaw'),
+  join(ROOT, 'plugins', 'codex'),
 ];
 
 // Plugins that don't install as a skill (hermes — runs via shell-hook

@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Nio — All-in-one setup
 # Detects platform and runs the appropriate plugin setup script(s).
-# Supports: Claude Code, OpenClaw, Hermes
+# Supports: Claude Code, Codex, OpenClaw, Hermes
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
@@ -13,9 +13,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # to whichever sub-scripts accept it (each ignores unknown flags where safe).
 UNINSTALL=0
 CC_HOME_ARG=""
+CODEX_HOME_ARG=""
 OPENCLAW_HOME_ARG=""
 HERMES_HOME_ARG=""
 CC_ARGS=()
+CODEX_ARGS=()
 OC_ARGS=()
 HERMES_ARGS=()
 
@@ -24,6 +26,7 @@ while [ $# -gt 0 ]; do
     --uninstall|uninstall)
       UNINSTALL=1
       CC_ARGS+=("--uninstall")
+      CODEX_ARGS+=("--uninstall")
       OC_ARGS+=("--uninstall")
       HERMES_ARGS+=("--uninstall")
       shift ;;
@@ -34,6 +37,14 @@ while [ $# -gt 0 ]; do
     --cc-home=*)
       CC_HOME_ARG="${1#*=}"
       CC_ARGS+=("$1")
+      shift ;;
+    --codex-home)
+      CODEX_HOME_ARG="${2:-}"
+      CODEX_ARGS+=("--codex-home" "${2:-}")
+      shift 2 ;;
+    --codex-home=*)
+      CODEX_HOME_ARG="${1#*=}"
+      CODEX_ARGS+=("$1")
       shift ;;
     --openclaw-home)
       OPENCLAW_HOME_ARG="${2:-}"
@@ -53,10 +64,12 @@ while [ $# -gt 0 ]; do
       HERMES_ARGS+=("--accept-hooks")
       shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--reset-config] [--uninstall]"
       echo ""
       echo "  --cc-home <path>        Path to .claude directory."
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
+      echo "  --codex-home <path>     Path to .codex directory."
+      echo "                          Defaults to \$CODEX_HOME, then \$HOME/.codex."
       echo "  --openclaw-home <path>  Path to .openclaw directory."
       echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
       echo "  --hermes-home <path>    Path to .hermes directory (holds config.yaml)."
@@ -73,6 +86,7 @@ while [ $# -gt 0 ]; do
       exit 0 ;;
     *)
       CC_ARGS+=("$1")
+      CODEX_ARGS+=("$1")
       OC_ARGS+=("$1")
       HERMES_ARGS+=("$1")
       shift ;;
@@ -96,6 +110,14 @@ else
   OPENCLAW_HOME="$HOME/.openclaw"
 fi
 
+if [ -n "$CODEX_HOME_ARG" ]; then
+  CODEX_HOME_DIR="$CODEX_HOME_ARG"
+elif [ -n "${CODEX_HOME:-}" ]; then
+  CODEX_HOME_DIR="$CODEX_HOME"
+else
+  CODEX_HOME_DIR="$HOME/.codex"
+fi
+
 # Hermes uses HERMES_CONFIG_PATH to point at the config *file* directly.
 # --hermes-home is a directory shortcut (file = <dir>/config.yaml) to stay
 # symmetric with the other two platforms.
@@ -116,6 +138,7 @@ echo ""
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling Nio (all platforms)..."
   [ -f "$SCRIPT_DIR/plugins/claude-code/setup.sh" ] && bash "$SCRIPT_DIR/plugins/claude-code/setup.sh" "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
+  [ -f "$SCRIPT_DIR/plugins/codex/setup.sh" ] && [ -d "$CODEX_HOME_DIR" ] && bash "$SCRIPT_DIR/plugins/codex/setup.sh" "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"
   [ -f "$SCRIPT_DIR/plugins/openclaw/setup.sh" ] && bash "$SCRIPT_DIR/plugins/openclaw/setup.sh" "${OC_ARGS[@]+"${OC_ARGS[@]}"}"
   if [ -f "$SCRIPT_DIR/plugins/hermes/setup.sh" ] && [ -f "$HERMES_HOME/config.yaml" ]; then
     HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
@@ -134,6 +157,14 @@ if [ -d "$CC_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
   echo "  Detected: Claude Code ($CC_HOME)"
   echo ""
   bash "$SCRIPT_DIR/plugins/claude-code/setup.sh" "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
+  INSTALLED=1
+fi
+
+# ---- Codex ----
+if [ -d "$CODEX_HOME_DIR" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
+  echo "  Detected: Codex ($CODEX_HOME_DIR)"
+  echo ""
+  bash "$SCRIPT_DIR/plugins/codex/setup.sh" "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"
   INSTALLED=1
 fi
 
@@ -160,16 +191,19 @@ if [ "$INSTALLED" -eq 0 ]; then
   echo ""
   echo "  Looked for:"
   echo "    - Claude Code  $CC_HOME"
+  echo "    - Codex        $CODEX_HOME_DIR"
   echo "    - OpenClaw     $OPENCLAW_HOME"
   echo "    - Hermes       $HERMES_HOME"
   echo ""
-  echo "  If your install lives elsewhere, pass --cc-home / --openclaw-home / --hermes-home:"
+  echo "  If your install lives elsewhere, pass --cc-home / --codex-home / --openclaw-home / --hermes-home:"
   echo "    ./setup.sh --cc-home /path/to/.claude"
+  echo "    ./setup.sh --codex-home /path/to/.codex"
   echo "    ./setup.sh --openclaw-home /path/to/.openclaw"
   echo "    ./setup.sh --hermes-home /path/to/.hermes"
   echo ""
   echo "  Or install for a specific platform directly:"
   echo "    plugins/claude-code/setup.sh"
+  echo "    plugins/codex/setup.sh"
   echo "    plugins/openclaw/setup.sh"
   echo "    plugins/hermes/setup.sh"
   echo ""
