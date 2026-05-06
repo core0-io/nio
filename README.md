@@ -73,7 +73,7 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 
 - **OpenClaw:** start or keep running your **OpenClaw gateway** (and connect the TUI / clients as you usually do). The Nio plugin loads with that process.
 - **Claude Code:** open Claude Code with the plugin/skill installed per `setup.sh`.
-- **Codex CLI:** start a Codex session (`codex` or `codex exec …`) — `setup.sh` enables `codex_hooks` and registers the plugin in `~/.codex/config.toml`. Codex's `stop` event is **turn-scoped** (not session-scoped) and there is no `SubagentStop` equivalent, so the audit log shows fewer per-session signals than Claude Code.
+- **Codex CLI:** start a Codex session (`codex` or `codex exec …`) — `setup.sh` installs the plugin into Codex's plugin cache and registers it in `~/.codex/config.toml`.
 - **Hermes:** use Hermes with shell hooks merged by `setup.sh`.
 
 Use the **platform-specific zip** when you only need one stack — it is smaller and the installer is scoped to that platform.
