@@ -15,7 +15,6 @@
 
 - **What it does:** Nio hooks into your agent platform (Claude Code, Codex CLI, OpenClaw, Hermes) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
 - **Config:** Policy lives in **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**). Audit events append to **`~/.nio/audit.jsonl`** by default.
-- **Critical:** The plugin reads config **once when the host process starts**. After you edit `config.yaml`, you must **restart the process that loads Nio** so changes apply. There is no separate `nio reload` command — use your platform's restart flow (see the per-tab *Verify* section on the [install page](https://core0-io.github.io/nio/docs/install.html)).
 
 ### Architecture at a glance
 
