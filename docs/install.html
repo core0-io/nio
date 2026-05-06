@@ -266,6 +266,14 @@
         </div>
         <p>Removes Nio from every detected agent CLI. Add <code>--platform NAME</code> to limit scope.</p>
 
+        <h2>Custom install paths</h2>
+        <p>If you've moved an agent CLI's home directory (via <code>CLAUDE_CONFIG_DIR</code>, <code>CODEX_HOME</code>, <code>OPENCLAW_STATE_DIR</code>, or manually), thread the override past the installer's <code>bash -s --</code> boundary — everything after <code>--</code> forwards to the matching <code>setup.sh</code>:</p>
+        <div class="code-block">
+          <pre><code id="cmd-cust">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code --cc-home /path/to/.claude</code></pre>
+          <button class="copy-btn" type="button" data-target="cmd-cust" aria-label="Copy command">Copy</button>
+        </div>
+        <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>).</p>
+
         <h2>Manual install or from source</h2>
         <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, <code>unzip</code> it, then <code>cd</code> into the directory and run <code>./setup.sh</code>. To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#install-from-source">"Install from source"</a> section in the README.</p>
 
