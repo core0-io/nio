@@ -54,18 +54,11 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 
 ### 1. Install
 
-1. Download the zip for your platform from the [**Releases page**](https://github.com/core0-io/nio/releases).
-2. Unzip and run **`./setup.sh`** from the extracted folder (see table below for zip names).
+```bash
+curl -fsSL https://core0-io.github.io/nio/install.sh | bash
+```
 
-| Platform | Zip name (pattern) | Commands |
-|----------|-------------------|----------|
-| **OpenClaw** | `nio-openclaw-v<version>.zip` | `unzip … -d nio-openclaw && cd nio-openclaw && ./setup.sh` |
-| **Claude Code** | `nio-claude-code-v<version>.zip` | `unzip … -d nio-claude-code && cd nio-claude-code && ./setup.sh` |
-| **Codex CLI** | `nio-codex-v<version>.zip` | `unzip … -d nio-codex && cd nio-codex && ./setup.sh` |
-| **Hermes** | `nio-hermes-v<version>.zip` | `unzip … -d nio-hermes && cd nio-hermes && ./setup.sh` |
-| **All platforms** | `nio-all-v<version>.zip` | `unzip … -d nio && cd nio && ./setup.sh` |
-
-`setup.sh` registers the plugin with your platform, installs the skill where needed, and writes the default Nio config under **`~/.nio/`**.
+Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.2.0`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
 
 ### 2. Run
 
@@ -75,8 +68,6 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 - **Claude Code:** open Claude Code with the plugin/skill installed per `setup.sh`.
 - **Codex CLI:** start a Codex session (`codex` or `codex exec …`) — `setup.sh` installs the plugin into Codex's plugin cache and registers it in `~/.codex/config.toml`.
 - **Hermes:** use Hermes with shell hooks merged by `setup.sh`.
-
-Use the **platform-specific zip** when you only need one stack — it is smaller and the installer is scoped to that platform.
 
 ### 3. Configure
 
@@ -103,44 +94,6 @@ Use the **platform-specific zip** when you only need one stack — it is smaller
 Useful checks: `openclaw gateway status`, `openclaw gateway health`, `hermes gateway status` (add `--system` on Linux for the systemd unit).
 
 <details>
-<summary><b>One-liner install (latest release from GitHub)</b></summary>
-
-Each block is self-contained — copy, paste, done. `VERSION` is the latest release tag from the GitHub API.
-
-**Claude Code:**
-
-```bash
-VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
-curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-claude-code-${VERSION}.zip" && \
-unzip -o "nio-claude-code-${VERSION}.zip" -d nio-claude-code && \
-cd nio-claude-code && ./setup.sh
-```
-
-**OpenClaw:**
-
-```bash
-VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
-curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-openclaw-${VERSION}.zip" && \
-unzip -o "nio-openclaw-${VERSION}.zip" -d nio-openclaw && \
-cd nio-openclaw && ./setup.sh
-```
-
-**Codex CLI:** substitute `codex` for `claude-code` / `openclaw` in the block above (i.e. `nio-codex-${VERSION}.zip` → `-d nio-codex && cd nio-codex && ./setup.sh`).
-
-**Hermes:** substitute `hermes` for `claude-code` / `openclaw` in the block above (i.e. `nio-hermes-${VERSION}.zip` → `-d nio-hermes && cd nio-hermes && ./setup.sh`).
-
-**All (all-in-one):**
-
-```bash
-VERSION=$(curl -s https://api.github.com/repos/core0-io/nio/releases/latest | grep tag_name | cut -d'"' -f4) && \
-curl -LO "https://github.com/core0-io/nio/releases/download/${VERSION}/nio-all-${VERSION}.zip" && \
-unzip -o "nio-all-${VERSION}.zip" -d nio && \
-cd nio && ./setup.sh
-```
-
-</details>
-
-<details>
 <summary><b>Reset config after upgrade</b></summary>
 
 ```bash
@@ -152,21 +105,17 @@ cd nio && ./setup.sh
 <details>
 <summary><b>Custom install paths (.claude / .openclaw moved elsewhere)</b></summary>
 
-By default, setup looks for `~/.claude`, `~/.codex`, `~/.openclaw`, and `~/.hermes`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENCLAW_STATE_DIR`, or manually), pass the path explicitly:
+By default the installer auto-detects `~/.claude`, `~/.codex`, `~/.openclaw`, and `~/.hermes`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENCLAW_STATE_DIR`, or manually), pass the override path through the installer's `bash -s --` boundary so it forwards to the matching `setup.sh`:
 
 ```bash
-# All-in-one zip
-./setup.sh --cc-home /path/to/.claude --codex-home /path/to/.codex --openclaw-home /path/to/.openclaw
-
-# Platform-specific zip
-./setup.sh --cc-home /path/to/.claude         # inside nio-claude-code/
-./setup.sh --codex-home /path/to/.codex       # inside nio-codex/
-./setup.sh --openclaw-home /path/to/.openclaw # inside nio-openclaw/
+curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code --cc-home /path/to/.claude
 ```
 
-Resolution order (first match wins):
+The installer accepts `--platform NAME` (repeatable), `--cc-home`, `--codex-home`, `--openclaw-home`, `--hermes-home`, `--reset-config`, and `--uninstall`; everything past `--` is forwarded to the per-platform `setup.sh`.
 
-1. `--cc-home` / `--codex-home` / `--openclaw-home` flag
+Resolution order inside each platform's `setup.sh` (first match wins):
+
+1. The `--*-home` flag passed via the installer
 2. `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` / `$OPENCLAW_STATE_DIR` environment variable
 3. `$HOME/.claude` / `$HOME/.codex` / `$HOME/.openclaw` (default)
 
