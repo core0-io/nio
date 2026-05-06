@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Install — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio (also known as nio-agent-guard) — execution-assurance and observability for autonomous AI agents. One curl-piped-shell command installs Nio on every supported agent CLI: Claude Code, Codex CLI, OpenClaw, and Hermes.">
+<meta name="keywords" content="nio, nio-agent-guard, agent-guard, ai agent security, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, codex cli, openclaw, hermes, hermes-agent, otel">
+<link rel="stylesheet" href="../assets/shared.css">
+<style>
+  .install-hero-cmd { position: relative; margin: 0 0 12px; }
+  .install-hero-cmd pre { margin: 0; }
+  .install-hero-cmd .copy-btn,
+  .code-block .copy-btn {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    padding: 4px 10px;
+    font: 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg-1);
+    background: var(--bg-card);
+    border: 1px solid var(--bd-1);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms, background 120ms;
+  }
+  .install-hero-cmd .copy-btn:hover,
+  .code-block .copy-btn:hover { color: var(--fg-0); border-color: var(--fg-3); }
+  .install-hero-cmd .copy-btn.copied,
+  .code-block .copy-btn.copied { color: var(--sev-0); border-color: var(--sev-0); }
+  .code-block { position: relative; margin: 8px 0 16px; }
+  .code-block pre { margin: 0; }
+
+  .tabs { margin: 18px 0 26px; }
+  .tab-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 0;
+    margin: 0 0 14px;
+    border-bottom: 1px solid var(--bd-1);
+  }
+  .tab-button {
+    appearance: none;
+    background: transparent;
+    color: var(--fg-2);
+    border: 0;
+    border-bottom: 2px solid transparent;
+    padding: 8px 14px;
+    margin-bottom: -1px;
+    font: 13px/1.2 inherit;
+    cursor: pointer;
+    transition: color 120ms, border-color 120ms;
+  }
+  .tab-button:hover { color: var(--fg-0); }
+  .tab-button[aria-selected="true"] {
+    color: var(--fg-0);
+    border-bottom-color: var(--sev-2);
+    font-weight: 500;
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  .tab-panel h3 { margin-top: 0; }
+  .tab-panel ul.prereq {
+    margin: 0 0 12px;
+    padding-left: 22px;
+    color: var(--fg-1);
+    font-size: 13px;
+  }
+  .tab-panel ul.prereq li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<!-- source: docs/install.sh, plugins/<plat>/setup.sh, plugins/<plat>/README.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.2.0">v2.2.0</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Overview · Install</div>
+        <h1>Install <em>Nio</em>.</h1>
+        <p class="lead">One curl-piped-shell command installs Nio on every agent CLI you have. Auto-detect your installed agents, or pick one explicitly. macOS, Linux, or WSL.</p>
+      </div>
+
+      <div class="doc">
+
+        <div class="install-hero-cmd">
+          <pre><code id="cmd-hero">curl -fsSL https://core0-io.github.io/nio/install.sh | bash</code></pre>
+          <button class="copy-btn" type="button" data-target="cmd-hero" aria-label="Copy command">Copy</button>
+        </div>
+        <p>Auto-detects which agent CLIs you have installed (<code>~/.claude</code>, <code>~/.codex</code>, <code>~/.openclaw</code>, <code>~/.hermes</code>) and configures Nio for each. To pick one platform explicitly, see the tabs below.</p>
+
+        <h2>Prerequisites</h2>
+        <ul>
+          <li><code>curl</code> and <code>unzip</code> on <code>PATH</code></li>
+          <li>Node.js <strong>≥ 18</strong> (the guard scripts are Node)</li>
+          <li>macOS, Linux, or WSL — there is no Windows-native installer</li>
+          <li>At least one supported agent CLI: Claude Code, Codex CLI, OpenClaw, or Hermes</li>
+        </ul>
+
+        <h2>Pick a platform</h2>
+        <div class="tabs">
+          <div class="tab-list" role="tablist">
+            <button type="button" class="tab-button" role="tab" data-tab="auto" aria-selected="true">Auto-detect</button>
+            <button type="button" class="tab-button" role="tab" data-tab="claude-code" aria-selected="false">Claude Code</button>
+            <button type="button" class="tab-button" role="tab" data-tab="codex" aria-selected="false">Codex CLI</button>
+            <button type="button" class="tab-button" role="tab" data-tab="openclaw" aria-selected="false">OpenClaw</button>
+            <button type="button" class="tab-button" role="tab" data-tab="hermes" aria-selected="false">Hermes</button>
+          </div>
+
+          <section class="tab-panel active" role="tabpanel" data-tab-panel="auto">
+            <h3>Auto-detect (recommended)</h3>
+            <p>The default mode. The installer scans <code>$HOME</code> for the four agent CLI directories — <code>.claude</code>, <code>.codex</code>, <code>.openclaw</code>, <code>.hermes</code> — and runs the matching per-platform setup for every one it finds.</p>
+            <div class="code-block">
+              <pre><code id="cmd-auto">curl -fsSL https://core0-io.github.io/nio/install.sh | bash</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-auto" aria-label="Copy command">Copy</button>
+            </div>
+            <p>If no agent CLI is detected, the installer exits with a clear error pointing at this page so you can pick a tab and pass <code>--platform NAME</code> explicitly.</p>
+          </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="claude-code">
+            <h3>Claude Code</h3>
+            <ul class="prereq">
+              <li>Claude Code CLI installed and <code>claude</code> on <code>PATH</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-cc">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-cc" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>Registers the <code>nio</code> marketplace with Claude Code (<code>claude plugin marketplace add</code>), installs the plugin (<code>claude plugin install nio@nio</code>), syncs scripts and <code>PreToolUse</code> / <code>SessionStart</code> hooks into the Claude Code plugin cache, and writes <code>~/.nio/config.yaml</code> from defaults.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li>Open a <strong>fresh</strong> Claude Code session — hooks load on the next session, not the one in flight.</li>
+              <li>Type <code>/nio config show</code> in chat. The current protection level prints.</li>
+              <li>Try <code>/nio scan .</code>, then <code>/nio report</code>.</li>
+            </ol>
+            <div class="callout ok">
+              <div class="title">If <code>/nio</code> isn't available</div>
+              <p>Re-run the one-liner — Nio's <code>setup.sh</code> re-registers the marketplace idempotently. The path bound to the marketplace updates if the unzip directory moved.</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="codex">
+            <h3>Codex CLI</h3>
+            <ul class="prereq">
+              <li>Codex CLI <strong>0.128.0</strong> — the only end-to-end-verified version. On macOS: <code>brew install --cask codex</code>.</li>
+              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-cx">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform codex</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-cx" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>Codex 0.128 has no <code>codex plugin install</code> command, so <code>setup.sh</code> performs a full nuke + cp install: wipes and rewrites <code>~/.codex/plugins/cache/nio/nio/&lt;version&gt;/</code> from the unzipped source, generates a Codex-valid marketplace catalog under <code>~/.nio/codex-marketplace/</code>, and edits <code>~/.codex/config.toml</code> to register the marketplace, enable the plugin, and set <code>codex_hooks = true</code> + <code>plugin_hooks = true</code> under <code>[features]</code>.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li>Open a fresh Codex session.</li>
+              <li><code>codex "$nio config show"</code> — current protection level prints.</li>
+              <li><code>codex "$nio scan ."</code>, then <code>codex "$nio report"</code>.</li>
+            </ol>
+            <div class="callout warn">
+              <div class="title">Caveat</div>
+              <p><code>plugin_hooks</code> is still under-development in Codex 0.128, but it's the only feature flag that lets plugin-bundled <code>hooks.json</code> fire. Codex also doesn't support custom slash commands — use <code>$nio</code> as the explicit skill trigger.</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="openclaw">
+            <h3>OpenClaw</h3>
+            <ul class="prereq">
+              <li>OpenClaw (ClawHub) CLI installed and <code>openclaw</code> on <code>PATH</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-oc">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform openclaw</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-oc" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>Registers the bundled plugin (<code>plugin/plugin.js</code>) with OpenClaw, mirrors the <code>/nio</code> skill directory so the slash command appears in the skill list, and writes <code>~/.nio/config.yaml</code> from defaults.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li>Open OpenClaw — <code>/nio</code> appears in the skill list.</li>
+              <li><code>/nio config show</code> → <code>/nio scan .</code> → <code>/nio report</code>.</li>
+            </ol>
+            <div class="callout warn">
+              <div class="title">Caveat — no interactive confirm</div>
+              <p>OpenClaw doesn't expose an interactive "do you want to run this?" prompt. When the guard decides <strong>confirm</strong>, the <code>confirm_action</code> fallback fires (default: <code>allow</code> + warning in the audit log). For headless / CI environments, set it to <code>deny</code> in <code>~/.nio/config.yaml</code>.</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="hermes">
+            <h3>Hermes</h3>
+            <ul class="prereq">
+              <li>Hermes Agent installed; shell-hook subsystem from upstream <a href="https://github.com/NousResearch/hermes-agent/pull/13296">PR #13296</a> is required</li>
+              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-h">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform hermes</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-h" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>Merges seven shell-hook entries (<code>pre_tool_call</code>, <code>post_tool_call</code>, <code>pre_llm_call</code>, <code>post_llm_call</code>, <code>on_session_start</code>, <code>on_session_end</code>, <code>subagent_stop</code>) into <code>~/.hermes/config.yaml</code>, drops the <code>/nio</code> Python plugin into <code>~/.hermes/plugins/nio/</code>, appends <code>"nio"</code> to <code>plugins.enabled</code>, and writes <code>~/.nio/config.yaml</code>.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li><code>hermes hooks doctor</code> — expect <em>"Checking 7 configured shell hook(s)…"</em>, all green.</li>
+              <li>Restart any running gateway: <code>hermes gateway run --replace</code>.</li>
+              <li>Send <code>/nio config show</code> in any Hermes channel — bot replies, no LLM in the loop.</li>
+            </ol>
+            <div class="callout warn">
+              <div class="title">Caveat — consent allowlist</div>
+              <p>Hermes refuses to fire unknown shell hooks until you consent. The interactive prompt at the end of <code>setup.sh</code> handles this; for non-TTY runs, the underlying per-platform script accepts <code>--accept-hooks</code>. The allowlist is keyed on the exact command string, so any path change (move, upgrade, new machine) requires re-approval.</p>
+            </div>
+          </section>
+        </div>
+
+        <h2>After install</h2>
+        <ol>
+          <li>Edit <code>~/.nio/config.yaml</code>: set <code>guard.protection_level</code>, optional <code>collector.endpoint</code> for OTLP export.</li>
+          <li>Restart your agent session so the hooks reload.</li>
+          <li>The audit log is at <code>~/.nio/audit.jsonl</code>. Read recent entries via <code>/nio report</code> (or <code>$nio report</code> on Codex).</li>
+          <li>Full config field reference: <a href="configuration.html">Configuration</a>.</li>
+        </ol>
+
+        <div class="callout">
+          <div class="title">Nio guarding its own install</div>
+          <p>If Nio is already running on one agent and you re-invoke the one-liner to add another, the guard may surface a confirm prompt — <code>curl …  | bash</code> matches one of the high-severity scan patterns. That's expected; allow it. The protection level controls the behaviour: <code>balanced</code> asks, <code>strict</code> denies, <code>permissive</code> allows.</p>
+        </div>
+
+        <h2>Uninstall</h2>
+        <div class="code-block">
+          <pre><code id="cmd-u">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --uninstall</code></pre>
+          <button class="copy-btn" type="button" data-target="cmd-u" aria-label="Copy command">Copy</button>
+        </div>
+        <p>Removes Nio from every detected agent CLI. Add <code>--platform NAME</code> to limit scope.</p>
+
+        <h2>Pinning a version</h2>
+        <p>The installer queries the GitHub API for the latest release tag. To pin a specific version (or to dodge GitHub API rate-limiting on shared CI IPs), pass <code>NIO_VERSION</code> as an env var:</p>
+        <pre><code>NIO_VERSION=v2.2.0 bash -c "$(curl -fsSL https://core0-io.github.io/nio/install.sh)"</code></pre>
+
+        <h2>Manual install or from source</h2>
+        <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, <code>unzip</code> it, then <code>cd</code> into the directory and run <code>./setup.sh</code>. To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#install-from-source">"Install from source"</a> section in the README.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="getting-started.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Getting Started</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="skill.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">/nio commands</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.2.0">v2.2.0</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+<script>
+(() => {
+  const VALID = new Set(['auto', 'claude-code', 'codex', 'openclaw', 'hermes']);
+
+  function activate(id) {
+    if (!VALID.has(id)) id = 'auto';
+    document.querySelectorAll('[role="tab"][data-tab]').forEach((b) => {
+      b.setAttribute('aria-selected', b.dataset.tab === id ? 'true' : 'false');
+    });
+    document.querySelectorAll('[data-tab-panel]').forEach((p) => {
+      p.classList.toggle('active', p.dataset.tabPanel === id);
+    });
+  }
+
+  function readHash() {
+    const m = window.location.hash.match(/^#tab=([\w-]+)$/);
+    return m ? m[1] : 'auto';
+  }
+
+  document.querySelectorAll('[role="tab"][data-tab]').forEach((b) => {
+    b.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      const id = b.dataset.tab;
+      activate(id);
+      history.replaceState(null, '', '#tab=' + id);
+    });
+  });
+
+  window.addEventListener('hashchange', () => activate(readHash()));
+  activate(readHash());
+})();
+
+(() => {
+  document.querySelectorAll('.copy-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const target = document.getElementById(btn.dataset.target);
+      if (!target) return;
+      const text = target.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        return;
+      }
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = orig;
+        btn.classList.remove('copied');
+      }, 1200);
+    });
+  });
+})();
+</script>
+</body></html>
