@@ -75,39 +75,6 @@ Per-platform verify and restart commands are in each tab's *Verify* section on t
 
 </details>
 
-<details>
-<summary><b>Custom install paths (.claude / .openclaw moved elsewhere)</b></summary>
-
-By default the installer auto-detects `~/.claude`, `~/.codex`, `~/.openclaw`, and `~/.hermes`. If you've relocated them (e.g. via `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `OPENCLAW_STATE_DIR`, or manually), pass the override path through the installer's `bash -s --` boundary so it forwards to the matching `setup.sh`:
-
-```bash
-curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code --cc-home /path/to/.claude
-```
-
-The installer accepts `--platform NAME` (repeatable), `--cc-home`, `--codex-home`, `--openclaw-home`, `--hermes-home`, `--reset-config`, and `--uninstall`; everything past `--` is forwarded to the per-platform `setup.sh`.
-
-Resolution order inside each platform's `setup.sh` (first match wins):
-
-1. The `--*-home` flag passed via the installer
-2. `$CLAUDE_CONFIG_DIR` / `$CODEX_HOME` / `$OPENCLAW_STATE_DIR` environment variable
-3. `$HOME/.claude` / `$HOME/.codex` / `$HOME/.openclaw` (default)
-
-The Nio config itself lives at `~/.nio/` by default, overridable via `$NIO_HOME`.
-
-</details>
-
-<details>
-<summary><b>Install from source</b></summary>
-
-```bash
-git clone https://github.com/core0-io/nio.git
-cd nio && pnpm install && pnpm run build && ./setup.sh
-```
-
-Use this if you want to hack on Nio or track `main`. The release zips ship with everything pre-built, so end users don't need Node/pnpm installed.
-
-</details>
-
 ---
 
 ## Usage (skill commands)
@@ -169,10 +136,13 @@ Nio provides full hook-based execution assurance for Claude Code, Codex CLI, Ope
 ## Development
 
 ```bash
-pnpm install
-pnpm run build
-pnpm test
+git clone https://github.com/core0-io/nio.git
+cd nio && pnpm install && pnpm run build
+pnpm test          # run the test suite
+./setup.sh         # install the local build into your agent CLIs
 ```
+
+The release zips ship with everything pre-built, so end users don't need Node/pnpm installed — only contributors hacking on Nio do.
 
 ## License
 
