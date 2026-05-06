@@ -68,11 +68,13 @@ Per-platform verify and restart commands are in each tab's *Verify* section on t
 
 ### 3. Upgrade
 
-Re-run the install one-liner — `setup.sh` is idempotent and picks up the latest release. After a version that changed the config schema, append `--reset-config` to overwrite `~/.nio/config.yaml` from defaults:
+Re-run the install one-liner — `setup.sh` is idempotent and picks up the latest release. After a version that changed the config schema, append `--reset-config` to overwrite `~/.nio/config.yaml` with the new bundled template:
 
 ```bash
 curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-config
 ```
+
+**Heads up:** `--reset-config` replaces your existing `config.yaml` with the upgraded template, so any customisations you made (allowed commands, permitted tools, collector endpoint, scoring weights, etc.) are wiped and have to be reapplied on top of the new defaults. Back the file up first (`cp ~/.nio/config.yaml ~/.nio/config.yaml.bak`) if you're not sure what you changed.
 
 ---
 
