@@ -7,9 +7,8 @@
 <meta name="keywords" content="nio, nio-agent-guard, agent-guard, ai agent security, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, codex cli, openclaw, hermes, hermes-agent, otel">
 <link rel="stylesheet" href="../assets/shared.css">
 <style>
-  .install-hero-cmd { position: relative; margin: 0 0 12px; }
-  .install-hero-cmd pre { margin: 0; }
-  .install-hero-cmd .copy-btn,
+  .code-block { position: relative; margin: 8px 0 16px; }
+  .code-block pre { margin: 0; }
   .code-block .copy-btn {
     position: absolute;
     top: 8px;
@@ -23,12 +22,8 @@
     cursor: pointer;
     transition: color 120ms, border-color 120ms, background 120ms;
   }
-  .install-hero-cmd .copy-btn:hover,
   .code-block .copy-btn:hover { color: var(--fg-0); border-color: var(--fg-3); }
-  .install-hero-cmd .copy-btn.copied,
   .code-block .copy-btn.copied { color: var(--sev-0); border-color: var(--sev-0); }
-  .code-block { position: relative; margin: 8px 0 16px; }
-  .code-block pre { margin: 0; }
 
   .tabs { margin: 18px 0 26px; }
   .tab-list {
@@ -50,6 +45,9 @@
     font: 13px/1.2 inherit;
     cursor: pointer;
     transition: color 120ms, border-color 120ms;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
   }
   .tab-button:hover { color: var(--fg-0); }
   .tab-button[aria-selected="true"] {
@@ -57,6 +55,10 @@
     border-bottom-color: var(--sev-2);
     font-weight: 500;
   }
+  .tab-button svg, .tab-button img { flex-shrink: 0; opacity: 0.75; transition: opacity 120ms; }
+  .tab-button:hover svg, .tab-button:hover img,
+  .tab-button[aria-selected="true"] svg,
+  .tab-button[aria-selected="true"] img { opacity: 1; }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
   .tab-panel h3 { margin-top: 0; }
@@ -109,32 +111,37 @@
 
       <div class="doc">
 
-        <div class="install-hero-cmd">
-          <pre><code id="cmd-hero">curl -fsSL https://core0-io.github.io/nio/install.sh | bash</code></pre>
-          <button class="copy-btn" type="button" data-target="cmd-hero" aria-label="Copy command">Copy</button>
-        </div>
-        <p>Auto-detects which agent CLIs you have installed (<code>~/.claude</code>, <code>~/.codex</code>, <code>~/.openclaw</code>, <code>~/.hermes</code>) and configures Nio for each. To pick one platform explicitly, see the tabs below.</p>
-
-        <h2>Prerequisites</h2>
-        <ul>
-          <li><code>curl</code> and <code>unzip</code> on <code>PATH</code></li>
-          <li>Node.js <strong>≥ 18</strong> (the guard scripts are Node)</li>
-          <li>macOS, Linux, or WSL — there is no Windows-native installer</li>
-          <li>At least one supported agent CLI: Claude Code, Codex CLI, OpenClaw, or Hermes</li>
-        </ul>
-
         <h2>Pick a platform</h2>
         <div class="tabs">
           <div class="tab-list" role="tablist">
-            <button type="button" class="tab-button" role="tab" data-tab="auto" aria-selected="true">Auto-detect</button>
-            <button type="button" class="tab-button" role="tab" data-tab="claude-code" aria-selected="false">Claude Code</button>
-            <button type="button" class="tab-button" role="tab" data-tab="codex" aria-selected="false">Codex CLI</button>
-            <button type="button" class="tab-button" role="tab" data-tab="openclaw" aria-selected="false">OpenClaw</button>
-            <button type="button" class="tab-button" role="tab" data-tab="hermes" aria-selected="false">Hermes</button>
+            <button type="button" class="tab-button" role="tab" data-tab="auto" aria-selected="true">
+              <img src="../assets/logos/auto-detect.svg" width="14" height="14" alt="">
+              Auto-detect
+            </button>
+            <button type="button" class="tab-button" role="tab" data-tab="claude-code" aria-selected="false">
+              <img src="../assets/logos/claude.svg" width="14" height="14" alt="">
+              Claude Code
+            </button>
+            <button type="button" class="tab-button" role="tab" data-tab="codex" aria-selected="false">
+              <img src="../assets/logos/codex.png" width="14" height="14" alt="">
+              Codex CLI
+            </button>
+            <button type="button" class="tab-button" role="tab" data-tab="openclaw" aria-selected="false">
+              <img src="../assets/logos/openclaw.svg" width="14" height="14" alt="">
+              OpenClaw
+            </button>
+            <button type="button" class="tab-button" role="tab" data-tab="hermes" aria-selected="false">
+              <img src="../assets/logos/hermes.svg" width="14" height="14" alt="">
+              Hermes
+            </button>
           </div>
 
           <section class="tab-panel active" role="tabpanel" data-tab-panel="auto">
             <h3>Auto-detect (recommended)</h3>
+            <ul class="prereq">
+              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>At least one supported agent CLI installed (Claude Code, Codex, OpenClaw, or Hermes)</li>
+            </ul>
             <p>The default mode. The installer scans <code>$HOME</code> for the four agent CLI directories — <code>.claude</code>, <code>.codex</code>, <code>.openclaw</code>, <code>.hermes</code> — and runs the matching per-platform setup for every one it finds.</p>
             <div class="code-block">
               <pre><code id="cmd-auto">curl -fsSL https://core0-io.github.io/nio/install.sh | bash</code></pre>
@@ -258,10 +265,6 @@
           <button class="copy-btn" type="button" data-target="cmd-u" aria-label="Copy command">Copy</button>
         </div>
         <p>Removes Nio from every detected agent CLI. Add <code>--platform NAME</code> to limit scope.</p>
-
-        <h2>Pinning a version</h2>
-        <p>The installer queries the GitHub API for the latest release tag. To pin a specific version (or to dodge GitHub API rate-limiting on shared CI IPs), pass <code>NIO_VERSION</code> as an env var:</p>
-        <pre><code>NIO_VERSION=v2.2.0 bash -c "$(curl -fsSL https://core0-io.github.io/nio/install.sh)"</code></pre>
 
         <h2>Manual install or from source</h2>
         <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, <code>unzip</code> it, then <code>cd</code> into the directory and run <code>./setup.sh</code>. To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#install-from-source">"Install from source"</a> section in the README.</p>
