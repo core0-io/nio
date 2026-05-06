@@ -1,5 +1,69 @@
 # @core0-io/nio
 
+## 2.3.0
+
+### Minor Changes
+
+- Two headline shifts in this release: first-class Codex CLI support, and a single hosted installer that replaces the per-platform zip dance.
+
+  ## Codex CLI plugin (new platform)
+
+  Codex CLI joins Claude Code, OpenClaw, and Hermes as a fully supported platform. The plugin lives at `plugins/codex/` and runs the same Phase 0–6 guard pipeline as the other platforms.
+
+  - **Layout.** Flat repo layout (`.codex-plugin/plugin.json` manifest with `interface{displayName,category,…}`, `hooks/hooks.json`, `skills/nio/`, root-level `setup.sh`). Skill content syncs from `plugins/shared/skill/` and bundled scripts mirror from the Claude Code plugin.
+  - **Hooks.** Subscribes to `SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `Stop`. `PermissionRequest` is deferred to a later phase.
+  - **Adapter.** `CodexAdapter` (`src/adapters/codex.ts`) registers as `name='codex'` with the default native tool mapping `{ Bash: exec_command }` — Codex's only first-party tool is `Bash`, so writes / reads / fetches reach the guard via shell.
+  - **Slash command.** Codex CLI does not support custom slash commands, so `/nio` is exposed via the `$nio` skill trigger and natural-language match against `SKILL.md`.
+
+  ### Install / setup behaviour
+
+  Codex 0.128 has no `codex plugin install` subcommand and never auto-installs from a registered marketplace, so `plugins/codex/setup.sh` performs a full nuke + cp install on every run:
+
+  - Wipes and rewrites `~/.codex/plugins/cache/nio/nio/<version>/` from the unzipped plugin source — this is what Codex actually loads at session start.
+  - Generates a Codex-valid marketplace catalog under `~/.nio/codex-marketplace/` (Codex 0.128's marketplace schema rejects the repo's flat layout, so the catalog is built fresh at install time).
+  - Writes a `hooks.json` into the cache directory with **absolute paths**. Codex runs hook commands with `cwd=session-cwd`, so plugin-relative `./skills/...` paths can't resolve at runtime.
+  - Edits `~/.codex/config.toml` to register `[marketplaces.nio]`, enable `[plugins."nio@nio"]`, and set both `[features] codex_hooks = true` (stable; gates the global hook system) and `[features] plugin_hooks = true` (still under-development in 0.128, but required for plugin-bundled `hooks.json` to load).
+
+  The same `setup.sh` works whether invoked from the repo or from an extracted release zip, and accepts `--platform codex` so the cross-platform top-level installer can delegate to it.
+
+  ### Tests
+
+  PreToolUse stdin fixtures captured from a real Codex 0.128 session back a new integration test suite (`src/tests/codex-*.test.ts`) that exercises the adapter end-to-end against those fixtures.
+
+  ## Hosted curl-piped installer (`install.sh`)
+
+  A single hosted installer at `https://core0-io.github.io/nio/install.sh` replaces the per-platform "download zip → unzip → cd → setup.sh" recipe:
+
+  ```bash
+  curl -fsSL https://core0-io.github.io/nio/install.sh | bash
+  ```
+
+  Auto-detects which agent CLIs are installed (`~/.claude` / `~/.codex` / `~/.openclaw` / `~/.hermes`) and runs the matching per-platform `setup.sh` for each. Supports:
+
+  - `--platform NAME` — repeatable; one of `claude-code` / `codex` / `openclaw` / `hermes`. Skips auto-detect and installs only the named platform(s).
+  - `--uninstall` — combine with `--platform` to scope.
+  - `--reset-config` — overwrites `~/.nio/config.yaml` from the bundled template.
+  - `--cc-home` / `--codex-home` / `--openclaw-home` / `--hermes-home` — forwarded past the `bash -s --` boundary to the per-platform `setup.sh` for relocated agent home directories.
+  - `NIO_VERSION=v2.3.0` env — pin a specific release tag instead of querying the GitHub API. Useful on shared CI IPs hitting the unauthenticated 60 req/hr limit.
+
+  The installer is platform-agnostic orchestration only — it lives on GitHub Pages, decoupled from the release zips. Per-platform `setup.sh` files stay inside the versioned release artifacts and can be invoked directly when the curl-piped path is undesirable.
+
+  ## Single tabbed install page
+
+  The four `docs/install-<platform>.html` pages collapse into one `docs/install.html` with five tabs: **Auto-detect** (default, recommended), **Claude Code**, **Codex CLI**, **OpenClaw**, **Hermes**. Each tab carries its own prerequisites, a condensed description of what `setup.sh` does on that platform, verify steps, and any platform-specific caveat. Tab state syncs with the URL hash (`#tab=<name>`), so deep-links from the README and getting-started page jump straight to the right platform. Each tab is decorated with the platform's official brand mark (sourced from upstream repos and the brand pages of each project).
+
+  ## README simplifications
+
+  `README.md` is now operator-focused: the duplicated `Critical: restart-required` bullet leaves `## At a glance`, `## Quick start` collapses into three subsections (`### 1. Install`, `### 2. Configure and run`, `### 3. Upgrade`) plus a single surviving `<details>` block (`./setup.sh --reset-config`), and the skill command listing moves below `## Architecture` as `## Skill usage` so readers see the guard pipeline before the commands that poke at it.
+
+  Sub-sections that used to live in `## Quick start` move to where they fit better:
+
+  - `Custom install paths (.claude / .openclaw moved elsewhere)` — moves to `docs/install.html`.
+  - `Install from source` — folds into the existing `## Development` section.
+  - The four-row platform zip table and four `<details>One-liner install</details>` blocks — replaced by the single curl-piped one-liner above.
+
+  `### 3. Upgrade` makes explicit that `--reset-config` overwrites the existing `config.yaml` with the upgraded bundled template, so user-tuned fields (`allowed_commands`, `permitted_tools`, `collector.endpoint`, `scoring_weights`, …) are wiped and have to be re-applied on top of the new defaults. The release notes recommend backing up `~/.nio/config.yaml` first.
+
 ## 2.2.0
 
 ### Minor Changes
