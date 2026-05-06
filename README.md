@@ -60,38 +60,11 @@ curl -fsSL https://core0-io.github.io/nio/install.sh | bash
 
 Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.2.0`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
 
-### 2. Run
+### 2. Configure and run
 
-**There is no standalone Nio daemon.** “Running Nio” means **running your agent with the platform that loads the Nio plugin**:
+Nio isn't a daemon — it loads as a plugin inside your agent host (Claude Code, Codex CLI, OpenClaw, or Hermes). Edit **`~/.nio/config.yaml`** (override the directory with **`NIO_HOME`**), then **restart your agent host** so the plugin re-reads the policy: Nio builds the guard once at plugin registration and never reloads in-process. Confirm decisions in **`~/.nio/audit.jsonl`** or your OTEL backend.
 
-- **OpenClaw:** start or keep running your **OpenClaw gateway** (and connect the TUI / clients as you usually do). The Nio plugin loads with that process.
-- **Claude Code:** open Claude Code with the plugin/skill installed per `setup.sh`.
-- **Codex CLI:** start a Codex session (`codex` or `codex exec …`) — `setup.sh` installs the plugin into Codex's plugin cache and registers it in `~/.codex/config.toml`.
-- **Hermes:** use Hermes with shell hooks merged by `setup.sh`.
-
-### 3. Configure
-
-- Edit **`~/.nio/config.yaml`** (template and comments ship with the release; defaults are also described in `config.default.yaml` in this repo).
-- Override the config directory with **`NIO_HOME`** if needed (`$NIO_HOME/config.yaml`).
-- **Optional — AI-assisted editing:** Point your coding LLM or agent at this file (and `config.default.yaml` if needed), and **describe the policy in plain language** — what to **allow**, **block**, **permit**, **deny**, patterns for commands or DB/SQL, MCP tools to gate, paths to protect, and so on — and ask it to **propose or apply YAML edits** that match those intents. **Always review** the result (and restart the host per §4), since mistakes in config directly affect what runs in production.
-
-### 4. Apply changes after editing config
-
-1. Save **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**).
-2. **Restart the agent host** so the Nio plugin loads the file again (same process = stale policy).
-3. Confirm behaviour in **`~/.nio/audit.jsonl`** or your OTEL backend.
-
-**Why a restart is required:** Nio loads YAML and builds the guard **at plugin registration**. The running process does not watch the file or reload config on each tool call.
-
-**Typical restart commands** (use whatever matches how you run the platform):
-
-| Platform | When the gateway / agent runs as a **background service** | When you run it in the **foreground** (dev/tmux) |
-|----------|--------------------------------------------------------------|--------------------------------------------------|
-| **OpenClaw** | `openclaw gateway restart` | Stop the process (e.g. **Ctrl+C**) and run `openclaw gateway run` again. |
-| **Hermes** | `hermes gateway restart` — multiple profiles: `hermes gateway restart --all` | Stop `hermes gateway run` and start it again (often in **tmux** on WSL). See [Hermes CLI](https://hermes-agent.nousresearch.com/docs/user-guide/cli/). |
-| **Claude Code** | *(no gateway)* — **quit and reopen** Claude Code (or reload the window / extension host) so hooks pick up changes. | Same: full host restart is the reliable way. |
-
-Useful checks: `openclaw gateway status`, `openclaw gateway health`, `hermes gateway status` (add `--system` on Linux for the systemd unit).
+Per-platform verify and restart commands are in each tab's *Verify* section on the [install page](https://core0-io.github.io/nio/docs/install.html).
 
 <details>
 <summary><b>Reset config after upgrade</b></summary>
