@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Nio — Codex CLI plugin setup
 #
-# Codex 0.118+ has no `codex plugin install` CLI. Plugins are loaded from
+# Codex 0.128.0 has no `codex plugin install` CLI. Plugins are loaded from
 # the install cache at $CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>/,
 # but Codex never auto-populates that cache from a registered marketplace
 # — install is the user's job. This script does it directly:

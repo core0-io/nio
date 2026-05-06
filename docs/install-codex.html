@@ -49,7 +49,7 @@
 
         <h2>Requirements</h2>
         <ul>
-          <li>Codex CLI <strong>≥ 0.118</strong> (<code>codex --version</code>; the cask <code>codex</code> works on macOS — <code>brew install --cask codex</code>)</li>
+          <li>Codex CLI <strong>0.128.0</strong> (<code>codex --version</code>; the cask <code>codex</code> works on macOS — <code>brew install --cask codex</code>). Other versions may work but only 0.128.0 has been verified end-to-end.</li>
           <li>Node.js <strong>≥ 18</strong> on <code>PATH</code> (the guard scripts are Node)</li>
           <li>macOS or Linux</li>
         </ul>
@@ -102,10 +102,6 @@ cd nio-codex && ./setup.sh</code></pre>
             <tr><td><code>-h</code>, <code>--help</code></td><td>Print usage.</td></tr>
           </tbody>
         </table>
-
-        <h2>Lifecycle event coverage</h2>
-        <p>Codex exposes <strong>6 hook events</strong>: <code>SessionStart</code>, <code>UserPromptSubmit</code>, <code>PreToolUse</code>, <code>PostToolUse</code>, <code>PermissionRequest</code>, <code>Stop</code>. Nio currently subscribes to <strong>5 of 6</strong> — <code>PermissionRequest</code> is deferred to phase 2 (<code>PreToolUse</code> already covers 99% of deny scenarios).</p>
-        <p>Codex has <strong>no <code>SessionEnd</code> and no <code>SubagentStop</code></strong> equivalent. Audit-log entries and metrics that fire on those events for Claude Code / OpenClaw / Hermes simply do not appear for Codex sessions. <code>Stop</code> in Codex is <strong>turn-scoped</strong>, so per-turn signals (token counts, decision counts) still work — only the longer-window session and subagent rollups are reduced.</p>
 
         <h2>Where things live</h2>
         <table>

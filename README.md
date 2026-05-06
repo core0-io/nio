@@ -231,7 +231,7 @@ Nio provides full hook-based execution assurance for Claude Code, Codex CLI, Ope
 | Platform | Support | Features |
 |----------|---------|----------|
 | **Claude Code** | Full | Skill + hooks auto-guard — see [install guide](docs/install-claude-code.html) |
-| **Codex CLI** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-codex.html). 5/7 lifecycle events covered (no `SessionEnd` / `SubagentStop` in Codex). |
+| **Codex CLI** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-codex.html) |
 | **OpenClaw** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install-openclaw.html) |
 | **Hermes Agent** | Full | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install-hermes.html) |
 | **Gemini CLI** | Skill | Scan/action commands |
