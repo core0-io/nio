@@ -259,6 +259,22 @@
           <p>If Nio is already running on one agent and you re-invoke the one-liner to add another, the guard may surface a confirm prompt — <code>curl …  | bash</code> matches one of the high-severity scan patterns. That's expected; allow it. The protection level controls the behaviour: <code>balanced</code> asks, <code>strict</code> denies, <code>permissive</code> allows.</p>
         </div>
 
+        <h2>Upgrade</h2>
+        <p>Re-run the install one-liner — <code>setup.sh</code> is idempotent and picks up the latest release. To pin a specific tag, set <code>NIO_VERSION</code> first:</p>
+        <div class="code-block">
+          <pre><code id="cmd-up">NIO_VERSION=v2.3.0 bash -c "$(curl -fsSL https://core0-io.github.io/nio/install.sh)"</code></pre>
+          <button class="copy-btn" type="button" data-target="cmd-up" aria-label="Copy command">Copy</button>
+        </div>
+        <p>After a release that changed the config schema, append <code>--reset-config</code> to overwrite <code>~/.nio/config.yaml</code> with the new bundled template:</p>
+        <div class="code-block">
+          <pre><code id="cmd-up-reset">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-config</code></pre>
+          <button class="copy-btn" type="button" data-target="cmd-up-reset" aria-label="Copy command">Copy</button>
+        </div>
+        <div class="callout warn">
+          <div class="title">Heads up — <code>--reset-config</code> wipes your customisations</div>
+          <p><code>--reset-config</code> replaces your existing <code>config.yaml</code> with the upgraded template, so any tuned fields (allowed commands, permitted tools, collector endpoint, scoring weights, …) are gone and have to be reapplied on top of the new defaults. Back the file up first if you're not sure what you customised: <code>cp ~/.nio/config.yaml ~/.nio/config.yaml.bak</code>.</p>
+        </div>
+
         <h2>Uninstall</h2>
         <div class="code-block">
           <pre><code id="cmd-u">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --uninstall</code></pre>
