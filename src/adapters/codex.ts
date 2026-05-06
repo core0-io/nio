@@ -7,7 +7,7 @@ import type { HookAdapter, HookInput } from './types.js';
 /**
  * Default native-tool → action-type mapping for Codex.
  *
- * Codex 0.118.x ships with `Bash` as its only first-party tool —
+ * Codex 0.128.0 ships with `Bash` as its only first-party tool —
  * writes, reads, network access all flow through shell. Plugin- and
  * MCP-provided tools (e.g. Write, Edit from a filesystem plugin) are
  * dynamic and not listed here; they reach Phase 1-6 only when the user

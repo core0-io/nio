@@ -15,7 +15,7 @@ Real captures from Codex CLI (`codex_hooks` feature flag enabled). Used by
 
 ## Observed schema notes
 
-- Codex's only native tool in 0.118.x is `Bash`. Write/Edit/Read/WebFetch
+- Codex's only native tool in 0.128.0 is `Bash`. Write/Edit/Read/WebFetch
   do not exist as separate native tools — the model performs writes via
   shell commands. Plugin- and MCP-provided tools surface separately.
 - `tool_input` for Bash is `{ "command": "<string>" }` — identical to

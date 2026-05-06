@@ -982,5 +982,4 @@ When a user types `/nio config show` in Hermes chat / Telegram / Discord:
 | Can block tools  | Yes (via hook)           | Yes (Phase 0–6, PreToolUse `permissionDecision: deny`) | Yes (Phase 0–6)           | Yes (Phase 0–6)      |
 | `/nio` dispatch  | LLM-driven (skill)       | LLM-driven (skill via `$nio` or natural-language match) | Tool-dispatch (`nio_command`) | Python plugin → `nio-cli.js` (bypass LLM) |
 | Phase 0 source   | `blocked_tools.claude_code` | `blocked_tools.codex`   | `blocked_tools.openclaw`  | `blocked_tools.hermes` |
-| Lifecycle events covered | 7 (full)         | 5 of 6 (no `SessionEnd` / `SubagentStop`; `PermissionRequest` deferred to phase 2) | Plugin hooks (full)       | 7 (full) |
 | Consent prompt   | N/A (implicit)           | N/A (implicit)           | N/A (implicit)            | First-run interactive, cached |

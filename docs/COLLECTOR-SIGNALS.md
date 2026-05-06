@@ -8,8 +8,6 @@ Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (log
 
 The four host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
 
-**Codex coverage caveat:** Codex CLI exposes only 6 lifecycle events (`SessionStart` / `UserPromptSubmit` / `PreToolUse` / `PostToolUse` / `PermissionRequest` / `Stop`) — it has **no `SessionEnd` and no `SubagentStop`** equivalent. Metrics and span boundaries that fire on those two events (e.g. `nio.turn.count` on `SessionEnd`, span close on `SubagentStop`) are reduced to the `Stop` event only on Codex. Audit-log entries for `SessionEnd` / `SubagentStop` simply do not appear for Codex sessions. `PermissionRequest` is currently not consumed by Nio (deferred to phase 2).
-
 ```text
    ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
    │ Claude Code │     │     Hermes     │     │   OpenClaw    │
