@@ -10,12 +10,7 @@
     { id: 'overview', title: 'Overview', openByDefault: true, items: [
       { label: 'Home', path: '/' },
       { label: 'Getting Started', path: '/docs/getting-started.html' },
-    ]},
-    { id: 'install', title: 'Install', openByDefault: false, items: [
-      { label: 'Claude Code', path: '/docs/install-claude-code.html' },
-      { label: 'Codex CLI', path: '/docs/install-codex.html' },
-      { label: 'OpenClaw', path: '/docs/install-openclaw.html' },
-      { label: 'Hermes', path: '/docs/install-hermes.html' },
+      { label: 'Installation', path: '/docs/install.html' },
     ]},
     { id: 'skill', title: 'Skill', openByDefault: true, items: [
       { label: '/nio commands', path: '/docs/skill.html' },
