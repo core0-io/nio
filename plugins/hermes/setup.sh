@@ -433,76 +433,194 @@ PY
     return 0
   fi
 
-  # Strategy 2 — try Hermes CLI subcommands that might directly approve.
-  # Hermes versions differ; we probe a few likely subcommand names and
-  # fail silently if they don't exist. Each candidate is invoked once per
-  # unique Nio command string. We stop as soon as the allowlist file
-  # contains our entries.
+  # Strategy 2 — write the allowlist file ourselves, using exactly the
+  # schema Hermes's agent.shell_hooks._record_approval uses internally:
+  #
+  #   {"approvals": [
+  #     {"event": ..., "command": ..., "approved_at": ISO8601,
+  #      "script_mtime_at_approval": ISO8601 | null},
+  #     ...
+  #   ]}
+  #
+  # Merge-safe: existing approvals from OTHER hook handlers are preserved.
+  # Idempotent: replaces any existing (event, command) entries that match
+  # ours (mirrors _record_approval's "filter-then-append" rule). Crash-
+  # safe: holds fcntl.flock on the sibling .lock file and writes via
+  # mkstemp + os.replace (same atomic pattern as Hermes's save_allowlist).
   echo "[nio-hermes] strategy 1 returned without writing $allowlist_path." >&2
-  echo "[nio-hermes] Trying hermes CLI fallbacks..." >&2
+  echo "[nio-hermes] Falling back to direct allowlist write (merge-safe)..." >&2
 
-  local cli_attempted=0
-  for sub_form in \
-      "hooks accept" \
-      "hooks approve" \
-      "hooks allowlist add" \
-      "hooks add"; do
-    # shellcheck disable=SC2086
-    if hermes $sub_form --help >/dev/null 2>&1; then
-      cli_attempted=1
-      echo "[nio-hermes]   trying: hermes $sub_form <cmd>" >&2
-      NIO_HERMES_CFG="$HERMES_CONFIG" NIO_SUB="$sub_form" "$hermes_py" - <<'PY' || true
-import os, subprocess, sys
+  NIO_HERMES_CFG="$HERMES_CONFIG" \
+  NIO_ALLOWLIST_PATH="$allowlist_path" \
+    "$hermes_py" - <<'PY' || true
+import fcntl, json, os, shlex, sys, tempfile
+from datetime import datetime, timezone
+from pathlib import Path
 try:
     import yaml
 except ImportError:
+    print("[nio-hermes] strategy 2: PyYAML missing; aborting direct write", file=sys.stderr)
     sys.exit(1)
+
+cfg_path = os.environ["NIO_HERMES_CFG"]
+allowlist_path = Path(os.environ["NIO_ALLOWLIST_PATH"])
+
 try:
-    cfg = yaml.safe_load(open(os.environ["NIO_HERMES_CFG"])) or {}
-except Exception:
+    cfg = yaml.safe_load(Path(cfg_path).read_text()) or {}
+except Exception as exc:
+    print(f"[nio-hermes] strategy 2: couldn't read {cfg_path}: {exc}", file=sys.stderr)
     sys.exit(1)
+
 hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
-sub = os.environ["NIO_SUB"].split()
+
+# Collect every (event, command) pair Nio installed. One allowlist entry
+# per pair — mirrors Hermes's schema (same command, different events get
+# distinct entries).
+nio_pairs = []
 seen = set()
-for entries in (hooks or {}).values():
+for event_name, entries in (hooks or {}).items():
     if not isinstance(entries, list):
         continue
     for e in entries:
-        if isinstance(e, dict):
-            cmd = e.get("command")
-            if (isinstance(cmd, str)
-                and "hook-cli.js" in cmd
-                and "--platform hermes" in cmd
-                and cmd not in seen):
-                seen.add(cmd)
-                try:
-                    subprocess.run(["hermes", *sub, cmd], check=False)
-                except Exception as exc:
-                    print(f"[nio-hermes] hermes {' '.join(sub)} failed: {exc}", file=sys.stderr)
-PY
-      if _nio_allowlist_has_us; then
-        echo "[nio-hermes] Hooks approved (strategy 2 / hermes $sub_form)."
-        echo "[nio-hermes] Verify: hermes hooks doctor"
-        return 0
-      fi
-    fi
-  done
+        if not isinstance(e, dict):
+            continue
+        cmd = e.get("command")
+        if (isinstance(cmd, str)
+            and "hook-cli.js" in cmd
+            and "--platform hermes" in cmd
+            and (event_name, cmd) not in seen):
+            seen.add((event_name, cmd))
+            nio_pairs.append((event_name, cmd))
 
-  # Both strategies failed. Print loud guidance so the user knows the
-  # install script's "✓ y" wasn't a silent victory.
-  echo "[nio-hermes] APPROVAL DID NOT WRITE $allowlist_path." >&2
-  echo "[nio-hermes] register_from_config() returned 0 but produced no allowlist," >&2
-  if [[ "$cli_attempted" -eq 0 ]]; then
-    echo "[nio-hermes] and no hermes CLI subcommand for direct approval was found." >&2
-  else
-    echo "[nio-hermes] and no probed CLI subcommand produced one either." >&2
+if not nio_pairs:
+    print("[nio-hermes] strategy 2: no Nio (event, command) pairs found in config", file=sys.stderr)
+    sys.exit(1)
+
+# Same script-path resolution Hermes uses (agent.shell_hooks._command_script_path).
+_SCRIPT_EXTS = (".sh", ".bash", ".zsh", ".fish", ".py", ".pyw",
+                ".rb", ".pl", ".lua", ".js", ".mjs", ".cjs", ".ts")
+def script_path_of(command):
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        return command
+    if not parts:
+        return command
+    for p in parts:
+        if p.lower().endswith(_SCRIPT_EXTS):
+            return p
+    for p in parts:
+        if "/" in p or p.startswith("~"):
+            return p
+    return parts[0]
+
+def utc_now_iso():
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+def script_mtime_iso(command):
+    p = os.path.expanduser(script_path_of(command))
+    try:
+        return datetime.fromtimestamp(
+            os.path.getmtime(p), tz=timezone.utc,
+        ).isoformat().replace("+00:00", "Z")
+    except OSError:
+        return None
+
+# Atomic, locked read-modify-write. fcntl.flock on the .lock sibling
+# (same approach as Hermes's _locked_update_approvals) makes us safe
+# against a concurrent `hermes` process touching the same file.
+allowlist_path.parent.mkdir(parents=True, exist_ok=True)
+lock_path = allowlist_path.with_suffix(allowlist_path.suffix + ".lock")
+
+def load_existing():
+    try:
+        raw = json.loads(allowlist_path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {"approvals": []}
+    if not isinstance(raw, dict):
+        return {"approvals": []}
+    if not isinstance(raw.get("approvals"), list):
+        raw["approvals"] = []
+    return raw
+
+def atomic_write(data):
+    # mkstemp + os.replace — same pattern as Hermes save_allowlist.
+    fd, tmp_path = tempfile.mkstemp(
+        prefix=f"{allowlist_path.name}.", suffix=".tmp", dir=str(allowlist_path.parent),
+    )
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(json.dumps(data, indent=2, sort_keys=True))
+        os.replace(tmp_path, allowlist_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+with open(lock_path, "a+") as lock_fh:
+    try:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
+    except OSError as exc:
+        print(f"[nio-hermes] strategy 2: couldn't lock {lock_path}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        data = load_existing()
+        approvals = data["approvals"]
+
+        # Filter-then-append, mirrors Hermes _record_approval. This
+        # preserves every approval from OTHER hook handlers and refreshes
+        # ours with a fresh approved_at + current script mtime.
+        keep = [
+            e for e in approvals
+            if not (
+                isinstance(e, dict)
+                and any(
+                    e.get("event") == ev and e.get("command") == cmd
+                    for (ev, cmd) in nio_pairs
+                )
+            )
+        ]
+        for event_name, command in nio_pairs:
+            keep.append({
+                "approved_at": utc_now_iso(),
+                "command": command,
+                "event": event_name,
+                "script_mtime_at_approval": script_mtime_iso(command),
+            })
+
+        data["approvals"] = keep
+        atomic_write(data)
+        kept_others = len(approvals) - sum(
+            1 for e in approvals
+            if isinstance(e, dict)
+               and any(e.get("event") == ev and e.get("command") == cmd
+                       for (ev, cmd) in nio_pairs)
+        )
+        print(
+            f"[nio-hermes] strategy 2: wrote {len(nio_pairs)} Nio approval(s); "
+            f"preserved {kept_others} pre-existing entr{'y' if kept_others == 1 else 'ies'}",
+            file=sys.stderr,
+        )
+    finally:
+        fcntl.flock(lock_fh.fileno(), fcntl.LOCK_UN)
+PY
+
+  if _nio_allowlist_has_us; then
+    echo "[nio-hermes] Hooks approved (strategy 2 / direct allowlist write)."
+    echo "[nio-hermes] Verify: hermes hooks doctor"
+    return 0
   fi
-  echo "[nio-hermes] Workarounds (try in this order):" >&2
-  echo "[nio-hermes]   1. hermes chat     # send any tool-triggering message," >&2
-  echo "[nio-hermes]                      # press Y at the consent prompt." >&2
-  echo "[nio-hermes]   2. hermes hooks --help   # look for an approval subcommand." >&2
-  echo "[nio-hermes]                            # If found, file an issue with the" >&2
-  echo "[nio-hermes]                            # output so we can add it as a strategy." >&2
+
+  # Both strategies failed (rare — strategy 2 should always succeed unless
+  # something is genuinely wrong with filesystem permissions or PyYAML).
+  echo "[nio-hermes] APPROVAL DID NOT WRITE $allowlist_path." >&2
+  echo "[nio-hermes] Both strategy 1 (Hermes API) and strategy 2 (direct write)" >&2
+  echo "[nio-hermes] failed. Check $allowlist_path's parent permissions and" >&2
+  echo "[nio-hermes] retry with: bash plugins/hermes/setup.sh --accept-hooks" >&2
+  echo "[nio-hermes] If that still fails, run hermes chat once and press Y" >&2
+  echo "[nio-hermes] at the consent prompt." >&2
   return 1
 }
 
