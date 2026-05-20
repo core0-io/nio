@@ -1,5 +1,43 @@
 # @core0-io/nio
 
+## 2.3.2
+
+### Patch Changes
+
+- **Hermes uninstall + re-install no longer leaves stale hook entries.**
+  A user's Ubuntu VM ended up with 14 dead hook entries in
+  `~/.hermes/config.yaml` (pointing at deleted `/tmp/nio-install-XXX/hermes/...`
+  paths from two prior `curl|bash` installs) and `--uninstall` was a silent
+  no-op. Diagnosed to a single overly-narrow predicate in
+  `plugins/hermes/install-hook.py` that powers both the merge dedupe and the
+  uninstall strip.
+
+  | Gap                                                                                                                                                                                                                                                                                                                                                                                                      | Pre-fix                                                                                                                                                                                                                                                                                                                                                                                                                                   | Fix |
+  | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+  | **Predicate matched dev paths only**: `entry_targets_nio` required the substring `/skills/nio/scripts/`, which is present only when `setup.sh` resolves the monorepo-dev branch. Release / `curl\|bash` installs write `…/hermes/scripts/…` (or `/tmp/nio-install-XXX/hermes/scripts/…`) — predicate returned False → uninstall stripped nothing, re-install stacked beside the "unrelated" prior entry. | Predicate keyed on the `--platform hermes` flag (unique to Nio's snippet) plus a 3-marker path-segment fallback (`/skills/nio/scripts/`, `/hermes/scripts/`, `/plugins/nio/scripts/`). Recognizes every install layout — dev, release, and the upcoming stable plugin path.                                                                                                                                                               |
+  | **`merge_event` collapsed only the first stale entry**: the rewrite loop returned after fixing one entry; the user's two-tmp-path config kept the second stale entry on every re-install.                                                                                                                                                                                                                | Rewrote the branch to remove ALL existing Nio entries from the event list and insert a single canonical entry at the position of the first removed one (user's relative hook ordering preserved). New status `deduped` surfaces stack-collapse in the install summary (`deduped=7`). Confirmation prompt added with a tailored message when dedupe fires.                                                                                 |
+  | **`uninstall()` ignored `plugins.enabled`**: `setup.sh:install_python_plugin()` appends `"nio"` to `plugins.enabled`, but uninstall never stripped it. The directory was deleted while the registration stayed.                                                                                                                                                                                          | `uninstall()` now removes `"nio"` from `plugins.enabled`, collapses an emptied list, and drops the `plugins:` block if no siblings remain. Tolerant of duplicate `"nio"` entries from stacked installs.                                                                                                                                                                                                                                   |
+  | **Orphan allowlist entries after uninstall**: removing entries from `config.yaml` left their counterparts dangling in `~/.hermes/shell-hooks-allowlist.json` (harmless but unclean).                                                                                                                                                                                                                     | New `revoke_hermes_allowlist()` helper in `setup.sh`, symmetric with `approve_hook()`: invokes Hermes's own venv Python to call `agent.shell_hooks.revoke()` for each Nio command we just stripped. Gracefully degrades (stderr warning, exit 0) when `hermes` is missing or its venv is broken. Driven by a new `--print-revoke-list` flag on `install-hook.py` that emits a single `{"nio_revoke_candidates":[…]}` JSON line on stdout. |
+  | **No-PyYAML fallback predicate was equally narrow**: `has_nio_entry` used the same `/skills/nio/scripts/` substring check.                                                                                                                                                                                                                                                                               | Widened in the same shape as `entry_targets_nio` (flag + marker fallback) so PyYAML-less environments stay consistent.                                                                                                                                                                                                                                                                                                                    |
+
+  Smoke-tested on a fixture that mirrors the user's VM (14 entries across two tmp-path prefixes):
+
+  - **Uninstall** strips all 14 entries + removes `nio` from `plugins.enabled` + preserves
+    unrelated user hooks + emits revoke JSON with 2 unique candidates.
+  - **Re-install over the same broken state** dedupes 14 → 7 entries all pointing at the
+    current path, with `deduped=7` in the install summary.
+  - **False-positive guard**: a third-party `hook-cli.js` entry with neither
+    `--platform hermes` nor any Nio path marker is left alone.
+
+  No impact on Claude Code / Codex / OpenClaw uninstalls — those already use
+  stable plugin identifiers (`claude plugin uninstall nio@nio`, marketplace
+  name, `openclaw plugins uninstall nio`) and were confirmed robust.
+
+  The latent issue that writes the ephemeral `/tmp/nio-install-XXX/...` path into
+  `config.yaml` in the first place is **scoped to a follow-up patch** — this
+  release ensures both the diagnosis (uninstall) and recovery (re-install
+  dedupes) paths work, even with the path-fragility still in play.
+
 ## 2.3.1
 
 ### Patch Changes
