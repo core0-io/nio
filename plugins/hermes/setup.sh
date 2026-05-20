@@ -26,22 +26,39 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-# Resolve hook-cli.js path. Two layouts to support:
-#
-#   1. Release zip `nio-hermes-vX.zip` extracts as a self-contained
-#      directory — hook-cli.js ships inside as scripts/hook-cli.js.
-#   2. Monorepo dev (and the `nio-all` zip) shares the bundled build
-#      output at plugins/claude-code/skills/nio/scripts/hook-cli.js.
-#
-# Prefer the plugin-local copy so a standalone Hermes install has no
-# hidden dependency on the claude-code plugin being present.
-if [[ -f "$SCRIPT_DIR/scripts/hook-cli.js" ]]; then
-  HOOK_CLI="$SCRIPT_DIR/scripts/hook-cli.js"
-else
-  HOOK_CLI="$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js"
-fi
 SNIPPET="$SCRIPT_DIR/config-snippet.yaml"
 HERMES_CONFIG="${HERMES_CONFIG_PATH:-$HOME/.hermes/config.yaml}"
+HERMES_HOME_DIR="$(dirname "$HERMES_CONFIG")"
+PLUGIN_DST="$HERMES_HOME_DIR/plugins/nio"
+PLUGIN_SRC="$SCRIPT_DIR/python-plugin"
+
+# Resolve hook-cli.js paths. Two layouts to support, with two roles each:
+#
+#   1. Release zip (also reached via `curl … | bash`): hook-cli.js ships
+#      inside the extracted zip as $SCRIPT_DIR/scripts/hook-cli.js.
+#      Under the one-liner that's /tmp/nio-install-XXX/hermes/scripts/...,
+#      a directory which install.sh's EXIT trap deletes immediately after
+#      setup.sh returns. We MUST NOT register that ephemeral path with
+#      Hermes — by the time `hermes hooks doctor` (or the runtime itself)
+#      looks for it, the file is gone.
+#   2. Monorepo dev (and the `nio-all` zip): source lives at
+#      $REPO_ROOT/plugins/claude-code/skills/nio/scripts/, which is the
+#      repo's bundle output — stable across runs.
+#
+#   HOOK_CLI_INSTALL    — where the bundled hook-cli.js exists NOW (source
+#                          for the `cp` step in install_python_plugin).
+#   HOOK_CLI_REGISTERED — the path we write into ~/.hermes/config.yaml.
+#                          Persistent ($PLUGIN_DST/scripts/hook-cli.js)
+#                          for the release path; identical to INSTALL for
+#                          the monorepo path (source IS stable).
+if [[ -f "$SCRIPT_DIR/scripts/hook-cli.js" ]]; then
+  HOOK_CLI_INSTALL="$SCRIPT_DIR/scripts/hook-cli.js"
+  HOOK_CLI_REGISTERED="$PLUGIN_DST/scripts/hook-cli.js"
+else
+  HOOK_CLI_INSTALL="$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js"
+  HOOK_CLI_REGISTERED="$HOOK_CLI_INSTALL"
+fi
+HOOK_CLI="$HOOK_CLI_REGISTERED"   # back-compat alias for any later use
 
 # Partition args: `--accept-hooks` and `--reset-config` are ours (handled
 # locally below); everything else is forwarded to install-hook.py verbatim.
@@ -74,8 +91,8 @@ NIO_DIR="$HOME/.nio"
 
 # ── Pre-flight checks ───────────────────────────────────────────────────
 
-if [[ ! -f "$HOOK_CLI" ]]; then
-  echo "error: hook-cli.js not found at $HOOK_CLI" >&2
+if [[ ! -f "$HOOK_CLI_INSTALL" ]]; then
+  echo "error: hook-cli.js not found at $HOOK_CLI_INSTALL" >&2
   echo "hint: run 'pnpm run build' from the repo root first." >&2
   exit 1
 fi
@@ -107,34 +124,20 @@ if command -v hermes >/dev/null 2>&1; then
   fi
 fi
 
-# ── Report + invoke the Python merge helper ─────────────────────────────
+# ── Banner ──────────────────────────────────────────────────────────────
 
 echo "Nio → Hermes shell-hook installer"
-echo "  hook-cli.js    : $HOOK_CLI"
-echo "  target config  : $HERMES_CONFIG"
-echo "  python         : $INSTALL_PY"
+echo "  hook-cli.js (installed) : $HOOK_CLI_INSTALL"
+echo "  hook-cli.js (registered): $HOOK_CLI_REGISTERED"
+echo "  target config           : $HERMES_CONFIG"
+echo "  python                  : $INSTALL_PY"
 echo
 
-NIO_REVOKE_JSON=""
-if [ "$UNINSTALL" -eq 1 ]; then
-  # Capture stdout so we can extract the JSON line listing the command
-  # strings we just removed (for shell-hooks-allowlist cleanup below).
-  # stderr passes through to the user in real time.
-  NIO_PY_STDOUT="$("$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
-    --config "$HERMES_CONFIG" \
-    --hook-cli "$HOOK_CLI" \
-    --snippet "$SNIPPET" \
-    --print-revoke-list \
-    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}")"
-  NIO_REVOKE_JSON="$(printf '%s\n' "$NIO_PY_STDOUT" \
-    | grep -E '^\{"nio_revoke_candidates":' | tail -1 || true)"
-else
-  "$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
-    --config "$HERMES_CONFIG" \
-    --hook-cli "$HOOK_CLI" \
-    --snippet "$SNIPPET" \
-    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
-fi
+# install-hook.py invocation moved further down — see the "Sequenced
+# actions" block. It must run AFTER install_python_plugin (install case)
+# so the stable hook-cli.js exists at the moment config.yaml references
+# it, and BEFORE uninstall cleanup (uninstall case) so the revoke list
+# is captured while config.yaml still has the entries.
 
 # ── Hermes /nio Python plugin install ──────────────────────────────────
 # Hermes auto-discovers any directory under ~/.hermes/plugins/<name>/
@@ -142,10 +145,8 @@ fi
 # hermes_cli/plugins.py::discover_and_load). Drop our 3-file plugin
 # (manifest + register() + bundled CLIs) into that directory so the
 # /nio slash command works in Hermes chat / Telegram / Discord without
-# routing through the LLM.
-HERMES_HOME_DIR="$(dirname "$HERMES_CONFIG")"
-PLUGIN_DST="$HERMES_HOME_DIR/plugins/nio"
-PLUGIN_SRC="$SCRIPT_DIR/python-plugin"
+# routing through the LLM. Variables resolved further up:
+# HERMES_HOME_DIR, PLUGIN_DST, PLUGIN_SRC.
 
 install_python_plugin() {
   if [[ ! -d "$PLUGIN_SRC" ]]; then
@@ -157,14 +158,14 @@ install_python_plugin() {
     return 0
   fi
   mkdir -p "$PLUGIN_DST/scripts"
-  cp -f "$PLUGIN_SRC/plugin.yaml"          "$PLUGIN_DST/plugin.yaml"
-  cp -f "$PLUGIN_SRC/__init__.py"          "$PLUGIN_DST/__init__.py"
-  cp -f "$SCRIPT_DIR/scripts/nio-cli.js"   "$PLUGIN_DST/scripts/nio-cli.js"
-  # hook-cli.js was already installed via the shell-hook config-yaml merge,
-  # but Hermes plugin discovery doesn't care about config.yaml — give the
-  # plugin its own copy too so the directory is fully self-contained for
-  # debugging / `hermes plugins list` introspection.
-  cp -f "$SCRIPT_DIR/scripts/hook-cli.js"  "$PLUGIN_DST/scripts/hook-cli.js"
+  cp -f "$PLUGIN_SRC/plugin.yaml"        "$PLUGIN_DST/plugin.yaml"
+  cp -f "$PLUGIN_SRC/__init__.py"        "$PLUGIN_DST/__init__.py"
+  cp -f "$SCRIPT_DIR/scripts/nio-cli.js" "$PLUGIN_DST/scripts/nio-cli.js"
+  # Copy hook-cli.js into its permanent home BEFORE install-hook.py
+  # writes config.yaml — config references HOOK_CLI_REGISTERED, which
+  # is exactly this destination. Doing it in the other order would leave
+  # a brief window where Hermes points at a path that doesn't yet exist.
+  cp -f "$HOOK_CLI_INSTALL"              "$PLUGIN_DST/scripts/hook-cli.js"
   echo "[nio-hermes] Installed /nio Python plugin → $PLUGIN_DST"
 
   # Hermes user plugins are opt-in: discover_and_load() only loads names
@@ -279,11 +280,45 @@ PY
   fi
 }
 
+# ── Sequenced actions ──────────────────────────────────────────────────
+# Order matters:
+#   (A) install case — install_python_plugin first, so the stable
+#       hook-cli.js at $HOOK_CLI_REGISTERED exists by the time
+#       install-hook.py writes config.yaml.
+#   (B) Always — invoke install-hook.py. Under --uninstall, capture
+#       stdout for the revoke-candidates JSON.
+#   (C) uninstall case — revoke the allowlist entries we just stripped
+#       (consuming the JSON from B), then tear down the plugin dir.
+
+# (A) Install: lay down the persistent plugin dir.
+if [ "$UNINSTALL" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
+  install_python_plugin
+fi
+
+# (B) install-hook.py — install OR uninstall.
+NIO_REVOKE_JSON=""
+if [ "$UNINSTALL" -eq 1 ]; then
+  # Capture stdout for the revoke JSON; stderr passes through.
+  NIO_PY_STDOUT="$("$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
+    --config "$HERMES_CONFIG" \
+    --hook-cli "$HOOK_CLI_REGISTERED" \
+    --snippet "$SNIPPET" \
+    --print-revoke-list \
+    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}")"
+  NIO_REVOKE_JSON="$(printf '%s\n' "$NIO_PY_STDOUT" \
+    | grep -E '^\{"nio_revoke_candidates":' | tail -1 || true)"
+else
+  "$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
+    --config "$HERMES_CONFIG" \
+    --hook-cli "$HOOK_CLI_REGISTERED" \
+    --snippet "$SNIPPET" \
+    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
+fi
+
+# (C) Uninstall cleanup.
 if [ "$UNINSTALL" -eq 1 ]; then
   revoke_hermes_allowlist "$NIO_REVOKE_JSON"
   uninstall_python_plugin
-elif [ "$DRY_RUN" -eq 0 ]; then
-  install_python_plugin
 fi
 
 # ── Nio runtime config (~/.nio/config.yaml) ─────────────────────────────
