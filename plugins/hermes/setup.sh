@@ -115,11 +115,26 @@ echo "  target config  : $HERMES_CONFIG"
 echo "  python         : $INSTALL_PY"
 echo
 
-"$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
-  --config "$HERMES_CONFIG" \
-  --hook-cli "$HOOK_CLI" \
-  --snippet "$SNIPPET" \
-  "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
+NIO_REVOKE_JSON=""
+if [ "$UNINSTALL" -eq 1 ]; then
+  # Capture stdout so we can extract the JSON line listing the command
+  # strings we just removed (for shell-hooks-allowlist cleanup below).
+  # stderr passes through to the user in real time.
+  NIO_PY_STDOUT="$("$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
+    --config "$HERMES_CONFIG" \
+    --hook-cli "$HOOK_CLI" \
+    --snippet "$SNIPPET" \
+    --print-revoke-list \
+    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}")"
+  NIO_REVOKE_JSON="$(printf '%s\n' "$NIO_PY_STDOUT" \
+    | grep -E '^\{"nio_revoke_candidates":' | tail -1 || true)"
+else
+  "$INSTALL_PY" "$SCRIPT_DIR/install-hook.py" \
+    --config "$HERMES_CONFIG" \
+    --hook-cli "$HOOK_CLI" \
+    --snippet "$SNIPPET" \
+    "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
+fi
 
 # ── Hermes /nio Python plugin install ──────────────────────────────────
 # Hermes auto-discovers any directory under ~/.hermes/plugins/<name>/
@@ -206,6 +221,7 @@ uninstall_python_plugin() {
 }
 
 if [ "$UNINSTALL" -eq 1 ]; then
+  revoke_hermes_allowlist "$NIO_REVOKE_JSON"
   uninstall_python_plugin
 elif [ "$DRY_RUN" -eq 0 ]; then
   install_python_plugin
@@ -300,6 +316,61 @@ PY
   else
     echo "[nio-hermes] Approval failed. Run manually:" >&2
     echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
+  fi
+}
+
+# Symmetric with approve_hook(): on uninstall, revoke every Nio command
+# string we just stripped from config.yaml so ~/.hermes/shell-hooks-allowlist.json
+# doesn't accumulate orphan entries. Best-effort — if `hermes` is gone,
+# or its Python venv is broken, we warn and exit 0; orphans are harmless
+# (Hermes won't fire a hook it can't find in config.yaml).
+revoke_hermes_allowlist() {
+  local revoke_json="$1"
+  if [[ -z "$revoke_json" ]]; then
+    return 0
+  fi
+  if ! command -v hermes >/dev/null 2>&1; then
+    echo "[nio-hermes] 'hermes' CLI not on PATH; skipping allowlist revoke." >&2
+    echo "             Orphan entries in ~/.hermes/shell-hooks-allowlist.json are" >&2
+    echo "             harmless; remove manually for a clean file." >&2
+    return 0
+  fi
+
+  local hermes_bin shebang hermes_py
+  hermes_bin="$(command -v hermes)"
+  shebang="$(head -n1 "$hermes_bin" 2>/dev/null || true)"
+  hermes_py="$(printf '%s\n' "$shebang" | sed -n 's|^#! *\([^ ]*\).*|\1|p')"
+
+  if [[ -z "$hermes_py" || ! -x "$hermes_py" ]]; then
+    echo "[nio-hermes] Couldn't locate Hermes's Python; skipping allowlist revoke." >&2
+    return 0
+  fi
+
+  echo "[nio-hermes] Revoking Nio allowlist entries via Hermes's shell_hooks.revoke()..."
+  if REVOKE_JSON="$revoke_json" "$hermes_py" - <<'PY'
+import json, os, sys
+try:
+    from agent.shell_hooks import revoke
+except Exception as exc:
+    print(f"[nio-hermes] cannot import agent.shell_hooks ({exc}); skipping", file=sys.stderr)
+    sys.exit(0)
+
+data = json.loads(os.environ.get("REVOKE_JSON") or "{}")
+removed = 0
+for cmd in data.get("nio_revoke_candidates", []):
+    if not isinstance(cmd, str) or not cmd:
+        continue
+    try:
+        revoke(cmd)
+        removed += 1
+    except Exception as exc:
+        print(f"[nio-hermes] revoke({cmd!r}) failed: {exc}", file=sys.stderr)
+print(f"[nio-hermes] revoked {removed} allowlist entr{'y' if removed == 1 else 'ies'}", file=sys.stderr)
+PY
+  then
+    :
+  else
+    echo "[nio-hermes] revoke step failed; orphaned allowlist entries may remain." >&2
   fi
 }
 

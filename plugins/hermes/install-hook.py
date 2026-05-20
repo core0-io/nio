@@ -102,12 +102,33 @@ def backup(config_path: Path) -> Optional[Path]:
 # YAML merge (PyYAML path) — multi-event aware
 # ---------------------------------------------------------------------------
 
+# Path segments that identify a hook-cli.js install location as Nio's.
+# Covers the three layouts setup.sh resolves under:
+#   1. monorepo dev — $REPO_ROOT/plugins/claude-code/skills/nio/scripts/
+#   2. release zip / curl|bash — $SCRIPT_DIR/scripts/ inside /tmp/nio-install-*/hermes/
+#   3. stable plugin path — ~/.hermes/plugins/nio/scripts/ (deferred install-side fix)
+_NIO_PATH_MARKERS = (
+    "/skills/nio/scripts/",
+    "/hermes/scripts/",
+    "/plugins/nio/scripts/",
+)
+
+
 def entry_targets_nio(cmd: Any) -> bool:
-    return (
-        isinstance(cmd, str)
-        and "hook-cli.js" in cmd
-        and "/skills/nio/scripts/" in cmd
-    )
+    """Identify a command string as a Nio Hermes hook entry, regardless
+    of which install layout wrote it.
+
+    Primary signal: the ``--platform hermes`` flag — every entry our
+    config-snippet.yaml emits carries it, and a third-party hook-cli.js
+    wouldn't have reason to use the same flag.
+
+    Fallback: any recognized path segment from a known install layout.
+    """
+    if not isinstance(cmd, str) or "hook-cli.js" not in cmd:
+        return False
+    if "--platform hermes" in cmd:
+        return True
+    return any(marker in cmd for marker in _NIO_PATH_MARKERS)
 
 
 def merge_event(
@@ -117,7 +138,7 @@ def merge_event(
 ) -> str:
     """Apply our entry to a single event key. Returns the per-event
     status: 'added' | 'added-alongside' | 'already-installed' |
-    'rewrote-path'."""
+    'rewrote-path' | 'deduped'."""
     pre = hooks.get(event_name)
     if pre is None:
         hooks[event_name] = [our_entry]
@@ -136,22 +157,39 @@ def merge_event(
         pre.append(our_entry)
         return "added-alongside"
 
-    same = [e for e in nio_entries if e.get("command") == our_entry["command"]]
-    if same:
+    already_correct = (
+        len(nio_entries) == 1
+        and nio_entries[0].get("command") == our_entry["command"]
+    )
+    if already_correct:
         return "already-installed"
 
-    # Path drift — rewrite the first stale Nio entry to point at the new
-    # location.
-    for e in pre:
-        if (
-            isinstance(e, dict)
-            and entry_targets_nio(e.get("command"))
-            and e.get("command") != our_entry["command"]
-        ):
-            e["command"] = our_entry["command"]
-            return "rewrote-path"
+    # Normalize: replace every existing Nio entry with one canonical entry
+    # at the current path. Preserves the position of the FIRST Nio entry
+    # (so user's relative hook ordering survives) and keeps non-Nio
+    # entries untouched. Collapses stacks accumulated by prior re-installs
+    # that wrote different tmp-dir paths.
+    first_idx = next(
+        i for i, e in enumerate(pre)
+        if isinstance(e, dict) and entry_targets_nio(e.get("command"))
+    )
+    rebuilt: List[Any] = []
+    inserted = False
+    for i, e in enumerate(pre):
+        is_nio = isinstance(e, dict) and entry_targets_nio(e.get("command"))
+        if is_nio:
+            if i == first_idx:
+                rebuilt.append(our_entry)
+                inserted = True
+            # else: drop this duplicate Nio entry
+        else:
+            rebuilt.append(e)
+    if not inserted:
+        rebuilt.append(our_entry)
+    # Mutate in place so the caller's hooks[event_name] binding stays valid.
+    pre[:] = rebuilt
 
-    return "rewrote-path"
+    return "deduped" if len(nio_entries) > 1 else "rewrote-path"
 
 
 def merge_with_yaml(
@@ -208,7 +246,11 @@ def has_top_level_hooks(text: str) -> bool:
 
 
 def has_nio_entry(text: str) -> bool:
-    return "/skills/nio/scripts/" in text and "hook-cli.js" in text
+    if "hook-cli.js" not in text:
+        return False
+    if "--platform hermes" in text:
+        return True
+    return any(marker in text for marker in _NIO_PATH_MARKERS)
 
 
 def merge_without_yaml(
@@ -240,9 +282,15 @@ def merge_without_yaml(
 # Uninstall — walks every event in the user's hooks block.
 # ---------------------------------------------------------------------------
 
-def uninstall(config_path: Path, hook_cli_abs: str) -> int:
+def uninstall(
+    config_path: Path,
+    hook_cli_abs: str,
+    emit_revoke_list: bool = False,
+) -> int:
     if not config_path.exists():
         log("nothing to do — config file does not exist")
+        if emit_revoke_list:
+            print(json.dumps({"nio_revoke_candidates": []}))
         return 0
     if not HAVE_YAML:
         log(
@@ -257,44 +305,91 @@ def uninstall(config_path: Path, hook_cli_abs: str) -> int:
     if not isinstance(data, dict):
         log("config.yaml does not parse as a mapping; aborting")
         return 2
+
     hooks = data.get("hooks")
-    if not isinstance(hooks, dict):
-        log("no hooks: block found — nothing to uninstall")
+    hooks_present = isinstance(hooks, dict)
+    plugins = data.get("plugins")
+    plugins_present = (
+        isinstance(plugins, dict) and isinstance(plugins.get("enabled"), list)
+    )
+
+    if not hooks_present and not plugins_present:
+        log("no Nio entries to uninstall (no hooks: or plugins.enabled block)")
+        if emit_revoke_list:
+            print(json.dumps({"nio_revoke_candidates": []}))
         return 0
+
+    # Snapshot the unique set of Nio command strings we're about to remove,
+    # so setup.sh can revoke matching shell-hooks-allowlist entries.
+    # Capture BEFORE mutating hooks so we don't lose the source of truth
+    # on a write failure.
+    revoke_candidates: List[str] = []
+    if hooks_present:
+        for pre in hooks.values():
+            if not isinstance(pre, list):
+                continue
+            for e in pre:
+                if (
+                    isinstance(e, dict)
+                    and isinstance(e.get("command"), str)
+                    and entry_targets_nio(e["command"])
+                ):
+                    revoke_candidates.append(e["command"])
 
     removed_any = False
-    for event_name in list(hooks.keys()):
-        pre = hooks.get(event_name)
-        if not isinstance(pre, list):
-            continue
-        before = len(pre)
-        remaining = [
-            e for e in pre
-            if not (
-                isinstance(e, dict)
-                and isinstance(e.get("command"), str)
-                and entry_targets_nio(e["command"])
-            )
-        ]
-        if len(remaining) == before:
-            continue
-        removed_any = True
-        if remaining:
-            hooks[event_name] = remaining
-        else:
-            del hooks[event_name]
+
+    # (1) Strip Nio hook entries from every event.
+    if hooks_present:
+        for event_name in list(hooks.keys()):
+            pre = hooks.get(event_name)
+            if not isinstance(pre, list):
+                continue
+            before = len(pre)
+            remaining = [
+                e for e in pre
+                if not (
+                    isinstance(e, dict)
+                    and isinstance(e.get("command"), str)
+                    and entry_targets_nio(e["command"])
+                )
+            ]
+            if len(remaining) == before:
+                continue
+            removed_any = True
+            if remaining:
+                hooks[event_name] = remaining
+            else:
+                del hooks[event_name]
+        if not hooks:
+            del data["hooks"]
+
+    # (2) Strip "nio" from plugins.enabled — symmetric with setup.sh's
+    # install_python_plugin() which appends it on install.
+    if plugins_present:
+        enabled = plugins["enabled"]
+        new_enabled = [name for name in enabled if name != "nio"]
+        if len(new_enabled) != len(enabled):
+            removed_any = True
+            if new_enabled:
+                plugins["enabled"] = new_enabled
+            else:
+                del plugins["enabled"]
+                if not plugins:
+                    del data["plugins"]
+
+    # Always emit the revoke candidates JSON (when requested) so setup.sh's
+    # parser is robust to no-op uninstalls too.
+    if emit_revoke_list:
+        print(json.dumps({"nio_revoke_candidates": sorted(set(revoke_candidates))}))
 
     if not removed_any:
-        log("no Nio hook-cli entries found — nothing to uninstall")
+        log("no Nio entries found — nothing to uninstall")
         return 0
-
-    if not hooks:
-        del data["hooks"]
 
     backup(config_path)
     new_text = yaml.safe_dump(data, default_flow_style=False, sort_keys=False, width=10_000)
     config_path.write_text(new_text, encoding="utf-8")
-    log(f"removed Nio hook-cli entries from {config_path}")
+    log(f"removed Nio config entries from {config_path}")
     return 0
 
 
@@ -310,7 +405,7 @@ def summarize(statuses: Dict[str, str]) -> str:
     for event, st in statuses.items():
         counts.setdefault(st, []).append(event)
     parts = []
-    for st in ("added", "added-alongside", "rewrote-path", "already-installed"):
+    for st in ("added", "added-alongside", "rewrote-path", "deduped", "already-installed"):
         if st in counts:
             parts.append(f"{st}={len(counts[st])}")
     return ", ".join(parts) or "no-op"
@@ -332,12 +427,20 @@ def main(argv: list[str]) -> int:
                     help="skip confirmation prompts (for CI / scripting)")
     ap.add_argument("--uninstall", action="store_true",
                     help="remove the Nio hook entries and exit")
+    ap.add_argument("--print-revoke-list", action="store_true",
+                    help="(uninstall) emit a single JSON line on stdout "
+                         "listing the removed command strings, for setup.sh "
+                         "to feed into agent.shell_hooks.revoke()")
     args = ap.parse_args(argv)
 
     config_path: Path = args.config.expanduser()
 
     if args.uninstall:
-        return uninstall(config_path, args.hook_cli)
+        return uninstall(
+            config_path,
+            args.hook_cli,
+            emit_revoke_list=args.print_revoke_list,
+        )
 
     if not args.snippet.exists():
         log(f"snippet template not found: {args.snippet}")
@@ -375,16 +478,22 @@ def main(argv: list[str]) -> int:
         return 0
 
     has_rewrite = any(s == "rewrote-path" for s in statuses.values())
-    if (
-        has_rewrite
-        and not args.yes
-        and not prompt_yes_no(
-            "An existing Nio entry points at a different path. "
-            "Rewrite it to the new location?"
-        )
-    ):
-        log("aborted by user")
-        return 1
+    has_dedupe = any(s == "deduped" for s in statuses.values())
+    if (has_rewrite or has_dedupe) and not args.yes:
+        if has_dedupe:
+            question = (
+                "Existing config has multiple stale Nio entries (likely "
+                "from stacked re-installs). Collapse them and point at "
+                "the new hook-cli.js location?"
+            )
+        else:
+            question = (
+                "An existing Nio entry points at a different path. "
+                "Rewrite it to the new location?"
+            )
+        if not prompt_yes_no(question):
+            log("aborted by user")
+            return 1
 
     config_path.parent.mkdir(parents=True, exist_ok=True)
     backup(config_path)
