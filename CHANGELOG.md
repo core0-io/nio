@@ -1,5 +1,48 @@
 # @core0-io/nio
 
+## 2.3.7
+
+### Patch Changes
+
+- **`approve_hook` finally works when `hermes` is a bash wrapper.** 2.3.6 still
+  failed silently on the user's VPS where `hermes` is `#!/usr/bin/env bash` —
+  the shebang-sniff gave us `/usr/bin/env`, which got handed to the Python
+  heredocs and immediately exited; both strategies appeared to "return without
+  writing", with no stderr to show what happened.
+
+  Three fixes:
+
+  1. **Python discovery with import validation.** Each candidate now has to
+     actually `import agent.shell_hooks` (or `import yaml`, depending on
+     strategy) before we trust it. Search order:
+
+     - shebang sniff of `hermes` (works for real Python `hermes` scripts)
+     - **parse the wrapper itself** for `exec /path/to/python …` lines —
+       this catches uv-tool / pipx / venv-activator style wrappers no
+       matter where their venv lives (no hardcoded path guessing needed)
+     - known fallback layouts under `~/.hermes/{,hermes-agent/}venv/bin/python{,3}`
+
+  2. **Strategy 2 (direct allowlist write) uses `$INSTALL_PY`**, not the
+     Hermes-specific Python. Direct write only needs yaml + stdlib; any
+     working Python (including system `/usr/bin/python3` on Ubuntu) works.
+     `$INSTALL_PY` was already validated against `import yaml` at the top
+     of `setup.sh`, so this strategy now always has a working interpreter
+     even when no Hermes-API-capable Python can be found.
+
+  3. **Captured exit codes + unbuffered stderr.** The Python invocations no
+     longer end in `|| true` — we capture `strategy1_rc` and `strategy2_rc`
+     and surface them in the final error message. `python -u` keeps stderr
+     live so any Python-side error message survives to the user's terminal
+     instead of being lost mid-buffer.
+
+  A new diagnostic banner prints up-front which Python each strategy
+  resolved to, so the next failure mode (whatever it is) immediately tells
+  you whether interpreter discovery was the issue.
+
+  Smoke-tested against a fixture mirroring the user's VPS (bash-wrapper
+  `hermes` + pre-existing non-Nio allowlist entry): strategy 2 writes 7 Nio
+  entries + preserves the 1 non-Nio entry, schema verified end-to-end.
+
 ## 2.3.6
 
 ### Patch Changes
