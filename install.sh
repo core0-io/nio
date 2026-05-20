@@ -92,24 +92,55 @@ extract_zip() {
 }
 
 # ---------- Resolve target platforms ----------
+# Auto-detect heuristic: a platform counts as "installed" only when BOTH
+# its config directory AND its CLI binary are present. Dir-only matches
+# (leftover ~/.claude from a removed Claude Code, e.g.) print a warning
+# and get skipped; the user can still force-install with --platform NAME.
 PLATFORMS=()
+SKIPPED_DIR_ONLY=()
+
+detect_platform() {
+  local plat="$1" dir="$2" bin="$3"
+  if [ ! -d "$dir" ]; then
+    return 0
+  fi
+  if command -v "$bin" >/dev/null 2>&1; then
+    PLATFORMS+=("$plat")
+  else
+    SKIPPED_DIR_ONLY+=("$plat:$dir:$bin")
+  fi
+}
+
 if [ ${#PLATFORM_ARGS[@]} -gt 0 ]; then
   PLATFORMS=("${PLATFORM_ARGS[@]}")
 else
-  [ -d "$HOME/.claude" ]   && PLATFORMS+=("claude-code")
-  [ -d "$HOME/.codex" ]    && PLATFORMS+=("codex")
-  [ -d "$HOME/.openclaw" ] && PLATFORMS+=("openclaw")
-  [ -d "$HOME/.hermes" ]   && PLATFORMS+=("hermes")
+  detect_platform claude-code "$HOME/.claude"   claude
+  detect_platform codex       "$HOME/.codex"    codex
+  detect_platform openclaw    "$HOME/.openclaw" openclaw
+  detect_platform hermes      "$HOME/.hermes"   hermes
+
+  if [ ${#SKIPPED_DIR_ONLY[@]} -gt 0 ]; then
+    echo "  Auto-detect: skipped these (config dir exists but CLI not on PATH):" >&2
+    for entry in "${SKIPPED_DIR_ONLY[@]}"; do
+      IFS=: read -r plat dir bin <<< "$entry"
+      echo "    - $plat: $dir is here but '$bin' isn't on PATH" >&2
+    done
+    echo "    Pass --platform NAME explicitly to force-install one of these." >&2
+    echo >&2
+  fi
+
   if [ ${#PLATFORMS[@]} -eq 0 ]; then
     cat >&2 <<EOM
-ERROR: no agent CLI detected. Looked for:
-  ~/.claude   (Claude Code)
-  ~/.codex    (Codex CLI)
-  ~/.openclaw (OpenClaw)
-  ~/.hermes   (Hermes)
+ERROR: no agent CLI detected. Looked for (dir AND binary):
+  ~/.claude   + 'claude'   (Claude Code)
+  ~/.codex    + 'codex'    (Codex CLI)
+  ~/.openclaw + 'openclaw' (OpenClaw)
+  ~/.hermes   + 'hermes'   (Hermes)
 
-Install one of those first, or pass --platform NAME explicitly.
-See ${DOCS_URL}
+Install one of those first (and make sure its binary is on PATH —
+'pip install --user' targets need ~/.local/bin in PATH; re-open shell
+or 'source ~/.profile' if you just installed), or pass --platform NAME
+explicitly. See ${DOCS_URL}
 EOM
     exit 1
   fi

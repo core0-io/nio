@@ -352,18 +352,12 @@ fi
 approve_hook() {
   if ! command -v hermes >/dev/null 2>&1; then
     echo "[nio-hermes] 'hermes' CLI not on PATH; skipping approval." >&2
-    echo "[nio-hermes] After installing Hermes, run once:" >&2
+    echo "[nio-hermes] After installing Hermes (and re-opening shell so PATH" >&2
+    echo "             picks up ~/.local/bin, or wherever your installer put it):" >&2
     echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
     return 0
   fi
 
-  # Hermes writes its allowlist (~/.hermes/shell-hooks-allowlist.json) only
-  # inside register_from_config(accept_hooks=True), which runs at startup
-  # for chat/acp/rl — not for 'hermes hooks test/doctor' and not for the
-  # top-level --accept-hooks flag on other subcommands. Spinning up chat
-  # just to populate one allowlist entry is overkill (model auth, TUI,
-  # startup cost). Invoke register_from_config directly from Hermes's own
-  # venv Python: same code path, no chat, no LLM.
   local hermes_bin shebang hermes_py
   hermes_bin="$(command -v hermes)"
   shebang="$(head -n1 "$hermes_bin" 2>/dev/null || true)"
@@ -376,47 +370,148 @@ approve_hook() {
     return 0
   fi
 
-  echo "[nio-hermes] Approving Nio hooks via Hermes's register_from_config()..."
-  # register_from_config() only writes an allowlist entry when the hook
-  # is not yet listed. For re-approvals after a rebuild (new hook-cli.js
-  # mtime, or user switched to a different install path) we need to
-  # clear the stale entry first so the new approved_at /
-  # script_mtime_at_approval land in shell-hooks-allowlist.json.
-  # revoke() is a no-op when there's nothing to remove, so this is
-  # idempotent on first install too. We loop over every event in
-  # config.yaml's hooks block — Nio installs entries for pre_tool_call,
-  # post_tool_call, pre_llm_call, post_llm_call, on_session_*,
-  # subagent_stop. Same command string across all events means one
-  # allowlist entry covers them; the revoke loop is still cheap and
-  # robust against future per-event command divergence.
-  if "$hermes_py" - <<'PY'
-from hermes_cli.config import load_config
-from agent.shell_hooks import register_from_config, revoke
+  local allowlist_path="$HERMES_HOME_DIR/shell-hooks-allowlist.json"
 
-cfg = load_config()
-hooks = cfg.get("hooks", {}) if isinstance(cfg.get("hooks", {}), dict) else {}
-for event_entries in hooks.values():
-    if not isinstance(event_entries, list):
-        continue
-    for entry in event_entries:
-        if isinstance(entry, dict):
-            cmd = entry.get("command")
-            if isinstance(cmd, str) and cmd:
-                revoke(cmd)
-register_from_config(cfg, accept_hooks=True)
+  # Returns 0 if the allowlist file exists, is non-empty, and contains at
+  # least one entry that matches Nio's hook-cli signature.
+  _nio_allowlist_has_us() {
+    [[ -s "$allowlist_path" ]] || return 1
+    grep -q "hook-cli.js" "$allowlist_path" 2>/dev/null
+  }
+
+  echo "[nio-hermes] Approving Nio hooks (multi-strategy)..."
+
+  # Strategy 1 — Hermes's internal API (the documented path per PR #13296).
+  # We read the config DIRECTLY (yaml.safe_load on $HERMES_CONFIG) instead
+  # of calling Hermes's load_config(): some versions of load_config()
+  # cache, read a different path, or omit entries the user just wrote.
+  # If register_from_config(accept_hooks=True) doesn't actually write the
+  # allowlist on the user's Hermes version, we verify and fall through.
+  NIO_HERMES_CFG="$HERMES_CONFIG" "$hermes_py" - <<'PY' || true
+import os, sys
+try:
+    import yaml
+except ImportError:
+    print("[nio-hermes] PyYAML unavailable in Hermes venv; skipping API strategy", file=sys.stderr)
+    sys.exit(1)
+
+cfg_path = os.environ.get("NIO_HERMES_CFG", os.path.expanduser("~/.hermes/config.yaml"))
+try:
+    with open(cfg_path) as f:
+        cfg = yaml.safe_load(f) or {}
+except Exception as exc:
+    print(f"[nio-hermes] couldn't read {cfg_path}: {exc}", file=sys.stderr)
+    sys.exit(1)
+
+hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
+nio_cmds = {
+    e["command"]
+    for entries in (hooks or {}).values() if isinstance(entries, list)
+    for e in entries
+    if isinstance(e, dict)
+       and isinstance(e.get("command"), str)
+       and "hook-cli.js" in e["command"]
+       and "--platform hermes" in e["command"]
+}
+print(f"[nio-hermes] strategy 1: register_from_config() over {len(nio_cmds)} command(s)",
+      file=sys.stderr)
+try:
+    from agent.shell_hooks import register_from_config, revoke
+    for cmd in nio_cmds:
+        try:
+            revoke(cmd)
+        except Exception:
+            pass
+    register_from_config(cfg, accept_hooks=True)
+except Exception as exc:
+    print(f"[nio-hermes] strategy 1 raised: {exc}", file=sys.stderr)
+    sys.exit(2)
 PY
-  then
-    echo "[nio-hermes] Hooks approved. Verify with: hermes hooks doctor"
-  else
-    echo "[nio-hermes] Approval failed. Run manually:" >&2
-    echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
+
+  if _nio_allowlist_has_us; then
+    echo "[nio-hermes] Hooks approved (strategy 1 / API). Verify: hermes hooks doctor"
+    return 0
   fi
+
+  # Strategy 2 — try Hermes CLI subcommands that might directly approve.
+  # Hermes versions differ; we probe a few likely subcommand names and
+  # fail silently if they don't exist. Each candidate is invoked once per
+  # unique Nio command string. We stop as soon as the allowlist file
+  # contains our entries.
+  echo "[nio-hermes] strategy 1 returned without writing $allowlist_path." >&2
+  echo "[nio-hermes] Trying hermes CLI fallbacks..." >&2
+
+  local cli_attempted=0
+  for sub_form in \
+      "hooks accept" \
+      "hooks approve" \
+      "hooks allowlist add" \
+      "hooks add"; do
+    # shellcheck disable=SC2086
+    if hermes $sub_form --help >/dev/null 2>&1; then
+      cli_attempted=1
+      echo "[nio-hermes]   trying: hermes $sub_form <cmd>" >&2
+      NIO_HERMES_CFG="$HERMES_CONFIG" NIO_SUB="$sub_form" "$hermes_py" - <<'PY' || true
+import os, subprocess, sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(1)
+try:
+    cfg = yaml.safe_load(open(os.environ["NIO_HERMES_CFG"])) or {}
+except Exception:
+    sys.exit(1)
+hooks = cfg.get("hooks") if isinstance(cfg.get("hooks"), dict) else {}
+sub = os.environ["NIO_SUB"].split()
+seen = set()
+for entries in (hooks or {}).values():
+    if not isinstance(entries, list):
+        continue
+    for e in entries:
+        if isinstance(e, dict):
+            cmd = e.get("command")
+            if (isinstance(cmd, str)
+                and "hook-cli.js" in cmd
+                and "--platform hermes" in cmd
+                and cmd not in seen):
+                seen.add(cmd)
+                try:
+                    subprocess.run(["hermes", *sub, cmd], check=False)
+                except Exception as exc:
+                    print(f"[nio-hermes] hermes {' '.join(sub)} failed: {exc}", file=sys.stderr)
+PY
+      if _nio_allowlist_has_us; then
+        echo "[nio-hermes] Hooks approved (strategy 2 / hermes $sub_form)."
+        echo "[nio-hermes] Verify: hermes hooks doctor"
+        return 0
+      fi
+    fi
+  done
+
+  # Both strategies failed. Print loud guidance so the user knows the
+  # install script's "✓ y" wasn't a silent victory.
+  echo "[nio-hermes] APPROVAL DID NOT WRITE $allowlist_path." >&2
+  echo "[nio-hermes] register_from_config() returned 0 but produced no allowlist," >&2
+  if [[ "$cli_attempted" -eq 0 ]]; then
+    echo "[nio-hermes] and no hermes CLI subcommand for direct approval was found." >&2
+  else
+    echo "[nio-hermes] and no probed CLI subcommand produced one either." >&2
+  fi
+  echo "[nio-hermes] Workarounds (try in this order):" >&2
+  echo "[nio-hermes]   1. hermes chat     # send any tool-triggering message," >&2
+  echo "[nio-hermes]                      # press Y at the consent prompt." >&2
+  echo "[nio-hermes]   2. hermes hooks --help   # look for an approval subcommand." >&2
+  echo "[nio-hermes]                            # If found, file an issue with the" >&2
+  echo "[nio-hermes]                            # output so we can add it as a strategy." >&2
+  return 1
 }
 
 APPROVED=0
+# approve_hook may return non-zero now when verification fails — set
+# APPROVED only on real success so the post-install summary reflects
+# reality (no more "Hooks approved" false claims when allowlist is empty).
 if [ "$ACCEPT_HOOKS" -eq 1 ]; then
-  approve_hook
-  APPROVED=1
+  if approve_hook; then APPROVED=1; fi
 elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
   # Real controlling terminal available — offer one-shot approval. We read
   # from /dev/tty (not stdin) so the prompt still works under `curl | bash`,
@@ -434,8 +529,7 @@ elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
   read -r answer </dev/tty || answer=""
   case "$answer" in
     [Yy]|[Yy][Ee][Ss])
-      approve_hook
-      APPROVED=1 ;;
+      if approve_hook; then APPROVED=1; fi ;;
     *)
       echo "[nio-hermes] Skipped. Approve later with:" >&2
       echo "             hermes --accept-hooks hooks doctor" >&2 ;;
