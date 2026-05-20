@@ -1,5 +1,29 @@
 # @core0-io/nio
 
+## 2.3.1
+
+### Patch Changes
+
+- **Installer fixes surfaced by a real `curl | bash` install on Ubuntu**:
+  the script bailed on missing `unzip`, the Hermes consent prompt silently
+  skipped, and the post-install "Restart your agent session" hint was
+  misleading on a fresh box where nothing was running yet.
+
+  | Gap                                                                                                                                                                                                                                                                                                                                  | Pre-fix                                                                                                                                                                                                                                                                                                                                                                                                                                 | Fix |
+  | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --- |
+  | **Missing `unzip` on stock Ubuntu**: `install.sh` hard-required `unzip`. Ubuntu / Debian / Fedora / RHEL ship `python3` by default but not `unzip`, so the one-liner exited with `ERROR: 'unzip' is required but not on PATH.` before fetching anything.                                                                             | Pre-check now prefers `unzip`, falls back to `python3 -m zipfile -e` (or `python`). Errors only if neither is present, and the message points at `apt-get install unzip` as the obvious remediation.                                                                                                                                                                                                                                    |
+  | **Hermes consent prompt skipped under `curl \| bash`**: the prompt was gated on `[ -t 0 ] && [ -t 1 ]`. Under `curl … \| bash`, stdin is the curl pipe, so `[ -t 0 ]` is false and `plugins/hermes/setup.sh` jumped straight to the "Approve later" path — users never saw the interactive prompt the docs promised.                 | Switched to `[ -r /dev/tty ] && [ -w /dev/tty ]` and read the answer from `/dev/tty` instead of stdin (the standard installer pattern used by rustup / nvm / get-docker). Genuine non-TTY environments (CI, Docker `-d`, systemd, `nohup </dev/null`) still fail the `/dev/tty` check and fall through cleanly.                                                                                                                         |
+  | **"Restart your agent session" misleading on first install**: the post-install hint said _restart_, but a fresh box has no agent process to restart yet — the user just needs to **start** one. Also the Hermes `setup.sh` Next-steps led with "Approve the hook on first run" before "Restart", inverting the natural mental model. | `install.sh` + `docs/install.html` now say "Start a new agent session"; the install.html bullet adds an explicit sub-clause for the only real _restart_ case (a `hermes gateway` already running with stale config). Hermes `setup.sh`'s unapproved-branch heredoc reordered so step 1 is "start a new session" (consent is its natural side-effect, not a separate action), step 2 is the headless pre-approve path, step 3 is verify. |
+
+  Docs: `docs/install.html` prereq strings now read "unzip _or_ python3"; the
+  Hermes consent caveat explains the `/dev/tty` mechanic and enumerates the
+  non-TTY scenarios that genuinely need `--accept-hooks` / `HERMES_ACCEPT_HOOKS=1`;
+  the manual-install paragraph mentions either extraction tool.
+
+  No behaviour change for users who already had `unzip` installed, ran the
+  installer from a real TTY, or were re-installing on a box with a running
+  agent — all three changes only widen previously-failing paths.
+
 ## 2.3.0
 
 ### Minor Changes
