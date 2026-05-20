@@ -307,15 +307,21 @@ APPROVED=0
 if [ "$ACCEPT_HOOKS" -eq 1 ]; then
   approve_hook
   APPROVED=1
-elif [ -t 0 ] && [ -t 1 ]; then
-  # Real interactive TTY — offer one-shot approval. Default N is safer
-  # (just hitting Enter doesn't touch the allowlist).
-  echo
-  echo "Hermes won't fire unknown shell hooks until you approve them."
-  echo "Approve this Nio hook now? (only this exact command; other future"
-  echo "shell hooks still require consent.)"
-  printf "  [y/N] "
-  read -r answer || answer=""
+elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+  # Real controlling terminal available — offer one-shot approval. We read
+  # from /dev/tty (not stdin) so the prompt still works under `curl | bash`,
+  # where stdin is the curl pipe. CI / cron / non-TTY containers fail the
+  # /dev/tty check and fall through to the non-interactive "Next steps"
+  # path below. Default N is safer (just hitting Enter doesn't touch the
+  # allowlist).
+  {
+    echo
+    echo "Hermes won't fire unknown shell hooks until you approve them."
+    echo "Approve this Nio hook now? (only this exact command; other future"
+    echo "shell hooks still require consent.)"
+    printf "  [y/N] "
+  } >/dev/tty
+  read -r answer </dev/tty || answer=""
   case "$answer" in
     [Yy]|[Yy][Ee][Ss])
       approve_hook
@@ -344,24 +350,31 @@ else
   cat <<'EOF'
 
 Next steps (Hermes side):
-  1. Approve the hook on first run. Either interactive:
-       hermes chat             # first pre_tool_call prompts for consent
-     — or pre-approve (required for gateway / CI / cron / non-TTY runs):
+  1. Start a new Hermes session. The new process loads ~/.hermes/config.yaml
+     fresh (including the Nio hook entry just added), and Hermes shows a
+     one-shot consent prompt the first time the hook fires:
+
+       hermes chat        # press Y at the prompt — done.
+
+     If you already have a daemon (e.g. `hermes gateway`) running with the
+     stale config, restart it so it picks up the new hook entry:
+
+       hermes gateway run --replace
+
+  2. Headless / CI / cron / non-TTY — no terminal for the consent prompt?
+     Pre-approve first, then start the session normally:
+
        hermes --accept-hooks hooks doctor     # one-shot, scoped to Nio
-       export HERMES_ACCEPT_HOOKS=1           # blanket for this shell
-       # or add hooks_auto_accept: true to ~/.hermes/config.yaml (global)
+       # or persistent for this shell:        export HERMES_ACCEPT_HOOKS=1
+       # or global default in config.yaml:    hooks_auto_accept: true
 
      Or re-run this installer with: bash plugins/hermes/setup.sh --accept-hooks
 
-  2. Verify registration at any time:
-       hermes hooks list
-       hermes hooks doctor
+  3. Verify any time:
+       hermes hooks list      # ✓ allowlisted shows up
+       hermes hooks doctor    # all green, runs a JSON smoke test
 
-  3. Test the hook end-to-end without running the agent:
-       hermes hooks test pre_tool_call --for-tool terminal \
-         --payload-file <(echo '{"tool_input":{"command":"ls /tmp"}}')
-
-  Re-run this script after any `pnpm run build` to refresh the absolute
-  path in config.yaml (and re-approve — the command string changes).
+  Re-run this script after any `pnpm run build` — the absolute hook-cli.js
+  path changes, and you'll need to re-approve.
 EOF
 fi

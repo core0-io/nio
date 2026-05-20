@@ -139,7 +139,7 @@
           <section class="tab-panel active" role="tabpanel" data-tab-panel="auto">
             <h3>Auto-detect (recommended)</h3>
             <ul class="prereq">
-              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
               <li>At least one supported agent CLI installed (Claude Code, Codex, OpenClaw, or Hermes)</li>
             </ul>
             <p>The default mode. The installer scans <code>$HOME</code> for the four agent CLI directories — <code>.claude</code>, <code>.codex</code>, <code>.openclaw</code>, <code>.hermes</code> — and runs the matching per-platform setup for every one it finds.</p>
@@ -154,7 +154,7 @@
             <h3>Claude Code</h3>
             <ul class="prereq">
               <li>Claude Code CLI installed and <code>claude</code> on <code>PATH</code></li>
-              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
             </ul>
             <div class="code-block">
               <pre><code id="cmd-cc">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code</code></pre>
@@ -178,7 +178,7 @@
             <h3>Codex CLI</h3>
             <ul class="prereq">
               <li>Codex CLI <strong>0.128.0</strong> — the only end-to-end-verified version. On macOS: <code>brew install --cask codex</code>.</li>
-              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
             </ul>
             <div class="code-block">
               <pre><code id="cmd-cx">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform codex</code></pre>
@@ -202,7 +202,7 @@
             <h3>OpenClaw</h3>
             <ul class="prereq">
               <li>OpenClaw (ClawHub) CLI installed and <code>openclaw</code> on <code>PATH</code></li>
-              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
             </ul>
             <div class="code-block">
               <pre><code id="cmd-oc">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform openclaw</code></pre>
@@ -225,7 +225,7 @@
             <h3>Hermes</h3>
             <ul class="prereq">
               <li>Hermes Agent installed; shell-hook subsystem from upstream <a href="https://github.com/NousResearch/hermes-agent/pull/13296">PR #13296</a> is required</li>
-              <li>Node.js ≥ 18, <code>curl</code>, <code>unzip</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
             </ul>
             <div class="code-block">
               <pre><code id="cmd-h">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform hermes</code></pre>
@@ -241,7 +241,7 @@
             </ol>
             <div class="callout warn">
               <div class="title">Caveat — consent allowlist</div>
-              <p>Hermes refuses to fire unknown shell hooks until you consent. The interactive prompt at the end of <code>setup.sh</code> handles this; for non-TTY runs, the underlying per-platform script accepts <code>--accept-hooks</code>. The allowlist is keyed on the exact command string, so any path change (move, upgrade, new machine) requires re-approval.</p>
+              <p>Hermes refuses to fire unknown shell hooks until you consent. The interactive prompt at the end of <code>setup.sh</code> handles this — it reads from <code>/dev/tty</code>, so the prompt still fires under <code>curl &hellip; | bash</code>. For non-TTY runs (CI, Docker <code>-d</code>, systemd, <code>nohup</code> with <code>&lt;/dev/null</code>), pass <code>--accept-hooks</code> through the one-liner, or set <code>HERMES_ACCEPT_HOOKS=1</code> before running. The allowlist is keyed on the exact command string, so any path change (move, upgrade, new machine) requires re-approval.</p>
             </div>
           </section>
         </div>
@@ -249,7 +249,7 @@
         <h2>After install</h2>
         <ol>
           <li>Edit <code>~/.nio/config.yaml</code>: set <code>guard.protection_level</code>, optional <code>collector.endpoint</code> for OTLP export.</li>
-          <li>Restart your agent session so the hooks reload.</li>
+          <li>Start a new agent session so the hooks load (if you have a long-running daemon like <code>hermes gateway</code>, restart it).</li>
           <li>The audit log is at <code>~/.nio/audit.jsonl</code>. Read recent entries via <code>/nio report</code> (or <code>$nio report</code> on Codex).</li>
           <li>Full config field reference: <a href="configuration.html">Configuration</a>.</li>
         </ol>
@@ -291,7 +291,7 @@
         <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>).</p>
 
         <h2>Manual install or from source</h2>
-        <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, <code>unzip</code> it, then <code>cd</code> into the directory and run <code>./setup.sh</code>. To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#development">Development</a> section in the README.</p>
+        <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, extract it (<code>unzip</code>, or <code>python3 -m zipfile -e</code> if <code>unzip</code> isn't installed), then <code>cd</code> into the directory and run <code>./setup.sh</code>. To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#development">Development</a> section in the README.</p>
 
       </div>
 

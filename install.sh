@@ -66,9 +66,30 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------- Pre-checks ----------
-for cmd in curl unzip; do
-  command -v "$cmd" >/dev/null 2>&1 || die "'$cmd' is required but not on PATH."
-done
+command -v curl >/dev/null 2>&1 || die "'curl' is required but not on PATH."
+
+# Pick an unzipper: prefer unzip, fall back to python3's zipfile module
+# (preinstalled on Ubuntu/Debian/Fedora/RHEL where 'unzip' often isn't).
+UNZIPPER=""
+if command -v unzip >/dev/null 2>&1; then
+  UNZIPPER="unzip"
+elif command -v python3 >/dev/null 2>&1; then
+  UNZIPPER="python3"
+elif command -v python >/dev/null 2>&1; then
+  UNZIPPER="python"
+else
+  die "need 'unzip' or 'python3' to extract release archives — install one (e.g. 'sudo apt-get install unzip')."
+fi
+
+extract_zip() {
+  local zip_file="$1" target="$2"
+  case "$UNZIPPER" in
+    unzip)
+      unzip -q -o "$zip_file" -d "$target" ;;
+    python3|python)
+      "$UNZIPPER" -m zipfile -e "$zip_file" "$target" ;;
+  esac
+}
 
 # ---------- Resolve target platforms ----------
 PLATFORMS=()
@@ -149,7 +170,7 @@ download_zip() {
 
   echo "  Fetching: ${zip_url}"
   curl -fsSL -o "$zip_file" "$zip_url" || { echo "  ERROR: download failed" >&2; return 1; }
-  unzip -q -o "$zip_file" -d "$target"  || { echo "  ERROR: unzip failed"   >&2; return 1; }
+  extract_zip "$zip_file" "$target"     || { echo "  ERROR: extract failed (via $UNZIPPER)" >&2; return 1; }
   [ -f "${target}/setup.sh" ] || { echo "  ERROR: zip is missing setup.sh at root" >&2; return 1; }
 }
 
@@ -190,7 +211,7 @@ if [ "$UNINSTALL" -eq 0 ] && [ ${#SUCCEEDED[@]} -gt 0 ]; then
   cat <<EOM
   Next steps:
     1. Edit ~/.nio/config.yaml (set collector.endpoint, protection level, ...)
-    2. Restart your agent session so Nio hooks load
+    2. Start a new agent session so Nio hooks load
     3. See https://core0-io.github.io/nio/docs/configuration.html
 EOM
 fi
