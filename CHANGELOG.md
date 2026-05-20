@@ -1,5 +1,28 @@
 # @core0-io/nio
 
+## 2.3.3
+
+### Patch Changes
+
+- **Hot-fix for the 2.3.2 uninstall regression.** Bash function-order bug:
+  the new `revoke_hermes_allowlist` helper was declared after the UNINSTALL
+  branch that calls it, so a real `curl … | bash -s -- --uninstall` exited
+  with `setup.sh: line 224: revoke_hermes_allowlist: command not found` and
+  `ERROR: hermes install/setup failed`. `bash -n` doesn't validate function
+  declaration order, so the 2.3.2 syntax smoke test missed it.
+
+  Moved the function definition next to `uninstall_python_plugin()`, before
+  the UNINSTALL branch. Verified end-to-end on a real fixture: uninstall now
+  strips hook entries, removes `"nio"` from `plugins.enabled`, and
+  successfully calls `agent.shell_hooks.revoke()` via Hermes's own venv
+  Python — exit code 0.
+
+  If you installed 2.3.2 and need to uninstall, either upgrade to 2.3.3
+  first (`curl -fsSL https://core0-io.github.io/nio/install.sh | bash` —
+  re-install is idempotent and self-heals stale entries) and then run
+  `--uninstall`, or edit `~/.hermes/config.yaml` by hand to remove the
+  `hooks:` block and `nio` from `plugins.enabled`.
+
 ## 2.3.2
 
 ### Patch Changes
