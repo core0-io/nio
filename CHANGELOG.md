@@ -1,5 +1,26 @@
 # @core0-io/nio
 
+## 2.3.5
+
+### Patch Changes
+
+- **Two install-time UX bugs.** Both surfaced on a real Ubuntu install where
+  the user pressed `y` at the consent prompt, saw "Hooks approved", and then
+  `hermes hooks doctor` showed every event **not allowlisted**; and where
+  the user's Ubuntu had a stale `~/.claude` directory (no `claude` binary)
+  that auto-detect still treated as "Claude Code installed".
+
+  | Gap                                                                                                                                                                                                                                                                                                                 | Pre-fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Fix |
+  | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --- |
+  | **False-success in `approve_hook`**: `register_from_config(accept_hooks=True)` returned 0 on the user's Hermes version without actually writing `~/.hermes/shell-hooks-allowlist.json`. The bash `if` saw exit code 0 and printed `Hooks approved. Verify with: hermes hooks doctor` — but the allowlist was empty. | `approve_hook` is now multi-strategy with **verify-after-each**. Strategy 1: `register_from_config()` via Hermes's venv Python, with the config read directly through `yaml.safe_load("$HERMES_CONFIG")` (not Hermes's `load_config()`, which on some versions caches or reads a different path). Strategy 2: probes `hermes hooks accept` / `approve` / `allowlist add` / `add` for an existing subcommand and invokes whichever exists once per unique Nio command string. After every strategy, the bash side reads `shell-hooks-allowlist.json` and checks for our `hook-cli.js` signature. `Hooks approved` is only printed on real success; total failure prints a loud multi-line error with concrete workarounds and returns non-zero so `APPROVED=1` is set only when the allowlist was actually written. |
+  | **Dir-only auto-detect**: `install.sh` checked `[ -d "$HOME/.<agent>" ]` only — stale leftover dirs from uninstalled agents were treated as "installed". User got Claude Code install/uninstall runs they didn't ask for.                                                                                           | Auto-detect now requires both the dir AND the CLI binary on `PATH`. Dir-only matches print a warning and get skipped: `~/.claude is here but 'claude' isn't on PATH`. Users can still force-install with `--platform NAME`. The empty-detect error message also mentions the `~/.local/bin` PATH gotcha, since "I installed Hermes but PATH isn't refreshed yet" is the typical Ubuntu trip.                                                                                                                                                                                                                                                                                                                                                                                                                       |
+
+  If you're hitting the `approve_hook` symptom, this release will at minimum
+  **tell you** when the allowlist write failed (instead of pretending it
+  worked). If your Hermes has an approval CLI command the install script
+  hasn't probed yet, the error message asks for `hermes hooks --help` output
+  so we can add it as a strategy.
+
 ## 2.3.4
 
 ### Patch Changes
