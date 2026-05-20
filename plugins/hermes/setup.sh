@@ -358,17 +358,60 @@ approve_hook() {
     return 0
   fi
 
-  local hermes_bin shebang hermes_py
+  local hermes_bin
   hermes_bin="$(command -v hermes)"
-  shebang="$(head -n1 "$hermes_bin" 2>/dev/null || true)"
-  hermes_py="$(printf '%s\n' "$shebang" | sed -n 's|^#! *\([^ ]*\).*|\1|p')"
 
-  if [[ -z "$hermes_py" || ! -x "$hermes_py" ]]; then
-    echo "[nio-hermes] Couldn't locate Hermes's Python interpreter from" >&2
-    echo "             $hermes_bin shebang. Approve manually:" >&2
-    echo "             hermes chat --accept-hooks   # type 'exit' to leave" >&2
+  # Find a Python interpreter that can actually import agent.shell_hooks.
+  # The previous heuristic (grab the path from `hermes`'s shebang) breaks
+  # when the user's `hermes` is a bash/sh wrapper — we end up handing the
+  # PY heredoc to /bin/bash, which dies with a syntax error before
+  # printing anything. Sniff the shebang AND validate the import.
+  local hermes_py=""
+  _try_hermes_py() {
+    local cand="$1"
+    [[ -n "$cand" && -x "$cand" ]] || return 1
+    "$cand" -c 'import agent.shell_hooks' >/dev/null 2>&1 || return 1
+    hermes_py="$cand"
     return 0
+  }
+  # 1. Sniff `hermes` shebang. Works when `hermes` is a real Python
+  #    script with #!/path/to/python.
+  local sb_py
+  sb_py="$(head -n1 "$hermes_bin" 2>/dev/null \
+          | sed -n 's|^#! *\([^ ]*\).*|\1|p')"
+  # 2. If `hermes` is a bash/sh wrapper (#!/usr/bin/env bash, common
+  #    for pipx/uv-tool installs), grep its body for an `exec <python>`
+  #    line and pull the absolute python path out of there. Catches
+  #    paths like /home/.../uv/tools/.../bin/python that we'd never
+  #    guess by hardcoding.
+  local wrapper_pys=()
+  if [[ -r "$hermes_bin" ]]; then
+    while IFS= read -r line; do
+      wrapper_pys+=("$line")
+    done < <(grep -oE '/[^[:space:]"'"'"']+(/python[0-9.]*|/bin/python[0-9.]*)' "$hermes_bin" 2>/dev/null | head -5)
   fi
+  # 3. Last-resort hardcoded layouts.
+  local hardcoded_pys=(
+    "$HOME/.hermes/hermes-agent/venv/bin/python3"
+    "$HOME/.hermes/hermes-agent/venv/bin/python"
+    "$HOME/.hermes/venv/bin/python3"
+    "$HOME/.hermes/venv/bin/python"
+  )
+  for cand in "$sb_py" "${wrapper_pys[@]}" "${hardcoded_pys[@]}"; do
+    _try_hermes_py "$cand" && break
+  done
+
+  # For strategy 2 (direct allowlist write) we don't need
+  # agent.shell_hooks — only yaml/json/fcntl. $INSTALL_PY is already
+  # validated upstream (line ~120) to import yaml.
+  local fs_py="$INSTALL_PY"
+
+  if [[ -n "$hermes_py" ]]; then
+    echo "[nio-hermes] python for Hermes API (strategy 1): $hermes_py" >&2
+  else
+    echo "[nio-hermes] no Hermes-API-capable Python found — strategy 1 will be skipped" >&2
+  fi
+  echo "[nio-hermes] python for direct allowlist write (strategy 2): $fs_py" >&2
 
   local allowlist_path="$HERMES_HOME_DIR/shell-hooks-allowlist.json"
 
@@ -387,7 +430,13 @@ approve_hook() {
   # cache, read a different path, or omit entries the user just wrote.
   # If register_from_config(accept_hooks=True) doesn't actually write the
   # allowlist on the user's Hermes version, we verify and fall through.
-  NIO_HERMES_CFG="$HERMES_CONFIG" "$hermes_py" - <<'PY' || true
+  local strategy1_rc=0
+  if [[ -z "$hermes_py" ]]; then
+    strategy1_rc=127  # interpreter unavailable
+  else
+  # NB: `python -u` keeps stderr unbuffered so diagnostic messages survive
+  # even when the interpreter dies mid-script.
+  NIO_HERMES_CFG="$HERMES_CONFIG" "$hermes_py" -u - <<'PY' || strategy1_rc=$?
 import os, sys
 try:
     import yaml
@@ -427,6 +476,7 @@ except Exception as exc:
     print(f"[nio-hermes] strategy 1 raised: {exc}", file=sys.stderr)
     sys.exit(2)
 PY
+  fi  # close: if [[ -n "$hermes_py" ]]; then
 
   if _nio_allowlist_has_us; then
     echo "[nio-hermes] Hooks approved (strategy 1 / API). Verify: hermes hooks doctor"
@@ -447,12 +497,20 @@ PY
   # ours (mirrors _record_approval's "filter-then-append" rule). Crash-
   # safe: holds fcntl.flock on the sibling .lock file and writes via
   # mkstemp + os.replace (same atomic pattern as Hermes's save_allowlist).
-  echo "[nio-hermes] strategy 1 returned without writing $allowlist_path." >&2
+  #
+  # Uses $fs_py (= $INSTALL_PY, already validated to import yaml) — NOT
+  # $hermes_py — so this works even when `hermes` is a bash wrapper.
+  if [[ "$strategy1_rc" -eq 127 ]]; then
+    echo "[nio-hermes] strategy 1 skipped (no Hermes-API Python found)." >&2
+  else
+    echo "[nio-hermes] strategy 1 returned rc=$strategy1_rc without writing $allowlist_path." >&2
+  fi
   echo "[nio-hermes] Falling back to direct allowlist write (merge-safe)..." >&2
 
+  local strategy2_rc=0
   NIO_HERMES_CFG="$HERMES_CONFIG" \
   NIO_ALLOWLIST_PATH="$allowlist_path" \
-    "$hermes_py" - <<'PY' || true
+    "$fs_py" -u - <<'PY' || strategy2_rc=$?
 import fcntl, json, os, shlex, sys, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -616,8 +674,9 @@ PY
   # Both strategies failed (rare — strategy 2 should always succeed unless
   # something is genuinely wrong with filesystem permissions or PyYAML).
   echo "[nio-hermes] APPROVAL DID NOT WRITE $allowlist_path." >&2
-  echo "[nio-hermes] Both strategy 1 (Hermes API) and strategy 2 (direct write)" >&2
-  echo "[nio-hermes] failed. Check $allowlist_path's parent permissions and" >&2
+  echo "[nio-hermes] strategy 1 rc=$strategy1_rc (127 = no API-capable Python found)" >&2
+  echo "[nio-hermes] strategy 2 rc=$strategy2_rc (using $fs_py)" >&2
+  echo "[nio-hermes] Check $allowlist_path's parent permissions and" >&2
   echo "[nio-hermes] retry with: bash plugins/hermes/setup.sh --accept-hooks" >&2
   echo "[nio-hermes] If that still fails, run hermes chat once and press Y" >&2
   echo "[nio-hermes] at the consent prompt." >&2
