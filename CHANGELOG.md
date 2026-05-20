@@ -1,5 +1,59 @@
 # @core0-io/nio
 
+## 2.3.6
+
+### Patch Changes
+
+- **`approve_hook` actually approves now, even when Hermes's API doesn't.**
+  On the user's Hermes version (and likely others), calling
+  `register_from_config(cfg, accept_hooks=True)` from a fresh Python process
+  returns `0` without ever writing `~/.hermes/shell-hooks-allowlist.json` —
+  even though the same function works at Hermes-own startup. 2.3.5 surfaced
+  this with a loud error; 2.3.6 fixes it.
+
+  We read `agent/shell_hooks.py` in a real Hermes install to learn the
+  allowlist schema:
+
+  ```json
+  {"approvals": [
+    {"event": "...", "command": "...",
+     "approved_at": "ISO8601Z",
+     "script_mtime_at_approval": "ISO8601Z" | null}
+  ]}
+  ```
+
+  One entry per `(event, command)` pair; JSON dumped with `indent=2,
+sort_keys=True`; atomic write via `tempfile.mkstemp` + `os.replace`;
+  `fcntl.flock` on the sibling `.lock` file for cross-process safety.
+
+  `approve_hook`'s strategy 2 (previously: probe `hermes hooks accept/
+approve/...` subcommands that don't exist on any known Hermes version)
+  is replaced with a direct allowlist write that mirrors Hermes's own
+  `_record_approval` exactly:
+
+  - **Merge-safe**: any pre-existing approvals (e.g. from other hook
+    handlers the user has approved) are preserved untouched.
+  - **Idempotent**: existing `(event, command)` matches are dropped
+    and re-added with fresh `approved_at` + current script mtime
+    (same "filter-then-append" rule Hermes uses).
+  - **Locked**: `fcntl.flock` on the `.lock` sibling so a concurrent
+    `hermes` process can't clobber the file mid-write.
+  - **Atomic**: mkstemp + `os.replace`, no half-written file possible.
+
+  Strategy 1 (`register_from_config`) still runs first; if it writes the
+  file on a given Hermes version, great — strategy 2 is skipped via the
+  verify-after check.
+
+  Smoke-tested three scenarios with the actual schema:
+
+  1. Fresh install (no allowlist file) → 7 Nio entries written.
+  2. Pre-existing `/usr/bin/other-hook` approval → preserved + 7 added.
+  3. Stale Nio entries + non-Nio approval → stale refreshed (new
+     `approved_at`), non-Nio preserved, total stays 8.
+
+  `hermes hooks doctor` should now show ✓ for every event after a clean
+  `curl … | bash` install with `y` at the consent prompt.
+
 ## 2.3.5
 
 ### Patch Changes
