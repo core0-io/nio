@@ -1,5 +1,59 @@
 # @core0-io/nio
 
+## 2.3.4
+
+### Patch Changes
+
+- **Hermes hooks survive past install (the step 2 fix).** Under release /
+  `curl | bash`, `install.sh` creates `WORK_DIR=$(mktemp -d -t nio-install-XXXXXX)`,
+  unpacks the Hermes plugin into `$WORK_DIR/hermes/`, runs `setup.sh`, then
+  deletes `$WORK_DIR` via its EXIT trap. `setup.sh` was writing
+  `node $SCRIPT_DIR/scripts/hook-cli.js …` into `~/.hermes/config.yaml` —
+  which under the one-liner is exactly that ephemeral tmp path. By the time
+  `hermes hooks doctor` (or the runtime itself) looked for the file, it
+  was already gone, hence the **`script missing or not executable`** error
+  on every event.
+
+  `setup.sh` now distinguishes two paths:
+
+  - **`HOOK_CLI_INSTALL`** — where the bundled `hook-cli.js` exists _now_
+    (`$SCRIPT_DIR/scripts/hook-cli.js` under release, or
+    `$REPO_ROOT/plugins/claude-code/skills/nio/scripts/hook-cli.js` under
+    monorepo dev). Used as the `cp` source.
+  - **`HOOK_CLI_REGISTERED`** — the path written into `config.yaml`.
+    `$PLUGIN_DST/scripts/hook-cli.js` (i.e. `~/.hermes/plugins/nio/scripts/hook-cli.js`)
+    under release — a persistent location that survives the installer
+    exit. Identical to `HOOK_CLI_INSTALL` under monorepo dev where the
+    source is already stable.
+
+  Execution reordered to a 3-phase block so the stable file lands at the
+  moment `install-hook.py` writes it into `config.yaml`:
+
+  1. **install** case → `install_python_plugin` first (copies
+     `hook-cli.js` into `HOOK_CLI_REGISTERED`'s parent).
+  2. always → `install-hook.py` with `--hook-cli "$HOOK_CLI_REGISTERED"`.
+  3. **uninstall** case → `revoke_hermes_allowlist` (consumes the JSON
+     stdout from step 2) + `uninstall_python_plugin`.
+
+  Pre-flight check switched from `HOOK_CLI` to `HOOK_CLI_INSTALL` — the
+  registered path doesn't exist until `install_python_plugin` runs, so the
+  old check would have always failed under the new flow. The startup banner
+  now prints both paths so users can see what gets installed where vs. what
+  `config.yaml` references.
+
+  **For users currently on 2.3.2/2.3.3 with the broken `/tmp/nio-install-XXX`
+  state:** just upgrade. Re-install self-heals — the dedupe predicate from
+  2.3.2 already recognized the `/hermes/scripts/` marker in the stale tmp
+  paths, and this release rewrites all of them to the stable destination
+  during the merge. `hermes hooks doctor` then shows ✓ for every event.
+
+  Smoke-tested end-to-end against a release-shaped fixture (curl|bash-style
+  tmp work dir + isolated `HERMES_CONFIG_PATH`): fresh install registers the
+  stable path and the file survives an explicit deletion of the tmp work
+  dir; uninstall strips hooks + `plugins.enabled` + allowlist entry; and a
+  re-install over a broken 7-entry-tmp-path fixture collapses to 7 entries
+  all pointing at the stable destination.
+
 ## 2.3.3
 
 ### Patch Changes
