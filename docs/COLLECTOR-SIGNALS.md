@@ -316,6 +316,7 @@ Full config reference: [configuration.html](configuration.html). Quick summary o
 collector:
   endpoint: ""                      # OTLP base URL; empty = no OTLP export at all
   api_key: ""                       # Bearer token
+  headers: {}                       # extra OTLP request headers; values are stringified
   timeout: 5000                     # milliseconds
   protocol: http                    # http | grpc
   metrics:

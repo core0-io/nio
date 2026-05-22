@@ -1,15 +1,16 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
 import {
+  type CollectorConfig,
+  collectorRequestHeaders,
   loadCollectorConfig,
   loadLogsConfig,
-  type CollectorConfig,
 } from '../scripts/lib/config-loader.js';
 
 // loadCollectorConfig / loadLogsConfig read from $NIO_HOME/config.yaml.
@@ -39,10 +40,7 @@ describe('loadCollectorConfig', () => {
   });
 
   it('returns enabled=true when endpoint is set', () => {
-    const cfg = withNioHome(
-      'collector:\n  endpoint: "http://localhost:4318"\n',
-      loadCollectorConfig,
-    );
+    const cfg = withNioHome('collector:\n  endpoint: "http://localhost:4318"\n', loadCollectorConfig);
     assert.equal(cfg.endpoint, 'http://localhost:4318');
     assert.equal(cfg.enabled, true);
   });
@@ -81,6 +79,29 @@ describe('loadCollectorConfig', () => {
     assert.equal(cfg.timeout, 1234);
     assert.equal(cfg.protocol, 'grpc');
   });
+
+  it('loads and stringifies collector headers', () => {
+    const yaml = [
+      'collector:',
+      '  endpoint: "http://localhost:4318"',
+      '  api_key: "secret"',
+      '  headers:',
+      '    x-event-pipeline-id: "a7f966c2-02a1-46f3-92cf-51d6889c52f4"',
+      '    x-retry-count: 3',
+      '',
+    ].join('\n');
+
+    const cfg = withNioHome(yaml, loadCollectorConfig);
+    assert.deepEqual(cfg.headers, {
+      'x-event-pipeline-id': 'a7f966c2-02a1-46f3-92cf-51d6889c52f4',
+      'x-retry-count': '3',
+    });
+    assert.deepEqual(collectorRequestHeaders(cfg), {
+      'x-event-pipeline-id': 'a7f966c2-02a1-46f3-92cf-51d6889c52f4',
+      'x-retry-count': '3',
+      Authorization: 'Bearer secret',
+    });
+  });
 });
 
 // ── loadLogsConfig ──────────────────────────────────────────────────────
@@ -95,36 +116,20 @@ describe('loadLogsConfig', () => {
   });
 
   it('honors collector.logs.path verbatim when absolute', () => {
-    const yaml = [
-      'collector:',
-      '  logs:',
-      '    path: "/var/log/nio/audit.jsonl"',
-      '',
-    ].join('\n');
+    const yaml = ['collector:', '  logs:', '    path: "/var/log/nio/audit.jsonl"', ''].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.equal(cfg.path, '/var/log/nio/audit.jsonl');
   });
 
   it('expands ~/ in collector.logs.path', () => {
-    const yaml = [
-      'collector:',
-      '  logs:',
-      '    path: "~/audit-custom/audit.jsonl"',
-      '',
-    ].join('\n');
+    const yaml = ['collector:', '  logs:', '    path: "~/audit-custom/audit.jsonl"', ''].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.ok(cfg.path.includes('audit-custom/audit.jsonl'));
     assert.ok(!cfg.path.startsWith('~/'), 'must not retain ~ prefix');
   });
 
   it('honors collector.logs.enabled and local toggles', () => {
-    const yaml = [
-      'collector:',
-      '  logs:',
-      '    enabled: false',
-      '    local: false',
-      '',
-    ].join('\n');
+    const yaml = ['collector:', '  logs:', '    enabled: false', '    local: false', ''].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.equal(cfg.enabled, false);
     assert.equal(cfg.local, false);

@@ -57,7 +57,7 @@ import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk
 import { OTLPMetricExporter as OTLPMetricExporterHttp } from '@opentelemetry/exporter-metrics-otlp-http';
 import { OTLPMetricExporter as OTLPMetricExporterGrpc } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
-import type { CollectorConfig } from './config-loader.js';
+import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 
 // ---------------------------------------------------------------------------
 // Provider factory
@@ -66,10 +66,7 @@ import type { CollectorConfig } from './config-loader.js';
 export function createMeterProvider(config: CollectorConfig): MeterProvider | null {
   if (!config.endpoint) return null;
 
-  const headers: Record<string, string> = {};
-  if (config.api_key) {
-    headers['Authorization'] = `Bearer ${config.api_key}`;
-  }
+  const headers = collectorRequestHeaders(config);
 
   const base = config.endpoint.replace(/\/$/, '');
   const metricsUrl = config.protocol === 'grpc' ? base : `${base}/v1/metrics`;
