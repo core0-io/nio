@@ -270,6 +270,8 @@ collector:
   endpoint: ""
   # Bearer token for OTLP endpoint authentication.
   api_key: ""
+  # Extra request headers sent to the OTLP endpoint. Values are stringified.
+  headers: {}
   # OTLP export timeout in milliseconds.
   timeout: 5000
   # OTLP transport protocol: http | grpc

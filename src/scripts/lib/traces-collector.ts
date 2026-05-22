@@ -28,7 +28,7 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
-import type { CollectorConfig } from './config-loader.js';
+import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
@@ -234,10 +234,7 @@ function randomSpanId(): string {
 export function createTracerProvider(config: CollectorConfig): NodeTracerProvider | null {
   if (!config.endpoint) return null;
 
-  const headers: Record<string, string> = {};
-  if (config.api_key) {
-    headers['Authorization'] = `Bearer ${config.api_key}`;
-  }
+  const headers = collectorRequestHeaders(config);
 
   const base = config.endpoint.replace(/\/$/, '');
   const tracesUrl = config.protocol === 'grpc' ? base : `${base}/v1/traces`;

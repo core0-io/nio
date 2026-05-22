@@ -211,6 +211,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
   "collector": {
     "endpoint": "",
     "api_key": "",
+    "headers": {},
     "timeout": 5000,
     "protocol": "http",
     "metrics": { "enabled": true, "local": true, "log": "", "max_size_mb": 100 },
@@ -237,6 +238,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.native_tool_mapping` | object | *(see above)* | Native tool → action type mapping, per platform. Classification table (NOT a third allow/deny list) that decides which Phase 1-6 rule set runs for each platform-native tool. Tools absent from the map skip Phase 1-6 (auto-allow, log only). MCP tools are dynamic and not categorised here. |
 | `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
 | `collector.api_key` | string | `""` | Bearer token for collector auth |
+| `collector.headers` | object | `{}` | Extra request headers sent to the OTLP endpoint; values are stringified |
 | `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |
 | `collector.metrics.enabled` | boolean | `true` | Enable OTEL metrics export (no local file) |
 | `collector.traces.enabled` | boolean | `true` | Enable OTEL traces export |

@@ -24,7 +24,7 @@ import { OTLPLogExporter as OTLPLogExporterGrpc } from '@opentelemetry/exporter-
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { Metadata } from '@grpc/grpc-js';
-import type { CollectorConfig } from './config-loader.js';
+import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { nioGuardAttributes } from './traces-collector.js';
 
 /** Minimal audit entry shape for OTEL log emission (avoids cross-rootDir import). */
@@ -53,10 +53,7 @@ const RISK_TO_SEVERITY: Record<string, SeverityNumber> = {
 export function createLoggerProvider(config: CollectorConfig): LoggerProvider | null {
   if (!config.endpoint) return null;
 
-  const headers: Record<string, string> = {};
-  if (config.api_key) {
-    headers['Authorization'] = `Bearer ${config.api_key}`;
-  }
+  const headers = collectorRequestHeaders(config);
 
   const base = config.endpoint.replace(/\/$/, '');
   const logsUrl = config.protocol === 'grpc' ? base : `${base}/v1/logs`;
