@@ -40,7 +40,10 @@ describe('loadCollectorConfig', () => {
   });
 
   it('returns enabled=true when endpoint is set', () => {
-    const cfg = withNioHome('collector:\n  endpoint: "http://localhost:4318"\n', loadCollectorConfig);
+    const cfg = withNioHome(
+      'collector:\n  endpoint: "http://localhost:4318"\n',
+      loadCollectorConfig,
+    );
     assert.equal(cfg.endpoint, 'http://localhost:4318');
     assert.equal(cfg.enabled, true);
   });
@@ -116,20 +119,36 @@ describe('loadLogsConfig', () => {
   });
 
   it('honors collector.logs.path verbatim when absolute', () => {
-    const yaml = ['collector:', '  logs:', '    path: "/var/log/nio/audit.jsonl"', ''].join('\n');
+    const yaml = [
+      'collector:',
+      '  logs:',
+      '    path: "/var/log/nio/audit.jsonl"',
+      '',
+    ].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.equal(cfg.path, '/var/log/nio/audit.jsonl');
   });
 
   it('expands ~/ in collector.logs.path', () => {
-    const yaml = ['collector:', '  logs:', '    path: "~/audit-custom/audit.jsonl"', ''].join('\n');
+    const yaml = [
+      'collector:',
+      '  logs:',
+      '    path: "~/audit-custom/audit.jsonl"',
+      '',
+    ].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.ok(cfg.path.includes('audit-custom/audit.jsonl'));
     assert.ok(!cfg.path.startsWith('~/'), 'must not retain ~ prefix');
   });
 
   it('honors collector.logs.enabled and local toggles', () => {
-    const yaml = ['collector:', '  logs:', '    enabled: false', '    local: false', ''].join('\n');
+    const yaml = [
+      'collector:',
+      '  logs:',
+      '    enabled: false',
+      '    local: false',
+      '',
+    ].join('\n');
     const cfg = withNioHome(yaml, loadLogsConfig);
     assert.equal(cfg.enabled, false);
     assert.equal(cfg.local, false);
