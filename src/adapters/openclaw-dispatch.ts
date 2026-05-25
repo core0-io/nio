@@ -19,9 +19,10 @@ import type { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { SkillScanner } from '../scanner/index.js';
 import type { ActionEnvelope, ActionType, ActionData } from '../types/action.js';
 
-const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
-const CONFIG_YAML_PATH = join(NIO_DIR, 'config.yaml');
-const AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
+// Resolved lazily so tests can set NIO_HOME after this module is imported.
+function nioDir(): string { return process.env.NIO_HOME || join(homedir(), '.nio'); }
+function configYamlPath(): string { return join(nioDir(), 'config.yaml'); }
+function auditPath(): string { return join(nioDir(), 'audit.jsonl'); }
 
 const VALID_ACTION_TYPES: ActionType[] = [
   'exec_command',
@@ -55,6 +56,8 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
       return handleScan(restStr, deps.scanner);
     case 'report':
       return handleReport();
+    case 'doctor':
+      return handleDoctor();
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -74,7 +77,8 @@ function usageText(): string {
     '       action read_file: /etc/passwd',
     '       action secret_access: AWS_KEY read',
     '  /nio scan <path>                          — static scan of a directory',
-    '  /nio report                               — recent audit events',
+    '  /nio report                               — recent audit events + diagnostics summary',
+    '  /nio doctor                               — dry-run validate config + test OAuth/LLM/collector connectivity',
   ].join('\n');
 }
 
@@ -106,7 +110,7 @@ function setProtectionLevel(level: Level): NioConfig {
     ...current,
     guard: { ...(current.guard ?? {}), protection_level: level },
   };
-  writeFileSync(CONFIG_YAML_PATH, yamlDump(merged));
+  writeFileSync(configYamlPath(), yamlDump(merged));
   return merged;
 }
 
@@ -228,34 +232,36 @@ async function handleScan(rest: string, scanner: SkillScanner): Promise<string> 
 // ── report ───────────────────────────────────────────────────────────────────
 
 function handleReport(): string {
-  if (!existsSync(AUDIT_PATH)) {
-    return `No execution events recorded yet.\n\nAudit log: ${AUDIT_PATH}`;
+  if (!existsSync(auditPath())) {
+    return `No execution events recorded yet.\n\nAudit log: ${auditPath()}`;
   }
 
   let lines: string[];
   try {
-    lines = readFileSync(AUDIT_PATH, 'utf-8').split('\n').filter(Boolean);
+    lines = readFileSync(auditPath(), 'utf-8').split('\n').filter(Boolean);
   } catch (err) {
     return `Failed to read audit log: ${err instanceof Error ? err.message : String(err)}`;
   }
 
   if (lines.length === 0) return 'No execution events recorded yet.';
 
-  const entries = lines
-    .slice(-50)
+  // Look back across a wider window than the decision table so diagnostics
+  // that fire on every action don't crowd everything else out. The decision
+  // table still uses the last 50 entries; the diagnostics summary aggregates
+  // up to the last 200 events.
+  const tail = lines.slice(-200);
+  const allEntries = tail
     .map((l) => {
-      try {
-        return JSON.parse(l) as Record<string, unknown>;
-      } catch {
-        return null;
-      }
+      try { return JSON.parse(l) as Record<string, unknown>; } catch { return null; }
     })
     .filter((e): e is Record<string, unknown> => e !== null);
 
-  const blocked = entries.filter((e) => e.decision === 'deny').length;
-  const confirmed = entries.filter((e) => e.decision === 'ask' || e.decision === 'confirm').length;
+  // Decision table (guard events only)
+  const decisionEntries = allEntries.filter(e => e.event === 'guard').slice(-50);
+  const blocked = decisionEntries.filter((e) => e.decision === 'deny').length;
+  const confirmed = decisionEntries.filter((e) => e.decision === 'ask' || e.decision === 'confirm').length;
 
-  const rows = entries.map((e) => {
+  const rows = decisionEntries.map((e) => {
     const ts = typeof e.timestamp === 'string' ? e.timestamp.slice(11, 19) : '—';
     const tool = (e.tool_name as string | undefined) ?? (e.event as string | undefined) ?? '—';
     const decision = (e.decision as string | undefined) ?? '—';
@@ -264,15 +270,247 @@ function handleReport(): string {
     return `| ${ts} | ${tool} | ${decision} | ${risk} | ${tags} |`;
   });
 
-  return [
+  const out = [
     '## Nio Security Report',
     '',
-    `**Events**: ${entries.length}`,
+    `**Events**: ${decisionEntries.length}`,
     `**Blocked**: ${blocked}`,
     `**Confirmed**: ${confirmed}`,
     '',
     '| Time | Tool | Decision | Risk | Tags |',
     '|------|------|----------|------|------|',
     ...rows,
-  ].join('\n');
+  ];
+
+  // Diagnostics summary — aggregate by (source, kind, component, config_path).
+  const diagSection = formatDiagnosticsAggregate(allEntries);
+  if (diagSection) {
+    out.push('', diagSection);
+  }
+
+  return out.join('\n');
+}
+
+interface DiagAggregate {
+  count: number;
+  source: string;
+  kind: string;
+  component: string;
+  config_path: string;
+  first_seen: string;
+  last_seen: string;
+  latest_message: string;
+  latest_hint?: string;
+}
+
+function formatDiagnosticsAggregate(entries: ReadonlyArray<Record<string, unknown>>): string {
+  const diags = entries.filter(e => e.event === 'diagnostic');
+  if (diags.length === 0) return '';
+
+  const groups = new Map<string, DiagAggregate>();
+  for (const d of diags) {
+    const source = String(d.source ?? '—');
+    const kind = String(d.kind ?? '—');
+    const component = String(d.component ?? '—');
+    const configPath = String(d.config_path ?? '—');
+    const key = `${source}|${kind}|${component}|${configPath}`;
+    const ts = typeof d.timestamp === 'string' ? d.timestamp : '';
+    const msg = String(d.message ?? '');
+    const hint = d.hint != null ? String(d.hint) : undefined;
+
+    const existing = groups.get(key);
+    if (existing) {
+      existing.count += 1;
+      if (ts && ts > existing.last_seen) {
+        existing.last_seen = ts;
+        existing.latest_message = msg;
+        existing.latest_hint = hint;
+      }
+      if (ts && (!existing.first_seen || ts < existing.first_seen)) {
+        existing.first_seen = ts;
+      }
+    } else {
+      groups.set(key, {
+        count: 1,
+        source, kind, component, config_path: configPath,
+        first_seen: ts, last_seen: ts,
+        latest_message: msg, latest_hint: hint,
+      });
+    }
+  }
+
+  const sorted = [...groups.values()].sort((a, b) =>
+    b.last_seen.localeCompare(a.last_seen) || b.count - a.count,
+  );
+
+  const fmt = (s: string) => s.length > 11 ? s.slice(11, 19) : s;
+  const rows = sorted.map(g =>
+    `| ${g.count} | ${g.source} | ${g.kind} | ${g.component} | ${fmt(g.first_seen)} | ${fmt(g.last_seen)} | ${g.latest_message.replace(/\|/g, '\\|')} |`,
+  );
+
+  const hints = sorted
+    .filter(g => g.latest_hint)
+    .map(g => `  - ${g.source} ${g.kind}: ${g.latest_hint}`);
+
+  const out = [
+    `## Diagnostics (last ${diags.length} of ${entries.length} events)`,
+    '',
+    '| Count | Source | Kind | Component | First seen | Last seen | Latest message |',
+    '|-------|--------|------|-----------|------------|-----------|----------------|',
+    ...rows,
+  ];
+  if (hints.length > 0) {
+    out.push('', 'Hints:', ...hints);
+  }
+  out.push('', 'Run `/nio doctor` to dry-run a config check.');
+  return out.join('\n');
+}
+
+// ── doctor ───────────────────────────────────────────────────────────────────
+
+/**
+ * Run a series of dry-run health checks against the current config and report
+ * each as ✓ / ✗. Network checks (OAuth, collector reachability) actually hit
+ * the configured endpoints, so this is the canonical place users go BEFORE
+ * triggering a hook to validate setup.
+ */
+async function handleDoctor(): Promise<string> {
+  const out: string[] = ['## Nio Doctor', ''];
+
+  // ─── Configuration ──────────────────────────────────────────────────
+  out.push('### Configuration');
+
+  let config: NioConfig;
+  let configLoadOk = true;
+  try {
+    config = loadConfig();
+  } catch (err) {
+    configLoadOk = false;
+    out.push(`- ✗ ${configYamlPath()}: ${err instanceof Error ? err.message : String(err)}`);
+    config = {} as NioConfig;
+  }
+  if (configLoadOk) {
+    // Even when loadConfig returns successfully, it may have logged a
+    // diagnostic and silently fallen back to defaults. Detect that by
+    // re-running validateConfig on the raw YAML.
+    let validationIssues: string[] = [];
+    if (existsSync(configYamlPath())) {
+      try {
+        const { load: yamlLoad } = await import('js-yaml');
+        const { validateConfig } = await import('./config-schema.js');
+        const raw = yamlLoad(readFileSync(configYamlPath(), 'utf-8'));
+        validateConfig(raw, configYamlPath());
+      } catch (err) {
+        validationIssues = String(err instanceof Error ? err.message : err).split('\n').filter(Boolean);
+      }
+    }
+    if (validationIssues.length === 0) {
+      out.push(`- ✓ ${configYamlPath()} loaded successfully`);
+    } else {
+      out.push(`- ✗ ${configYamlPath()} has schema issues:`);
+      for (const issue of validationIssues) out.push(`    ${issue}`);
+    }
+  }
+
+  // ─── External Analysers ─────────────────────────────────────────────
+  const externals = config.guard?.external_analyser ?? [];
+  if (externals.length > 0) {
+    out.push('', `### External Analysers (${externals.length} configured)`);
+    for (const entry of externals) {
+      if (entry.enabled === false) {
+        out.push(`- · ${entry.name} (${entry.endpoint}) — disabled`);
+        continue;
+      }
+      if (entry.auth?.type === 'oauth') {
+        const result = await dryRunOAuth(entry);
+        if (result.ok) {
+          out.push(`- ✓ ${entry.name} (${entry.endpoint}) — OAuth token acquired`);
+        } else {
+          out.push(`- ✗ ${entry.name} (${entry.endpoint}): ${result.message}`);
+          if (result.hint) out.push(`    hint: ${result.hint}`);
+        }
+      } else if (entry.auth?.type === 'bearer') {
+        out.push(`- · ${entry.name} (${entry.endpoint}) — bearer auth (skipped: cannot validate without firing scoring request)`);
+      } else {
+        out.push(`- · ${entry.name} (${entry.endpoint}) — no auth configured`);
+      }
+    }
+  }
+
+  // ─── LLM Analyser ───────────────────────────────────────────────────
+  const llm = config.guard?.llm_analyser;
+  if (llm?.enabled || llm?.api_key) {
+    out.push('', '### LLM Analyser');
+    if (llm?.enabled && !llm?.api_key) {
+      out.push('- ✗ guard.llm_analyser.enabled=true but api_key is empty');
+      out.push('    hint: Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.');
+    } else if (llm?.api_key && !llm?.enabled) {
+      out.push('- · guard.llm_analyser.api_key set but enabled=false (Phase 5 is OFF)');
+    } else if (llm?.enabled && llm?.api_key) {
+      out.push('- ✓ enabled with api_key set (key validity not actually tested)');
+    }
+  }
+
+  // ─── Collector ──────────────────────────────────────────────────────
+  const collector = config.collector;
+  if (collector?.endpoint) {
+    out.push('', '### Collector');
+    const result = await dryRunCollector(collector.endpoint, collector.timeout);
+    if (result.ok) {
+      out.push(`- ✓ ${collector.endpoint} reachable (${result.message})`);
+    } else {
+      out.push(`- ✗ ${collector.endpoint}: ${result.message}`);
+    }
+  }
+
+  return out.join('\n');
+}
+
+interface DryRunResult {
+  ok: boolean;
+  message: string;
+  hint?: string;
+}
+
+async function dryRunOAuth(entry: NonNullable<NioConfig['guard']>['external_analyser'] extends Array<infer T> | undefined ? T : never): Promise<DryRunResult> {
+  // Lazy import to keep dispatch surface small
+  const { getOrCreateOAuthStrategy } = await import('../core/analysers/external/auth.js');
+  const { DiagnosticCollector } = await import('./diagnostics.js');
+
+  if (!entry || !entry.auth || entry.auth.type !== 'oauth') {
+    return { ok: false, message: 'not an oauth entry' };
+  }
+  const strategy = getOrCreateOAuthStrategy({
+    oauthUrl:     entry.auth.oauth_url,
+    keyId:        entry.auth.key_id,
+    keySecret:    entry.auth.key_secret,
+    clientId:     entry.auth.client_id,
+    clientSecret: entry.auth.client_secret,
+  });
+  const reporter = new DiagnosticCollector();
+  const header = await strategy.getAuthHeader(reporter);
+  if (header) return { ok: true, message: 'token acquired' };
+
+  const collected = reporter.take();
+  const last = collected[collected.length - 1];
+  return {
+    ok: false,
+    message: last?.message ?? 'OAuth flow returned no token',
+    hint: last?.hint,
+  };
+}
+
+async function dryRunCollector(endpoint: string, timeoutMs?: number): Promise<DryRunResult> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs ?? 3000);
+  try {
+    const resp = await fetch(endpoint, { method: 'HEAD', signal: controller.signal });
+    clearTimeout(timer);
+    // 4xx/5xx is still "reachable" — OTLP collectors commonly 405 a bare HEAD.
+    return { ok: true, message: `HTTP ${resp.status} on HEAD` };
+  } catch (err) {
+    clearTimeout(timer);
+    const message = err instanceof Error ? err.message : String(err);
+    return { ok: false, message };
+  }
 }

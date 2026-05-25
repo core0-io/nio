@@ -24,9 +24,10 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 // Paths
 // ---------------------------------------------------------------------------
 
-const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
-const CONFIG_YAML_PATH = join(NIO_DIR, 'config.yaml');
-const DEFAULT_AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
+// Resolved lazily so tests can set NIO_HOME after this module is imported.
+function nioDir(): string { return process.env.NIO_HOME || join(homedir(), '.nio'); }
+function configYamlPath(): string { return join(nioDir(), 'config.yaml'); }
+function defaultAuditPath(): string { return join(nioDir(), 'audit.jsonl'); }
 
 function expandHome(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
@@ -39,10 +40,10 @@ function expandHome(p: string): string {
  */
 export function resolveAuditPath(logsConfig?: CollectorLogsConfig): string {
   const raw = logsConfig?.path;
-  return raw ? expandHome(raw) : DEFAULT_AUDIT_PATH;
+  return raw ? expandHome(raw) : defaultAuditPath();
 }
 
-function ensureDir(dir: string = NIO_DIR): void {
+function ensureDir(dir: string = nioDir()): void {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
@@ -58,7 +59,7 @@ const CONFIG_DEFAULTS: NioConfig = validateConfig({ guard: { level: 'balanced' }
 
 export function resetConfig(): NioConfig {
   ensureDir();
-  writeFileSync(CONFIG_YAML_PATH, yamlDump(CONFIG_DEFAULTS));
+  writeFileSync(configYamlPath(), yamlDump(CONFIG_DEFAULTS));
   return { ...CONFIG_DEFAULTS };
 }
 
@@ -74,18 +75,18 @@ function reportConfigError(err: unknown): void {
     severity: 'error',
     source: 'config',
     kind,
-    message: `Failed to load ${CONFIG_YAML_PATH}, falling back to defaults`,
+    message: `Failed to load ${configYamlPath()}, falling back to defaults`,
     detail: message,
-    config_path: CONFIG_YAML_PATH,
+    config_path: configYamlPath(),
     hint: 'See plugins/shared/config.default.yaml for the expected shape, or run /nio doctor.',
   });
 }
 
 export function loadConfig(): NioConfig {
-  if (existsSync(CONFIG_YAML_PATH)) {
+  if (existsSync(configYamlPath())) {
     try {
-      const raw = yamlLoad(readFileSync(CONFIG_YAML_PATH, 'utf-8'));
-      const validated = validateConfig(raw, CONFIG_YAML_PATH);
+      const raw = yamlLoad(readFileSync(configYamlPath(), 'utf-8'));
+      const validated = validateConfig(raw, configYamlPath());
       return { ...CONFIG_DEFAULTS, ...validated };
     } catch (err) {
       reportConfigError(err);
@@ -96,7 +97,7 @@ export function loadConfig(): NioConfig {
   // No user config — use inline defaults, try to persist a starter file
   try {
     ensureDir();
-    writeFileSync(CONFIG_YAML_PATH, yamlDump(CONFIG_DEFAULTS));
+    writeFileSync(configYamlPath(), yamlDump(CONFIG_DEFAULTS));
   } catch {
     // Best-effort: filesystem may be read-only
   }
