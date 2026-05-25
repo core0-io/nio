@@ -1,15 +1,16 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
 import {
+  type CollectorConfig,
+  collectorRequestHeaders,
   loadCollectorConfig,
   loadLogsConfig,
-  type CollectorConfig,
 } from '../scripts/lib/config-loader.js';
 
 // loadCollectorConfig / loadLogsConfig read from $NIO_HOME/config.yaml.
@@ -129,6 +130,29 @@ describe('loadCollectorConfig', () => {
     assert.equal(cfg.logs_enabled,    false);
     assert.equal(cfg.metrics_enabled, true);
     assert.equal(cfg.traces_enabled,  true);
+  });
+
+  it('loads and stringifies collector headers', () => {
+    const yaml = [
+      'collector:',
+      '  endpoint: "http://localhost:4318"',
+      '  api_key: "secret"',
+      '  headers:',
+      '    x-event-pipeline-id: "a7f966c2-02a1-46f3-92cf-51d6889c52f4"',
+      '    x-retry-count: 3',
+      '',
+    ].join('\n');
+
+    const cfg = withNioHome(yaml, loadCollectorConfig);
+    assert.deepEqual(cfg.headers, {
+      'x-event-pipeline-id': 'a7f966c2-02a1-46f3-92cf-51d6889c52f4',
+      'x-retry-count': '3',
+    });
+    assert.deepEqual(collectorRequestHeaders(cfg), {
+      'x-event-pipeline-id': 'a7f966c2-02a1-46f3-92cf-51d6889c52f4',
+      'x-retry-count': '3',
+      Authorization: 'Bearer secret',
+    });
   });
 });
 

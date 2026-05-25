@@ -18,6 +18,7 @@ import { load as yamlLoad } from 'js-yaml';
 export interface CollectorConfig {
   endpoint: string;
   api_key: string;
+  headers: Record<string, string>;
   timeout: number;
   protocol: 'http' | 'grpc';
   /** OTLP export readiness — true iff endpoint is set. */
@@ -80,11 +81,30 @@ function expandHome(path: string): string {
   return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
 }
 
+export function collectorRequestHeaders(config: CollectorConfig): Record<string, string> {
+  const headers: Record<string, string> = { ...config.headers };
+  if (config.api_key) {
+    headers['Authorization'] = `Bearer ${config.api_key}`;
+  }
+  return headers;
+}
+
 export function loadCollectorConfig(): CollectorConfig {
   const raw = readRawConfig();
 
   const c = (raw['collector'] ?? {}) as Record<string, unknown>;
   const endpoint = (c['endpoint'] as string) ?? '';
+  const rawHeaders = c['headers'];
+  const headers: Record<string, string> = {};
+
+  if (rawHeaders !== undefined) {
+    if (rawHeaders === null || typeof rawHeaders !== 'object' || Array.isArray(rawHeaders)) {
+      throw new Error('collector.headers is invalid');
+    }
+    for (const [key, value] of Object.entries(rawHeaders)) {
+      headers[key] = String(value);
+    }
+  }
 
   const metrics = (c['metrics'] ?? {}) as Record<string, unknown>;
   const traces  = (c['traces']  ?? {}) as Record<string, unknown>;
@@ -93,6 +113,7 @@ export function loadCollectorConfig(): CollectorConfig {
   return {
     endpoint,
     api_key: (c['api_key'] as string) ?? '',
+    headers,
     timeout: (c['timeout'] as number) || 5000,
     protocol: (c['protocol'] as 'http' | 'grpc') ?? 'http',
     // Reflects only OTLP export readiness. Local audit logging is
