@@ -75,12 +75,42 @@ export const LLMConfigSchema = z.object({
 
 export type LLMConfig = z.infer<typeof LLMConfigSchema>;
 
-export const ExternalAnalyserConfigSchema = z.object({
-  enabled: z.boolean().optional(),
-  endpoint: z.string().optional(),
-  api_key: z.string().optional(),
-  timeout: z.number().positive().optional(),
+// ---------------------------------------------------------------------------
+// External analyser — per-endpoint config (Phase 6)
+//
+// Phase 6 supports an arbitrary number of HTTP scoring endpoints, each
+// optionally authenticated via Bearer API key or FFWD-style OAuth2 PKCE.
+// ---------------------------------------------------------------------------
+
+const BearerAuthSchema = z.object({
+  type:    z.literal('bearer'),
+  api_key: z.string().min(1),
 });
+
+const OAuthAuthSchema = z.object({
+  type:          z.literal('oauth'),
+  oauth_url:     z.string().url(),       // base; runtime appends /register /code /token
+  key_id:        z.string().min(1),
+  key_secret:    z.string().min(1),
+  client_id:     z.string().optional(),  // pre-issued client; if absent, /register is called
+  client_secret: z.string().optional(),  // pre-issued confidential client
+});
+
+export const ExternalAnalyserAuthSchema =
+  z.discriminatedUnion('type', [BearerAuthSchema, OAuthAuthSchema]);
+
+export type ExternalAnalyserAuth = z.infer<typeof ExternalAnalyserAuthSchema>;
+
+export const ExternalAnalyserEntrySchema = z.object({
+  name:     z.string().min(1),
+  enabled:  z.boolean().optional(),
+  endpoint: z.string().min(1),
+  timeout:  z.number().positive().optional(),
+  weight:   z.number().nonnegative().optional(),
+  auth:     ExternalAnalyserAuthSchema.optional(),
+});
+
+export type ExternalAnalyserEntry = z.infer<typeof ExternalAnalyserEntrySchema>;
 
 export const GuardConfigSchema = z.object({
   protection_level: z.enum(['strict', 'balanced', 'permissive']).optional(),
@@ -88,7 +118,12 @@ export const GuardConfigSchema = z.object({
   file_scan_rules: RulesPatternsSchema.optional(),
   action_guard_rules: GuardRulesSchema.optional(),
   llm_analyser: LLMConfigSchema.optional(),
-  external_analyser: ExternalAnalyserConfigSchema.optional(),
+  external_analyser: z.array(ExternalAnalyserEntrySchema)
+    .refine(
+      arr => new Set(arr.map(e => e.name)).size === arr.length,
+      { message: 'external_analyser entries must have unique names' },
+    )
+    .optional(),
   allowed_commands: z.array(z.string()).optional(),
   allowlist_mode: z.enum(['exit', 'continue']).optional(),
   permitted_tools: z.record(z.string(), z.array(z.string())).optional(),
@@ -108,7 +143,6 @@ export const GuardConfigSchema = z.object({
     static: z.number().optional(),
     behavioural: z.number().optional(),
     llm: z.number().optional(),
-    external: z.number().optional(),
   }).optional(),
 });
 

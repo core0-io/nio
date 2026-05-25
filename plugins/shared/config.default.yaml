@@ -143,14 +143,48 @@ guard:
     # Maximum input token budget sent to the LLM per scan.
     max_input_tokens: 50000
 
-  # External scoring API (Phase 6). Requires endpoint to be set. Disable with enabled: false.
-  external_analyser:
-    # Enable/disable Phase 6 external scoring.
-    enabled: false
-    # Scoring API endpoint. Use http://localhost:9090 for the bundled mock scorer.
-    endpoint: ""
-    api_key: ""
-    timeout: 3000
+  # External scoring APIs (Phase 6). 0..N endpoints, each scored concurrently
+  # in parallel; results contribute to the final risk score via per-endpoint
+  # `weight`. Authentication is optional: omit `auth` for unauthenticated
+  # endpoints, or choose `bearer` (static API key) / `oauth` (FFWD-style PKCE
+  # with disk-backed token cache at ~/.nio/oauth-cache/).
+  #
+  # Multiple endpoints sharing identical OAuth fields (oauth_url + key_id +
+  # key_secret [+ client_id]) automatically share a single token cache and
+  # only run the PKCE flow once.
+  #
+  # external_analyser:
+  #   # 1) No auth — public scoring endpoint
+  #   - name: scorer_plain
+  #     enabled: true
+  #     endpoint: "https://plain.example.com/score"
+  #     timeout: 3000
+  #     weight: 1.0
+  #
+  #   # 2) Bearer / static API key
+  #   - name: scorer_a
+  #     enabled: true
+  #     endpoint: "https://a.example.com/score"
+  #     timeout: 3000
+  #     weight: 2.0
+  #     auth:
+  #       type: bearer
+  #       api_key: "sk-..."
+  #
+  #   # 3) OAuth2 PKCE (FFWD)
+  #   - name: scorer_ffwd
+  #     enabled: true
+  #     endpoint: "https://app.int.ffwd.one/api/.../score"
+  #     weight: 2.0
+  #     auth:
+  #       type: oauth
+  #       oauth_url:  "https://app.int.ffwd.one/api/oauth"  # base, /register /code /token appended
+  #       key_id:     "31ffa501-9eca-4011-92c6-401078e86ba1"
+  #       key_secret: "yMSMlBzAM4oPVzVyfJrLOcy1iZmbmK9__jZucqXTLt4"
+  #       # Optional pre-issued client; if absent, /register is called automatically:
+  #       # client_id:     "838ff1f9-32ca-4496-b51d-7a99970a6dc8"
+  #       # client_secret: ""
+  external_analyser: []
 
   # Phase 1 allowlist: additional command prefixes treated as safe.
   # Commands matching these prefixes bypass the guard pipeline.
@@ -251,12 +285,12 @@ guard:
 
   # Phase scoring weights for weighted score aggregation.
   #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)
+  # Phase 6 weights live per-endpoint on external_analyser[].weight, not here.
   scoring_weights:
     runtime: 1.0       # Phase 2: pattern matching
     static: 1.0        # Phase 3: static rules on file content
     behavioural: 2.0   # Phase 4: AST dataflow analysis
     llm: 1.0           # Phase 5: LLM semantic analysis
-    external: 2.0      # Phase 6: external scoring API
 
 # Telemetry collection — shared OTLP connection + per-signal settings.
 # OTLP export is disabled by default (empty endpoint). Set endpoint to enable;

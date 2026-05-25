@@ -15,6 +15,7 @@ import type { CollectorConfig } from '../scripts/lib/config-loader.js';
 const baseEnabled: CollectorConfig = {
   endpoint: 'http://localhost:4318',
   api_key: '',
+  headers: {},
   timeout: 5000,
   protocol: 'http',
   enabled: true,

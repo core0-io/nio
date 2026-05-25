@@ -19,7 +19,7 @@ export interface PhaseWeights {
   static: number;      // Phase 3
   behavioural: number;  // Phase 4
   llm: number;         // Phase 5
-  external: number;    // Phase 6
+  // Phase 6 weights live per-endpoint on `external_analyser[].weight`, not here.
 }
 
 export const DEFAULT_WEIGHTS: PhaseWeights = {
@@ -27,7 +27,6 @@ export const DEFAULT_WEIGHTS: PhaseWeights = {
   static: 1.0,
   behavioural: 2.0,
   llm: 1.0,
-  external: 2.0,
 };
 
 // ── Score Labels ────────────────────────────────────────────────────────
@@ -66,7 +65,11 @@ export interface PhaseScores {
   static?: number;
   behavioural?: number;
   llm?: number;
-  external?: number;
+  /**
+   * Phase 6: map of external-analyser name → score. Each entry is weighted by
+   * the corresponding `externalWeights[name]` passed to `aggregateScores`.
+   */
+  external?: Record<string, number>;
 }
 
 /**
@@ -74,11 +77,15 @@ export interface PhaseScores {
  *
  *   final_score = Σ(wi × si) / Σ(wi)   (only phases that ran)
  *
+ * Phase 2-5 use the fixed `weights` map; Phase 6's per-endpoint scores are
+ * each weighted by `externalWeights[name]` (defaulting to 1.0 when missing).
+ *
  * Returns 0 if no phases produced a score.
  */
 export function aggregateScores(
   scores: PhaseScores,
   weights: PhaseWeights = DEFAULT_WEIGHTS,
+  externalWeights?: Record<string, number>,
 ): number {
   let numerator = 0;
   let denominator = 0;
@@ -87,6 +94,14 @@ export function aggregateScores(
     const score = scores[key];
     if (score != null) {
       const w = weights[key];
+      numerator += w * score;
+      denominator += w;
+    }
+  }
+
+  if (scores.external) {
+    for (const [name, score] of Object.entries(scores.external)) {
+      const w = externalWeights?.[name] ?? 1.0;
       numerator += w * score;
       denominator += w;
     }

@@ -12,13 +12,17 @@
  */
 
 import type { Finding } from '../../models.js';
+import type { AuthStrategy } from './auth.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
 export interface ExternalAnalyserOptions {
+  name: string;
   endpoint: string;
-  apiKey?: string;
   timeout?: number; // ms, default 3000
+  weight?: number;
+  /** Optional authentication strategy resolving the Authorization header. */
+  auth?: AuthStrategy;
 }
 
 /** Payload sent to the external endpoint. */
@@ -51,14 +55,18 @@ export interface ExternalScoreResponse {
 // ── ExternalAnalyser ────────────────────────────────────────────────────
 
 export class ExternalAnalyser {
+  public readonly name: string;
+  public readonly weight: number;
   private endpoint: string;
-  private apiKey?: string;
   private timeout: number;
+  private auth?: AuthStrategy;
 
   constructor(opts: ExternalAnalyserOptions) {
+    this.name = opts.name;
     this.endpoint = opts.endpoint;
-    this.apiKey = opts.apiKey;
     this.timeout = opts.timeout ?? 3000;
+    this.weight = opts.weight ?? 1.0;
+    this.auth = opts.auth;
   }
 
   /**
@@ -108,8 +116,9 @@ export class ExternalAnalyser {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
-      if (this.apiKey) {
-        headers['Authorization'] = `Bearer ${this.apiKey}`;
+      if (this.auth) {
+        const authHeader = await this.auth.getAuthHeader();
+        if (authHeader) headers['Authorization'] = authHeader;
       }
 
       const response = await fetch(this.endpoint, {

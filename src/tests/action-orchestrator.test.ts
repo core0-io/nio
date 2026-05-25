@@ -105,24 +105,37 @@ describe('Scoring: aggregateScores', () => {
     assert.ok(Math.abs(result - 0.5333) < 0.01, `Expected ~0.533, got ${result}`);
   });
 
-  it('should handle all five phases', () => {
-    const scores: PhaseScores = { runtime: 0.5, static: 0.5, behavioural: 0.5, llm: 0.5, external: 0.5 };
+  it('should handle all five phases (including a single external endpoint)', () => {
+    const scores: PhaseScores = {
+      runtime: 0.5, static: 0.5, behavioural: 0.5, llm: 0.5,
+      external: { e1: 0.5 },
+    };
     // All scores equal → weighted average = 0.5 regardless of weights
-    assert.equal(aggregateScores(scores), 0.5);
+    assert.equal(aggregateScores(scores, DEFAULT_WEIGHTS, { e1: 2.0 }), 0.5);
   });
 
-  it('should respect custom weights', () => {
-    const scores: PhaseScores = { runtime: 1.0, external: 0.0 };
-    const weights = { ...DEFAULT_WEIGHTS, runtime: 1.0, external: 1.0 };
+  it('should respect custom weights (with external endpoint weight)', () => {
+    const scores: PhaseScores = { runtime: 1.0, external: { e1: 0.0 } };
     // (1.0*1.0 + 1.0*0.0) / (1.0 + 1.0) = 0.5
-    assert.equal(aggregateScores(scores, weights), 0.5);
+    assert.equal(aggregateScores(scores, { ...DEFAULT_WEIGHTS, runtime: 1.0 }, { e1: 1.0 }), 0.5);
   });
 
-  it('should give higher weight to behavioural and external', () => {
+  it('should give higher weight to behavioural', () => {
     // runtime=1.0 (w=1), behavioural=0.0 (w=2) → (1*1 + 2*0) / (1+2) = 0.333
     const scores: PhaseScores = { runtime: 1.0, behavioural: 0.0 };
     const result = aggregateScores(scores);
     assert.ok(Math.abs(result - 0.333) < 0.01, `Expected ~0.333, got ${result}`);
+  });
+
+  it('should aggregate multiple external endpoints by their per-endpoint weights', () => {
+    // runtime=0.5 (w=1), external.a=1.0 (w=2), external.b=0.0 (w=1)
+    // → (1*0.5 + 2*1.0 + 1*0.0) / (1+2+1) = 2.5 / 4 = 0.625
+    const scores: PhaseScores = {
+      runtime: 0.5,
+      external: { a: 1.0, b: 0.0 },
+    };
+    const result = aggregateScores(scores, DEFAULT_WEIGHTS, { a: 2.0, b: 1.0 });
+    assert.ok(Math.abs(result - 0.625) < 1e-6, `Expected 0.625, got ${result}`);
   });
 });
 
@@ -201,8 +214,8 @@ describe('Decision: shouldShortCircuit', () => {
 describe('ExternalAnalyser', () => {
   it('should construct with endpoint and optional settings', () => {
     const scorer = new ExternalAnalyser({
+      name: 'test',
       endpoint: 'https://example.com/score',
-      apiKey: 'test-key',
       timeout: 5000,
     });
     assert.ok(scorer, 'Should construct without error');
@@ -210,6 +223,7 @@ describe('ExternalAnalyser', () => {
 
   it('should return null on network error (unreachable endpoint)', async () => {
     const scorer = new ExternalAnalyser({
+      name: 'test',
       endpoint: 'http://127.0.0.1:1/score', // unreachable
       timeout: 500,
     });
@@ -232,13 +246,17 @@ describe('ExternalAnalyser', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('ActionOrchestrator: Phase 5/6 options', () => {
-  it('should accept llmApiKey and scoringEndpoint options', () => {
+  it('should accept llmApiKey and externalAnalysers options', () => {
     const analyser = new ActionOrchestrator({
       llmApiKey: 'test-key',
       llmModel: 'claude-sonnet-4-20250514',
-      scoringEndpoint: 'https://example.com/score',
-      scoringApiKey: 'score-key',
-      scoringTimeout: 5000,
+      externalAnalysers: [{
+        name: 'e1',
+        endpoint: 'https://example.com/score',
+        weight: 1,
+        timeout: 5000,
+        auth: { type: 'bearer', api_key: 'score-key' },
+      }],
     });
     assert.ok(analyser, 'Should construct with Phase 5/6 options');
   });
@@ -252,12 +270,127 @@ describe('ActionOrchestrator: Phase 5/6 options', () => {
     assert.equal(result.scores.llm, undefined, 'Phase 5 score should be undefined when no API key');
   });
 
-  it('should skip Phase 6 when no scoringEndpoint', async () => {
-    const analyser = new ActionOrchestrator({}); // no scoringEndpoint
+  it('should skip Phase 6 when externalAnalysers is empty', async () => {
+    const analyser = new ActionOrchestrator({ externalAnalysers: [] });
     const envelope = makeEnvelope('exec_command', { command: 'echo hello' });
 
     const result = await analyser.evaluate(envelope);
-    assert.equal(result.scores.external, undefined, 'Phase 6 score should be undefined when no endpoint');
+    assert.equal(result.scores.external, undefined, 'Phase 6 score should be undefined with no endpoints');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ActionOrchestrator: Phase 6 multi-endpoint
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+interface ScorerOpts {
+  /** Score returned by the endpoint. */
+  score: number;
+  /** When true, the listener closes the socket without responding. */
+  drop?: boolean;
+}
+
+function startScorer(opts: ScorerOpts): Promise<{ url: string; server: Server }> {
+  const server = createServer((req, res) => {
+    if (opts.drop) {
+      res.socket?.destroy();
+      return;
+    }
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ score: opts.score, reason: `scored ${opts.score}` }));
+    });
+  });
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({ url: `http://127.0.0.1:${port}`, server });
+    });
+  });
+}
+
+function stopScorer(server: Server): Promise<void> {
+  return new Promise(r => server.close(() => r()));
+}
+
+describe('ActionOrchestrator: Phase 6 multi-endpoint', () => {
+  it('aggregates two endpoints by per-endpoint weight', async () => {
+    const a = await startScorer({ score: 0.4 });
+    const b = await startScorer({ score: 0.1 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [
+          { name: 'a', endpoint: a.url, weight: 3.0 },
+          { name: 'b', endpoint: b.url, weight: 1.0 },
+        ],
+      });
+      const result = await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+
+      assert.deepEqual(result.scores.external, { a: 0.4, b: 0.1 });
+      // Phase 2 (runtime) ran with score=0 and weight=1, contributing 0/1 to the
+      // weighted average. External adds (3*0.4 + 1*0.1) on top with weight 3+1=4.
+      // Final = (0 + 1.2 + 0.1) / (1 + 3 + 1) = 1.3 / 5 = 0.26.
+      assert.ok(result.scores.final !== undefined);
+      assert.ok(Math.abs(result.scores.final! - 0.26) < 1e-6,
+        `expected final ≈ 0.26, got ${result.scores.final}`);
+    } finally {
+      await stopScorer(a.server);
+      await stopScorer(b.server);
+    }
+  });
+
+  it('short-circuits when ANY endpoint returns critical (final ≥ critical, not diluted)', async () => {
+    const critical = await startScorer({ score: 0.95 });
+    const quiet    = await startScorer({ score: 0.05 });
+    try {
+      const analyser = new ActionOrchestrator({
+        level: 'balanced',
+        externalAnalysers: [
+          { name: 'critical', endpoint: critical.url, weight: 1.0 },
+          { name: 'quiet',    endpoint: quiet.url,    weight: 1.0 },
+        ],
+      });
+      const result = await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+
+      assert.equal(result.phase_stopped, 6);
+      assert.equal(result.decision, 'deny');
+      assert.ok(result.scores.final !== undefined && result.scores.final >= 0.95,
+        `expected final ≥ 0.95, got ${result.scores.final}`);
+      assert.ok(
+        result.findings.some(f => f.rule_id === 'EXTERNAL_SCORE:critical'),
+        'expected synthetic finding tagged with critical endpoint name',
+      );
+    } finally {
+      await stopScorer(critical.server);
+      await stopScorer(quiet.server);
+    }
+  });
+
+  it('survives one endpoint failing — other endpoint still contributes', async () => {
+    const dead = await startScorer({ score: 0, drop: true });
+    const live = await startScorer({ score: 0.3 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [
+          { name: 'dead', endpoint: dead.url, weight: 1.0, timeout: 200 },
+          { name: 'live', endpoint: live.url, weight: 1.0 },
+        ],
+      });
+      const result = await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+
+      // dead endpoint is omitted from scores.external; live still present
+      assert.deepEqual(result.scores.external, { live: 0.3 });
+      assert.ok(result.phase_timings?.external?.['live']);
+      assert.ok(!result.phase_timings?.external?.['dead']);
+    } finally {
+      await stopScorer(dead.server);
+      await stopScorer(live.server);
+    }
   });
 });
 

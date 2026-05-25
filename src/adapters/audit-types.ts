@@ -33,9 +33,16 @@ export interface AuditPhaseDetail {
   duration_ms: number;
 }
 
-export type AuditPhaseMap = Partial<
-  Record<'tool_gate' | 'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', AuditPhaseDetail>
->;
+export type AuditPhaseMap = Partial<{
+  tool_gate:   AuditPhaseDetail;
+  allowlist:   AuditPhaseDetail;
+  runtime:     AuditPhaseDetail;
+  static:      AuditPhaseDetail;
+  behavioural: AuditPhaseDetail;
+  llm:         AuditPhaseDetail;
+  /** Phase 6: one detail per external-analyser endpoint, keyed by name. */
+  external:    Record<string, AuditPhaseDetail>;
+}>;
 
 // ── Guard entry ─────────────────────────────────────────────────────────
 
@@ -57,7 +64,15 @@ export interface AuditGuardEntry {
   risk_tags: string[];
 
   phase_stopped: number | null;
-  scores: Record<string, number | undefined>;
+  scores: {
+    runtime?: number;
+    static?: number;
+    behavioural?: number;
+    llm?: number;
+    /** Phase 6: per-endpoint scores keyed by external-analyser name. */
+    external?: Record<string, number>;
+    final?: number;
+  };
   phases?: AuditPhaseMap;
   top_findings: AuditFindingSummary[];
   explanation?: string;

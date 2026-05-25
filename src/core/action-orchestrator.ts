@@ -38,6 +38,11 @@ import {
   type GuardDecision,
 } from './action-decision.js';
 import { ExternalAnalyser } from './analysers/external/index.js';
+import {
+  BearerAuthStrategy,
+  getOrCreateOAuthStrategy,
+  type AuthStrategy,
+} from './analysers/external/auth.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -47,9 +52,15 @@ export interface PhaseTimingEntry {
   duration_ms: number;
 }
 
-export type PhaseTimings = Partial<
-  Record<'allowlist' | 'runtime' | 'static' | 'behavioural' | 'llm' | 'external', PhaseTimingEntry>
->;
+export type PhaseTimings = Partial<{
+  allowlist:   PhaseTimingEntry;
+  runtime:     PhaseTimingEntry;
+  static:      PhaseTimingEntry;
+  behavioural: PhaseTimingEntry;
+  llm:         PhaseTimingEntry;
+  /** Phase 6: one timing entry per external-analyser endpoint, keyed by name. */
+  external:    Record<string, PhaseTimingEntry>;
+}>;
 
 export interface ActionDecision {
   decision: GuardDecision;
@@ -92,11 +103,25 @@ export interface ActionOrchestratorOptions {
   llmEnabled?: boolean;
   llmApiKey?: string;
   llmModel?: string;
-  // Phase 6: External analyser
-  externalEnabled?: boolean;
-  scoringEndpoint?: string;
-  scoringApiKey?: string;
-  scoringTimeout?: number;
+  // Phase 6: External analyser endpoints (0..N). See `ExternalAnalyserEntry`
+  // in src/adapters/config-schema.ts for the config-shape mirror.
+  externalAnalysers?: Array<{
+    name: string;
+    enabled?: boolean;
+    endpoint: string;
+    timeout?: number;
+    weight?: number;
+    auth?:
+      | { type: 'bearer'; api_key: string }
+      | {
+          type: 'oauth';
+          oauth_url: string;
+          key_id: string;
+          key_secret: string;
+          client_id?: string;
+          client_secret?: string;
+        };
+  }>;
 }
 
 // ── ActionOrchestrator ─────────────────────────────────────────────────
@@ -111,8 +136,8 @@ export class ActionOrchestrator {
   private llmEnabled: boolean;
   private llmApiKey?: string;
   private llmModel?: string;
-  private externalEnabled: boolean;
-  private externalScorer?: ExternalAnalyser;
+  private externalScorers: ExternalAnalyser[] = [];
+  private externalWeights: Record<string, number> = {};
 
   constructor(opts?: ActionOrchestratorOptions) {
     this.weights = { ...DEFAULT_WEIGHTS, ...opts?.scoringWeights };
@@ -124,14 +149,32 @@ export class ActionOrchestrator {
     this.llmEnabled = opts?.llmEnabled ?? false;
     this.llmApiKey = opts?.llmApiKey;
     this.llmModel = opts?.llmModel;
-    this.externalEnabled = opts?.externalEnabled ?? false;
 
-    if (opts?.scoringEndpoint) {
-      this.externalScorer = new ExternalAnalyser({
-        endpoint: opts.scoringEndpoint,
-        apiKey: opts.scoringApiKey,
-        timeout: opts.scoringTimeout,
-      });
+    for (const e of opts?.externalAnalysers ?? []) {
+      if (e.enabled === false) continue;
+      if (!e.endpoint) continue;
+
+      let auth: AuthStrategy | undefined;
+      if (e.auth?.type === 'bearer') {
+        auth = new BearerAuthStrategy(e.auth.api_key);
+      } else if (e.auth?.type === 'oauth') {
+        auth = getOrCreateOAuthStrategy({
+          oauthUrl:     e.auth.oauth_url,
+          keyId:        e.auth.key_id,
+          keySecret:    e.auth.key_secret,
+          clientId:     e.auth.client_id,
+          clientSecret: e.auth.client_secret,
+        });
+      }
+
+      this.externalScorers.push(new ExternalAnalyser({
+        name:     e.name,
+        endpoint: e.endpoint,
+        timeout:  e.timeout,
+        weight:   e.weight,
+        auth,
+      }));
+      this.externalWeights[e.name] = e.weight ?? 1.0;
     }
   }
 
@@ -254,40 +297,73 @@ export class ActionOrchestrator {
       }
     }
 
-    // ── Phase 6: External API (optional, gated on enabled + endpoint)
-    if (this.externalEnabled && this.externalScorer) {
-      const t6 = performance.now();
-      const result = await this.externalScorer.scoreAction(
+    // ── Phase 6: External APIs (0..N endpoints, concurrent) ──────────
+    if (this.externalScorers.length > 0) {
+      // Snapshot of Phase 2-5 scores. All concurrent external scorers see the
+      // same snapshot — they do NOT see each other's results (decision: 互不可见).
+      const priorScoreSnapshot: Record<string, number | undefined> = {
+        runtime:     scores.runtime,
+        static:      scores.static,
+        behavioural: scores.behavioural,
+        llm:         scores.llm,
+      };
+
+      const externalTimings: Record<string, PhaseTimingEntry> = {};
+      const externalScores: Record<string, number> = {};
+
+      const settled = await Promise.allSettled(this.externalScorers.map(async (scorer) => {
+        const t = performance.now();
+        const result = await scorer.scoreAction(
           envelope.action.type,
           envelope.action.data as unknown as Record<string, unknown>,
-          scores as Record<string, number | undefined>,
+          priorScoreSnapshot,
           allFindings,
           envelope.context.initiating_skill,
         );
-      const t6End = performance.now();
-      if (result) {
-        scores.external = result.score;
-        timings.external = { score: result.score, finding_count: 0, duration_ms: Math.round(t6End - t6) };
+        return { scorer, result, duration: performance.now() - t };
+      }));
 
-        // Emit a synthetic finding when external score indicates risk (≥ 0.5)
+      let maxExternalScore = 0;
+
+      for (const outcome of settled) {
+        if (outcome.status !== 'fulfilled') continue;
+        const { scorer, result, duration } = outcome.value;
+        if (!result) continue;
+
+        externalScores[scorer.name] = result.score;
+        externalTimings[scorer.name] = {
+          score: result.score,
+          finding_count: 0,
+          duration_ms: Math.round(duration),
+        };
+
         if (result.score >= 0.5) {
           allFindings.push({
-            id: `EXTERNAL_SCORE:${envelope.action.type}:0`,
-            rule_id: 'EXTERNAL_SCORE',
+            id: `EXTERNAL_SCORE:${scorer.name}:${envelope.action.type}`,
+            rule_id: `EXTERNAL_SCORE:${scorer.name}`,
             category: 'policy_violation',
             severity: result.score >= 0.9 ? 'critical' : result.score >= 0.7 ? 'high' : 'medium',
-            title: 'External scorer flagged action',
+            title: `External scorer ${scorer.name} flagged action`,
             description: result.reason || 'External scoring API returned elevated risk score',
-            location: { file: envelope.action.type, line: 0 },
+            location: { file: `${envelope.action.type}:${scorer.name}`, line: 0 },
             analyser: 'static',
             confidence: result.score,
           });
-          timings.external!.finding_count = 1;
+          externalTimings[scorer.name].finding_count = 1;
         }
 
-        if (shouldShortCircuit(result.score, level)) {
-          return this.buildResult(allFindings, scores, 6, level, timings, result.score);
-        }
+        if (result.score > maxExternalScore) maxExternalScore = result.score;
+      }
+
+      if (Object.keys(externalScores).length > 0) {
+        scores.external = externalScores;
+        timings.external = externalTimings;
+      }
+
+      // Short-circuit if ANY endpoint crossed the deny threshold — the
+      // critical verdict should not be diluted by quieter siblings.
+      if (maxExternalScore > 0 && shouldShortCircuit(maxExternalScore, level)) {
+        return this.buildResult(allFindings, scores, 6, level, timings, maxExternalScore);
       }
     }
 
@@ -403,7 +479,7 @@ export class ActionOrchestrator {
     // Base aggregate: weighted average across every phase that produced a
     // score. On a natural end-of-pipeline (phase 6 without triggering
     // short-circuit) this is the final answer.
-    const aggregated = aggregateScores(scores, this.weights);
+    const aggregated = aggregateScores(scores, this.weights, this.externalWeights);
 
     // When a phase's own score crossed the deny threshold, we short-
     // circuited on that phase. That phase alone said "this is severe

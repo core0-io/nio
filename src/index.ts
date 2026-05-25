@@ -99,10 +99,7 @@ export function createNio(options?: {
     llmEnabled: guard?.llm_analyser?.enabled ?? false,
     llmApiKey: guard?.llm_analyser?.api_key,
     llmModel: guard?.llm_analyser?.model,
-    externalEnabled: guard?.external_analyser?.enabled ?? false,
-    scoringEndpoint: guard?.external_analyser?.endpoint,
-    scoringApiKey: guard?.external_analyser?.api_key,
-    scoringTimeout: guard?.external_analyser?.timeout,
+    externalAnalysers: guard?.external_analyser ?? [],
   });
 
   return {

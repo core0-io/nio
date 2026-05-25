@@ -197,7 +197,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
     "file_scan_rules": {},
     "action_guard_rules": {},
     "llm_analyser": { "enabled": false, "api_key": "" },
-    "external_analyser": { "enabled": false, "endpoint": "" },
+    "external_analyser": [],
     "allowed_commands": [],
     "permitted_tools": {},
     "blocked_tools": {},
@@ -229,8 +229,19 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.action_guard_rules` | object | `{}` | Extra guard patterns (Phase 2 runtime analysis) |
 | `guard.llm_analyser.enabled` | boolean | `true` | Enable/disable Phase 5 LLM analysis |
 | `guard.llm_analyser.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
-| `guard.external_analyser.enabled` | boolean | `true` | Enable/disable Phase 6 external scoring |
-| `guard.external_analyser.endpoint` | string | `""` | Phase 6 external scoring API URL |
+| `guard.external_analyser` | array | `[]` | Phase 6 external scoring endpoints. Each entry: `{ name, endpoint, weight?, timeout?, enabled?, auth? }`. All enabled entries run concurrently; their scores are weighted into the final aggregate per `entry.weight` (default 1.0). |
+| `guard.external_analyser[].name` | string | (required) | Unique identifier surfaced in `scores.external`, `phase_timings.external`, and audit logs. |
+| `guard.external_analyser[].endpoint` | string | (required) | HTTPS POST URL receiving the scoring payload. |
+| `guard.external_analyser[].weight` | number | `1.0` | Aggregation weight; participates in `final_score = Σ(wi·si)/Σ(wi)`. |
+| `guard.external_analyser[].timeout` | number | `3000` | Per-request timeout (ms). |
+| `guard.external_analyser[].enabled` | boolean | `true` | Set false to skip this endpoint without removing config. |
+| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (FFWD-style PKCE). Omit `auth` entirely for unauthenticated endpoints. |
+| `guard.external_analyser[].auth.api_key` | string | — | `bearer` only — sent as `Authorization: Bearer <api_key>`. |
+| `guard.external_analyser[].auth.oauth_url` | string | — | `oauth` only — base URL; runtime appends `/register`, `/code`, `/token`. |
+| `guard.external_analyser[].auth.key_id` / `.key_secret` | string | — | `oauth` only — bootstrap credentials used to authenticate the `/code` request. |
+| `guard.external_analyser[].auth.client_id` / `.client_secret` | string | — | `oauth` only, optional — pre-issued client; if absent, `/register` is called automatically. |
+
+**OAuth token caching:** Endpoints with `auth.type=oauth` cache tokens to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth fields (`oauth_url + key_id + key_secret [+ client_id]`) share the cache and the in-process `OAuthAuthStrategy` instance — PKCE runs only once even when N endpoints fire concurrently. Cached tokens are refreshed via `refresh_token` grant when near expiry; on refresh failure the full PKCE flow re-runs automatically.
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
 | `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
 | `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |

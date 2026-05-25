@@ -202,14 +202,13 @@ describe('guard.scoring_weights', () => {
       static: 1.0,
       behavioural: 2.0,
       llm: 1.0,
-      external: 2.0,
     });
   });
 
   it('equal weights → plain average of phase scores', () => {
     const score = aggregateScores(
       { runtime: 0.5, static: 1.0 },
-      { runtime: 1, static: 1, behavioural: 1, llm: 1, external: 1 },
+      { runtime: 1, static: 1, behavioural: 1, llm: 1 },
     );
     assert.equal(score, 0.75);
   });
@@ -217,7 +216,7 @@ describe('guard.scoring_weights', () => {
   it('high runtime weight biases final score toward Phase 2', () => {
     const score = aggregateScores(
       { runtime: 0.5, static: 1.0 },
-      { runtime: 10, static: 1, behavioural: 1, llm: 1, external: 1 },
+      { runtime: 10, static: 1, behavioural: 1, llm: 1 },
     );
     // (0.5 × 10 + 1.0 × 1) / (10 + 1) = 6/11 ≈ 0.545
     assert.ok(Math.abs(score - 0.5454545454545454) < 1e-9);
@@ -227,7 +226,7 @@ describe('guard.scoring_weights', () => {
     // Only runtime produced a score; other weights do not pollute the denominator
     const score = aggregateScores(
       { runtime: 0.8 },
-      { runtime: 1, static: 1, behavioural: 5, llm: 1, external: 1 },
+      { runtime: 1, static: 1, behavioural: 5, llm: 1 },
     );
     assert.equal(score, 0.8);
   });
