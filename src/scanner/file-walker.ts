@@ -85,8 +85,17 @@ export async function walkDirectory(rootDir: string): Promise<FileInfo[]> {
         extension,
       });
     } catch (err) {
-      // Skip unreadable files
-      console.warn(`Failed to read file: ${filePath}`);
+      // Skip unreadable files but make the failure visible in the audit log
+      // so unexpected permission / symlink loops don't go unnoticed.
+      const { reportDiagnostic } = await import('../adapters/diagnostics.js');
+      reportDiagnostic({
+        severity: 'warning',
+        source: 'scanner',
+        kind: 'file_read_failed',
+        component: filePath,
+        message: `Failed to read file: ${filePath}`,
+        detail: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

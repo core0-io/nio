@@ -36,6 +36,7 @@ export {};
 
 import { createNio, HermesAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter, HookOutput } from '../index.js';
+import { formatDiagnosticsForUser } from '../adapters/diagnostics.js';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
@@ -226,26 +227,32 @@ function formatHermesGuardOutput(
   result: HookOutput,
   confirmAction: string,
 ): FormattedOutput {
+  const diagBlock = result.diagnostics?.length
+    ? '\n\n' + formatDiagnosticsForUser(result.diagnostics)
+    : '';
+
   if (result.decision === 'deny') {
     return {
       stdout: JSON.stringify({
         decision: 'block',
-        reason: result.reason || 'Blocked by Nio',
+        reason: (result.reason || 'Blocked by Nio') + diagBlock,
       }),
     };
   }
   if (result.decision === 'allow') {
-    return { stdout: '{}' };
+    // Hermes has no additionalContext channel; surface diagnostics on stderr
+    // so they remain visible without changing the allow contract.
+    return { stdout: '{}', stderr: diagBlock ? diagBlock.trim() : undefined };
   }
   // decision === 'ask' — Hermes has no confirmation channel.
   if (confirmAction === 'allow') {
-    return { stdout: '{}' };
+    return { stdout: '{}', stderr: diagBlock ? diagBlock.trim() : undefined };
   }
   if (confirmAction === 'deny') {
     return {
       stdout: JSON.stringify({
         decision: 'block',
-        reason: result.reason || 'Action requires confirmation',
+        reason: (result.reason || 'Action requires confirmation') + diagBlock,
       }),
     };
   }
@@ -253,7 +260,7 @@ function formatHermesGuardOutput(
   return {
     stdout: JSON.stringify({
       decision: 'block',
-      reason: result.reason || 'Action requires confirmation',
+      reason: (result.reason || 'Action requires confirmation') + diagBlock,
     }),
     stderr:
       `guard.confirm_action: 'ask' not supported on Hermes (no confirmation channel); falling back to 'deny'`,

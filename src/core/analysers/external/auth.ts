@@ -16,18 +16,24 @@ import { mkdir, readFile, rename, writeFile, chmod } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import type { DiagnosticCollector } from '../../../adapters/diagnostics.js';
+
 // ── AuthStrategy interface ──────────────────────────────────────────────
 
 export interface AuthStrategy {
-  /** Resolve the Authorization header value (e.g. "Bearer xyz"), or null. */
-  getAuthHeader(): Promise<string | null>;
+  /**
+   * Resolve the Authorization header value (e.g. "Bearer xyz"), or null on
+   * failure. Pass a DiagnosticCollector to capture structured failure info
+   * the orchestrator can surface back to the user.
+   */
+  getAuthHeader(reporter?: DiagnosticCollector): Promise<string | null>;
 }
 
 // ── BearerAuthStrategy ──────────────────────────────────────────────────
 
 export class BearerAuthStrategy implements AuthStrategy {
   constructor(private readonly apiKey: string) {}
-  async getAuthHeader(): Promise<string | null> {
+  async getAuthHeader(_reporter?: DiagnosticCollector): Promise<string | null> {
     return `Bearer ${this.apiKey}`;
   }
 }
@@ -142,18 +148,26 @@ export class OAuthAuthStrategy implements AuthStrategy {
     this.cachePath = cacheFilePath(cfg);
   }
 
-  async getAuthHeader(): Promise<string | null> {
-    const tok = await this.ensureToken();
+  async getAuthHeader(reporter?: DiagnosticCollector): Promise<string | null> {
+    const tok = await this.ensureToken(reporter);
     return tok ? `Bearer ${tok}` : null;
   }
 
-  private async ensureToken(): Promise<string | null> {
+  private async ensureToken(reporter?: DiagnosticCollector): Promise<string | null> {
+    // Note: when multiple concurrent calls share an in-flight promise, only
+    // the first caller's reporter receives diagnostics. That's acceptable —
+    // any caller will see the failure via the returned null, and audit-log
+    // entries are written unconditionally by reporter.collect().
     if (this.inflight) return this.inflight;
-    this.inflight = this.acquireToken().finally(() => { this.inflight = undefined; });
+    this.inflight = this.acquireToken(reporter).finally(() => { this.inflight = undefined; });
     return this.inflight;
   }
 
-  private async acquireToken(): Promise<string | null> {
+  private get oauthHost(): string {
+    try { return new URL(this.cfg.oauthUrl).hostname; } catch { return this.cfg.oauthUrl; }
+  }
+
+  private async acquireToken(reporter?: DiagnosticCollector): Promise<string | null> {
     // 1) Cache hit
     const cached = await readCache(this.cachePath);
     if (cached && cached.expires_at > nowSeconds() + TOKEN_SAFETY_MARGIN_S) {
@@ -162,23 +176,43 @@ export class OAuthAuthStrategy implements AuthStrategy {
 
     // 2) Try refresh_token grant
     if (cached?.refresh_token) {
-      const refreshed = await this.tryRefresh(cached);
+      const refreshed = await this.tryRefresh(cached, reporter);
       if (refreshed) return refreshed.access_token;
     }
 
     // 3) Fresh PKCE flow
     try {
       const entry = await this.runPkceFlow(cached);
-      await writeCache(this.cachePath, entry);
+      try {
+        await writeCache(this.cachePath, entry);
+      } catch (err: unknown) {
+        reporter?.collect({
+          severity: 'warning',
+          source: 'oauth',
+          kind: 'cache_write_failed',
+          component: this.oauthHost,
+          message: `Failed to persist OAuth token cache to ${this.cachePath}`,
+          detail: (err as { message?: string })?.message,
+          hint: 'Check disk permissions on ~/.nio/oauth-cache/. Token is still usable in-memory for this process.',
+        });
+      }
       return entry.access_token;
     } catch (err: unknown) {
       const error = err as { message?: string };
-      console.warn(`[OAuth] PKCE flow failed: ${error.message}`);
+      reporter?.collect({
+        severity: 'error',
+        source: 'oauth',
+        kind: 'pkce_failed',
+        component: this.oauthHost,
+        message: `PKCE flow failed for ${this.cfg.oauthUrl}`,
+        detail: error.message,
+        hint: 'Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.',
+      });
       return null;
     }
   }
 
-  private async tryRefresh(cached: TokenCacheEntry): Promise<TokenCacheEntry | null> {
+  private async tryRefresh(cached: TokenCacheEntry, reporter?: DiagnosticCollector): Promise<TokenCacheEntry | null> {
     try {
       const body = new URLSearchParams();
       body.set('grant_type', 'refresh_token');
@@ -191,7 +225,17 @@ export class OAuthAuthStrategy implements AuthStrategy {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: body.toString(),
       });
-      if (!resp.ok) return null;
+      if (!resp.ok) {
+        reporter?.collect({
+          severity: 'warning',
+          source: 'oauth',
+          kind: 'refresh_failed',
+          component: this.oauthHost,
+          message: `refresh_token grant rejected (HTTP ${resp.status}); falling back to full PKCE`,
+          detail: `${resp.status} ${resp.statusText}`,
+        });
+        return null;
+      }
 
       const data = await resp.json() as {
         access_token?: string;
@@ -207,9 +251,28 @@ export class OAuthAuthStrategy implements AuthStrategy {
         client_id: cached.client_id,
         client_secret: cached.client_secret,
       };
-      await writeCache(this.cachePath, entry);
+      try {
+        await writeCache(this.cachePath, entry);
+      } catch (err: unknown) {
+        reporter?.collect({
+          severity: 'warning',
+          source: 'oauth',
+          kind: 'cache_write_failed',
+          component: this.oauthHost,
+          message: `Failed to persist refreshed token to ${this.cachePath}`,
+          detail: (err as { message?: string })?.message,
+        });
+      }
       return entry;
-    } catch {
+    } catch (err: unknown) {
+      reporter?.collect({
+        severity: 'warning',
+        source: 'oauth',
+        kind: 'refresh_failed',
+        component: this.oauthHost,
+        message: `refresh_token request errored; falling back to full PKCE`,
+        detail: (err as { message?: string })?.message,
+      });
       return null;
     }
   }

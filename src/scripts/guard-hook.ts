@@ -28,6 +28,7 @@ import { createMeterProvider, recordGuardDecision } from './lib/metrics-collecto
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
+import { formatDiagnosticsForUser, type Diagnostic } from '../adapters/diagnostics.js';
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -66,23 +67,39 @@ function readStdin(): Promise<unknown> {
 // Claude Code output helpers
 // ---------------------------------------------------------------------------
 
-function outputDeny(reason: string): never {
-  process.stderr.write(reason + '\n');
+function appendDiagnostics(reason: string, diagnostics?: readonly Diagnostic[]): string {
+  if (!diagnostics || diagnostics.length === 0) return reason;
+  return `${reason}\n\n${formatDiagnosticsForUser(diagnostics)}`;
+}
+
+function outputDeny(reason: string, diagnostics?: readonly Diagnostic[]): never {
+  process.stderr.write(appendDiagnostics(reason, diagnostics) + '\n');
   process.exit(2);
 }
 
-function outputAsk(reason: string): never {
+function outputAsk(reason: string, diagnostics?: readonly Diagnostic[]): never {
   console.log(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       permissionDecision: 'ask',
-      permissionDecisionReason: reason,
+      permissionDecisionReason: appendDiagnostics(reason, diagnostics),
     },
   }));
   process.exit(0);
 }
 
-function outputAllow(): never {
+function outputAllow(diagnostics?: readonly Diagnostic[]): never {
+  // No diagnostics → exit silently (current behaviour preserved).
+  // Diagnostics present → emit hookSpecificOutput.additionalContext so the
+  // agent sees the failure without us having to block the action.
+  if (diagnostics && diagnostics.length > 0) {
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        additionalContext: formatDiagnosticsForUser(diagnostics),
+      },
+    }));
+  }
   process.exit(0);
 }
 
@@ -135,14 +152,16 @@ async function main(): Promise<void> {
     loggerProvider?.forceFlush(),
   ]);
 
-  if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked');
+  const diags = result.diagnostics;
+
+  if (result.decision === 'deny') outputDeny(result.reason || 'Action blocked', diags);
   else if (result.decision === 'ask') {
     const confirmAction = config.guard?.confirm_action ?? 'ask';
-    if (confirmAction === 'deny') outputDeny(result.reason || 'Action requires confirmation');
-    else if (confirmAction === 'allow') outputAllow();
-    else outputAsk(result.reason || 'Action requires confirmation');
+    if (confirmAction === 'deny') outputDeny(result.reason || 'Action requires confirmation', diags);
+    else if (confirmAction === 'allow') outputAllow(diags);
+    else outputAsk(result.reason || 'Action requires confirmation', diags);
   }
-  else outputAllow();
+  else outputAllow(diags);
 }
 
 main();

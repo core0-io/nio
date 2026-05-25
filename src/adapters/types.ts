@@ -38,6 +38,12 @@ export interface HookOutput {
   riskTags?: string[];
   /** Initiating skill (if detected) */
   initiatingSkill?: string | null;
+  /**
+   * Non-blocking diagnostics surfaced during evaluation. Hook scripts copy
+   * these into platform-specific user-visible output (e.g. Claude Code's
+   * `hookSpecificOutput.additionalContext`, or appended to deny/ask reason).
+   */
+  diagnostics?: import('./diagnostics.js').Diagnostic[];
 }
 
 /**

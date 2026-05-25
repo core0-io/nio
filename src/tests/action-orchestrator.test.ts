@@ -1,5 +1,20 @@
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
+
+// Sandbox diagnostic writes so tests never touch ~/.nio/audit.jsonl.
+let testAuditDir: string;
+before(() => {
+  testAuditDir = mkdtempSync(join(tmpdir(), 'nio-action-orchestrator-test-'));
+  _setDiagnosticsAuditPathForTests(join(testAuditDir, 'audit.jsonl'));
+});
+after(() => {
+  _setDiagnosticsAuditPathForTests(null);
+  try { rmSync(testAuditDir, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 import {
   findingsToScore,
   aggregateScores,
@@ -383,10 +398,21 @@ describe('ActionOrchestrator: Phase 6 multi-endpoint', () => {
       });
       const result = await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
 
-      // dead endpoint is omitted from scores.external; live still present
+      // dead endpoint is omitted from scores.external (it produced no score),
+      // but its failure stays visible in phase_timings.external with an `error`
+      // field. live is recorded normally.
       assert.deepEqual(result.scores.external, { live: 0.3 });
       assert.ok(result.phase_timings?.external?.['live']);
-      assert.ok(!result.phase_timings?.external?.['dead']);
+      assert.ok(result.phase_timings?.external?.['dead'], 'failed endpoint must keep an entry');
+      assert.equal(result.phase_timings?.external?.['dead']?.score, 0);
+      assert.ok(result.phase_timings?.external?.['dead']?.error, 'failed endpoint entry has error info');
+
+      // Diagnostics include the failure attributable to "dead"
+      assert.ok(
+        result.diagnostics?.some(d =>
+          d.source === 'external_analyser' && d.component === 'dead'),
+        'expected diagnostic for the dead endpoint',
+      );
     } finally {
       await stopScorer(dead.server);
       await stopScorer(live.server);

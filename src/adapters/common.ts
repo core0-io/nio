@@ -12,8 +12,10 @@ import { validateConfig } from './config-schema.js';
 import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
-import type { AuditEntry, AuditGuardEntry, AuditConfigErrorEntry, AuditFindingSummary } from './audit-types.js';
-export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditConfigErrorEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
+import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
+import { reportDiagnostic } from './diagnostics.js';
+export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditDiagnosticEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
+export { reportDiagnostic, DiagnosticCollector, type Diagnostic } from './diagnostics.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { Finding } from '../core/models.js';
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
@@ -60,34 +62,23 @@ export function resetConfig(): NioConfig {
   return { ...CONFIG_DEFAULTS };
 }
 
-// Dedup: only report a given config error once per process.
-let lastReportedConfigError: string | null = null;
-
 function reportConfigError(err: unknown): void {
   const message = err instanceof Error ? err.message : String(err);
-  if (lastReportedConfigError === message) return;
-  lastReportedConfigError = message;
 
-  console.error(
-    `[Nio] Failed to load ${CONFIG_YAML_PATH}, falling back to defaults:`,
-  );
-  console.error(`  ${message}`);
+  // Classify YAML parse errors vs Zod schema errors. validateConfig throws
+  // `Invalid config (<source>):\n<issues>`; YAML parse errors come straight
+  // from js-yaml with a different prefix.
+  const kind = /^Invalid config/.test(message) ? 'schema_invalid' : 'yaml_parse_failed';
 
-  try {
-    ensureDir();
-    const entry: AuditConfigErrorEntry = {
-      event: 'config_error',
-      timestamp: new Date().toISOString(),
-      config_path: CONFIG_YAML_PATH,
-      error_message: message,
-    };
-    // Config error happens before logsConfig is loaded — always falls back
-    // to the default path. Cannot honor a user-customized logs.path here
-    // because that's exactly what failed to load.
-    appendFileSync(DEFAULT_AUDIT_PATH, JSON.stringify(entry) + '\n');
-  } catch {
-    // Best-effort — don't let audit write swallow the primary failure
-  }
+  reportDiagnostic({
+    severity: 'error',
+    source: 'config',
+    kind,
+    message: `Failed to load ${CONFIG_YAML_PATH}, falling back to defaults`,
+    detail: message,
+    config_path: CONFIG_YAML_PATH,
+    hint: 'See plugins/shared/config.default.yaml for the expected shape, or run /nio doctor.',
+  });
 }
 
 export function loadConfig(): NioConfig {

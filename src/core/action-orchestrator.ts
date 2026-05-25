@@ -43,6 +43,7 @@ import {
   getOrCreateOAuthStrategy,
   type AuthStrategy,
 } from './analysers/external/auth.js';
+import { DiagnosticCollector, type Diagnostic } from '../adapters/diagnostics.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -50,6 +51,16 @@ export interface PhaseTimingEntry {
   score: number;
   finding_count: number;
   duration_ms: number;
+  /**
+   * Set when the phase ran but the underlying analyser failed in a recoverable
+   * way (e.g. an external scoring endpoint returned 401, or its OAuth flow
+   * couldn't get a token). The phase is treated as if it didn't contribute a
+   * score, but the failure stays visible in the audit trail.
+   */
+  error?: {
+    kind: string;
+    detail?: string;
+  };
 }
 
 export type PhaseTimings = Partial<{
@@ -72,6 +83,14 @@ export interface ActionDecision {
   phase_stopped: 1 | 2 | 3 | 4 | 5 | 6;
   phase_timings?: PhaseTimings;
   explanation?: string;
+  /**
+   * Non-blocking diagnostics surfaced during evaluation (OAuth/LLM/external
+   * HTTP failures, etc.). Hook scripts copy these into their user-visible
+   * output so silent failures become visible without forcing the user to
+   * grep audit logs. Recoverable failures only — fatal config errors are
+   * surfaced at config-load time, not here.
+   */
+  diagnostics?: Diagnostic[];
 }
 
 /** Map a 0-1 risk score to a risk level. */
@@ -188,6 +207,10 @@ export class ActionOrchestrator {
     const allFindings: Finding[] = [];
     const scores: PhaseScores = {};
     const timings: PhaseTimings = {};
+    // Fresh collector per evaluation so concurrent evaluate() calls do not
+    // share or overwrite each other's diagnostics. Each analyser receives
+    // this reporter via method args, not constructor.
+    const reporter = new DiagnosticCollector();
 
     // ── Phase 1: Allowlist Gate ───────────────────────────────────────
     const t1 = performance.now();
@@ -283,9 +306,23 @@ export class ActionOrchestrator {
     }
 
     // ── Phase 5: LLM (optional, gated on enabled + API key) ──────────
+    if (this.llmEnabled && !this.llmApiKey) {
+      // Misconfig: enabled without an API key. Phase 5 cannot run, but the
+      // user almost certainly intended for it to — surface it as a
+      // diagnostic so /nio report / /nio doctor / the next agent reply
+      // make it visible.
+      reporter.collect({
+        severity: 'error',
+        source: 'llm',
+        kind: 'api_key_missing',
+        config_path: 'guard.llm_analyser.api_key',
+        message: 'guard.llm_analyser.enabled=true but api_key is empty',
+        hint: 'Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.',
+      });
+    }
     if (this.llmEnabled && this.llmApiKey) {
       const t5 = performance.now();
-      const phase5Findings = await this.runLLMOnAction(envelope);
+      const phase5Findings = await this.runLLMOnAction(envelope, reporter);
       const t5End = performance.now();
       allFindings.push(...phase5Findings);
       const scoreD = findingsToScore(phase5Findings);
@@ -293,7 +330,7 @@ export class ActionOrchestrator {
       timings.llm = { score: scoreD, finding_count: phase5Findings.length, duration_ms: Math.round(t5End - t5) };
 
       if (shouldShortCircuit(scoreD, level)) {
-        return this.buildResult(allFindings, scores, 5, level, timings, scoreD);
+        return this.buildResult(allFindings, scores, 5, level, timings, scoreD, reporter);
       }
     }
 
@@ -312,6 +349,9 @@ export class ActionOrchestrator {
       const externalScores: Record<string, number> = {};
 
       const settled = await Promise.allSettled(this.externalScorers.map(async (scorer) => {
+        // Per-scorer reporter so concurrent runs don't interleave diagnostics
+        // when we later need to attribute a failure kind to a specific endpoint.
+        const localReporter = new DiagnosticCollector();
         const t = performance.now();
         const result = await scorer.scoreAction(
           envelope.action.type,
@@ -319,16 +359,37 @@ export class ActionOrchestrator {
           priorScoreSnapshot,
           allFindings,
           envelope.context.initiating_skill,
+          localReporter,
         );
-        return { scorer, result, duration: performance.now() - t };
+        return { scorer, result, duration: performance.now() - t, localReporter };
       }));
 
       let maxExternalScore = 0;
 
       for (const outcome of settled) {
         if (outcome.status !== 'fulfilled') continue;
-        const { scorer, result, duration } = outcome.value;
-        if (!result) continue;
+        const { scorer, result, duration, localReporter } = outcome.value;
+        const localDiags = localReporter.take();
+        // Forward this scorer's diagnostics to the main collector (without
+        // re-writing — they were already audited at collect time).
+        reporter.addCollected(localDiags);
+
+        if (!result) {
+          // Failed endpoint — still record the timing entry so misconfig is
+          // visible in audit logs. Attribute the failure kind to the latest
+          // diagnostic emitted by this scorer (if any).
+          const lastDiag = localDiags[localDiags.length - 1];
+          externalTimings[scorer.name] = {
+            score: 0,
+            finding_count: 0,
+            duration_ms: Math.round(duration),
+            error: {
+              kind: lastDiag?.kind ?? 'unknown',
+              detail: lastDiag?.detail ?? lastDiag?.message,
+            },
+          };
+          continue;
+        }
 
         externalScores[scorer.name] = result.score;
         externalTimings[scorer.name] = {
@@ -357,18 +418,20 @@ export class ActionOrchestrator {
 
       if (Object.keys(externalScores).length > 0) {
         scores.external = externalScores;
+      }
+      if (Object.keys(externalTimings).length > 0) {
         timings.external = externalTimings;
       }
 
       // Short-circuit if ANY endpoint crossed the deny threshold — the
       // critical verdict should not be diluted by quieter siblings.
       if (maxExternalScore > 0 && shouldShortCircuit(maxExternalScore, level)) {
-        return this.buildResult(allFindings, scores, 6, level, timings, maxExternalScore);
+        return this.buildResult(allFindings, scores, 6, level, timings, maxExternalScore, reporter);
       }
     }
 
     // ── Final: Aggregate scores ──────────────────────────────────────
-    return this.buildResult(allFindings, scores, 6, level, timings);
+    return this.buildResult(allFindings, scores, 6, level, timings, undefined, reporter);
   }
 
   // ── Phase 3: Static analysis on file content ──────────────────────────
@@ -418,7 +481,7 @@ export class ActionOrchestrator {
 
   // ── Phase 5: LLM analysis on action ────────────────────────────────────
 
-  private async runLLMOnAction(envelope: ActionEnvelope): Promise<Finding[]> {
+  private async runLLMOnAction(envelope: ActionEnvelope, reporter?: DiagnosticCollector): Promise<Finding[]> {
     // Lazy import to avoid loading Anthropic SDK when not needed
     const { LLMAnalyser } = await import('./analysers/llm/index.js');
     const { defaultPolicy } = await import('./scan-policy.js');
@@ -426,6 +489,7 @@ export class ActionOrchestrator {
     const analyser = new LLMAnalyser({
       apiKey: this.llmApiKey,
       model: this.llmModel,
+      reporter,
     });
 
     const policy = defaultPolicy();
@@ -475,6 +539,7 @@ export class ActionOrchestrator {
     level: ProtectionLevel = this.level,
     phaseTimings?: PhaseTimings,
     shortCircuitScore?: number,
+    reporter?: DiagnosticCollector,
   ): ActionDecision {
     // Base aggregate: weighted average across every phase that produced a
     // score. On a natural end-of-pipeline (phase 6 without triggering
@@ -506,6 +571,8 @@ export class ActionOrchestrator {
       ? `${topFinding.title}: ${topFinding.description}`
       : undefined;
 
+    const diagnostics = reporter?.take();
+
     return {
       decision,
       risk_level: riskLevel,
@@ -515,6 +582,7 @@ export class ActionOrchestrator {
       phase_stopped: phaseStopped,
       phase_timings: phaseTimings,
       explanation,
+      ...(diagnostics && diagnostics.length > 0 ? { diagnostics } : {}),
     };
   }
 }

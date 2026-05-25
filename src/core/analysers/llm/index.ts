@@ -19,6 +19,7 @@ import { BaseAnalyser, type AnalysisContext } from '../base.js';
 import type { Finding, AnalyserName } from '../../models.js';
 import { findingId } from '../../models.js';
 import type { ScanPolicy } from '../../scan-policy.js';
+import type { DiagnosticCollector } from '../../../adapters/diagnostics.js';
 import {
   buildAnalysisPrompt,
   generateDelimiter,
@@ -44,16 +45,20 @@ export class LLMAnalyser extends BaseAnalyser {
   private apiKey: string | undefined;
   private model: string;
   private maxInputTokens: number;
+  private reporter?: DiagnosticCollector;
 
   constructor(opts?: {
     apiKey?: string;
     model?: string;
     maxInputTokens?: number;
+    /** Optional diagnostic collector for surfacing API failures. */
+    reporter?: DiagnosticCollector;
   }) {
     super();
     this.apiKey = opts?.apiKey;
     this.model = opts?.model ?? DEFAULT_MODEL;
     this.maxInputTokens = opts?.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
+    this.reporter = opts?.reporter;
   }
 
   isEnabled(policy: ScanPolicy): boolean {
@@ -140,7 +145,15 @@ export class LLMAnalyser extends BaseAnalyser {
         }
       }
 
-      console.warn('[LLMAnalyser] API call failed:', error.message);
+      this.reporter?.collect({
+        severity: 'error',
+        source: 'llm',
+        kind: 'api_call_failed',
+        component: this.model,
+        message: `Anthropic API call failed${error.status ? ' (HTTP ' + error.status + ')' : ''}`,
+        detail: error.message,
+        hint: 'Check guard.llm_analyser.api_key validity, network connectivity, or rate-limit headroom.',
+      });
       return null;
     }
   }

@@ -40,6 +40,8 @@ function runtimeDecisionToHookOutput(
 
   const finalScore = rd.scores.final ?? 0;
 
+  const diagnostics = rd.diagnostics?.length ? rd.diagnostics : undefined;
+
   if (rd.decision === 'deny') {
     return {
       decision: 'deny',
@@ -54,6 +56,7 @@ function runtimeDecisionToHookOutput(
       riskScore: finalScore,
       riskTags: uniqueTags,
       initiatingSkill,
+      diagnostics,
     };
   }
 
@@ -71,6 +74,7 @@ function runtimeDecisionToHookOutput(
       riskScore: finalScore,
       riskTags: uniqueTags,
       initiatingSkill,
+      diagnostics,
     };
   }
 
@@ -79,6 +83,7 @@ function runtimeDecisionToHookOutput(
     riskLevel: rd.risk_level,
     riskScore: finalScore,
     initiatingSkill,
+    diagnostics,
   };
 }
 

@@ -110,13 +110,40 @@ export interface AuditLifecycleEntry {
   details?: Record<string, unknown>;
 }
 
-// ── Config error entry ──────────────────────────────────────────────────
+// ── Diagnostic entry ────────────────────────────────────────────────────
 
-export interface AuditConfigErrorEntry {
-  event: 'config_error';
+/**
+ * Structured failure record covering config-validation errors and runtime
+ * failures (OAuth, LLM, ExternalAnalyser HTTP, Collector OTLP, scanner IO).
+ * Replaces the legacy single-purpose AuditConfigErrorEntry. Writers must NOT
+ * dedupe — repeated identical entries are expected, and readers (/nio report,
+ * /nio doctor) aggregate them.
+ */
+export interface AuditDiagnosticEntry {
+  event: 'diagnostic';
   timestamp: string;
-  config_path: string;
-  error_message: string;
+  severity: 'error' | 'warning' | 'info';
+  source:
+    | 'config'             // schema validation / YAML parse
+    | 'oauth'              // OAuthAuthStrategy
+    | 'llm'                // Phase 5 LLM analyser
+    | 'external_analyser'  // Phase 6 ExternalAnalyser HTTP
+    | 'collector'          // OTLP export
+    | 'scanner'            // file walker / file IO
+    | 'hook';              // hook script itself
+  /** Free-form sub-classification within source (e.g. 'pkce_failed'). */
+  kind: string;
+  message: string;
+  /** Dot path into config that's responsible, if applicable. */
+  config_path?: string;
+  /** Component identifier — endpoint name, analyser name, server name. */
+  component?: string;
+  /** Stack trace excerpt, HTTP status + response body snippet, etc. */
+  detail?: string;
+  /** Human-readable suggestion for how to fix. */
+  hint?: string;
+  /** Optional session_id for grouping in /nio report. */
+  session_id?: string;
 }
 
 // ── Hook event entry ────────────────────────────────────────────────────
@@ -158,5 +185,5 @@ export type AuditEntry =
   | AuditGuardEntry
   | AuditScanEntry
   | AuditLifecycleEntry
-  | AuditConfigErrorEntry
+  | AuditDiagnosticEntry
   | AuditHookEntry;

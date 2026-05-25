@@ -321,7 +321,15 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     }
     // Unknown event names: silently no-op (matches the legacy contract).
   } catch (err) {
-    // Telemetry must never break the host; log and continue.
-    console.error('[nio] collector-core error:', err);
+    // Telemetry must never break the host; report as a diagnostic so the
+    // failure is auditable instead of just appearing on stderr.
+    const { reportDiagnostic } = await import('../../adapters/diagnostics.js');
+    reportDiagnostic({
+      severity: 'warning',
+      source: 'collector',
+      kind: 'collector_core_error',
+      message: '[nio] collector-core failed to process a hook event',
+      detail: err instanceof Error ? err.message : String(err),
+    });
   }
 }

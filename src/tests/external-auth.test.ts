@@ -8,9 +8,10 @@
  * tests neither hit the network nor share state.
  */
 
-import { afterEach, beforeEach, describe, it } from 'node:test';
+import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, writeFile, stat } from 'node:fs/promises';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
@@ -24,6 +25,18 @@ import {
   oauthFingerprint,
   _resetOAuthRegistryForTests,
 } from '../core/analysers/external/auth.js';
+import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
+
+// Sandbox diagnostic writes so tests never touch ~/.nio/audit.jsonl.
+let testAuditDir: string;
+before(() => {
+  testAuditDir = mkdtempSync(join(tmpdir(), 'nio-external-auth-test-'));
+  _setDiagnosticsAuditPathForTests(join(testAuditDir, 'audit.jsonl'));
+});
+after(() => {
+  _setDiagnosticsAuditPathForTests(null);
+  try { rmSync(testAuditDir, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 
 // ─── Mock OAuth server harness ───────────────────────────────────────────
 
