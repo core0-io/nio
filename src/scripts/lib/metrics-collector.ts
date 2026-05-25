@@ -65,6 +65,7 @@ import type { CollectorConfig } from './config-loader.js';
 
 export function createMeterProvider(config: CollectorConfig): MeterProvider | null {
   if (!config.endpoint) return null;
+  if (!config.metrics_enabled) return null;
 
   const headers: Record<string, string> = {};
   if (config.api_key) {

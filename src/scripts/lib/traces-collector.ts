@@ -233,6 +233,7 @@ function randomSpanId(): string {
 
 export function createTracerProvider(config: CollectorConfig): NodeTracerProvider | null {
   if (!config.endpoint) return null;
+  if (!config.traces_enabled) return null;
 
   const headers: Record<string, string> = {};
   if (config.api_key) {

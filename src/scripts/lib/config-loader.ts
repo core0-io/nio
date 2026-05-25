@@ -20,7 +20,14 @@ export interface CollectorConfig {
   api_key: string;
   timeout: number;
   protocol: 'http' | 'grpc';
+  /** OTLP export readiness — true iff endpoint is set. */
   enabled: boolean;
+  /** Honors collector.metrics.enabled (default true). */
+  metrics_enabled: boolean;
+  /** Honors collector.traces.enabled (default true). */
+  traces_enabled: boolean;
+  /** Honors collector.logs.enabled (default true). Mirrors loadLogsConfig.enabled. */
+  logs_enabled: boolean;
 }
 
 export interface LogsConfig {
@@ -79,6 +86,10 @@ export function loadCollectorConfig(): CollectorConfig {
   const c = (raw['collector'] ?? {}) as Record<string, unknown>;
   const endpoint = (c['endpoint'] as string) ?? '';
 
+  const metrics = (c['metrics'] ?? {}) as Record<string, unknown>;
+  const traces  = (c['traces']  ?? {}) as Record<string, unknown>;
+  const logs    = (c['logs']    ?? {}) as Record<string, unknown>;
+
   return {
     endpoint,
     api_key: (c['api_key'] as string) ?? '',
@@ -87,6 +98,9 @@ export function loadCollectorConfig(): CollectorConfig {
     // Reflects only OTLP export readiness. Local audit logging is
     // controlled separately via loadLogsConfig() / logsConfig.local.
     enabled: endpoint !== '',
+    metrics_enabled: (metrics['enabled'] as boolean) ?? true,
+    traces_enabled:  (traces['enabled']  as boolean) ?? true,
+    logs_enabled:    (logs['enabled']    as boolean) ?? true,
   };
 }
 

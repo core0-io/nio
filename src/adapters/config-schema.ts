@@ -142,7 +142,14 @@ export interface ResolvedMetricsConfig {
   api_key: string;
   timeout: number;
   protocol: 'http' | 'grpc';
+  /** OTLP export readiness — true iff endpoint is set. */
   enabled: boolean;
+  /** Honors collector.metrics.enabled (default true). */
+  metrics_enabled: boolean;
+  /** Honors collector.traces.enabled (default true). */
+  traces_enabled: boolean;
+  /** Honors collector.logs.enabled (default true). */
+  logs_enabled: boolean;
 }
 
 

@@ -52,6 +52,7 @@ const RISK_TO_SEVERITY: Record<string, SeverityNumber> = {
 
 export function createLoggerProvider(config: CollectorConfig): LoggerProvider | null {
   if (!config.endpoint) return null;
+  if (!config.logs_enabled) return null;
 
   const headers: Record<string, string> = {};
   if (config.api_key) {

@@ -19,13 +19,14 @@ export {};
  * Always exits 0 — informational only, never blocks session startup.
  */
 
-import { readdirSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { loadCollectorConfig } from './lib/config-loader.js';
-import { createLoggerProvider, emitAuditLog } from './lib/logs-collector.js';
+import { createLoggerProvider } from './lib/logs-collector.js';
 import { createNio, ScanCache } from '../index.js';
+import { loadConfig, writeAuditLog } from '../adapters/index.js';
 
 interface AuditScanEntry {
   event: 'session_scan';
@@ -60,22 +61,15 @@ const SKILLS_DIRS = [
   join(homedir(), '.codex', 'skills'),
   join(homedir(), '.openclaw', 'skills'),
 ];
-const NIO_DIR = process.env.NIO_HOME || join(homedir(), '.nio');
-const AUDIT_PATH = join(NIO_DIR, 'audit.jsonl');
 
-function ensureDir(): void {
-  if (!existsSync(NIO_DIR)) {
-    mkdirSync(NIO_DIR, { recursive: true });
-  }
-}
-
-// LoggerProvider for OTEL audit log export (lazy-initialized)
+// LoggerProvider for OTEL audit log export (lazy-initialized).
+// createLoggerProvider already short-circuits on missing endpoint or
+// collector.logs.enabled === false.
 let _loggerProvider: import('@opentelemetry/sdk-logs').LoggerProvider | null | undefined;
 function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider | null {
   if (_loggerProvider === undefined) {
     try {
-      const cc = loadCollectorConfig();
-      _loggerProvider = createLoggerProvider(cc);
+      _loggerProvider = createLoggerProvider(loadCollectorConfig());
     } catch {
       _loggerProvider = null;
     }
@@ -84,18 +78,13 @@ function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider |
 }
 
 function writeScanAuditLog(entry: AuditScanEntry): void {
-  // OTEL export
+  // Route through writeAuditLog so collector.logs.{enabled,local,path,
+  // max_size_mb} are all honored uniformly with the other hook scripts.
   try {
-    const lp = getLoggerProvider();
-    if (lp) emitAuditLog(lp, entry);
-  } catch { /* non-critical */ }
-
-  // Local JSONL
-  try {
-    ensureDir();
-    appendFileSync(AUDIT_PATH, JSON.stringify(entry) + '\n');
+    const logsConfig = loadConfig().collector?.logs;
+    writeAuditLog(entry, { loggerProvider: getLoggerProvider(), logsConfig });
   } catch {
-    // Non-critical
+    // Non-critical — audit failure must not block session startup
   }
 }
 

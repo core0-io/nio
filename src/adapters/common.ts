@@ -121,7 +121,16 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
   const timeout = c.timeout || 5000;
   const protocol = c.protocol ?? 'http';
 
-  return { endpoint, api_key, timeout, protocol, enabled: endpoint !== '' };
+  return {
+    endpoint,
+    api_key,
+    timeout,
+    protocol,
+    enabled: endpoint !== '',
+    metrics_enabled: c.metrics?.enabled ?? true,
+    traces_enabled:  c.traces?.enabled  ?? true,
+    logs_enabled:    c.logs?.enabled    ?? true,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -81,6 +81,55 @@ describe('loadCollectorConfig', () => {
     assert.equal(cfg.timeout, 1234);
     assert.equal(cfg.protocol, 'grpc');
   });
+
+  it('defaults metrics/traces/logs enabled flags to true when sections are missing', () => {
+    const cfg = withNioHome('collector: {}\n', loadCollectorConfig);
+    assert.equal(cfg.metrics_enabled, true);
+    assert.equal(cfg.traces_enabled,  true);
+    assert.equal(cfg.logs_enabled,    true);
+  });
+
+  it('honors collector.metrics.enabled=false', () => {
+    const yaml = [
+      'collector:',
+      '  endpoint: "http://localhost:4318"',
+      '  metrics:',
+      '    enabled: false',
+      '',
+    ].join('\n');
+    const cfg = withNioHome(yaml, loadCollectorConfig);
+    assert.equal(cfg.metrics_enabled, false);
+    assert.equal(cfg.traces_enabled,  true);
+    assert.equal(cfg.logs_enabled,    true);
+  });
+
+  it('honors collector.traces.enabled=false', () => {
+    const yaml = [
+      'collector:',
+      '  endpoint: "http://localhost:4318"',
+      '  traces:',
+      '    enabled: false',
+      '',
+    ].join('\n');
+    const cfg = withNioHome(yaml, loadCollectorConfig);
+    assert.equal(cfg.traces_enabled,  false);
+    assert.equal(cfg.metrics_enabled, true);
+    assert.equal(cfg.logs_enabled,    true);
+  });
+
+  it('honors collector.logs.enabled=false', () => {
+    const yaml = [
+      'collector:',
+      '  endpoint: "http://localhost:4318"',
+      '  logs:',
+      '    enabled: false',
+      '',
+    ].join('\n');
+    const cfg = withNioHome(yaml, loadCollectorConfig);
+    assert.equal(cfg.logs_enabled,    false);
+    assert.equal(cfg.metrics_enabled, true);
+    assert.equal(cfg.traces_enabled,  true);
+  });
 });
 
 // ── loadLogsConfig ──────────────────────────────────────────────────────

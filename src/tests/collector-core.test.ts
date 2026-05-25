@@ -33,6 +33,9 @@ const baseConfig: ResolvedMetricsConfig = {
   timeout: 5000,
   protocol: 'http',
   enabled: true,
+  metrics_enabled: true,
+  traces_enabled: true,
+  logs_enabled: true,
 };
 
 function readEntries(path: string): Array<Record<string, unknown>> {
