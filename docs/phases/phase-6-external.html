@@ -50,34 +50,65 @@
         <table>
           <thead><tr><th>Property</th><th>Value</th></tr></thead>
           <tbody>
-            <tr><td>Latency</td><td>configurable (HTTP timeout)</td></tr>
-            <tr><td>Scope</td><td>All guarded actions (when enabled)</td></tr>
-            <tr><td>Score weight</td><td><code>scoring_weights.external</code> — default <strong>2.0</strong> (tie-breaker)</td></tr>
-            <tr><td>Default state</td><td><strong>disabled</strong> — needs explicit enable + endpoint</td></tr>
-            <tr><td>Short-circuit</td><td>any CRITICAL finding → deny immediately</td></tr>
+            <tr><td>Latency</td><td>configurable (per-endpoint HTTP timeout)</td></tr>
+            <tr><td>Scope</td><td>All guarded actions (when one or more endpoints enabled)</td></tr>
+            <tr><td>Endpoints</td><td>0..N, each with its own <code>weight</code> in the aggregate</td></tr>
+            <tr><td>Concurrency</td><td>All enabled endpoints called in parallel (<code>Promise.allSettled</code>)</td></tr>
+            <tr><td>Default state</td><td><strong>disabled</strong> — empty array (<code>external_analyser: []</code>)</td></tr>
+            <tr><td>Short-circuit</td><td>any endpoint at CRITICAL → deny immediately, siblings ignored</td></tr>
+            <tr><td>On auth/HTTP failure</td><td>endpoint drops out of the average; the failure is surfaced via <a href="../diagnostics.html#oauth"><strong>diagnostics</strong></a></td></tr>
           </tbody>
         </table>
 
         <h2>Enable</h2>
         <pre><code>guard:
   external_analyser:
-    enabled: true
-    endpoint: "https://policy.internal.example.com/score"
-    api_key: "..."           # optional Bearer token
-    timeout: 3000            # ms</code></pre>
+    # No auth
+    - name: scorer_plain
+      enabled: true
+      endpoint: "https://plain.example.com/score"
+      timeout: 3000
+      weight: 1.0
 
-        <p>See <a href="../configuration.html#guard.external_analyser"><code>guard.external_analyser</code></a>.</p>
+    # Bearer / static API key
+    - name: scorer_a
+      endpoint: "https://a.example.com/score"
+      weight: 2.0
+      auth:
+        type: bearer
+        api_key: "sk-..."
+
+    # OAuth2 PKCE (FFWD-style)
+    - name: scorer_ffwd
+      endpoint: "https://app.int.ffwd.one/api/.../score"
+      weight: 2.0
+      auth:
+        type: oauth
+        oauth_url: "https://app.int.ffwd.one/api/oauth"
+        key_id: "..."
+        key_secret: "..."</code></pre>
+
+        <p>See <a href="../configuration.html#guard.external_analyser"><code>guard.external_analyser</code></a> for the full schema.</p>
 
         <p>For local development, the repo bundles a mock scorer at <code>http://localhost:9090</code>.</p>
 
         <h2>Wire format</h2>
-        <p>Nio sends a <code>POST</code> to <code>endpoint</code> with the action context and expects a JSON response with at least a <code>score</code> field in [0, 1]. Response example:</p>
+        <p>Nio sends a <code>POST</code> to each endpoint with the action context and expects a JSON response with at least a <code>score</code> field in [0, 1]. Authentication (when configured) flows through <code>Authorization: Bearer &lt;token&gt;</code>. Response example:</p>
         <pre><code>POST /score
-→ { "tool": "Bash", "command": "aws s3 sync …" }
+→ { "tool_name": "Bash", "tool_input": { "command": "aws s3 sync …" },
+    "prior_scores": { "runtime": 0.1, "static": 0.2 } }
 ← { "score": 0.94, "reason": "production bucket" }</code></pre>
 
-        <h2>Why the weight is 2.0</h2>
-        <p>Default weight is doubled so your enterprise rules carry more authority than the generic phases. If multiple phases score moderately, Phase 6 acts as the tie-breaker. Lower it if you want it to be advisory only; raise it if you want it to dominate.</p>
+        <h2>Weights</h2>
+        <p>Each endpoint declares its own <code>weight</code> (default <strong>1.0</strong>). The final score is the weighted average across all phases that ran:</p>
+        <pre><code>final_score = Σ(wᵢ × sᵢ) / Σ(wᵢ)</code></pre>
+        <p>An endpoint that fails (network / HTTP / auth) drops out of both numerator and denominator — its weight does not pollute the average.</p>
+
+        <h2>OAuth identity sharing</h2>
+        <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>key_id</code> + <code>key_secret</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. PKCE only runs once even when N endpoints fire concurrently. Endpoints with different <code>key_id</code>s get isolated caches.</p>
+
+        <h2>When something goes wrong</h2>
+        <p>Auth failures, HTTP errors, timeouts — none of these block the agent's action. They surface through Nio's <a href="../diagnostics.html">diagnostics channel</a>: a structured entry in <code>~/.nio/audit.jsonl</code>, a stderr line, and (on the next hook call) a block of <code>additionalContext</code> that the agent reads. Run <a href="../diagnostics.html#nio-doctor"><code>/nio doctor</code></a> to validate every OAuth endpoint with a real PKCE dry-run.</p>
 
         <h2>Use cases</h2>
         <ul>

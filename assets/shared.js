@@ -18,6 +18,9 @@
     { id: 'configuration', title: 'Configuration', openByDefault: true, items: [
       { label: 'Config reference', path: '/docs/configuration.html' },
     ]},
+    { id: 'diagnostics', title: 'Diagnostics', openByDefault: false, items: [
+      { label: 'Errors & /nio doctor', path: '/docs/diagnostics.html' },
+    ]},
     { id: 'observability', title: 'Observability', openByDefault: false, items: [
       { label: 'Overview', path: '/docs/collector-signals.html' },
       { label: 'Traces', path: '/docs/collector-signals-traces.html' },

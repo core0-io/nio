@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Skill · /nio commands</div>
         <h1>The <em>/nio</em> skill — one entry, five subcommands.</h1>
-        <p class="lead">After install, your agent has a single skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>config</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>.</p>
+        <p class="lead">After install, your agent has a single skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>doctor</code>, <code>config</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>.</p>
       </div>
 
       <div class="doc">
@@ -160,7 +160,7 @@
         <hr>
 
         <h2 id="report"><code>report</code></h2>
-        <p>Reads <code>~/.nio/audit.jsonl</code> and formats the last 50 events as a table. No arguments.</p>
+        <p>Reads <code>~/.nio/audit.jsonl</code> and formats the last 50 events as a table, plus a Diagnostics summary aggregated from up to 200 recent events. No arguments.</p>
 
         <h3>Event types</h3>
         <p>Each line is JSON with an <code>event</code> discriminator:</p>
@@ -168,6 +168,7 @@
           <li><code>guard</code> — one per tool-call evaluation: <code>decision</code>, <code>risk_level</code>, <code>risk_score</code>, per-phase scores, top findings.</li>
           <li><code>session_scan</code> — skill/plugin scans fired on session start.</li>
           <li><code>lifecycle</code> — subagent spawn/stop events (OpenClaw).</li>
+          <li><code>diagnostic</code> — config / OAuth / LLM / external / collector / scanner failure; aggregated by <code>(source, kind, component, config_path)</code> in the report's Diagnostics section. See <a href="diagnostics.html">Diagnostics</a> for the full reference.</li>
         </ul>
 
         <h3>Output</h3>
@@ -188,6 +189,23 @@
 | ... </code></pre>
 
         <p>If <code>~/.nio/audit.jsonl</code> doesn't exist yet, the skill tells you no events are recorded and suggests enabling hooks via <code>setup.sh</code>.</p>
+
+        <hr>
+
+        <h2 id="doctor"><code>doctor</code></h2>
+        <p>Validate the current configuration end-to-end. Doctor catches issues <em>before</em> they cause silent failures during real tool calls. No arguments.</p>
+
+        <p>What doctor does:</p>
+        <ol>
+          <li><strong>Configuration</strong> — re-runs Zod schema validation against the on-disk <code>~/.nio/config.yaml</code>.</li>
+          <li><strong>External analysers</strong> — for each entry with <code>auth.type: oauth</code>, performs a real PKCE flow against the configured <code>oauth_url</code>.</li>
+          <li><strong>LLM analyser</strong> — flags <code>guard.llm_analyser.enabled=true</code> paired with an empty <code>api_key</code>.</li>
+          <li><strong>Collector</strong> — HEAD-probes <code>collector.endpoint</code> if set.</li>
+        </ol>
+
+        <p>Output is a markdown checklist with <code>✓ / ✗ / ·</code> per check and an inline <code>hint:</code> line pointing at the specific config path to fix. Doctor's own probes use a scoped diagnostic collector that's discarded after the command returns, so repeated <code>doctor</code> runs do not pollute <code>/nio report</code>.</p>
+
+        <p>See the <a href="diagnostics.html#nio-doctor">Diagnostics page</a> for a full example output and a walkthrough.</p>
 
         <hr>
 

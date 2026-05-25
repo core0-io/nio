@@ -75,9 +75,12 @@
 /nio config balanced        # switch between strict | balanced | permissive
 /nio scan .                 # scan the current working directory
 /nio action "rm -rf /"      # evaluate a proposed command without running it
-/nio report                 # last 50 guard decisions from the audit log</code></pre>
+/nio report                 # last 50 guard decisions + diagnostics summary
+/nio doctor                 # validate config + dry-run OAuth/LLM/collector</code></pre>
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
+
+        <p><strong>Something doesn't work?</strong> Run <code>/nio doctor</code> first — it validates schema, OAuth credentials, LLM API key, and collector reachability with actionable hints. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
 
         <h2>Telemetry · OTLP collector</h2>
         <p>Optional but useful for observability. Every hook event Nio sees is shaped into <strong>OpenTelemetry</strong> data and exported through the bundled async collector. Three signals are emitted:</p>

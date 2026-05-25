@@ -9,7 +9,8 @@ This project provides a unified Claude Code skill: `/nio`
 ```
 /nio scan <path>          — Scan code for execution risks (15 static + 7 behavioural rules)
 /nio action <description> — Evaluate runtime action safety (allow/deny/confirm)
-/nio report               — View agent execution audit log
+/nio report               — Agent execution audit log + diagnostics summary
+/nio doctor               — Validate config + dry-run OAuth/LLM/collector connectivity
 /nio config <level>       — Set protection level (strict/balanced/permissive)
 ```
 

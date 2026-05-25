@@ -43,6 +43,7 @@
         <div class="eyebrow">Configuration · Reference</div>
         <h1>Every field in <em>config.yaml</em>.</h1>
         <p class="lead">Nio reads <code>~/.nio/config.yaml</code> (or <code>$NIO_HOME/config.yaml</code>). Two top-level sections: <code>guard</code> for the runtime pipeline + scan rules, <code>collector</code> for OTLP telemetry. The bundled template at <code>config.default.yaml</code> has inline comments for every field.</p>
+        <p class="lead"><strong>Something not working?</strong> Run <code>/nio doctor</code> to validate the current config and dry-run OAuth / LLM / collector connectivity. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
       </div>
 
       <div class="doc">
@@ -147,27 +148,30 @@
 
         <h3 id="guard.llm_analyser"><code>guard.llm_analyser</code></h3>
         <p><strong>Type:</strong> object</p>
-        <p>Phase 5 — semantic analysis using Claude. Disabled by default. Requires an Anthropic API key.</p>
+        <p>Phase 5 — semantic analysis using Claude. Disabled by default. Requires an Anthropic API key. Validated by <a href="diagnostics.html#llm-api_key_missing"><code>/nio doctor</code></a>.</p>
         <table>
           <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
           <tbody>
             <tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Master switch.</td></tr>
-            <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Anthropic API key.</td></tr>
+            <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Anthropic API key. Empty + <code>enabled: true</code> → <a href="diagnostics.html#llm-api_key_missing">diagnostic</a>.</td></tr>
             <tr><td><code>model</code></td><td>string</td><td><code>"claude-sonnet-4-20250514"</code></td><td>Model identifier.</td></tr>
             <tr><td><code>max_input_tokens</code></td><td>number</td><td><code>50000</code></td><td>Per-scan input budget.</td></tr>
           </tbody>
         </table>
 
         <h3 id="guard.external_analyser"><code>guard.external_analyser</code></h3>
-        <p><strong>Type:</strong> object</p>
-        <p>Phase 6 — external scoring API. Disabled by default. Requires an endpoint.</p>
+        <p><strong>Type:</strong> array · <strong>Default:</strong> <code>[]</code></p>
+        <p>Phase 6 — external scoring API endpoints. 0..N endpoints; each runs concurrently. Each entry contributes to the weighted score average via its own <code>weight</code> field. See the <a href="phases/phase-6-external.html">Phase 6 page</a> for the full wire model. Validated by <a href="diagnostics.html#external_analyser-auth_failed"><code>/nio doctor</code></a> (OAuth entries get a real PKCE dry-run).</p>
+        <p>Each entry is an object:</p>
         <table>
           <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
           <tbody>
-            <tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Master switch.</td></tr>
-            <tr><td><code>endpoint</code></td><td>string</td><td><code>""</code></td><td>HTTP URL. Use <code>http://localhost:9090</code> for the bundled mock.</td></tr>
-            <tr><td><code>api_key</code></td><td>string</td><td><code>""</code></td><td>Bearer token (optional).</td></tr>
-            <tr><td><code>timeout</code></td><td>number</td><td><code>3000</code></td><td>Request timeout (ms).</td></tr>
+            <tr><td><code>name</code></td><td>string</td><td>(required)</td><td>Unique identifier, appears in <code>scores.external</code> and <code>phase_timings.external</code>.</td></tr>
+            <tr><td><code>endpoint</code></td><td>string</td><td>(required)</td><td>HTTP URL. Use <code>http://localhost:9090</code> for the bundled mock.</td></tr>
+            <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Set false to skip an entry without removing config.</td></tr>
+            <tr><td><code>weight</code></td><td>number</td><td><code>1.0</code></td><td>Aggregation weight in <code>final_score = Σ(wᵢ × sᵢ) / Σ(wᵢ)</code>.</td></tr>
+            <tr><td><code>timeout</code></td><td>number</td><td><code>3000</code></td><td>Per-request timeout (ms). Exceeded → <a href="diagnostics.html#external_analyser-timeout">diagnostic</a>.</td></tr>
+            <tr><td><code>auth</code></td><td>object</td><td><em>none</em></td><td>Optional. <code>{ type: 'bearer', api_key }</code> or <code>{ type: 'oauth', oauth_url, key_id, key_secret, client_id?, client_secret? }</code>. OAuth failures → <a href="diagnostics.html#oauth-pkce_failed">diagnostic</a>.</td></tr>
           </tbody>
         </table>
 
@@ -251,7 +255,7 @@
 
         <h3 id="collector.endpoint"><code>collector.endpoint</code></h3>
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>"http://localhost:4318"</code></p>
-        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal.</p>
+        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal. Reachability dry-run by <a href="diagnostics.html"><code>/nio doctor</code></a>; export failures emit <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
 
         <h3 id="collector.api_key"><code>collector.api_key</code></h3>
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code></p>

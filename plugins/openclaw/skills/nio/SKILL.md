@@ -332,6 +332,32 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 {"event":"lifecycle","timestamp":"...","platform":"openclaw","session_id":"...","lifecycle_type":"subagent_spawning"}
 ```
 
+**Diagnostic entry** (`event: "diagnostic"`) — config / OAuth / LLM / external / collector / scanner failure:
+
+```json
+{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"pkce_failed","component":"app.int.ffwd.one","message":"PKCE flow failed for https://app.int.ffwd.one/api/oauth","detail":"HTTP 401 at /code","config_path":"guard.external_analyser[*].auth","hint":"Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor."}
+```
+
+`source` values: `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`. Common `kind` values:
+
+| Source | Kind | Severity | Meaning |
+|--------|------|----------|---------|
+| `config` | `schema_invalid` | error | Zod validation failed |
+| `config` | `yaml_parse_failed` | error | YAML syntax error |
+| `oauth` | `pkce_failed` | error | Register/code/token PKCE flow rejected |
+| `oauth` | `refresh_failed` | warning | refresh_token grant declined (falls back to PKCE) |
+| `oauth` | `cache_write_failed` | warning | Couldn't persist token to ~/.nio/oauth-cache/ |
+| `llm` | `api_key_missing` | error | `enabled: true` with empty `api_key` |
+| `llm` | `api_call_failed` | error | Anthropic API call returned an error |
+| `external_analyser` | `auth_failed` | error | `auth` configured but `getAuthHeader()` returned null |
+| `external_analyser` | `http_error` | error | Scoring endpoint returned non-2xx |
+| `external_analyser` | `timeout` | error | Request exceeded `timeout` |
+| `external_analyser` | `network_error` | error | DNS / connection refused / etc. |
+| `collector` | `otlp_export_failed` | warning | OTLP exporter could not deliver telemetry |
+| `scanner` | `file_read_failed` | warning | File walker couldn't read a file |
+
+Aggregate by `(source, kind, component, config_path)` and surface a Diagnostics summary section below the decisions table.
+
 Old-format lines (without `event` field) are also valid — treat them as guard entries with `event_type: "pre"`.
 
 ### How to Display
@@ -381,4 +407,22 @@ If any events were triggered by skills, group them here:
 ```
 
 If the log file doesn't exist, inform the user that no execution events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
+
+## Subcommand: doctor
+
+Validate the current configuration end-to-end. Doctor catches issues *before* they cause silent failures during real tool calls.
+
+What doctor checks:
+
+1. **Configuration** — re-runs Zod schema validation against the live `~/.nio/config.yaml`. Flags any field with a path + message (e.g. `guard.external_analyser[2].auth.key_secret: required field is empty`).
+2. **External analysers** — for each entry with `auth.type: oauth`, performs a real PKCE flow against the configured `oauth_url`. ✓ when a token is acquired; ✗ with the underlying HTTP status when the flow fails. Bearer-auth entries are listed but cannot be validated without firing an actual scoring request.
+3. **LLM analyser** — flags `guard.llm_analyser.enabled=true` paired with an empty `api_key` (otherwise Phase 5 silently skips, which is a common misconfig).
+4. **Collector** — HEAD-probes `collector.endpoint` if set. 4xx/5xx still counts as reachable since OTLP collectors commonly 405 a bare HEAD.
+
+Use doctor when:
+- You changed `~/.nio/config.yaml` and want to confirm it loaded.
+- A Bash/Write tool call appeared to be evaluated but you don't see an expected `external_analyser` score in the report — doctor will tell you which endpoint is broken.
+- You rotated an OAuth `key_secret` or LLM `api_key` and want to confirm credentials are working.
+
+Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
 

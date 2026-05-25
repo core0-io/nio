@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>Diagnostics & /nio doctor — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio diagnostics — how config errors, OAuth failures, LLM API failures, and other recoverable issues are surfaced to users via audit log, hook output, and the /nio doctor command.">
+<meta name="keywords" content="nio, diagnostics, /nio doctor, config validation, oauth troubleshooting, llm api key, audit log, agent guard observability">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.3.7">v2.3.7</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Diagnostics</div>
+        <h1><em>Diagnostics</em> — silent failures, made visible.</h1>
+        <p class="lead">When something is misconfigured — a stale OAuth key, a missing LLM API key, an unreachable scoring endpoint — Nio surfaces a structured <code>Diagnostic</code> through three coordinated channels so the failure can't hide. Decisions are never blocked by a recoverable failure; the affected phase simply drops out of the weighted average, and the reason is recorded.</p>
+      </div>
+
+      <div class="doc">
+
+        <h2>Three channels</h2>
+        <table>
+          <thead><tr><th>Channel</th><th>Where</th><th>When to use</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><strong>Audit log</strong></td>
+              <td><code>~/.nio/audit.jsonl</code>, lines with <code>"event": "diagnostic"</code></td>
+              <td>Postmortem / aggregation. <a href="skill.html"><code>/nio report</code></a> reads this and groups entries by <code>(source, kind, component, config_path)</code>.</td>
+            </tr>
+            <tr>
+              <td><strong>Hook → agent</strong></td>
+              <td>Claude Code: <code>hookSpecificOutput.additionalContext</code> on allow, appended to <code>permissionDecisionReason</code> on ask/deny. Hermes: appended to the block <code>reason</code>, or stderr on allow.</td>
+              <td>Push to the agent in real time. The agent sees a compact "1 error, 2 warnings during this action" block with hint lines, so the next reply can mention the broken config to the human.</td>
+            </tr>
+            <tr>
+              <td><strong>Structured stderr</strong></td>
+              <td><code>[nio:&lt;source&gt;:&lt;kind&gt;] &lt;message&gt;</code> on the hook process's stderr, with a <code>hint:</code> continuation line.</td>
+              <td>Developer debugging. Visible when running CLIs directly; partly visible inside hook contexts depending on the platform.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>All three are populated unconditionally — there is no write-side deduplication. The <code>/nio report</code> reader collapses repeats. This means an active OAuth misconfig will continue to log on every tool call, but the report will show one row with <code>Count: 47</code> instead of 47 noisy rows.</p>
+
+        <h2>The <code>Diagnostic</code> shape</h2>
+        <pre><code>{
+  "event": "diagnostic",
+  "timestamp": "2026-05-25T14:31:08.000Z",
+  "severity": "error" | "warning" | "info",
+  "source": "config" | "oauth" | "llm" | "external_analyser"
+          | "collector" | "scanner" | "hook",
+  "kind": "&lt;source-specific identifier&gt;",
+  "message": "&lt;human-readable summary&gt;",
+  "component": "&lt;endpoint name / hostname / etc.&gt;",
+  "config_path": "&lt;dot-path into config that's responsible&gt;",
+  "detail": "&lt;HTTP status, stack trace excerpt, etc.&gt;",
+  "hint": "&lt;suggested fix&gt;"
+}</code></pre>
+
+        <h2 id="reference">Source × Kind reference</h2>
+        <table>
+          <thead><tr><th>Source</th><th>Kind</th><th>Severity</th><th>Default <code>config_path</code></th><th>What it means</th></tr></thead>
+          <tbody>
+            <tr id="config-schema_invalid"><td><code>config</code></td><td><code>schema_invalid</code></td><td>error</td><td>file path</td><td>Zod validation rejected the YAML. Field-specific error in <code>detail</code>.</td></tr>
+            <tr id="config-yaml_parse_failed"><td><code>config</code></td><td><code>yaml_parse_failed</code></td><td>error</td><td>file path</td><td>YAML syntax error (indentation, unbalanced quotes, etc.).</td></tr>
+            <tr id="oauth-pkce_failed"><td><code>oauth</code></td><td><code>pkce_failed</code></td><td>error</td><td><code>guard.external_analyser[*].auth</code></td><td>Register / code / token PKCE flow rejected. Almost always wrong <code>key_id</code> / <code>key_secret</code>.</td></tr>
+            <tr id="oauth-refresh_failed"><td><code>oauth</code></td><td><code>refresh_failed</code></td><td>warning</td><td><code>guard.external_analyser[*].auth</code></td><td>refresh_token grant declined. Nio falls back to full PKCE; if that succeeds the diagnostic stays a warning.</td></tr>
+            <tr id="oauth-cache_write_failed"><td><code>oauth</code></td><td><code>cache_write_failed</code></td><td>warning</td><td>—</td><td>Couldn't persist the access token to <code>~/.nio/oauth-cache/</code>. Usually permissions on a multi-user system.</td></tr>
+            <tr id="llm-api_key_missing"><td><code>llm</code></td><td><code>api_key_missing</code></td><td>error</td><td><code>guard.llm_analyser.api_key</code></td><td><code>enabled: true</code> paired with an empty <code>api_key</code>. Phase 5 silently skips otherwise.</td></tr>
+            <tr id="llm-api_call_failed"><td><code>llm</code></td><td><code>api_call_failed</code></td><td>error</td><td><code>guard.llm_analyser.api_key</code></td><td>Anthropic API call errored (4xx/5xx, network, rate limit).</td></tr>
+            <tr id="external_analyser-auth_failed"><td><code>external_analyser</code></td><td><code>auth_failed</code></td><td>error</td><td><code>guard.external_analyser[*].auth</code></td><td><code>auth</code> was configured but resolved to no header. The fetch is skipped — no 401 noise.</td></tr>
+            <tr id="external_analyser-http_error"><td><code>external_analyser</code></td><td><code>http_error</code></td><td>error</td><td><code>guard.external_analyser[*].endpoint</code></td><td>Scoring endpoint returned non-2xx.</td></tr>
+            <tr id="external_analyser-timeout"><td><code>external_analyser</code></td><td><code>timeout</code></td><td>error</td><td><code>guard.external_analyser[*].timeout</code></td><td>Request exceeded the per-endpoint <code>timeout</code>.</td></tr>
+            <tr id="external_analyser-network_error"><td><code>external_analyser</code></td><td><code>network_error</code></td><td>error</td><td><code>guard.external_analyser[*].endpoint</code></td><td>DNS / connection refused / TLS error.</td></tr>
+            <tr id="collector-otlp_export_failed"><td><code>collector</code></td><td><code>otlp_export_failed</code></td><td>warning</td><td><code>collector.endpoint</code></td><td>OTLP exporter couldn't deliver telemetry.</td></tr>
+            <tr id="collector-collector_core_error"><td><code>collector</code></td><td><code>collector_core_error</code></td><td>warning</td><td>—</td><td>collector-core failed to process a hook event (rare, indicates a bug or malformed input).</td></tr>
+            <tr id="scanner-file_read_failed"><td><code>scanner</code></td><td><code>file_read_failed</code></td><td>warning</td><td>—</td><td>File walker couldn't read a file. Usually permissions or symlink loops.</td></tr>
+          </tbody>
+        </table>
+
+        <h2><code>/nio doctor</code></h2>
+        <p>Doctor is the canonical place to validate a config change. Unlike <code>/nio report</code> (which reads the audit log), doctor actually executes the network checks live — it acquires a real OAuth token, HEAD-probes the collector, and re-runs schema validation on the on-disk YAML. Run it after every config edit, or when something doesn't behave the way you expect.</p>
+
+        <pre><code>## Nio Doctor
+
+### Configuration
+- ✓ ~/.nio/config.yaml loaded successfully
+
+### External Analysers (3 configured)
+- ✓ scorer_a (https://a.example.com/score) — OAuth token acquired
+- ✗ scorer_ffwd (https://app.int.ffwd.one): PKCE flow failed for https://app.int.ffwd.one/api/oauth
+    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+- · scorer_off (https://x.example.com/score) — disabled
+
+### LLM Analyser
+- ✗ guard.llm_analyser.enabled=true but api_key is empty
+    hint: Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.
+
+### Collector
+- ✓ http://localhost:4318 reachable (HTTP 405 on HEAD)</code></pre>
+
+        <p>Doctor's checks never write to the audit log — its probes use a scoped collector that's discarded when the command returns. So you can re-run doctor as often as you like without polluting <code>/nio report</code>.</p>
+
+        <h2><code>/nio report</code> — Diagnostics summary</h2>
+        <p>When <code>~/.nio/audit.jsonl</code> contains diagnostic entries, <code>/nio report</code> appends a "Diagnostics" section below the decisions table, aggregated by <code>(source, kind, component, config_path)</code>:</p>
+
+        <pre><code>## Diagnostics (last 47 of 200 events)
+
+| Count | Source | Kind | Component | First seen | Last seen | Latest message |
+|-------|--------|------|-----------|------------|-----------|----------------|
+| 32 | oauth | pkce_failed | scorer_ffwd | 14:02:11 | 14:31:08 | PKCE flow failed for https://app.int.ffwd.one/api/oauth |
+| 12 | llm | api_key_missing | — | 14:02:11 | 14:31:08 | guard.llm_analyser.enabled=true but api_key is empty |
+|  3 | external_analyser | timeout | scorer_slow | 14:10:00 | 14:25:00 | https://slow.example.com/score timed out after 3000ms |
+
+Hints:
+  - oauth pkce_failed: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+  - llm api_key_missing: Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.
+  - external_analyser timeout: Increase guard.external_analyser[].timeout or investigate endpoint latency.</code></pre>
+
+        <h2>Walkthrough: an OAuth misconfig from start to fix</h2>
+        <ol>
+          <li>You edit <code>~/.nio/config.yaml</code> and add a new external_analyser entry, but you paste a wrong character into <code>auth.key_secret</code>.</li>
+          <li>The next time the agent runs a tool call (any Bash, Write, Read…), Nio's Phase 6 picks up the new endpoint, the OAuth strategy tries to acquire a token, and gets back HTTP 401 at <code>/code</code>.</li>
+          <li>The hook output includes an <code>additionalContext</code> block:
+            <pre><code>Nio: 1 error during this action
+  - [oauth pkce_failed] app.int.ffwd.one: PKCE flow failed for https://app.int.ffwd.one/api/oauth
+    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+Run /nio doctor or /nio report for details.</code></pre>
+            The agent sees this and mentions it in its next response to you.
+          </li>
+          <li>You run <code>/nio doctor</code>:
+            <pre><code>### External Analysers (1 configured)
+- ✗ scorer_ffwd (https://app.int.ffwd.one/api/.../score): PKCE flow failed for https://app.int.ffwd.one/api/oauth
+    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.</code></pre>
+          </li>
+          <li>You fix <code>auth.key_secret</code> in the YAML.</li>
+          <li>Re-run <code>/nio doctor</code> — now ✓.</li>
+        </ol>
+
+        <p>Throughout, the agent's tool calls were never blocked. Phase 6's <code>scorer_ffwd</code> simply dropped out of the weighted aggregate during the broken period; its slot in <code>phase_timings.external</code> still appears in the audit log with an <code>error: { kind: 'pkce_failed', detail: '...' }</code> field, so the gap is auditable.</p>
+
+      </div>
+
+      <div class="page-nav">
+        <a href="configuration.html">
+          <span class="dir">← Prev</span>
+          <span class="label">Configuration</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="collector-signals.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Observability</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.3.7">v2.3.7</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>
