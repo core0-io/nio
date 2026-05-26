@@ -421,18 +421,13 @@ async function handleDoctor(): Promise<string> {
         out.push(`- · ${entry.name} (${entry.endpoint}) — disabled`);
         continue;
       }
-      if (entry.auth?.type === 'oauth') {
-        const result = await dryRunOAuth(entry);
-        if (result.ok) {
-          out.push(`- ✓ ${entry.name} (${entry.endpoint}) — OAuth token acquired`);
-        } else {
-          out.push(`- ✗ ${entry.name} (${entry.endpoint}): ${result.message}`);
-          if (result.hint) out.push(`    hint: ${result.hint}`);
-        }
-      } else if (entry.auth?.type === 'bearer') {
-        out.push(`- · ${entry.name} (${entry.endpoint}) — bearer auth (skipped: cannot validate without firing scoring request)`);
+      const authLabel = entry.auth?.type ? ` [${entry.auth.type}]` : ' [no auth]';
+      const result = await probeExternalAnalyser(entry);
+      if (result.ok) {
+        out.push(`- ✓ ${entry.name} (${entry.endpoint}) — ${result.message}${authLabel}`);
       } else {
-        out.push(`- · ${entry.name} (${entry.endpoint}) — no auth configured`);
+        out.push(`- ✗ ${entry.name} (${entry.endpoint})${authLabel}: ${result.message}`);
+        if (result.hint) out.push(`    hint: ${result.hint}`);
       }
     }
   }
@@ -472,28 +467,55 @@ interface DryRunResult {
   hint?: string;
 }
 
-async function dryRunOAuth(entry: NonNullable<NioConfig['guard']>['external_analyser'] extends Array<infer T> | undefined ? T : never): Promise<DryRunResult> {
-  // Lazy import to keep dispatch surface small
-  const { getOrCreateOAuthStrategy } = await import('../core/analysers/external/auth.js');
+/**
+ * Probe a single external_analyser entry end-to-end: build its auth strategy,
+ * GET the scoring endpoint with all the configured machinery (headers,
+ * lookback window, auth), and verify the response shape. Returns the actual
+ * returned score on success so the user can confirm the endpoint is
+ * answering plausibly. Uses a silent DiagnosticCollector so the probe does
+ * not write anything to the audit log.
+ */
+async function probeExternalAnalyser(
+  entry: NonNullable<NonNullable<NioConfig['guard']>['external_analyser']>[number],
+): Promise<DryRunResult> {
+  const { ExternalAnalyser } = await import('../core/analysers/external/index.js');
+  const { BearerAuthStrategy, getOrCreateOAuthStrategy } = await import('../core/analysers/external/auth.js');
   const { DiagnosticCollector } = await import('./diagnostics.js');
 
-  if (!entry || !entry.auth || entry.auth.type !== 'oauth') {
-    return { ok: false, message: 'not an oauth entry' };
+  let auth;
+  if (entry.auth?.type === 'bearer') {
+    auth = new BearerAuthStrategy(entry.auth.api_key);
+  } else if (entry.auth?.type === 'oauth') {
+    auth = getOrCreateOAuthStrategy({
+      oauthUrl:     entry.auth.oauth_url,
+      clientId:     entry.auth.client_id,
+      clientSecret: entry.auth.client_secret,
+    });
   }
-  const strategy = getOrCreateOAuthStrategy({
-    oauthUrl:     entry.auth.oauth_url,
-    clientId:     entry.auth.client_id,
-    clientSecret: entry.auth.client_secret,
-  });
-  const reporter = new DiagnosticCollector();
-  const header = await strategy.getAuthHeader(reporter);
-  if (header) return { ok: true, message: 'token acquired' };
 
-  const collected = reporter.take();
-  const last = collected[collected.length - 1];
+  const scorer = new ExternalAnalyser({
+    name:            entry.name,
+    endpoint:        entry.endpoint,
+    headers:         entry.headers,
+    lookbackSeconds: entry.lookback_seconds,
+    timeout:         entry.timeout,
+    weight:          entry.weight,
+    auth,
+  });
+
+  // Silent reporter — doctor's probe must not pollute the audit log.
+  const reporter = new DiagnosticCollector(true);
+  const result = await scorer.call(reporter);
+
+  if (result) {
+    const reason = result.reason ? ` — ${result.reason}` : '';
+    return { ok: true, message: `score ${result.score}${reason}` };
+  }
+
+  const last = reporter.take().pop();
   return {
     ok: false,
-    message: last?.message ?? 'OAuth flow returned no token',
+    message: last?.detail ?? last?.message ?? 'request failed',
     hint: last?.hint,
   };
 }

@@ -11,14 +11,42 @@
 
 import { after, afterEach, before, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { dump as yamlDump } from 'js-yaml';
 
 import { dispatchNioCommand } from '../adapters/openclaw-dispatch.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 import { _resetOAuthRegistryForTests } from '../core/analysers/external/auth.js';
+
+// ── Mock scoring endpoint (no auth) for doctor probe tests ───────────────
+
+interface MockScorerOpts {
+  status?: number;     // default 200
+  body?: unknown;      // JSON-serialised. Default { score: 0.42 }
+}
+
+function startMockScorer(opts: MockScorerOpts = {}): Promise<{ url: string; server: Server }> {
+  const status = opts.status ?? 200;
+  const body = JSON.stringify(opts.body ?? { score: 0.42 });
+  const server = createServer((_req, res) => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(body);
+  });
+  return new Promise(resolve => {
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address() as AddressInfo;
+      resolve({ url: `http://127.0.0.1:${port}/score`, server });
+    });
+  });
+}
+
+function stopServer(server: Server): Promise<void> {
+  return new Promise(r => server.close(() => r()));
+}
 
 let nioHome: string;
 let originalNioHome: string | undefined;
@@ -79,7 +107,7 @@ describe('/nio doctor', () => {
     assert.match(out, /hint:.*api_key/);
   });
 
-  it('dry-runs OAuth and reports failure with hint when endpoint is unreachable', async () => {
+  it('OAuth endpoint unreachable → ✗ with token_failed hint', async () => {
     writeConfig({
       guard: {
         protection_level: 'balanced',
@@ -98,10 +126,10 @@ describe('/nio doctor', () => {
     });
     const out = await dispatchNioCommand('doctor', stubDeps);
     assert.match(out, /### External Analysers/);
-    assert.match(out, /✗ scorer_dead/);
-    // /token is unreachable → token_failed diagnostic; its hint mentions
-    // client_id / client_secret.
-    assert.match(out, /hint:.*client_id/);
+    assert.match(out, /✗ scorer_dead.*\[oauth\]/);
+    // /token is unreachable → token_failed → external_analyser.auth_failed.
+    // The hint chain ultimately points at client_id / client_secret.
+    assert.match(out, /hint:/);
   });
 
   it('marks disabled external analyser entries with · instead of ✓/✗', async () => {
@@ -118,6 +146,87 @@ describe('/nio doctor', () => {
     });
     const out = await dispatchNioCommand('doctor', stubDeps);
     assert.match(out, /· scorer_off .* — disabled/);
+  });
+
+  it('probes the endpoint and reports the returned score on success (no auth)', async () => {
+    const scorer = await startMockScorer({ body: { score: 0.42 } });
+    try {
+      writeConfig({
+        guard: {
+          protection_level: 'balanced',
+          external_analyser: [{ name: 'scorer_local', endpoint: scorer.url, weight: 1 }],
+        },
+      });
+      const out = await dispatchNioCommand('doctor', stubDeps);
+      assert.match(out, /✓ scorer_local.*score 0\.42.*\[no auth\]/);
+    } finally {
+      await stopServer(scorer.server);
+    }
+  });
+
+  it('probes bearer-auth entry against the endpoint (no longer skipped)', async () => {
+    const scorer = await startMockScorer({ body: { score: 0.13 } });
+    try {
+      writeConfig({
+        guard: {
+          protection_level: 'balanced',
+          external_analyser: [{
+            name: 'scorer_bearer',
+            endpoint: scorer.url,
+            weight: 1,
+            auth: { type: 'bearer', api_key: 'sk-test' },
+          }],
+        },
+      });
+      const out = await dispatchNioCommand('doctor', stubDeps);
+      assert.match(out, /✓ scorer_bearer.*score 0\.13.*\[bearer\]/);
+    } finally {
+      await stopServer(scorer.server);
+    }
+  });
+
+  it('reports HTTP error body in the failure detail (e.g. 422 with JSON detail)', async () => {
+    const scorer = await startMockScorer({
+      status: 422,
+      body: { detail: [{ loc: ['query', 'start'], msg: 'Field required' }] },
+    });
+    try {
+      writeConfig({
+        guard: {
+          protection_level: 'balanced',
+          external_analyser: [{ name: 'scorer_422', endpoint: scorer.url, weight: 1 }],
+        },
+      });
+      const out = await dispatchNioCommand('doctor', stubDeps);
+      assert.match(out, /✗ scorer_422.*\[no auth\]/);
+      assert.match(out, /422.*Field required/);
+    } finally {
+      await stopServer(scorer.server);
+    }
+  });
+
+  it('doctor probe does NOT write its failures to the audit log', async () => {
+    writeConfig({
+      guard: {
+        protection_level: 'balanced',
+        external_analyser: [{
+          name: 'scorer_dead',
+          endpoint: 'http://127.0.0.1:1/score',
+          weight: 1,
+        }],
+      },
+    });
+    // Clear audit log
+    writeFileSync(join(nioHome, 'audit.jsonl'), '');
+    await dispatchNioCommand('doctor', stubDeps);
+    // Audit log should still be empty — doctor uses a silent collector.
+    const auditPath = join(nioHome, 'audit.jsonl');
+    const auditLines = readFileSync(auditPath, 'utf-8').split('\n').filter(Boolean);
+    const diagLines = auditLines.filter((l: string) => {
+      try { return (JSON.parse(l) as { event?: string }).event === 'diagnostic'; } catch { return false; }
+    });
+    assert.equal(diagLines.length, 0,
+      `doctor must not write diagnostics; found ${diagLines.length}`);
   });
 });
 

@@ -94,9 +94,17 @@ export function reportDiagnostic(d: Diagnostic): void {
 export class DiagnosticCollector {
   private entries: Diagnostic[] = [];
 
+  /**
+   * @param silent  When true, collect() only buffers in memory — it does NOT
+   *                write to audit log or stderr. Use for sandboxed probes
+   *                like `/nio doctor` that should not pollute the audit
+   *                trail with their dry-run findings.
+   */
+  constructor(private readonly silent: boolean = false) {}
+
   collect(d: Diagnostic): void {
     this.entries.push(d);
-    reportDiagnostic(d);
+    if (!this.silent) reportDiagnostic(d);
   }
 
   /** Return the collected diagnostics and reset the buffer. */
