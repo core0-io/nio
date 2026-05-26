@@ -24,7 +24,7 @@ export { RuntimeAnalyser, type RuntimeAnalyserOptions, type GuardRulesConfig } f
 export { AllowlistAnalyser, type AllowlistAnalyserOptions, type AllowlistResult } from './core/analysers/allowlist/index.js';
 
 // Export ExternalAnalyser (pluggable HTTP scorer for both pipelines)
-export { ExternalAnalyser, type ExternalAnalyserOptions, type ExternalScoreRequest, type ExternalScoreResponse } from './core/analysers/external/index.js';
+export { ExternalAnalyser, type ExternalAnalyserOptions, type ExternalScoreResponse } from './core/analysers/external/index.js';
 
 // Export policy presets
 export {

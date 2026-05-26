@@ -5,12 +5,12 @@
  * AuthStrategy — Authorization header providers for ExternalAnalyser.
  *
  *   BearerAuthStrategy  — static "Bearer <api_key>".
- *   OAuthAuthStrategy   — OAuth2 `client_credentials` grant against FFWD's
- *                         /token endpoint. Tokens are cached on disk at
- *                         ~/.nio/oauth-cache/<host>-<fingerprint>.json with
- *                         mode 0600. When the cached token nears expiry nio
- *                         simply requests a new one — client_credentials has
- *                         no refresh_token, just re-fetch.
+ *   OAuthAuthStrategy   — OAuth2 `client_credentials` grant against the
+ *                         configured `/token` endpoint. Tokens are cached on
+ *                         disk at ~/.nio/oauth-cache/<host>-<fingerprint>.json
+ *                         with mode 0600. When the cached token nears expiry
+ *                         nio simply requests a new one — client_credentials
+ *                         has no refresh_token, just re-fetch.
  */
 
 import { createHash, randomBytes } from 'node:crypto';

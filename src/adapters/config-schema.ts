@@ -79,8 +79,8 @@ export type LLMConfig = z.infer<typeof LLMConfigSchema>;
 // External analyser — per-endpoint config (Phase 6)
 //
 // Phase 6 supports an arbitrary number of HTTP scoring endpoints, each
-// optionally authenticated via Bearer API key or FFWD-style OAuth2
-// client_credentials grant.
+// optionally authenticated via Bearer API key or OAuth2 client_credentials
+// grant.
 // ---------------------------------------------------------------------------
 
 const BearerAuthSchema = z.object({
@@ -91,7 +91,7 @@ const BearerAuthSchema = z.object({
 const OAuthAuthSchema = z.object({
   type:          z.literal('oauth'),
   oauth_url:     z.string().url(),       // base; runtime appends /token
-  client_id:     z.string().min(1),      // pre-registered via FFWD portal
+  client_id:     z.string().min(1),      // pre-registered with the OAuth provider
   client_secret: z.string().min(1),      // required for the client_credentials grant
 });
 
@@ -104,6 +104,18 @@ export const ExternalAnalyserEntrySchema = z.object({
   name:     z.string().min(1),
   enabled:  z.boolean().optional(),
   endpoint: z.string().min(1),
+  /**
+   * Custom request headers. Merged on top of nio's defaults (Authorization
+   * from `auth`). User entries OVERRIDE nio's defaults — set Authorization
+   * here only if you intentionally want to bypass `auth`.
+   */
+  headers:  z.record(z.string(), z.string()).optional(),
+  /**
+   * When set, nio appends `start` and `end` query parameters to the endpoint
+   * URL at request time, scoping the score to the last N seconds. Used for
+   * time-windowed scoring APIs that require an explicit window.
+   */
+  lookback_seconds: z.number().int().positive().optional(),
   timeout:  z.number().positive().optional(),
   weight:   z.number().nonnegative().optional(),
   auth:     ExternalAnalyserAuthSchema.optional(),

@@ -1680,8 +1680,9 @@ model:  <span class="bad">intent mismatch · 0.81</span>` },
       { id: 'compliance tag', desc: 'HIPAA / SOC2 routed paths',   sev: 'HIGH' },
       { id: 'audit trail',    desc: 'Signed decision log',         sev: 'LOW' },
     ],
-    example: { title: 'POST /score', body:
-`<span class="comment">→</span> { tool: "Bash", command: "aws s3 sync …" }
+    example: { title: 'GET /scores/agent', body:
+`<span class="comment">→</span> ?agent-name=cc&amp;start=…&amp;end=…
+   Authorization: Bearer eyJ…
 <span class="comment">←</span> { score: <span class="bad">0.94</span>, reason: <span class="bad">"prod bucket"</span> }` },
   },
 ];

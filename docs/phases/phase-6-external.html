@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Pipeline · Phase 6</div>
         <h1><em>External Scoring</em> — your enterprise policy gets the final word.</h1>
-        <p class="lead">Optional. When enabled, Nio POSTs the action context to your HTTP endpoint and uses the returned score in the weighted average. Use this for compliance routing (HIPAA, SOC2), DLP integration, or any policy specific to your org that doesn't belong in shared rules.</p>
+        <p class="lead">Optional. When enabled, Nio GETs your scoring endpoint and uses the returned score in the weighted average. Use this for compliance routing (HIPAA, SOC2), DLP integration, or any policy specific to your org that doesn't belong in shared rules.</p>
       </div>
 
       <div class="doc">
@@ -78,14 +78,17 @@
         type: bearer
         api_key: "sk-..."
 
-    # OAuth2 client_credentials (FFWD-style). Pre-register the client
-    # in the FFWD portal and paste its credentials below.
-    - name: scorer_ffwd
-      endpoint: "https://app.int.ffwd.one/api/.../score"
+    # OAuth2 client_credentials. Pre-register the client with the OAuth
+    # provider and paste its credentials below.
+    - name: scorer_primary
+      endpoint: "https://scoring.example.com/api/scores/agent?agent-name=cc"
       weight: 2.0
+      lookback_seconds: 3600        # append &start=<iso>&end=<iso> (ISO 8601)
+      # headers:                    # optional custom headers
+      #   X-Tenant-Id: "..."
       auth:
         type: oauth
-        oauth_url:     "https://app.int.ffwd.one/api/oauth"
+        oauth_url:     "https://scoring.example.com/oauth"
         client_id:     "..."
         client_secret: "..."</code></pre>
 
@@ -94,10 +97,9 @@
         <p>For local development, the repo bundles a mock scorer at <code>http://localhost:9090</code>.</p>
 
         <h2>Wire format</h2>
-        <p>Nio sends a <code>POST</code> to each endpoint with the action context and expects a JSON response with at least a <code>score</code> field in [0, 1]. Authentication (when configured) flows through <code>Authorization: Bearer &lt;token&gt;</code>. Response example:</p>
-        <pre><code>POST /score
-→ { "tool_name": "Bash", "tool_input": { "command": "aws s3 sync …" },
-    "prior_scores": { "runtime": 0.1, "static": 0.2 } }
+        <p>Nio issues a <code>GET</code> against each endpoint and expects a JSON response with at least a <code>score</code> field in [0, 1]. The endpoint URL is the entire request — encode any context the endpoint needs as query parameters (e.g. <code>?agent-name=X</code>). Authentication (when configured) flows through the <code>Authorization: Bearer &lt;token&gt;</code> header. Response example:</p>
+        <pre><code>GET /api/.../scores/agent?agent-name=cc
+  Authorization: Bearer eyJ…
 ← { "score": 0.94, "reason": "production bucket" }</code></pre>
 
         <h2>Weights</h2>
@@ -106,7 +108,7 @@
         <p>An endpoint that fails (network / HTTP / auth) drops out of both numerator and denominator — its weight does not pollute the average.</p>
 
         <h2>OAuth identity sharing</h2>
-        <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. The <code>/token</code> POST runs only once even when N endpoints fire concurrently. Endpoints with different <code>client_id</code>s get isolated caches. The OAuth client must be pre-registered via the FFWD portal.</p>
+        <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. The <code>/token</code> POST runs only once even when N endpoints fire concurrently. Endpoints with different <code>client_id</code>s get isolated caches. The OAuth client must be pre-registered with the OAuth provider.</p>
 
         <h2>When something goes wrong</h2>
         <p>Auth failures, HTTP errors, timeouts — none of these block the agent's action. They surface through Nio's <a href="../diagnostics.html">diagnostics channel</a>: a structured entry in <code>~/.nio/audit.jsonl</code>, a stderr line, and (on the next hook call) a block of <code>additionalContext</code> that the agent reads. Run <a href="../diagnostics.html#nio-doctor"><code>/nio doctor</code></a> to validate every OAuth endpoint with a real <code>client_credentials</code> dry-run.</p>

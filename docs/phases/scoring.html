@@ -60,10 +60,9 @@
             <tr><td><code>static</code></td><td>Phase 3 — static rules on file content</td><td>1.0</td></tr>
             <tr><td><code>behavioural</code></td><td>Phase 4 — AST dataflow</td><td>2.0</td></tr>
             <tr><td><code>llm</code></td><td>Phase 5 — LLM semantic</td><td>1.0</td></tr>
-            <tr><td><code>external</code></td><td>Phase 6 — external scoring API</td><td>2.0</td></tr>
           </tbody>
         </table>
-        <p>Behavioural and external are weighted higher because they tend to be more accurate per finding (dataflow tracking, your own enterprise rules) than the cheaper regex/keyword phases.</p>
+        <p>Behavioural is weighted higher because it tends to be more accurate per finding (dataflow tracking) than the cheaper regex/keyword phases. Phase 6 weights are per-endpoint — see <code>external_analyser[].weight</code> in the <a href="../configuration.html#guard.external_analyser">config reference</a>.</p>
 
         <h2>Short-circuit</h2>
         <p>The pipeline doesn't always run to completion:</p>

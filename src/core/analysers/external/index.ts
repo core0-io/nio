@@ -4,11 +4,13 @@
 /**
  * ExternalAnalyser — pluggable HTTP endpoint for external security analysis.
  *
- * A generalized scorer that sends context to a user-configured API and
- * receives a 0-1 score + optional findings. Usable by both pipelines:
+ * Hits a user-configured URL with `GET` and expects a JSON response
+ * `{ score: number, reason?: string }`. The endpoint URL (with any query
+ * params the user encodes into it) is the entire request — nio does not
+ * send a body. Used by both pipelines:
  *
- *   - Dynamic Guard (ActionOrchestrator Phase 6): action context + prior scores
- *   - Static Scan (ScanOrchestrator): file content + prior findings
+ *   - Dynamic Guard (ActionOrchestrator Phase 6)
+ *   - Static Scan  (ScanOrchestrator post-phase)
  */
 
 import type { Finding } from '../../models.js';
@@ -24,27 +26,17 @@ export interface ExternalAnalyserOptions {
   weight?: number;
   /** Optional authentication strategy resolving the Authorization header. */
   auth?: AuthStrategy;
-}
-
-/** Payload sent to the external endpoint. */
-export interface ExternalScoreRequest {
-  /** What is being analysed: "action" or "scan" */
-  mode: 'action' | 'scan';
-  /** Action context (guard pipeline) */
-  tool_name?: string;
-  tool_input?: Record<string, unknown>;
-  initiating_skill?: string;
-  /** Scan context (scan pipeline) */
-  files?: Array<{ path: string; content_preview: string }>;
-  skill_id?: string;
-  /** Common: prior analysis results */
-  prior_scores?: Record<string, number | undefined>;
-  prior_findings?: Array<{
-    rule_id: string;
-    severity: string;
-    title: string;
-    file: string;
-  }>;
+  /**
+   * Optional custom request headers, merged over nio's defaults (the
+   * Authorization header from `auth`). User entries override defaults.
+   */
+  headers?: Record<string, string>;
+  /**
+   * When set, nio appends `&start=<iso>&end=<iso>` (ISO 8601 timestamps) to
+   * the endpoint URL at request time, scoping the score to the last N
+   * seconds. Required by time-windowed scoring APIs.
+   */
+  lookbackSeconds?: number;
 }
 
 /** Response from the external endpoint. */
@@ -61,6 +53,8 @@ export class ExternalAnalyser {
   private endpoint: string;
   private timeout: number;
   private auth?: AuthStrategy;
+  private customHeaders?: Record<string, string>;
+  private lookbackSeconds?: number;
 
   constructor(opts: ExternalAnalyserOptions) {
     this.name = opts.name;
@@ -68,52 +62,65 @@ export class ExternalAnalyser {
     this.timeout = opts.timeout ?? 3000;
     this.weight = opts.weight ?? 1.0;
     this.auth = opts.auth;
+    this.customHeaders = opts.headers;
+    this.lookbackSeconds = opts.lookbackSeconds;
+  }
+
+  /**
+   * Build the final request URL, optionally appending `start`/`end` query
+   * parameters when `lookbackSeconds` is configured. Timestamps use ISO 8601
+   * (RFC 3339) with millisecond precision and a `Z` suffix.
+   */
+  private buildUrl(): string {
+    if (!this.lookbackSeconds) return this.endpoint;
+    const nowMs = Date.now();
+    const end = new Date(nowMs).toISOString();
+    const start = new Date(nowMs - this.lookbackSeconds * 1000).toISOString();
+    const sep = this.endpoint.includes('?') ? '&' : '?';
+    return `${this.endpoint}${sep}start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
   }
 
   /**
    * Score an action (guard pipeline — ActionOrchestrator Phase 6).
+   *
+   * The action context (toolName / toolInput / priorScores / priorFindings)
+   * arguments are ignored at the HTTP level — nio just GETs the configured
+   * endpoint. The endpoint is expected to score the agent or session based
+   * on its own state (e.g. a `/scores/agent?agent-name=X`-style URL where
+   * any context the endpoint needs is encoded in the URL itself). The args
+   * are still accepted so the call-site contract is stable; future
+   * GET-with-query-template support can use them.
    */
   async scoreAction(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    priorScores: Record<string, number | undefined>,
-    priorFindings: Finding[],
-    initiatingSkill?: string,
+    _toolName: string,
+    _toolInput: Record<string, unknown>,
+    _priorScores: Record<string, number | undefined>,
+    _priorFindings: Finding[],
+    _initiatingSkill?: string,
     reporter?: DiagnosticCollector,
   ): Promise<{ score: number; reason?: string } | null> {
-    return this.call({
-      mode: 'action',
-      tool_name: toolName,
-      tool_input: toolInput,
-      prior_scores: priorScores,
-      prior_findings: this.compactFindings(priorFindings),
-      initiating_skill: initiatingSkill,
-    }, reporter);
+    return this.call(reporter);
   }
 
   /**
    * Score a scan result (scan pipeline — ScanOrchestrator post-phase).
+   * Same GET semantics as scoreAction.
    */
   async scoreScan(
-    skillId: string,
-    files: Array<{ path: string; content_preview: string }>,
-    priorFindings: Finding[],
+    _skillId: string,
+    _files: Array<{ path: string; content_preview: string }>,
+    _priorFindings: Finding[],
     reporter?: DiagnosticCollector,
   ): Promise<{ score: number; reason?: string } | null> {
-    return this.call({
-      mode: 'scan',
-      skill_id: skillId,
-      files,
-      prior_findings: this.compactFindings(priorFindings),
-    }, reporter);
+    return this.call(reporter);
   }
 
   /**
-   * Low-level call — send any ExternalScoreRequest and get a score back.
+   * Low-level call — GET the configured endpoint and parse the score.
    * Emits diagnostics through the optional reporter on auth/HTTP/timeout
    * failures so the parent orchestrator can surface them in ActionDecision.
    */
-  async call(body: ExternalScoreRequest, reporter?: DiagnosticCollector): Promise<{ score: number; reason?: string } | null> {
+  async call(reporter?: DiagnosticCollector): Promise<{ score: number; reason?: string } | null> {
     let authHeader: string | null = null;
     if (this.auth) {
       authHeader = await this.auth.getAuthHeader(reporter);
@@ -121,9 +128,10 @@ export class ExternalAnalyser {
         // Auth was configured but failed — skip the request entirely; a
         // request without Authorization would just earn a 401 and add noise.
         // The underlying auth strategy already emitted a diagnostic of its
-        // own (kind: token_failed / cache_write_failed / etc.); we add a follow-up
-        // anchored to THIS endpoint so the failure is also attributable to
-        // the scoring endpoint name (not just the OAuth client).
+        // own (kind: token_failed / cache_write_failed / etc.); we add a
+        // follow-up anchored to THIS endpoint so the failure is also
+        // attributable to the scoring endpoint name (not just the OAuth
+        // client).
         reporter?.collect({
           severity: 'error',
           source: 'external_analyser',
@@ -140,28 +148,38 @@ export class ExternalAnalyser {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), this.timeout);
 
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
+      // nio defaults first; user-configured headers override.
+      const headers: Record<string, string> = {};
       if (authHeader) headers['Authorization'] = authHeader;
+      if (this.customHeaders) Object.assign(headers, this.customHeaders);
 
-      const response = await fetch(this.endpoint, {
-        method: 'POST',
+      const url = this.buildUrl();
+      const response = await fetch(url, {
+        method: 'GET',
         headers,
-        body: JSON.stringify(body),
         signal: controller.signal,
       });
 
       clearTimeout(timeoutId);
 
       if (!response.ok) {
+        // Capture a body preview so the user can see WHY the server rejected
+        // (e.g. 422 usually carries a JSON explaining the missing/invalid field).
+        let bodyPreview = '';
+        try {
+          const text = await response.text();
+          bodyPreview = text.slice(0, 400);
+        } catch { /* ignore */ }
+        const detail = bodyPreview
+          ? `${response.status} ${response.statusText}: ${bodyPreview}`
+          : `${response.status} ${response.statusText}`;
         reporter?.collect({
           severity: 'error',
           source: 'external_analyser',
           kind: 'http_error',
           component: this.name,
           message: `${this.endpoint} returned HTTP ${response.status}`,
-          detail: `${response.status} ${response.statusText}`,
+          detail,
           hint: 'Check endpoint URL and any required auth in guard.external_analyser[].auth.',
         });
         return null;
@@ -195,14 +213,5 @@ export class ExternalAnalyser {
       }
       return null;
     }
-  }
-
-  private compactFindings(findings: Finding[]): ExternalScoreRequest['prior_findings'] {
-    return findings.map(f => ({
-      rule_id: f.rule_id,
-      severity: f.severity,
-      title: f.title,
-      file: f.location.file,
-    }));
   }
 }

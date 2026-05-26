@@ -129,10 +129,10 @@ describe('/nio report — Diagnostics summary', () => {
     const auditPath = join(nioHome, 'audit.jsonl');
     const lines = [
       { event: 'diagnostic', timestamp: '2026-05-25T14:02:11.000Z', severity: 'error',
-        source: 'oauth', kind: 'token_failed', component: 'scorer_ffwd',
+        source: 'oauth', kind: 'token_failed', component: 'scorer_primary',
         message: 'HTTP 401', hint: 'Check client_id.' },
       { event: 'diagnostic', timestamp: '2026-05-25T14:09:33.000Z', severity: 'error',
-        source: 'oauth', kind: 'token_failed', component: 'scorer_ffwd',
+        source: 'oauth', kind: 'token_failed', component: 'scorer_primary',
         message: 'HTTP 401', hint: 'Check client_id.' },
       { event: 'diagnostic', timestamp: '2026-05-25T14:31:08.000Z', severity: 'error',
         source: 'llm',   kind: 'api_key_missing',
@@ -145,7 +145,7 @@ describe('/nio report — Diagnostics summary', () => {
     const out = await dispatchNioCommand('report', stubDeps);
     assert.match(out, /## Diagnostics/);
     // Two token_failed entries should collapse to count=2
-    assert.match(out, /\| 2 \| oauth \| token_failed \| scorer_ffwd \|/);
+    assert.match(out, /\| 2 \| oauth \| token_failed \| scorer_primary \|/);
     // api_key_missing keeps its own row
     assert.match(out, /\| 1 \| llm \| api_key_missing \|/);
     // Hints section appears

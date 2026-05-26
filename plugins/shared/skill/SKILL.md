@@ -231,15 +231,17 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.llm_analyser.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
 | `guard.external_analyser` | array | `[]` | Phase 6 external scoring endpoints. Each entry: `{ name, endpoint, weight?, timeout?, enabled?, auth? }`. All enabled entries run concurrently; their scores are weighted into the final aggregate per `entry.weight` (default 1.0). |
 | `guard.external_analyser[].name` | string | (required) | Unique identifier surfaced in `scores.external`, `phase_timings.external`, and audit logs. |
-| `guard.external_analyser[].endpoint` | string | (required) | HTTPS POST URL receiving the scoring payload. |
+| `guard.external_analyser[].endpoint` | string | (required) | HTTPS URL of the scoring endpoint. nio always issues GET; encode any context the endpoint needs in the URL itself (e.g. `?agent-name=X`). |
+| `guard.external_analyser[].headers` | object | — | Optional custom request headers (e.g. `X-Tenant-Id`). Merged over nio defaults; user entries override (including `Authorization`). |
+| `guard.external_analyser[].lookback_seconds` | number | — | When set, nio appends `&start=<iso>&end=<iso>` (ISO 8601 timestamps; `start` is `now - N` seconds, `end` is now) to the request URL at fetch time. Required by time-windowed scoring APIs. |
 | `guard.external_analyser[].weight` | number | `1.0` | Aggregation weight; participates in `final_score = Σ(wi·si)/Σ(wi)`. |
 | `guard.external_analyser[].timeout` | number | `3000` | Per-request timeout (ms). |
 | `guard.external_analyser[].enabled` | boolean | `true` | Set false to skip this endpoint without removing config. |
-| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (FFWD-style `client_credentials` grant). Omit `auth` entirely for unauthenticated endpoints. |
+| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (OAuth2 `client_credentials` grant). Omit `auth` entirely for unauthenticated endpoints. |
 | `guard.external_analyser[].auth.api_key` | string | — | `bearer` only — sent as `Authorization: Bearer <api_key>`. |
 | `guard.external_analyser[].auth.oauth_url` | string | — | `oauth` only — base URL; runtime appends `/token`. |
-| `guard.external_analyser[].auth.client_id` | string | — | `oauth` only — **required**. Pre-register the OAuth client via the FFWD portal and paste its `client_id` here. |
-| `guard.external_analyser[].auth.client_secret` | string | — | `oauth` only — **required**. The corresponding `client_secret` from the FFWD portal. |
+| `guard.external_analyser[].auth.client_id` | string | — | `oauth` only — **required**. Pre-register the OAuth client with the provider and paste its `client_id` here. |
+| `guard.external_analyser[].auth.client_secret` | string | — | `oauth` only — **required**. The corresponding `client_secret` from the provider. |
 
 **OAuth token caching:** Endpoints with `auth.type=oauth` cache the access_token to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth identity (`oauth_url + client_id + client_secret`) share the cache and the in-process `OAuthAuthStrategy` instance — the `/token` POST fires only once even when N endpoints fire concurrently. When the cached token nears expiry, nio simply requests a fresh one (`client_credentials` grant has no refresh_token; one POST replaces it).
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
@@ -335,7 +337,7 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 **Diagnostic entry** (`event: "diagnostic"`) — config / OAuth / LLM / external / collector / scanner failure:
 
 ```json
-{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"token_failed","component":"app.int.ffwd.one","message":"client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token","detail":"HTTP 401 Unauthorized","config_path":"guard.external_analyser[*].auth","hint":"Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor."}
+{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"token_failed","component":"scoring.example.com","message":"client_credentials grant failed at https://scoring.example.com/oauth/token","detail":"HTTP 401 Unauthorized","config_path":"guard.external_analyser[*].auth","hint":"Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor."}
 ```
 
 `source` values: `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`. Common `kind` values:

@@ -308,12 +308,22 @@ interface ScorerOpts {
   drop?: boolean;
 }
 
-function startScorer(opts: ScorerOpts): Promise<{ url: string; server: Server }> {
+interface ScorerObserved {
+  method?: string;
+  headers?: Record<string, string | string[] | undefined>;
+  url?: string;
+}
+
+function startScorer(opts: ScorerOpts): Promise<{ url: string; server: Server; observed: ScorerObserved }> {
+  const observed: ScorerObserved = {};
   const server = createServer((req, res) => {
     if (opts.drop) {
       res.socket?.destroy();
       return;
     }
+    observed.method = req.method;
+    observed.headers = req.headers as Record<string, string | string[] | undefined>;
+    observed.url = req.url;
     let body = '';
     req.on('data', c => { body += c; });
     req.on('end', () => {
@@ -324,7 +334,7 @@ function startScorer(opts: ScorerOpts): Promise<{ url: string; server: Server }>
   return new Promise(resolve => {
     server.listen(0, '127.0.0.1', () => {
       const { port } = server.address() as AddressInfo;
-      resolve({ url: `http://127.0.0.1:${port}`, server });
+      resolve({ url: `http://127.0.0.1:${port}`, server, observed });
     });
   });
 }
@@ -416,6 +426,115 @@ describe('ActionOrchestrator: Phase 6 multi-endpoint', () => {
     } finally {
       await stopScorer(dead.server);
       await stopScorer(live.server);
+    }
+  });
+
+  it('issues GET requests (no body, no Content-Type)', async () => {
+    const scorer = await startScorer({ score: 0.3 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [{ name: 's', endpoint: scorer.url, weight: 1.0 }],
+      });
+      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+      assert.equal(scorer.observed.method, 'GET');
+      assert.equal(scorer.observed.headers?.['content-type'], undefined,
+        'GET must not send a Content-Type header');
+      assert.equal(scorer.observed.headers?.['content-length'], undefined,
+        'GET must not carry a body');
+    } finally {
+      await stopScorer(scorer.server);
+    }
+  });
+
+  it('forwards user-configured headers and lets them override defaults', async () => {
+    const scorer = await startScorer({ score: 0.1 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [{
+          name: 's',
+          endpoint: scorer.url,
+          weight: 1.0,
+          headers: {
+            'X-Tenant-Id': 'tenant-42',
+            // Override an arbitrary header to prove user wins:
+            'X-Override': 'user-value',
+          },
+        }],
+      });
+      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+      assert.equal(scorer.observed.headers?.['x-tenant-id'], 'tenant-42');
+      assert.equal(scorer.observed.headers?.['x-override'], 'user-value');
+    } finally {
+      await stopScorer(scorer.server);
+    }
+  });
+
+  it('appends start/end query params as ISO 8601 when lookback_seconds is set', async () => {
+    const scorer = await startScorer({ score: 0.4 });
+    try {
+      const before = Date.now();
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [{ name: 's', endpoint: scorer.url, weight: 1.0, lookback_seconds: 3600 }],
+      });
+      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+      const after = Date.now();
+
+      const observedUrl = scorer.observed.url ?? '';
+      const parsed = new URL(`http://x${observedUrl}`);
+      const startStr = parsed.searchParams.get('start') ?? '';
+      const endStr = parsed.searchParams.get('end') ?? '';
+
+      // ISO 8601 with millisecond precision and Z suffix
+      assert.match(startStr, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      assert.match(endStr,   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+
+      const start = Date.parse(startStr);
+      const end = Date.parse(endStr);
+      assert.equal(end - start, 3600 * 1000, 'window width equals lookback_seconds (in ms)');
+      assert.ok(end >= before && end <= after,
+        `end (${end}) should be in [${before}, ${after}]`);
+    } finally {
+      await stopScorer(scorer.server);
+    }
+  });
+
+  it('preserves existing query params when appending start/end (uses & not ?)', async () => {
+    const scorer = await startScorer({ score: 0.4 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [{
+          name: 's',
+          endpoint: `${scorer.url}/?agent-name=cc`,
+          weight: 1.0,
+          lookback_seconds: 60,
+        }],
+      });
+      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+
+      const observedUrl = scorer.observed.url ?? '';
+      const parsed = new URL(`http://x${observedUrl}`);
+      assert.equal(parsed.searchParams.get('agent-name'), 'cc',
+        'pre-existing query param survives');
+      assert.ok(parsed.searchParams.has('start'));
+      assert.ok(parsed.searchParams.has('end'));
+    } finally {
+      await stopScorer(scorer.server);
+    }
+  });
+
+  it('does NOT append start/end when lookback_seconds is unset', async () => {
+    const scorer = await startScorer({ score: 0.4 });
+    try {
+      const analyser = new ActionOrchestrator({
+        externalAnalysers: [{ name: 's', endpoint: scorer.url, weight: 1.0 }],
+      });
+      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+
+      const observedUrl = scorer.observed.url ?? '';
+      assert.doesNotMatch(observedUrl, /start=/);
+      assert.doesNotMatch(observedUrl, /end=/);
+    } finally {
+      await stopScorer(scorer.server);
     }
   });
 });

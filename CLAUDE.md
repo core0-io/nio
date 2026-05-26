@@ -77,7 +77,7 @@ guard:
   file_scan_rules: {}            # Extra scan patterns (Phase 3 + scan command)
   action_guard_rules: {}         # Extra guard patterns (Phase 2 runtime analysis)
   llm_analyser: { enabled: false, api_key: "" }       # Phase 5 LLM analyser
-  external_analyser: { enabled: false, endpoint: "" }  # Phase 6 external scoring API
+  external_analyser: []     # Phase 6 — array of scoring endpoints (GET-only; bearer/oauth auth; optional lookback_seconds/headers)
   allowed_commands: []      # Phase 1 safe command prefixes
   permitted_tools: {}       # Per-platform + `mcp` strict allowlist (Phase 0)
   blocked_tools: {}         # Per-platform + `mcp` denylist (Phase 0; takes precedence)

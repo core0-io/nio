@@ -46,7 +46,7 @@ describe('reportDiagnostic', () => {
       severity: 'error',
       source: 'oauth',
       kind: 'token_failed',
-      component: 'ffwd.example.com',
+      component: 'scoring.example.com',
       message: 'client_credentials grant failed',
       detail: 'HTTP 401',
       hint: 'Check client_id.',
@@ -125,7 +125,7 @@ describe('formatDiagnosticsForUser', () => {
     const out = formatDiagnosticsForUser([
       {
         severity: 'error', source: 'oauth', kind: 'token_failed',
-        component: 'scorer_ffwd', message: 'HTTP 401 at /token',
+        component: 'scorer_primary', message: 'HTTP 401 at /token',
         hint: 'Check client_id.',
       },
       {
@@ -135,7 +135,7 @@ describe('formatDiagnosticsForUser', () => {
     ]);
     assert.match(out, /1 error/);
     assert.match(out, /1 warning/);
-    assert.match(out, /\[oauth token_failed\] scorer_ffwd: HTTP 401 at \/token/);
+    assert.match(out, /\[oauth token_failed\] scorer_primary: HTTP 401 at \/token/);
     assert.match(out, /hint: Check client_id\./);
     assert.match(out, /\[collector otlp_export_failed\] export failed/);
     assert.match(out, /Run \/nio doctor/);

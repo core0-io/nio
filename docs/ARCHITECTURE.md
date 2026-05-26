@@ -157,14 +157,15 @@ if it exceeds the deny threshold for the active protection level.
                      │ not critical
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Phase 6: External Scoring API → `external` score                    │
-│ [Optional — gated on guard.scoring_endpoint config]                 │
+│ Phase 6: External Scoring APIs → `external` scores (0..N endpoints) │
+│ [Optional — gated on guard.external_analyser config]                │
 │                                                                     │
-│   POST { tool_name, tool_input, prior_scores, prior_findings }     │
-│   → external HTTP endpoint                                          │
+│   GET <endpoint>?<query…>&start=<iso>&end=<iso>                    │
+│       Authorization: Bearer <token>                                 │
 │   ← { score: 0.0–1.0, reason?: string }                            │
 │                                                                     │
-│   external score ──► critical? ──YES──► DENY (exit)                │
+│   All enabled endpoints run concurrently; each contributes via      │
+│   its own `weight`. Any endpoint at critical ──► DENY (exit).       │
 └────────────────────┬────────────────────────────────────────────────┘
                      │ not critical
                      ▼
@@ -303,10 +304,13 @@ and functions, then runs language-aware dataflow tracking.
 semantic analysis. For Write/Edit, analyses the file content. For Bash, wraps
 the command as a shell script. Reuses the existing `LLMAnalyser` from the scan pipeline.
 
-### Phase 6: External Scoring API (optional) → `external`
+### Phase 6: External Scoring APIs (optional) → `external`
 
-**Gated on `guard.scoring_endpoint` in config.** Sends action context + prior
-scores/findings to a user-configured HTTP endpoint. Returns a 0–1 score.
+**Gated on `guard.external_analyser` array in config.** 0..N endpoints; each
+runs concurrently with `Promise.allSettled`. nio issues a `GET` against each
+configured URL (with any query params the user encodes) and expects a
+0–1 score back. Each endpoint contributes to the weighted average via its
+own per-endpoint `weight`.
 
 The `ExternalAnalyser` is a standalone module (`src/core/analysers/external/`)
 usable by both pipelines:
@@ -315,10 +319,24 @@ usable by both pipelines:
 
 ```yaml
 guard:
-  scoring_endpoint: "https://my-security-api.example.com/score"
-  scoring_api_key: ""
-  scoring_timeout: 3000
+  external_analyser:
+    - name: scorer_primary
+      endpoint: "https://my-security-api.example.com/scores/agent?agent-name=cc"
+      lookback_seconds: 600          # appends &start=<iso>&end=<iso>
+      weight: 2.0
+      timeout: 3000
+      # headers: { X-Tenant-Id: "..." }   # optional custom headers
+      auth:                              # optional: bearer | oauth
+        type: oauth
+        oauth_url:     "https://my-security-api.example.com/oauth"
+        client_id:     "..."
+        client_secret: "..."
 ```
+
+OAuth uses `client_credentials` grant against `<oauth_url>/token`; access
+tokens cache to `~/.nio/oauth-cache/<host>-<fp>.json` (mode 0600) and are
+re-fetched when near expiry. Endpoints sharing the same `(oauth_url,
+client_id, client_secret)` share a single token + in-process strategy.
 
 ### Score Aggregation
 

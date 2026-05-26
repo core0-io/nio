@@ -104,7 +104,7 @@ Pre-execution risk evaluation in two modes:
 
 Detection coverage spans **15 static regex rules**, **7 source→sink behavioural rules** across 6 languages, and runtime command / network / sensitive-path heuristics. Per-rule reference: **[SCAN-RULES.md](plugins/shared/skill/SCAN-RULES.md)** for the static-rule patterns, **[ACTION-POLICIES.md](plugins/shared/skill/ACTION-POLICIES.md)** for runtime-detector policies.
 
-Phase 6 connects Nio's pre-execution gate to an external risk intelligence platform — so the decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it operates on. [FFWD Agent Assurance](https://core0.io) is designed for exactly this role.
+Phase 6 connects Nio's pre-execution gate to an external risk-scoring service of your choice — so the decision is informed not just by what the agent is about to do, but by the live health of the infrastructure it operates on. Plug in any HTTPS endpoint that returns a 0–1 score; bearer-token and OAuth2 `client_credentials` are both supported out of the box.
 
 ---
 

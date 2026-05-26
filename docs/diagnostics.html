@@ -115,7 +115,7 @@
 
 ### External Analysers (3 configured)
 - ✓ scorer_a (https://a.example.com/score) — OAuth token acquired
-- ✗ scorer_ffwd (https://app.int.ffwd.one): client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+- ✗ scorer_primary (https://scoring.example.com): client_credentials grant failed at https://scoring.example.com/oauth/token
     hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.
 - · scorer_off (https://x.example.com/score) — disabled
 
@@ -135,7 +135,7 @@
 
 | Count | Source | Kind | Component | First seen | Last seen | Latest message |
 |-------|--------|------|-----------|------------|-----------|----------------|
-| 32 | oauth | token_failed | scorer_ffwd | 14:02:11 | 14:31:08 | client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token |
+| 32 | oauth | token_failed | scorer_primary | 14:02:11 | 14:31:08 | client_credentials grant failed at https://scoring.example.com/oauth/token |
 | 12 | llm | api_key_missing | — | 14:02:11 | 14:31:08 | guard.llm_analyser.enabled=true but api_key is empty |
 |  3 | external_analyser | timeout | scorer_slow | 14:10:00 | 14:25:00 | https://slow.example.com/score timed out after 3000ms |
 
@@ -150,21 +150,21 @@ Hints:
           <li>The next time the agent runs a tool call (any Bash, Write, Read…), Nio's Phase 6 picks up the new endpoint, the OAuth strategy POSTs to <code>/token</code> with <code>grant_type=client_credentials</code>, and gets back HTTP 401.</li>
           <li>The hook output includes an <code>additionalContext</code> block:
             <pre><code>Nio: 1 error during this action
-  - [oauth token_failed] app.int.ffwd.one: client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+  - [oauth token_failed] scoring.example.com: client_credentials grant failed at https://scoring.example.com/oauth/token
     hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.
 Run /nio doctor or /nio report for details.</code></pre>
             The agent sees this and mentions it in its next response to you.
           </li>
           <li>You run <code>/nio doctor</code>:
             <pre><code>### External Analysers (1 configured)
-- ✗ scorer_ffwd (https://app.int.ffwd.one/api/.../score): client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+- ✗ scorer_primary (https://scoring.example.com/api/.../score): client_credentials grant failed at https://scoring.example.com/oauth/token
     hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.</code></pre>
           </li>
           <li>You fix <code>auth.client_secret</code> in the YAML.</li>
           <li>Re-run <code>/nio doctor</code> — now ✓.</li>
         </ol>
 
-        <p>Throughout, the agent's tool calls were never blocked. Phase 6's <code>scorer_ffwd</code> simply dropped out of the weighted aggregate during the broken period; its slot in <code>phase_timings.external</code> still appears in the audit log with an <code>error: { kind: 'token_failed', detail: '...' }</code> field, so the gap is auditable.</p>
+        <p>Throughout, the agent's tool calls were never blocked. Phase 6's <code>scorer_primary</code> simply dropped out of the weighted aggregate during the broken period; its slot in <code>phase_timings.external</code> still appears in the audit log with an <code>error: { kind: 'token_failed', detail: '...' }</code> field, so the gap is auditable.</p>
 
       </div>
 
