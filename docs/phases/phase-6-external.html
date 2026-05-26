@@ -78,15 +78,16 @@
         type: bearer
         api_key: "sk-..."
 
-    # OAuth2 PKCE (FFWD-style)
+    # OAuth2 client_credentials (FFWD-style). Pre-register the client
+    # in the FFWD portal and paste its credentials below.
     - name: scorer_ffwd
       endpoint: "https://app.int.ffwd.one/api/.../score"
       weight: 2.0
       auth:
         type: oauth
-        oauth_url: "https://app.int.ffwd.one/api/oauth"
-        key_id: "..."
-        key_secret: "..."</code></pre>
+        oauth_url:     "https://app.int.ffwd.one/api/oauth"
+        client_id:     "..."
+        client_secret: "..."</code></pre>
 
         <p>See <a href="../configuration.html#guard.external_analyser"><code>guard.external_analyser</code></a> for the full schema.</p>
 
@@ -105,10 +106,10 @@
         <p>An endpoint that fails (network / HTTP / auth) drops out of both numerator and denominator — its weight does not pollute the average.</p>
 
         <h2>OAuth identity sharing</h2>
-        <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>key_id</code> + <code>key_secret</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. PKCE only runs once even when N endpoints fire concurrently. Endpoints with different <code>key_id</code>s get isolated caches.</p>
+        <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. The <code>/token</code> POST runs only once even when N endpoints fire concurrently. Endpoints with different <code>client_id</code>s get isolated caches. The OAuth client must be pre-registered via the FFWD portal.</p>
 
         <h2>When something goes wrong</h2>
-        <p>Auth failures, HTTP errors, timeouts — none of these block the agent's action. They surface through Nio's <a href="../diagnostics.html">diagnostics channel</a>: a structured entry in <code>~/.nio/audit.jsonl</code>, a stderr line, and (on the next hook call) a block of <code>additionalContext</code> that the agent reads. Run <a href="../diagnostics.html#nio-doctor"><code>/nio doctor</code></a> to validate every OAuth endpoint with a real PKCE dry-run.</p>
+        <p>Auth failures, HTTP errors, timeouts — none of these block the agent's action. They surface through Nio's <a href="../diagnostics.html">diagnostics channel</a>: a structured entry in <code>~/.nio/audit.jsonl</code>, a stderr line, and (on the next hook call) a block of <code>additionalContext</code> that the agent reads. Run <a href="../diagnostics.html#nio-doctor"><code>/nio doctor</code></a> to validate every OAuth endpoint with a real <code>client_credentials</code> dry-run.</p>
 
         <h2>Use cases</h2>
         <ul>

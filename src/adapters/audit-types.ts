@@ -131,7 +131,7 @@ export interface AuditDiagnosticEntry {
     | 'collector'          // OTLP export
     | 'scanner'            // file walker / file IO
     | 'hook';              // hook script itself
-  /** Free-form sub-classification within source (e.g. 'pkce_failed'). */
+  /** Free-form sub-classification within source (e.g. 'token_failed'). */
   kind: string;
   message: string;
   /** Dot path into config that's responsible, if applicable. */

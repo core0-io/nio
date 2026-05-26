@@ -482,8 +482,6 @@ async function dryRunOAuth(entry: NonNullable<NioConfig['guard']>['external_anal
   }
   const strategy = getOrCreateOAuthStrategy({
     oauthUrl:     entry.auth.oauth_url,
-    keyId:        entry.auth.key_id,
-    keySecret:    entry.auth.key_secret,
     clientId:     entry.auth.client_id,
     clientSecret: entry.auth.client_secret,
   });

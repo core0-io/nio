@@ -90,8 +90,8 @@ describe('/nio doctor', () => {
           auth: {
             type: 'oauth',
             oauth_url: 'http://127.0.0.1:1/oauth',
-            key_id: 'kid',
-            key_secret: 'ksec',
+            client_id: 'cid',
+            client_secret: 'csec',
           },
         }],
       },
@@ -99,9 +99,9 @@ describe('/nio doctor', () => {
     const out = await dispatchNioCommand('doctor', stubDeps);
     assert.match(out, /### External Analysers/);
     assert.match(out, /✗ scorer_dead/);
-    // The OAuth strategy will fail at /register; the error chain becomes
-    // pkce_failed, whose hint mentions key_id / key_secret.
-    assert.match(out, /hint:.*key_id/);
+    // /token is unreachable → token_failed diagnostic; its hint mentions
+    // client_id / client_secret.
+    assert.match(out, /hint:.*client_id/);
   });
 
   it('marks disabled external analyser entries with · instead of ✓/✗', async () => {
@@ -129,11 +129,11 @@ describe('/nio report — Diagnostics summary', () => {
     const auditPath = join(nioHome, 'audit.jsonl');
     const lines = [
       { event: 'diagnostic', timestamp: '2026-05-25T14:02:11.000Z', severity: 'error',
-        source: 'oauth', kind: 'pkce_failed', component: 'scorer_ffwd',
-        message: 'HTTP 401 at /code', hint: 'Check key_id.' },
+        source: 'oauth', kind: 'token_failed', component: 'scorer_ffwd',
+        message: 'HTTP 401', hint: 'Check client_id.' },
       { event: 'diagnostic', timestamp: '2026-05-25T14:09:33.000Z', severity: 'error',
-        source: 'oauth', kind: 'pkce_failed', component: 'scorer_ffwd',
-        message: 'HTTP 401 at /code', hint: 'Check key_id.' },
+        source: 'oauth', kind: 'token_failed', component: 'scorer_ffwd',
+        message: 'HTTP 401', hint: 'Check client_id.' },
       { event: 'diagnostic', timestamp: '2026-05-25T14:31:08.000Z', severity: 'error',
         source: 'llm',   kind: 'api_key_missing',
         message: 'api_key empty', hint: 'Set api_key.' },
@@ -144,13 +144,13 @@ describe('/nio report — Diagnostics summary', () => {
 
     const out = await dispatchNioCommand('report', stubDeps);
     assert.match(out, /## Diagnostics/);
-    // Two pkce_failed entries should collapse to count=2
-    assert.match(out, /\| 2 \| oauth \| pkce_failed \| scorer_ffwd \|/);
+    // Two token_failed entries should collapse to count=2
+    assert.match(out, /\| 2 \| oauth \| token_failed \| scorer_ffwd \|/);
     // api_key_missing keeps its own row
     assert.match(out, /\| 1 \| llm \| api_key_missing \|/);
     // Hints section appears
     assert.match(out, /Hints:/);
-    assert.match(out, /oauth pkce_failed:.*key_id/);
+    assert.match(out, /oauth token_failed:.*client_id/);
   });
 
   it('omits Diagnostics section when no diagnostic entries exist', async () => {

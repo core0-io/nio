@@ -5,7 +5,9 @@
  * external-auth.test.ts — BearerAuthStrategy + OAuthAuthStrategy.
  *
  * Uses node:http to spin up an isolated mock OAuth server per test, so
- * tests neither hit the network nor share state.
+ * tests neither hit the network nor share state. nio uses only the
+ * `client_credentials` grant against `/token` — no `/register`, no `/code`,
+ * no PKCE, no refresh_token.
  */
 
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
@@ -22,10 +24,9 @@ import {
   OAuthAuthStrategy,
   cacheFilePath,
   getOrCreateOAuthStrategy,
-  oauthFingerprint,
   _resetOAuthRegistryForTests,
 } from '../core/analysers/external/auth.js';
-import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
+import { _setDiagnosticsAuditPathForTests, DiagnosticCollector } from '../adapters/diagnostics.js';
 
 // Sandbox diagnostic writes so tests never touch ~/.nio/audit.jsonl.
 let testAuditDir: string;
@@ -41,90 +42,57 @@ after(() => {
 // ─── Mock OAuth server harness ───────────────────────────────────────────
 
 interface MockState {
-  registerCalls: number;
-  codeCalls: number;
   tokenCalls: number;
-  refreshCalls: number;
-  /** Last code-verifier received at /token (for PKCE assertion). */
-  lastCodeVerifier?: string;
+  unexpectedCalls: number;  // Anything other than POST /token bumps this.
+  /** Last (client_id, client_secret) the server saw at /token. */
+  lastClientId?: string;
+  lastClientSecret?: string;
 }
 
 interface MockOptions {
-  /** When true, /register returns hyphenated keys (`client-id`, `client-secret`). */
-  hyphenateRegister?: boolean;
   /** Override default expires_in (seconds). */
   expiresIn?: number;
-  /** When true, refresh_token endpoint replies 400 (forces full re-PKCE). */
-  refreshFails?: boolean;
+  /** When set, /token replies with this HTTP status instead of 200. */
+  tokenStatus?: number;
 }
 
 function startMockOAuth(opts: MockOptions = {}): Promise<{ url: string; server: Server; state: MockState }> {
-  const state: MockState = { registerCalls: 0, codeCalls: 0, tokenCalls: 0, refreshCalls: 0 };
+  const state: MockState = { tokenCalls: 0, unexpectedCalls: 0 };
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
     for await (const c of req) chunks.push(c as Buffer);
     const body = Buffer.concat(chunks).toString('utf-8');
 
-    if (req.url === '/register' && req.method === 'POST') {
-      state.registerCalls += 1;
-      const clientId = `client-${state.registerCalls}`;
-      const payload = opts.hyphenateRegister
-        ? { 'client-id': clientId, 'client-secret': null }
-        : { client_id: clientId, client_secret: null };
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(payload));
-      return;
-    }
-
-    if (req.url === '/code' && req.method === 'POST') {
-      state.codeCalls += 1;
-      const parsed = JSON.parse(body) as Record<string, string>;
-      // Verify hyphenated keys are sent by the client
-      if (!parsed['key-id'] || !parsed['key-secret'] || !parsed['client-id'] || !parsed['code-challenge']) {
-        res.writeHead(400);
-        res.end(JSON.stringify({ error: 'missing fields', got: Object.keys(parsed) }));
-        return;
-      }
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ code: `code-${state.codeCalls}` }));
-      return;
-    }
-
     if (req.url === '/token' && req.method === 'POST') {
+      state.tokenCalls += 1;
       const params = new URLSearchParams(body);
-      const grantType = params.get('grant_type');
-      if (grantType === 'refresh_token') {
-        state.refreshCalls += 1;
-        if (opts.refreshFails) {
-          res.writeHead(400);
-          res.end(JSON.stringify({ error: 'refresh denied' }));
-          return;
-        }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          access_token: `at-refreshed-${state.refreshCalls}`,
-          refresh_token: `rt-refreshed-${state.refreshCalls}`,
-          expires_in: opts.expiresIn ?? 3600,
-          token_type: 'Bearer',
-        }));
+      state.lastClientId = params.get('client_id') ?? undefined;
+      state.lastClientSecret = params.get('client_secret') ?? undefined;
+
+      const grant = params.get('grant_type');
+      if (grant !== 'client_credentials') {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unsupported_grant_type', got: grant }));
         return;
       }
-      // authorization_code grant
-      state.tokenCalls += 1;
-      state.lastCodeVerifier = params.get('code_verifier') ?? undefined;
+      if (opts.tokenStatus && opts.tokenStatus !== 200) {
+        res.writeHead(opts.tokenStatus);
+        res.end(JSON.stringify({ error: 'invalid_client' }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         access_token: `at-${state.tokenCalls}`,
-        refresh_token: `rt-${state.tokenCalls}`,
-        expires_in: opts.expiresIn ?? 3600,
         token_type: 'Bearer',
+        expires_in: opts.expiresIn ?? 3600,
       }));
       return;
     }
 
-    res.writeHead(404);
-    res.end();
+    state.unexpectedCalls += 1;
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: 'nio should only hit POST /token', url: req.url, method: req.method }));
   });
 
   return new Promise(resolve => {
@@ -148,7 +116,7 @@ describe('BearerAuthStrategy', () => {
   });
 });
 
-describe('OAuthAuthStrategy', () => {
+describe('OAuthAuthStrategy (client_credentials)', () => {
   let cacheDir: string;
 
   beforeEach(async () => {
@@ -160,30 +128,28 @@ describe('OAuthAuthStrategy', () => {
     _resetOAuthRegistryForTests();
   });
 
-  it('cold start runs register + code + token; caches token to disk with mode 0600', async () => {
+  it('cold start POSTs /token once, sends client_credentials grant, caches token 0600', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
-      const s = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
-      });
+      const cfg = { oauthUrl: url, clientId: 'cid', clientSecret: 'csec', cacheDir };
+      const s = new OAuthAuthStrategy(cfg);
       const header = await s.getAuthHeader();
-      assert.equal(header, 'Bearer at-1');
-      assert.equal(state.registerCalls, 1);
-      assert.equal(state.codeCalls, 1);
-      assert.equal(state.tokenCalls, 1);
 
-      // cache file present
-      const expected = cacheFilePath({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
-      });
+      assert.equal(header, 'Bearer at-1');
+      assert.equal(state.tokenCalls, 1);
+      assert.equal(state.unexpectedCalls, 0, 'nio must not hit /register, /code, or anything else');
+      assert.equal(state.lastClientId, 'cid');
+      assert.equal(state.lastClientSecret, 'csec');
+
+      const expected = cacheFilePath(cfg);
       const st = await stat(expected);
-      // mode bits — only check user/group/other permission bits
       assert.equal(st.mode & 0o777, 0o600, `expected 0600, got ${(st.mode & 0o777).toString(8)}`);
 
       const cached = JSON.parse(await readFile(expected, 'utf-8'));
       assert.equal(cached.access_token, 'at-1');
-      assert.equal(cached.refresh_token, 'rt-1');
-      assert.equal(cached.client_id, 'client-1');
+      // No refresh_token in the cache — client_credentials doesn't have one.
+      assert.equal(cached.refresh_token, undefined);
+      assert.ok(typeof cached.expires_at === 'number' && cached.expires_at > 0);
     } finally {
       await stopServer(server);
     }
@@ -192,132 +158,76 @@ describe('OAuthAuthStrategy', () => {
   it('cache hit reuses token without any HTTP call', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
-      const s = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
-      });
-      // First call populates cache
+      const cfg = { oauthUrl: url, clientId: 'cid', clientSecret: 'csec', cacheDir };
+      const s = new OAuthAuthStrategy(cfg);
       await s.getAuthHeader();
-      const callsAfterFirst = { ...state };
+      const callsAfterFirst = state.tokenCalls;
 
-      // Second call on same instance — inflight is reset, must re-read from cache
       const header = await s.getAuthHeader();
       assert.equal(header, 'Bearer at-1');
-      assert.equal(state.registerCalls, callsAfterFirst.registerCalls);
-      assert.equal(state.codeCalls, callsAfterFirst.codeCalls);
-      assert.equal(state.tokenCalls, callsAfterFirst.tokenCalls);
+      assert.equal(state.tokenCalls, callsAfterFirst);
 
-      // A fresh instance pointing at same cacheDir/fingerprint also reuses the cache
-      const s2 = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
-      });
+      // A fresh instance pointing at the same cacheDir/fingerprint also reuses the cache
+      const s2 = new OAuthAuthStrategy(cfg);
       assert.equal(await s2.getAuthHeader(), 'Bearer at-1');
-      assert.equal(state.tokenCalls, callsAfterFirst.tokenCalls);
+      assert.equal(state.tokenCalls, callsAfterFirst);
     } finally {
       await stopServer(server);
     }
   });
 
-  it('refresh path: expired token + refresh_token → only /token (refresh) is called', async () => {
+  it('expired cached token → re-POSTs /token once (no refresh, no PKCE)', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
-      // Seed the cache with an expired token + refresh_token
-      const cfg = { oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir };
-      const fp = oauthFingerprint(cfg);
-      const seed = {
+      const cfg = { oauthUrl: url, clientId: 'cid', clientSecret: 'csec', cacheDir };
+      await writeFile(cacheFilePath(cfg), JSON.stringify({
         access_token: 'at-old',
-        refresh_token: 'rt-old',
         expires_at: 1,           // way in the past
-        client_id: 'client-seed',
-        client_secret: null,
-      };
-      await writeFile(cacheFilePath(cfg), JSON.stringify(seed));
-
-      const s = new OAuthAuthStrategy(cfg);
-      const header = await s.getAuthHeader();
-      assert.equal(header, 'Bearer at-refreshed-1');
-      assert.equal(state.refreshCalls, 1);
-      assert.equal(state.registerCalls, 0, 'no /register');
-      assert.equal(state.codeCalls, 0, 'no /code');
-      assert.equal(state.tokenCalls, 0, 'authorization_code /token not called');
-    } finally {
-      await stopServer(server);
-    }
-  });
-
-  it('refresh failure falls back to full PKCE flow', async () => {
-    const { url, server, state } = await startMockOAuth({ refreshFails: true });
-    try {
-      const cfg = { oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir };
-      const fp = oauthFingerprint(cfg);
-      const seed = {
-        access_token: 'at-old',
-        refresh_token: 'rt-old',
-        expires_at: 1,
-        client_id: 'client-seed',
-        client_secret: null,
-      };
-      await writeFile(cacheFilePath(cfg), JSON.stringify(seed));
+      }));
 
       const s = new OAuthAuthStrategy(cfg);
       const header = await s.getAuthHeader();
       assert.equal(header, 'Bearer at-1');
-      assert.equal(state.refreshCalls, 1, 'refresh attempted');
-      // cached.client_id is reused → /register is skipped on the PKCE fallback
-      assert.equal(state.registerCalls, 0, 'register reuses cached client_id');
-      assert.equal(state.codeCalls, 1, 'code re-issued with cached client_id');
-      assert.equal(state.tokenCalls, 1, 'fresh token via authorization_code grant');
+      assert.equal(state.tokenCalls, 1);
+      assert.equal(state.unexpectedCalls, 0);
     } finally {
       await stopServer(server);
     }
   });
 
-  it('pre-issued client_id skips /register', async () => {
+  it('returns null and emits a diagnostic on 401', async () => {
+    const { url, server, state } = await startMockOAuth({ tokenStatus: 401 });
+    try {
+      const cfg = { oauthUrl: url, clientId: 'cid', clientSecret: 'badsec', cacheDir };
+      const s = new OAuthAuthStrategy(cfg);
+      const reporter = new DiagnosticCollector();
+      const header = await s.getAuthHeader(reporter);
+
+      assert.equal(header, null);
+      assert.equal(state.tokenCalls, 1);
+
+      const diags = reporter.take();
+      assert.equal(diags.length, 1);
+      assert.equal(diags[0].source, 'oauth');
+      assert.equal(diags[0].kind, 'token_failed');
+      assert.match(diags[0].detail ?? '', /HTTP 401/);
+      assert.match(diags[0].hint ?? '', /client_id \/ client_secret/);
+    } finally {
+      await stopServer(server);
+    }
+  });
+
+  it('in-process inflight dedup: 10 concurrent getAuthHeader() → 1 POST', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
       const s = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec',
-        clientId: 'pre-issued-42',
-        cacheDir,
-      });
-      const header = await s.getAuthHeader();
-      assert.equal(header, 'Bearer at-1');
-      assert.equal(state.registerCalls, 0, '/register must NOT be called');
-      assert.equal(state.codeCalls, 1);
-      assert.equal(state.tokenCalls, 1);
-    } finally {
-      await stopServer(server);
-    }
-  });
-
-  it('register endpoint with hyphenated keys (FFWD flavor) is parsed', async () => {
-    const { url, server, state } = await startMockOAuth({ hyphenateRegister: true });
-    try {
-      const s = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
-      });
-      const header = await s.getAuthHeader();
-      assert.equal(header, 'Bearer at-1');
-      assert.equal(state.registerCalls, 1);
-      assert.equal(state.tokenCalls, 1);
-    } finally {
-      await stopServer(server);
-    }
-  });
-
-  it('in-process inflight dedup: 10 concurrent getAuthHeader() → only 1 PKCE flow', async () => {
-    const { url, server, state } = await startMockOAuth();
-    try {
-      const s = new OAuthAuthStrategy({
-        oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir,
+        oauthUrl: url, clientId: 'cid', clientSecret: 'csec', cacheDir,
       });
       const results = await Promise.all(
         Array.from({ length: 10 }, () => s.getAuthHeader()),
       );
-      // All concurrent callers see the same token
       assert.ok(results.every(r => r === 'Bearer at-1'));
       assert.equal(state.tokenCalls, 1);
-      assert.equal(state.registerCalls, 1);
-      assert.equal(state.codeCalls, 1);
     } finally {
       await stopServer(server);
     }
@@ -336,15 +246,15 @@ describe('OAuth cross-endpoint sharing via registry', () => {
     _resetOAuthRegistryForTests();
   });
 
-  it('three strategies sharing same OAuth fields run PKCE exactly once', async () => {
+  it('three strategies sharing the same OAuth identity make /token POST exactly once', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
-      const baseCfg = { oauthUrl: url, keyId: 'kid', keySecret: 'ksec', cacheDir };
+      const baseCfg = { oauthUrl: url, clientId: 'cid', clientSecret: 'csec', cacheDir };
       const s1 = getOrCreateOAuthStrategy(baseCfg);
       const s2 = getOrCreateOAuthStrategy(baseCfg);
       const s3 = getOrCreateOAuthStrategy(baseCfg);
-      assert.equal(s1, s2, 'same instance');
-      assert.equal(s2, s3, 'same instance');
+      assert.equal(s1, s2);
+      assert.equal(s2, s3);
 
       const [h1, h2, h3] = await Promise.all([
         s1.getAuthHeader(), s2.getAuthHeader(), s3.getAuthHeader(),
@@ -353,29 +263,27 @@ describe('OAuth cross-endpoint sharing via registry', () => {
       assert.equal(h2, 'Bearer at-1');
       assert.equal(h3, 'Bearer at-1');
       assert.equal(state.tokenCalls, 1);
-      assert.equal(state.registerCalls, 1);
     } finally {
       await stopServer(server);
     }
   });
 
-  it('two strategies with different key_id produce two PKCE flows and two cache files', async () => {
+  it('different client_id → distinct strategies, two POSTs', async () => {
     const { url, server, state } = await startMockOAuth();
     try {
       const sA = getOrCreateOAuthStrategy({
-        oauthUrl: url, keyId: 'kidA', keySecret: 'ksec', cacheDir,
+        oauthUrl: url, clientId: 'cidA', clientSecret: 'csec', cacheDir,
       });
       const sB = getOrCreateOAuthStrategy({
-        oauthUrl: url, keyId: 'kidB', keySecret: 'ksec', cacheDir,
+        oauthUrl: url, clientId: 'cidB', clientSecret: 'csec', cacheDir,
       });
-      assert.notEqual(sA, sB, 'different instances');
+      assert.notEqual(sA, sB);
 
       const [hA, hB] = await Promise.all([sA.getAuthHeader(), sB.getAuthHeader()]);
       assert.match(hA!, /^Bearer at-[12]$/);
       assert.match(hB!, /^Bearer at-[12]$/);
       assert.notEqual(hA, hB);
       assert.equal(state.tokenCalls, 2);
-      assert.equal(state.registerCalls, 2);
     } finally {
       await stopServer(server);
     }

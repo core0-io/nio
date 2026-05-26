@@ -146,12 +146,12 @@ guard:
   # External scoring APIs (Phase 6). 0..N endpoints, each scored concurrently
   # in parallel; results contribute to the final risk score via per-endpoint
   # `weight`. Authentication is optional: omit `auth` for unauthenticated
-  # endpoints, or choose `bearer` (static API key) / `oauth` (FFWD-style PKCE
-  # with disk-backed token cache at ~/.nio/oauth-cache/).
+  # endpoints, or choose `bearer` (static API key) / `oauth` (FFWD-style
+  # client_credentials grant with disk-backed token cache at ~/.nio/oauth-cache/).
   #
-  # Multiple endpoints sharing identical OAuth fields (oauth_url + key_id +
-  # key_secret [+ client_id]) automatically share a single token cache and
-  # only run the PKCE flow once.
+  # Multiple endpoints sharing the same OAuth identity (oauth_url + client_id
+  # + client_secret) automatically share a single token cache and only POST
+  # /token once.
   #
   # external_analyser:
   #   # 1) No auth — public scoring endpoint
@@ -171,19 +171,20 @@ guard:
   #       type: bearer
   #       api_key: "sk-..."
   #
-  #   # 3) OAuth2 PKCE (FFWD)
+  #   # 3) OAuth2 client_credentials (FFWD). Pre-register the client in the
+  #   #   FFWD portal and paste its credentials below — nio POSTs
+  #   #   {oauth_url}/token with grant_type=client_credentials, caches the
+  #   #   bearer token at ~/.nio/oauth-cache/, and re-fetches when it nears
+  #   #   expiry. No PKCE, no refresh_token, no /register, no /code.
   #   - name: scorer_ffwd
   #     enabled: true
   #     endpoint: "https://app.int.ffwd.one/api/.../score"
   #     weight: 2.0
   #     auth:
   #       type: oauth
-  #       oauth_url:  "https://app.int.ffwd.one/api/oauth"  # base, /register /code /token appended
-  #       key_id:     "31ffa501-9eca-4011-92c6-401078e86ba1"
-  #       key_secret: "yMSMlBzAM4oPVzVyfJrLOcy1iZmbmK9__jZucqXTLt4"
-  #       # Optional pre-issued client; if absent, /register is called automatically:
-  #       # client_id:     "838ff1f9-32ca-4496-b51d-7a99970a6dc8"
-  #       # client_secret: ""
+  #       oauth_url:     "https://app.int.ffwd.one/api/oauth"
+  #       client_id:     "..."
+  #       client_secret: "..."
   external_analyser: []
 
   # Phase 1 allowlist: additional command prefixes treated as safe.

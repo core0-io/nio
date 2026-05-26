@@ -91,8 +91,7 @@
           <tbody>
             <tr id="config-schema_invalid"><td><code>config</code></td><td><code>schema_invalid</code></td><td>error</td><td>file path</td><td>Zod validation rejected the YAML. Field-specific error in <code>detail</code>.</td></tr>
             <tr id="config-yaml_parse_failed"><td><code>config</code></td><td><code>yaml_parse_failed</code></td><td>error</td><td>file path</td><td>YAML syntax error (indentation, unbalanced quotes, etc.).</td></tr>
-            <tr id="oauth-pkce_failed"><td><code>oauth</code></td><td><code>pkce_failed</code></td><td>error</td><td><code>guard.external_analyser[*].auth</code></td><td>Register / code / token PKCE flow rejected. Almost always wrong <code>key_id</code> / <code>key_secret</code>.</td></tr>
-            <tr id="oauth-refresh_failed"><td><code>oauth</code></td><td><code>refresh_failed</code></td><td>warning</td><td><code>guard.external_analyser[*].auth</code></td><td>refresh_token grant declined. Nio falls back to full PKCE; if that succeeds the diagnostic stays a warning.</td></tr>
+            <tr id="oauth-token_failed"><td><code>oauth</code></td><td><code>token_failed</code></td><td>error</td><td><code>guard.external_analyser[*].auth</code></td><td><code>/token</code> rejected the <code>client_credentials</code> grant. Almost always wrong <code>client_id</code> / <code>client_secret</code>.</td></tr>
             <tr id="oauth-cache_write_failed"><td><code>oauth</code></td><td><code>cache_write_failed</code></td><td>warning</td><td>—</td><td>Couldn't persist the access token to <code>~/.nio/oauth-cache/</code>. Usually permissions on a multi-user system.</td></tr>
             <tr id="llm-api_key_missing"><td><code>llm</code></td><td><code>api_key_missing</code></td><td>error</td><td><code>guard.llm_analyser.api_key</code></td><td><code>enabled: true</code> paired with an empty <code>api_key</code>. Phase 5 silently skips otherwise.</td></tr>
             <tr id="llm-api_call_failed"><td><code>llm</code></td><td><code>api_call_failed</code></td><td>error</td><td><code>guard.llm_analyser.api_key</code></td><td>Anthropic API call errored (4xx/5xx, network, rate limit).</td></tr>
@@ -116,8 +115,8 @@
 
 ### External Analysers (3 configured)
 - ✓ scorer_a (https://a.example.com/score) — OAuth token acquired
-- ✗ scorer_ffwd (https://app.int.ffwd.one): PKCE flow failed for https://app.int.ffwd.one/api/oauth
-    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+- ✗ scorer_ffwd (https://app.int.ffwd.one): client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+    hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.
 - · scorer_off (https://x.example.com/score) — disabled
 
 ### LLM Analyser
@@ -136,36 +135,36 @@
 
 | Count | Source | Kind | Component | First seen | Last seen | Latest message |
 |-------|--------|------|-----------|------------|-----------|----------------|
-| 32 | oauth | pkce_failed | scorer_ffwd | 14:02:11 | 14:31:08 | PKCE flow failed for https://app.int.ffwd.one/api/oauth |
+| 32 | oauth | token_failed | scorer_ffwd | 14:02:11 | 14:31:08 | client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token |
 | 12 | llm | api_key_missing | — | 14:02:11 | 14:31:08 | guard.llm_analyser.enabled=true but api_key is empty |
 |  3 | external_analyser | timeout | scorer_slow | 14:10:00 | 14:25:00 | https://slow.example.com/score timed out after 3000ms |
 
 Hints:
-  - oauth pkce_failed: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+  - oauth token_failed: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.
   - llm api_key_missing: Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.
   - external_analyser timeout: Increase guard.external_analyser[].timeout or investigate endpoint latency.</code></pre>
 
         <h2>Walkthrough: an OAuth misconfig from start to fix</h2>
         <ol>
-          <li>You edit <code>~/.nio/config.yaml</code> and add a new external_analyser entry, but you paste a wrong character into <code>auth.key_secret</code>.</li>
-          <li>The next time the agent runs a tool call (any Bash, Write, Read…), Nio's Phase 6 picks up the new endpoint, the OAuth strategy tries to acquire a token, and gets back HTTP 401 at <code>/code</code>.</li>
+          <li>You edit <code>~/.nio/config.yaml</code> and add a new external_analyser entry, but you paste a wrong character into <code>auth.client_secret</code>.</li>
+          <li>The next time the agent runs a tool call (any Bash, Write, Read…), Nio's Phase 6 picks up the new endpoint, the OAuth strategy POSTs to <code>/token</code> with <code>grant_type=client_credentials</code>, and gets back HTTP 401.</li>
           <li>The hook output includes an <code>additionalContext</code> block:
             <pre><code>Nio: 1 error during this action
-  - [oauth pkce_failed] app.int.ffwd.one: PKCE flow failed for https://app.int.ffwd.one/api/oauth
-    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.
+  - [oauth token_failed] app.int.ffwd.one: client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+    hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.
 Run /nio doctor or /nio report for details.</code></pre>
             The agent sees this and mentions it in its next response to you.
           </li>
           <li>You run <code>/nio doctor</code>:
             <pre><code>### External Analysers (1 configured)
-- ✗ scorer_ffwd (https://app.int.ffwd.one/api/.../score): PKCE flow failed for https://app.int.ffwd.one/api/oauth
-    hint: Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor.</code></pre>
+- ✗ scorer_ffwd (https://app.int.ffwd.one/api/.../score): client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token
+    hint: Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor.</code></pre>
           </li>
-          <li>You fix <code>auth.key_secret</code> in the YAML.</li>
+          <li>You fix <code>auth.client_secret</code> in the YAML.</li>
           <li>Re-run <code>/nio doctor</code> — now ✓.</li>
         </ol>
 
-        <p>Throughout, the agent's tool calls were never blocked. Phase 6's <code>scorer_ffwd</code> simply dropped out of the weighted aggregate during the broken period; its slot in <code>phase_timings.external</code> still appears in the audit log with an <code>error: { kind: 'pkce_failed', detail: '...' }</code> field, so the gap is auditable.</p>
+        <p>Throughout, the agent's tool calls were never blocked. Phase 6's <code>scorer_ffwd</code> simply dropped out of the weighted aggregate during the broken period; its slot in <code>phase_timings.external</code> still appears in the audit log with an <code>error: { kind: 'token_failed', detail: '...' }</code> field, so the gap is auditable.</p>
 
       </div>
 

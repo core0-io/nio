@@ -45,11 +45,11 @@ describe('reportDiagnostic', () => {
     reportDiagnostic({
       severity: 'error',
       source: 'oauth',
-      kind: 'pkce_failed',
+      kind: 'token_failed',
       component: 'ffwd.example.com',
-      message: 'PKCE flow failed',
-      detail: 'HTTP 401 at /code',
-      hint: 'Check key_id.',
+      message: 'client_credentials grant failed',
+      detail: 'HTTP 401',
+      hint: 'Check client_id.',
     });
     const after = readAuditLines();
     assert.equal(after.length, before + 1);
@@ -57,10 +57,10 @@ describe('reportDiagnostic', () => {
     const entry = after[after.length - 1];
     assert.equal(entry.event, 'diagnostic');
     assert.equal(entry.source, 'oauth');
-    assert.equal(entry.kind, 'pkce_failed');
+    assert.equal(entry.kind, 'token_failed');
     assert.equal(entry.severity, 'error');
-    assert.equal(entry.message, 'PKCE flow failed');
-    assert.equal(entry.hint, 'Check key_id.');
+    assert.equal(entry.message, 'client_credentials grant failed');
+    assert.equal(entry.hint, 'Check client_id.');
     assert.ok(typeof entry.timestamp === 'string', 'timestamp is set');
   });
 
@@ -94,7 +94,7 @@ describe('DiagnosticCollector', () => {
   it('addCollected() merges without re-writing to audit/stderr', () => {
     const beforeCount = readAuditLines().length;
     const seed: Diagnostic[] = [
-      { severity: 'error', source: 'oauth', kind: 'pkce_failed', message: 'seeded' },
+      { severity: 'error', source: 'oauth', kind: 'token_failed', message: 'seeded' },
     ];
     const c = new DiagnosticCollector();
     c.addCollected(seed);
@@ -124,9 +124,9 @@ describe('formatDiagnosticsForUser', () => {
   it('renders count summary + per-diag bullets with hints', () => {
     const out = formatDiagnosticsForUser([
       {
-        severity: 'error', source: 'oauth', kind: 'pkce_failed',
-        component: 'scorer_ffwd', message: 'HTTP 401 at /code',
-        hint: 'Check key_id.',
+        severity: 'error', source: 'oauth', kind: 'token_failed',
+        component: 'scorer_ffwd', message: 'HTTP 401 at /token',
+        hint: 'Check client_id.',
       },
       {
         severity: 'warning', source: 'collector', kind: 'otlp_export_failed',
@@ -135,8 +135,8 @@ describe('formatDiagnosticsForUser', () => {
     ]);
     assert.match(out, /1 error/);
     assert.match(out, /1 warning/);
-    assert.match(out, /\[oauth pkce_failed\] scorer_ffwd: HTTP 401 at \/code/);
-    assert.match(out, /hint: Check key_id\./);
+    assert.match(out, /\[oauth token_failed\] scorer_ffwd: HTTP 401 at \/token/);
+    assert.match(out, /hint: Check client_id\./);
     assert.match(out, /\[collector otlp_export_failed\] export failed/);
     assert.match(out, /Run \/nio doctor/);
   });

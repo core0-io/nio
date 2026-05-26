@@ -79,7 +79,8 @@ export type LLMConfig = z.infer<typeof LLMConfigSchema>;
 // External analyser — per-endpoint config (Phase 6)
 //
 // Phase 6 supports an arbitrary number of HTTP scoring endpoints, each
-// optionally authenticated via Bearer API key or FFWD-style OAuth2 PKCE.
+// optionally authenticated via Bearer API key or FFWD-style OAuth2
+// client_credentials grant.
 // ---------------------------------------------------------------------------
 
 const BearerAuthSchema = z.object({
@@ -89,11 +90,9 @@ const BearerAuthSchema = z.object({
 
 const OAuthAuthSchema = z.object({
   type:          z.literal('oauth'),
-  oauth_url:     z.string().url(),       // base; runtime appends /register /code /token
-  key_id:        z.string().min(1),
-  key_secret:    z.string().min(1),
-  client_id:     z.string().optional(),  // pre-issued client; if absent, /register is called
-  client_secret: z.string().optional(),  // pre-issued confidential client
+  oauth_url:     z.string().url(),       // base; runtime appends /token
+  client_id:     z.string().min(1),      // pre-registered via FFWD portal
+  client_secret: z.string().min(1),      // required for the client_credentials grant
 });
 
 export const ExternalAnalyserAuthSchema =

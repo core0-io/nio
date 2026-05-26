@@ -161,7 +161,7 @@
 
         <h3 id="guard.external_analyser"><code>guard.external_analyser</code></h3>
         <p><strong>Type:</strong> array · <strong>Default:</strong> <code>[]</code></p>
-        <p>Phase 6 — external scoring API endpoints. 0..N endpoints; each runs concurrently. Each entry contributes to the weighted score average via its own <code>weight</code> field. See the <a href="phases/phase-6-external.html">Phase 6 page</a> for the full wire model. Validated by <a href="diagnostics.html#external_analyser-auth_failed"><code>/nio doctor</code></a> (OAuth entries get a real PKCE dry-run).</p>
+        <p>Phase 6 — external scoring API endpoints. 0..N endpoints; each runs concurrently. Each entry contributes to the weighted score average via its own <code>weight</code> field. See the <a href="phases/phase-6-external.html">Phase 6 page</a> for the full wire model. Validated by <a href="diagnostics.html#external_analyser-auth_failed"><code>/nio doctor</code></a> (OAuth entries get a real <code>client_credentials</code> dry-run).</p>
         <p>Each entry is an object:</p>
         <table>
           <thead><tr><th>Field</th><th>Type</th><th>Default</th><th>Note</th></tr></thead>
@@ -171,7 +171,7 @@
             <tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Set false to skip an entry without removing config.</td></tr>
             <tr><td><code>weight</code></td><td>number</td><td><code>1.0</code></td><td>Aggregation weight in <code>final_score = Σ(wᵢ × sᵢ) / Σ(wᵢ)</code>.</td></tr>
             <tr><td><code>timeout</code></td><td>number</td><td><code>3000</code></td><td>Per-request timeout (ms). Exceeded → <a href="diagnostics.html#external_analyser-timeout">diagnostic</a>.</td></tr>
-            <tr><td><code>auth</code></td><td>object</td><td><em>none</em></td><td>Optional. <code>{ type: 'bearer', api_key }</code> or <code>{ type: 'oauth', oauth_url, key_id, key_secret, client_id?, client_secret? }</code>. OAuth failures → <a href="diagnostics.html#oauth-pkce_failed">diagnostic</a>.</td></tr>
+            <tr><td><code>auth</code></td><td>object</td><td><em>none</em></td><td>Optional. <code>{ type: 'bearer', api_key }</code> or <code>{ type: 'oauth', oauth_url, client_id, client_secret }</code>. OAuth uses the <code>client_credentials</code> grant against <code>{oauth_url}/token</code> — pre-register the client via the FFWD portal. OAuth failures → <a href="diagnostics.html#oauth-token_failed">diagnostic</a>.</td></tr>
           </tbody>
         </table>
 

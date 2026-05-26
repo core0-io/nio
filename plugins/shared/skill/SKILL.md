@@ -235,13 +235,13 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.external_analyser[].weight` | number | `1.0` | Aggregation weight; participates in `final_score = Σ(wi·si)/Σ(wi)`. |
 | `guard.external_analyser[].timeout` | number | `3000` | Per-request timeout (ms). |
 | `guard.external_analyser[].enabled` | boolean | `true` | Set false to skip this endpoint without removing config. |
-| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (FFWD-style PKCE). Omit `auth` entirely for unauthenticated endpoints. |
+| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (FFWD-style `client_credentials` grant). Omit `auth` entirely for unauthenticated endpoints. |
 | `guard.external_analyser[].auth.api_key` | string | — | `bearer` only — sent as `Authorization: Bearer <api_key>`. |
-| `guard.external_analyser[].auth.oauth_url` | string | — | `oauth` only — base URL; runtime appends `/register`, `/code`, `/token`. |
-| `guard.external_analyser[].auth.key_id` / `.key_secret` | string | — | `oauth` only — bootstrap credentials used to authenticate the `/code` request. |
-| `guard.external_analyser[].auth.client_id` / `.client_secret` | string | — | `oauth` only, optional — pre-issued client; if absent, `/register` is called automatically. |
+| `guard.external_analyser[].auth.oauth_url` | string | — | `oauth` only — base URL; runtime appends `/token`. |
+| `guard.external_analyser[].auth.client_id` | string | — | `oauth` only — **required**. Pre-register the OAuth client via the FFWD portal and paste its `client_id` here. |
+| `guard.external_analyser[].auth.client_secret` | string | — | `oauth` only — **required**. The corresponding `client_secret` from the FFWD portal. |
 
-**OAuth token caching:** Endpoints with `auth.type=oauth` cache tokens to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth fields (`oauth_url + key_id + key_secret [+ client_id]`) share the cache and the in-process `OAuthAuthStrategy` instance — PKCE runs only once even when N endpoints fire concurrently. Cached tokens are refreshed via `refresh_token` grant when near expiry; on refresh failure the full PKCE flow re-runs automatically.
+**OAuth token caching:** Endpoints with `auth.type=oauth` cache the access_token to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth identity (`oauth_url + client_id + client_secret`) share the cache and the in-process `OAuthAuthStrategy` instance — the `/token` POST fires only once even when N endpoints fire concurrently. When the cached token nears expiry, nio simply requests a fresh one (`client_credentials` grant has no refresh_token; one POST replaces it).
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
 | `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
 | `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |
@@ -335,7 +335,7 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 **Diagnostic entry** (`event: "diagnostic"`) — config / OAuth / LLM / external / collector / scanner failure:
 
 ```json
-{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"pkce_failed","component":"app.int.ffwd.one","message":"PKCE flow failed for https://app.int.ffwd.one/api/oauth","detail":"HTTP 401 at /code","config_path":"guard.external_analyser[*].auth","hint":"Check key_id / key_secret in guard.external_analyser[].auth, or run /nio doctor."}
+{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"token_failed","component":"app.int.ffwd.one","message":"client_credentials grant failed at https://app.int.ffwd.one/api/oauth/token","detail":"HTTP 401 Unauthorized","config_path":"guard.external_analyser[*].auth","hint":"Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor."}
 ```
 
 `source` values: `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`. Common `kind` values:
@@ -344,8 +344,7 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 |--------|------|----------|---------|
 | `config` | `schema_invalid` | error | Zod validation failed |
 | `config` | `yaml_parse_failed` | error | YAML syntax error |
-| `oauth` | `pkce_failed` | error | Register/code/token PKCE flow rejected |
-| `oauth` | `refresh_failed` | warning | refresh_token grant declined (falls back to PKCE) |
+| `oauth` | `token_failed` | error | `client_credentials` grant at `/token` rejected; usually wrong `client_id` / `client_secret` |
 | `oauth` | `cache_write_failed` | warning | Couldn't persist token to ~/.nio/oauth-cache/ |
 | `llm` | `api_key_missing` | error | `enabled: true` with empty `api_key` |
 | `llm` | `api_call_failed` | error | Anthropic API call returned an error |
@@ -414,15 +413,15 @@ Validate the current configuration end-to-end. Doctor catches issues *before* th
 
 What doctor checks:
 
-1. **Configuration** — re-runs Zod schema validation against the live `~/.nio/config.yaml`. Flags any field with a path + message (e.g. `guard.external_analyser[2].auth.key_secret: required field is empty`).
-2. **External analysers** — for each entry with `auth.type: oauth`, performs a real PKCE flow against the configured `oauth_url`. ✓ when a token is acquired; ✗ with the underlying HTTP status when the flow fails. Bearer-auth entries are listed but cannot be validated without firing an actual scoring request.
+1. **Configuration** — re-runs Zod schema validation against the live `~/.nio/config.yaml`. Flags any field with a path + message (e.g. `guard.external_analyser[2].auth.client_secret: required field is empty`).
+2. **External analysers** — for each entry with `auth.type: oauth`, performs a real `client_credentials` grant POST against `{oauth_url}/token`. ✓ when a token is acquired; ✗ with the underlying HTTP status when the flow fails. Bearer-auth entries are listed but cannot be validated without firing an actual scoring request.
 3. **LLM analyser** — flags `guard.llm_analyser.enabled=true` paired with an empty `api_key` (otherwise Phase 5 silently skips, which is a common misconfig).
 4. **Collector** — HEAD-probes `collector.endpoint` if set. 4xx/5xx still counts as reachable since OTLP collectors commonly 405 a bare HEAD.
 
 Use doctor when:
 - You changed `~/.nio/config.yaml` and want to confirm it loaded.
 - A Bash/Write tool call appeared to be evaluated but you don't see an expected `external_analyser` score in the report — doctor will tell you which endpoint is broken.
-- You rotated an OAuth `key_secret` or LLM `api_key` and want to confirm credentials are working.
+- You rotated an OAuth `client_secret` or LLM `api_key` and want to confirm credentials are working.
 
 Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
 

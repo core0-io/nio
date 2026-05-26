@@ -121,7 +121,7 @@ export class ExternalAnalyser {
         // Auth was configured but failed — skip the request entirely; a
         // request without Authorization would just earn a 401 and add noise.
         // The underlying auth strategy already emitted a diagnostic of its
-        // own (kind: pkce_failed / refresh_failed / etc.); we add a follow-up
+        // own (kind: token_failed / cache_write_failed / etc.); we add a follow-up
         // anchored to THIS endpoint so the failure is also attributable to
         // the scoring endpoint name (not just the OAuth client).
         reporter?.collect({

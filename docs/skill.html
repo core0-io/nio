@@ -198,7 +198,7 @@
         <p>What doctor does:</p>
         <ol>
           <li><strong>Configuration</strong> — re-runs Zod schema validation against the on-disk <code>~/.nio/config.yaml</code>.</li>
-          <li><strong>External analysers</strong> — for each entry with <code>auth.type: oauth</code>, performs a real PKCE flow against the configured <code>oauth_url</code>.</li>
+          <li><strong>External analysers</strong> — for each entry with <code>auth.type: oauth</code>, performs a real <code>client_credentials</code> grant POST against <code>{oauth_url}/token</code>.</li>
           <li><strong>LLM analyser</strong> — flags <code>guard.llm_analyser.enabled=true</code> paired with an empty <code>api_key</code>.</li>
           <li><strong>Collector</strong> — HEAD-probes <code>collector.endpoint</code> if set.</li>
         </ol>

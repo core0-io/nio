@@ -135,10 +135,8 @@ export interface ActionOrchestratorOptions {
       | {
           type: 'oauth';
           oauth_url: string;
-          key_id: string;
-          key_secret: string;
-          client_id?: string;
-          client_secret?: string;
+          client_id: string;
+          client_secret: string;
         };
   }>;
 }
@@ -179,8 +177,6 @@ export class ActionOrchestrator {
       } else if (e.auth?.type === 'oauth') {
         auth = getOrCreateOAuthStrategy({
           oauthUrl:     e.auth.oauth_url,
-          keyId:        e.auth.key_id,
-          keySecret:    e.auth.key_secret,
           clientId:     e.auth.client_id,
           clientSecret: e.auth.client_secret,
         });
