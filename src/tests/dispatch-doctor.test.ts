@@ -17,7 +17,6 @@ import { join } from 'node:path';
 import { dump as yamlDump } from 'js-yaml';
 
 import { dispatchNioCommand } from '../adapters/openclaw-dispatch.js';
-import { resetConfig as resetConfigCache } from '../adapters/common.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 import { _resetOAuthRegistryForTests } from '../core/analysers/external/auth.js';
 
@@ -51,10 +50,10 @@ const stubDeps = {
 };
 
 function writeConfig(cfg: Record<string, unknown>): void {
-  writeFileSync(join(nioHome, 'config.yaml'), yamlDump(cfg));
-  // Reset in-process config cache: writes back to disk, so we then overwrite
-  // again with the desired test config.
-  try { resetConfigCache(); } catch { /* fall through */ }
+  // Write the YAML directly. We deliberately do NOT call resetConfig() — it
+  // writes its own defaults to disk via the lazy configYamlPath() resolver,
+  // which would clobber the test config (and historically clobbered the
+  // real ~/.nio/config.yaml when the path was a module-load-time constant).
   writeFileSync(join(nioHome, 'config.yaml'), yamlDump(cfg));
 }
 
