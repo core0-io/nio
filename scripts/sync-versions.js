@@ -26,6 +26,8 @@ const targets = [
   { path: 'plugins/claude-code/.claude-plugin/marketplace.json', re: /("version"\s*:\s*)"[^"]*"/, replacement: (v) => `$1"${v}"` },
   // Claude Code plugin manifest — top-level "version".
   { path: 'plugins/claude-code/.claude-plugin/plugin.json', re: /("version"\s*:\s*)"[^"]*"/, replacement: (v) => `$1"${v}"` },
+  // Codex plugin manifest — top-level "version".
+  { path: 'plugins/codex/.codex-plugin/plugin.json', re: /("version"\s*:\s*)"[^"]*"/, replacement: (v) => `$1"${v}"` },
   // SKILL.md frontmatter (source of truth — sync-shared.js copies this to
   // both claude-code and openclaw plugin skill dirs).
   { path: 'plugins/shared/skill/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
