@@ -12,6 +12,7 @@ MIN_NODE_VERSION=18
 UNINSTALL=0
 RESET_CONFIG=0
 OPENCLAW_HOME_ARG=""
+CONFIG_FILE_ARG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,11 +24,21 @@ while [ $# -gt 0 ]; do
       OPENCLAW_HOME_ARG="${2:-}"; shift 2 ;;
     --openclaw-home=*)
       OPENCLAW_HOME_ARG="${1#*=}"; shift ;;
+    --config)
+      CONFIG_FILE_ARG="${2:-}"; shift 2 ;;
+    --config=*)
+      CONFIG_FILE_ARG="${1#*=}"; shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--openclaw-home <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--openclaw-home <path>] [--config <path>] [--reset-config] [--uninstall]"
       echo ""
       echo "  --openclaw-home <path>  Path to .openclaw directory."
       echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
+      echo "  --config <path>         Apply an operator-provided ~/.nio/config.yaml."
+      echo "                          Runs /nio doctor against the file and aborts the"
+      echo "                          install if any probe fails. Existing config is"
+      echo "                          saved as config.yaml.bak.<ISO-stamp>. Mutually"
+      echo "                          exclusive with --reset-config. \$NIO_CONFIG env var"
+      echo "                          is honoured as a fallback."
       echo "  --reset-config          Overwrite existing nio config with defaults."
       echo "  --uninstall             Remove the plugin and config."
       exit 0 ;;
@@ -37,6 +48,26 @@ while [ $# -gt 0 ]; do
       exit 1 ;;
   esac
 done
+
+# Flag wins over env. Resolve to absolute path so subsequent commands with
+# different cwds still find the file.
+NIO_CONFIG="${CONFIG_FILE_ARG:-${NIO_CONFIG:-}}"
+if [ -n "$NIO_CONFIG" ]; then
+  if [ ! -f "$NIO_CONFIG" ]; then
+    echo "  ERROR: --config file not found: $NIO_CONFIG" >&2
+    exit 1
+  fi
+  NIO_CONFIG="$(cd "$(dirname "$NIO_CONFIG")" && pwd)/$(basename "$NIO_CONFIG")"
+fi
+
+if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --uninstall are mutually exclusive." >&2
+  exit 1
+fi
 
 # Resolve OpenClaw home: --openclaw-home > $OPENCLAW_STATE_DIR > $HOME/.openclaw
 if [ -n "$OPENCLAW_HOME_ARG" ]; then
@@ -184,7 +215,14 @@ fi
 # ---- Step 3: Create config directory ----
 echo "[3/3] Setting up configuration..."
 mkdir -p "$NIO_DIR"
-if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
+if [ -n "$NIO_CONFIG" ]; then
+  echo "  Applying operator config: $NIO_CONFIG"
+  if ! node "$SCRIPT_DIR/skills/nio/scripts/config-cli.js" import "$NIO_CONFIG"; then
+    echo "  FAIL: config import rejected by /nio doctor — install aborted." >&2
+    exit 1
+  fi
+  echo "  OK: Operator config applied"
+elif [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
     cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
   fi

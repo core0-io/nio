@@ -81,6 +81,8 @@
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
 
+        <p><strong>Already have a team config?</strong> Skip the per-machine tuning and apply an operator-provided <code>nio.yaml</code> at install time with <code>./setup.sh --config /path/to/nio.yaml</code> (or via the curl one-liner). Nio runs <code>/nio doctor</code> against the file first and aborts the install if any probe fails — see <a href="install.html#shared-config">Onboarding with a shared config</a>.</p>
+
         <p><strong>Something doesn't work?</strong> Run <code>/nio doctor</code> first — it validates schema, OAuth credentials, LLM API key, and collector reachability with actionable hints. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
 
         <h2>Telemetry · OTLP collector</h2>

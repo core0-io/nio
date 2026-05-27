@@ -16,10 +16,16 @@
 #                                                 # with the bundled defaults
 #                                                 # (Nio runtime config; does
 #                                                 # not touch ~/.hermes/config.yaml)
+#   bash plugins/hermes/setup.sh --config <path>  # apply operator config; runs
+#                                                 # /nio doctor first and aborts
+#                                                 # the install if any probe
+#                                                 # fails. Mutually exclusive
+#                                                 # with --reset-config.
 #   bash plugins/hermes/setup.sh --uninstall      # remove the Nio entry
 #
 # Environment:
 #   HERMES_CONFIG_PATH   override target (default: ~/.hermes/config.yaml)
+#   NIO_CONFIG           fallback for --config <path>
 
 set -euo pipefail
 
@@ -69,23 +75,51 @@ ACCEPT_HOOKS=0
 DRY_RUN=0
 UNINSTALL=0
 RESET_CONFIG=0
+CONFIG_FILE_ARG=""
 FORWARD_ARGS=()
-for arg in "$@"; do
+i=1
+all_args=("$@")
+while [ $i -le $# ]; do
+  arg="${all_args[$((i-1))]}"
   case "$arg" in
     --accept-hooks|--approve)
-      ACCEPT_HOOKS=1 ;;
+      ACCEPT_HOOKS=1; i=$((i+1)) ;;
     --reset-config)
-      RESET_CONFIG=1 ;;
+      RESET_CONFIG=1; i=$((i+1)) ;;
+    --config)
+      CONFIG_FILE_ARG="${all_args[$i]:-}"; i=$((i+2)) ;;
+    --config=*)
+      CONFIG_FILE_ARG="${arg#*=}"; i=$((i+1)) ;;
     --dry-run)
       DRY_RUN=1
-      FORWARD_ARGS+=("$arg") ;;
+      FORWARD_ARGS+=("$arg"); i=$((i+1)) ;;
     --uninstall)
       UNINSTALL=1
-      FORWARD_ARGS+=("$arg") ;;
+      FORWARD_ARGS+=("$arg"); i=$((i+1)) ;;
     *)
-      FORWARD_ARGS+=("$arg") ;;
+      FORWARD_ARGS+=("$arg"); i=$((i+1)) ;;
   esac
 done
+
+# Flag wins over env. Resolve to absolute path so subsequent commands with
+# different cwds still find the file.
+NIO_CONFIG="${CONFIG_FILE_ARG:-${NIO_CONFIG:-}}"
+if [ -n "$NIO_CONFIG" ]; then
+  if [ ! -f "$NIO_CONFIG" ]; then
+    echo "  ERROR: --config file not found: $NIO_CONFIG" >&2
+    exit 1
+  fi
+  NIO_CONFIG="$(cd "$(dirname "$NIO_CONFIG")" && pwd)/$(basename "$NIO_CONFIG")"
+fi
+
+if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --uninstall are mutually exclusive." >&2
+  exit 1
+fi
 
 NIO_DIR="$HOME/.nio"
 
@@ -323,11 +357,21 @@ fi
 
 # ── Nio runtime config (~/.nio/config.yaml) ─────────────────────────────
 # Same behaviour as the Claude Code + OpenClaw plugin setup scripts:
-# copy the bundled defaults if the user has no config yet, or if they
-# passed --reset-config. Independent of the Hermes hook merge above.
+# - --config <path>:  doctor-gated import of an operator-provided file
+# - --reset-config:   copy bundled defaults
+# - first install:    copy bundled defaults
+# - otherwise:        leave the existing config alone
+# Independent of the Hermes hook merge above.
 if [ "$DRY_RUN" -eq 0 ] && [ "$UNINSTALL" -eq 0 ]; then
   mkdir -p "$NIO_DIR"
-  if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
+  if [ -n "$NIO_CONFIG" ]; then
+    echo "[nio-hermes] Applying operator config: $NIO_CONFIG"
+    if ! node "$SCRIPT_DIR/scripts/nio-cli.js" config import "$NIO_CONFIG"; then
+      echo "[nio-hermes] FAIL: config import rejected by /nio doctor — install aborted." >&2
+      exit 1
+    fi
+    echo "[nio-hermes] Operator config applied"
+  elif [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
     if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
       cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
       [ "$RESET_CONFIG" -eq 1 ] \

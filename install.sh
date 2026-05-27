@@ -22,6 +22,11 @@ Args:
   --platform NAME       claude-code | codex | openclaw | hermes (repeatable)
   --uninstall           uninstall instead of install
   --reset-config        reset ~/.nio/config.yaml to defaults
+  --config PATH         apply an operator ~/.nio/config.yaml (runs /nio doctor;
+                        aborts install if any probe fails; previous file kept
+                        as config.yaml.bak.<ISO-stamp>). Resolved to absolute
+                        path here so the extracted setup.sh finds it from any
+                        cwd. Mutually exclusive with --reset-config.
   --cc-home PATH        passed through to claude-code setup.sh
   --codex-home PATH     passed through to codex setup.sh
   --openclaw-home PATH  passed through to openclaw setup.sh
@@ -30,6 +35,7 @@ Args:
 
 Env:
   NIO_VERSION=v2.2.0    pin a specific release tag (default: latest)
+  NIO_CONFIG=PATH       fallback for --config when the flag is not given
 USAGE
 }
 
@@ -39,6 +45,7 @@ die() { echo "ERROR: $*" >&2; exit 1; }
 PLATFORM_ARGS=()
 PASS_THROUGH=()
 UNINSTALL=0
+CONFIG_FILE_ARG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -51,6 +58,11 @@ while [ $# -gt 0 ]; do
       UNINSTALL=1; shift ;;
     --reset-config)
       PASS_THROUGH+=("$1"); shift ;;
+    --config)
+      [ $# -ge 2 ] || die "--config requires a path"
+      CONFIG_FILE_ARG="$2"; shift 2 ;;
+    --config=*)
+      CONFIG_FILE_ARG="${1#*=}"; shift ;;
     --cc-home|--codex-home|--openclaw-home|--hermes-home)
       [ $# -ge 2 ] || die "$1 requires a path"
       PASS_THROUGH+=("$1" "$2"); shift 2 ;;
@@ -64,6 +76,18 @@ while [ $# -gt 0 ]; do
       exit 1 ;;
   esac
 done
+
+# Resolve --config to an absolute path NOW (before we cd into /tmp for the
+# unzip), because the extracted setup.sh runs from the extracted dir and
+# would not find a relative-path operator config from the original cwd.
+NIO_CONFIG="${CONFIG_FILE_ARG:-${NIO_CONFIG:-}}"
+if [ -n "$NIO_CONFIG" ]; then
+  if [ ! -f "$NIO_CONFIG" ]; then
+    die "--config file not found: $NIO_CONFIG"
+  fi
+  NIO_CONFIG="$(cd "$(dirname "$NIO_CONFIG")" && pwd)/$(basename "$NIO_CONFIG")"
+  PASS_THROUGH+=("--config" "$NIO_CONFIG")
+fi
 
 # ---------- Pre-checks ----------
 command -v curl >/dev/null 2>&1 || die "'curl' is required but not on PATH."

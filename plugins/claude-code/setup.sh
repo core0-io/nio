@@ -12,6 +12,7 @@ MIN_NODE_VERSION=18
 UNINSTALL=0
 RESET_CONFIG=0
 CC_HOME_ARG=""
+CONFIG_FILE_ARG=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -23,11 +24,21 @@ while [ $# -gt 0 ]; do
       CC_HOME_ARG="${2:-}"; shift 2 ;;
     --cc-home=*)
       CC_HOME_ARG="${1#*=}"; shift ;;
+    --config)
+      CONFIG_FILE_ARG="${2:-}"; shift 2 ;;
+    --config=*)
+      CONFIG_FILE_ARG="${1#*=}"; shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--config <path>] [--reset-config] [--uninstall]"
       echo ""
       echo "  --cc-home <path>  Path to .claude directory."
       echo "                    Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
+      echo "  --config <path>   Apply an operator-provided ~/.nio/config.yaml. Runs"
+      echo "                    /nio doctor against the file and aborts the install"
+      echo "                    if any probe fails. Existing config is saved as"
+      echo "                    config.yaml.bak.<ISO-stamp>. Mutually exclusive with"
+      echo "                    --reset-config. \$NIO_CONFIG env var is honoured as a"
+      echo "                    fallback when --config is not given."
       echo "  --reset-config    Overwrite existing nio config with defaults."
       echo "  --uninstall       Remove the plugin and config."
       exit 0 ;;
@@ -37,6 +48,26 @@ while [ $# -gt 0 ]; do
       exit 1 ;;
   esac
 done
+
+# Flag wins over env. Resolve to absolute path so subsequent commands with
+# different cwds still find the file.
+NIO_CONFIG="${CONFIG_FILE_ARG:-${NIO_CONFIG:-}}"
+if [ -n "$NIO_CONFIG" ]; then
+  if [ ! -f "$NIO_CONFIG" ]; then
+    echo "  ERROR: --config file not found: $NIO_CONFIG" >&2
+    exit 1
+  fi
+  NIO_CONFIG="$(cd "$(dirname "$NIO_CONFIG")" && pwd)/$(basename "$NIO_CONFIG")"
+fi
+
+if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  exit 1
+fi
+if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
+  echo "  ERROR: --config and --uninstall are mutually exclusive." >&2
+  exit 1
+fi
 
 # Resolve Claude Code home: --cc-home > $CLAUDE_CONFIG_DIR > $HOME/.claude
 if [ -n "$CC_HOME_ARG" ]; then
@@ -200,7 +231,14 @@ fi
 # ---- Step 2: Create config directory ----
 echo "[2/2] Setting up configuration..."
 mkdir -p "$NIO_DIR"
-if [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
+if [ -n "$NIO_CONFIG" ]; then
+  echo "  Applying operator config: $NIO_CONFIG"
+  if ! node "$SCRIPT_DIR/skills/nio/scripts/config-cli.js" import "$NIO_CONFIG"; then
+    echo "  FAIL: config import rejected by /nio doctor — install aborted." >&2
+    exit 1
+  fi
+  echo "  OK: Operator config applied"
+elif [ "$RESET_CONFIG" -eq 1 ] || [ ! -f "$NIO_DIR/config.yaml" ]; then
   if [ -f "$SCRIPT_DIR/config.default.yaml" ]; then
     cp "$SCRIPT_DIR/config.default.yaml" "$NIO_DIR/config.yaml"
   fi

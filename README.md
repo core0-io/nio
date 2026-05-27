@@ -59,6 +59,14 @@ curl -fsSL https://core0-io.github.io/nio/install.sh | bash
 
 Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.2.0`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
 
+**Onboarding with a shared config.** If someone handed you a pre-configured `nio.yaml` (e.g. an org-wide `external_analyser` + collector setup), pass it at install time:
+
+```bash
+curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --config /path/to/nio.yaml
+```
+
+Nio runs `/nio doctor` against the file before touching disk — the install aborts if any probe fails. Your previous config (if any) is kept as `~/.nio/config.yaml.bak.<ISO-stamp>`.
+
 ### 2. Configure and run
 
 Nio isn't a daemon — it loads as a plugin inside your agent host (Claude Code, Codex CLI, OpenClaw, or Hermes). Edit **`~/.nio/config.yaml`** (override the directory with **`NIO_HOME`**), then **restart your agent host** so the plugin re-reads the policy: Nio builds the guard once at plugin registration and never reloads in-process. Confirm decisions in **`~/.nio/audit.jsonl`** or your OTEL backend.
@@ -74,6 +82,12 @@ curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-config
 ```
 
 **Heads up:** `--reset-config` replaces your existing `config.yaml` with the upgraded template, so any customisations you made (allowed commands, permitted tools, collector endpoint, scoring weights, etc.) are wiped and have to be reapplied on top of the new defaults. Back the file up first (`cp ~/.nio/config.yaml ~/.nio/config.yaml.bak`) if you're not sure what you changed.
+
+To roll a new operator-tuned config in the same step, pass `--config /path/to/new.yaml` instead — the previous file is automatically preserved as `config.yaml.bak.<ISO-stamp>` and the install aborts if `/nio doctor` flags any issue with the new file:
+
+```bash
+curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --config /path/to/new.yaml
+```
 
 ---
 
@@ -146,8 +160,9 @@ Nio provides full hook-based execution assurance for Claude Code, Codex CLI, Ope
 ```bash
 git clone https://github.com/core0-io/nio.git
 cd nio && pnpm install && pnpm run build
-pnpm test          # run the test suite
-./setup.sh         # install the local build into your agent CLIs
+pnpm test                                # run the test suite
+./setup.sh                               # install the local build into your agent CLIs
+./setup.sh --config /path/to/nio.yaml    # …and apply an operator config (doctor-gated)
 ```
 
 The release zips ship with everything pre-built, so end users don't need Node/pnpm installed — only contributors hacking on Nio do.

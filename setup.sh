@@ -16,6 +16,7 @@ CC_HOME_ARG=""
 CODEX_HOME_ARG=""
 OPENCLAW_HOME_ARG=""
 HERMES_HOME_ARG=""
+CONFIG_FILE_ARG=""
 CC_ARGS=()
 CODEX_ARGS=()
 OC_ARGS=()
@@ -60,11 +61,17 @@ while [ $# -gt 0 ]; do
     --hermes-home=*)
       HERMES_HOME_ARG="${1#*=}"
       shift ;;
+    --config)
+      CONFIG_FILE_ARG="${2:-}"
+      shift 2 ;;
+    --config=*)
+      CONFIG_FILE_ARG="${1#*=}"
+      shift ;;
     --accept-hermes-hook|--accept-hermes-hooks)
       HERMES_ARGS+=("--accept-hooks")
       shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--config <path>] [--reset-config] [--uninstall]"
       echo ""
       echo "  --cc-home <path>        Path to .claude directory."
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
@@ -79,6 +86,12 @@ while [ $# -gt 0 ]; do
       echo "                          non-interactively. Only approves this exact"
       echo "                          command; other future shell hooks still need"
       echo "                          consent. (Runs 'hermes --accept-hooks hooks doctor'.)"
+      echo "  --config <path>         Apply an operator-provided ~/.nio/config.yaml."
+      echo "                          Runs /nio doctor against the file and aborts the"
+      echo "                          install if any probe fails. Existing config is"
+      echo "                          saved as config.yaml.bak.<ISO-stamp>. Mutually"
+      echo "                          exclusive with --reset-config. \$NIO_CONFIG env"
+      echo "                          var is honoured as a fallback."
       echo "  --reset-config          Overwrite existing nio config with defaults."
       echo "  --uninstall             Remove the plugin and config."
       echo ""
@@ -92,6 +105,21 @@ while [ $# -gt 0 ]; do
       shift ;;
   esac
 done
+
+# Resolve --config to absolute path here so every plugin setup receives the
+# same canonical path regardless of cwd.
+NIO_CONFIG="${CONFIG_FILE_ARG:-${NIO_CONFIG:-}}"
+if [ -n "$NIO_CONFIG" ]; then
+  if [ ! -f "$NIO_CONFIG" ]; then
+    echo "  ERROR: --config file not found: $NIO_CONFIG" >&2
+    exit 1
+  fi
+  NIO_CONFIG="$(cd "$(dirname "$NIO_CONFIG")" && pwd)/$(basename "$NIO_CONFIG")"
+  CC_ARGS+=("--config" "$NIO_CONFIG")
+  CODEX_ARGS+=("--config" "$NIO_CONFIG")
+  OC_ARGS+=("--config" "$NIO_CONFIG")
+  HERMES_ARGS+=("--config" "$NIO_CONFIG")
+fi
 
 # Resolve detection paths: --flag > env var > $HOME default
 if [ -n "$CC_HOME_ARG" ]; then
