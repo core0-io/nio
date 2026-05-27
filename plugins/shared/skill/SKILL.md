@@ -4,7 +4,7 @@ description: Nio — AI agent execution assurance. Use for evaluating action saf
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "2.3.7"
+  version: "2.4.0"
 user-invocable: true
 command-dispatch: tool
 command-tool: nio_command
