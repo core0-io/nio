@@ -1672,17 +1672,16 @@ code:   <span>curl …/install.sh | sudo bash</span>
 model:  <span class="bad">intent mismatch · 0.81</span>` },
   },
   {
-    phase: 6, name: "External Scoring API", sub: "Your enterprise policy gets the final word.",
+    phase: 6, name: "External Scoring APIs", sub: "Your enterprise policy gets the final word.",
     latency: "configurable", scope: "optional", weight: 2.0,
-    meta: [ { k: 'ENDPOINT', v: 'guard.external_analyser' }, { k: 'WEIGHT', v: '2.0 · tie-breaker' }, { k: 'USE FOR', v: 'compliance · DLP' } ],
+    meta: [ { k: 'ENDPOINTS', v: 'guard.external_analyser[]' }, { k: 'WEIGHT', v: 'per-endpoint' }, { k: 'USE FOR', v: 'compliance · DLP' } ],
     rules: [
       { id: 'custom policy',  desc: 'Company-specific blocklists', sev: 'CRIT' },
       { id: 'compliance tag', desc: 'HIPAA / SOC2 routed paths',   sev: 'HIGH' },
       { id: 'audit trail',    desc: 'Signed decision log',         sev: 'LOW' },
     ],
-    example: { title: 'GET /scores/agent', body:
-`<span class="comment">→</span> ?agent-name=cc&amp;start=…&amp;end=…
-   Authorization: Bearer eyJ…
+    example: { title: 'GET /scores/...', body:
+`<span class="comment">→</span> Authorization: Bearer eyJ…
 <span class="comment">←</span> { score: <span class="bad">0.94</span>, reason: <span class="bad">"prod bucket"</span> }` },
   },
 ];

@@ -233,7 +233,6 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.external_analyser[].name` | string | (required) | Unique identifier surfaced in `scores.external`, `phase_timings.external`, and audit logs. |
 | `guard.external_analyser[].endpoint` | string | (required) | HTTPS URL of the scoring endpoint. nio always issues GET; encode any context the endpoint needs in the URL itself (e.g. `?agent-name=X`). |
 | `guard.external_analyser[].headers` | object | — | Optional custom request headers (e.g. `X-Tenant-Id`). Merged over nio defaults; user entries override (including `Authorization`). |
-| `guard.external_analyser[].lookback_seconds` | number | — | When set, nio appends `&start=<iso>&end=<iso>` (ISO 8601 timestamps; `start` is `now - N` seconds, `end` is now) to the request URL at fetch time. Required by time-windowed scoring APIs. |
 | `guard.external_analyser[].weight` | number | `1.0` | Aggregation weight; participates in `final_score = Σ(wi·si)/Σ(wi)`. |
 | `guard.external_analyser[].timeout` | number | `3000` | Per-request timeout (ms). |
 | `guard.external_analyser[].enabled` | boolean | `true` | Set false to skip this endpoint without removing config. |
@@ -244,6 +243,18 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 | `guard.external_analyser[].auth.client_secret` | string | — | `oauth` only — **required**. The corresponding `client_secret` from the provider. |
 
 **OAuth token caching:** Endpoints with `auth.type=oauth` cache the access_token to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth identity (`oauth_url + client_id + client_secret`) share the cache and the in-process `OAuthAuthStrategy` instance — the `/token` POST fires only once even when N endpoints fire concurrently. When the cached token nears expiry, nio simply requests a fresh one (`client_credentials` grant has no refresh_token; one POST replaces it).
+
+**Endpoint response contract:** Every scoring endpoint must return a JSON body of this exact shape:
+
+```json
+{ "score": 0.42, "reason": "..." }
+```
+
+- `score` — required, finite number, clamped to `[0, 1]`
+- `reason` — optional string
+
+Anything else (wrong field name, nested score, score as a string, JSON array, non-JSON body) is rejected with an `external_analyser / response_invalid` diagnostic that includes a preview of what was actually returned. nio does **not** support custom field names or nested paths — wrap non-conformant services with a thin adapter on your side. Run `/nio doctor` to verify your endpoint conforms before triggering a hook.
+
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
 | `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
 | `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |

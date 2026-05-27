@@ -129,7 +129,6 @@ export interface ActionOrchestratorOptions {
     enabled?: boolean;
     endpoint: string;
     headers?: Record<string, string>;
-    lookback_seconds?: number;
     timeout?: number;
     weight?: number;
     auth?:
@@ -185,12 +184,11 @@ export class ActionOrchestrator {
       }
 
       this.externalScorers.push(new ExternalAnalyser({
-        name:            e.name,
-        endpoint:        e.endpoint,
-        headers:         e.headers,
-        lookbackSeconds: e.lookback_seconds,
-        timeout:         e.timeout,
-        weight:          e.weight,
+        name:     e.name,
+        endpoint: e.endpoint,
+        headers:  e.headers,
+        timeout:  e.timeout,
+        weight:   e.weight,
         auth,
       }));
       this.externalWeights[e.name] = e.weight ?? 1.0;

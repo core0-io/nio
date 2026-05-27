@@ -147,6 +147,14 @@ guard:
   # results contribute to the final risk score via per-endpoint `weight`. nio
   # always issues GET requests — encode any context the endpoint needs as
   # query parameters in the endpoint URL itself (e.g. ?agent-name=X).
+  #
+  # ENDPOINT RESPONSE CONTRACT — each endpoint must return JSON of the shape:
+  #   { "score": 0.42, "reason": "..." }
+  # `score` is required (finite number, clamped to [0, 1]); `reason` is optional.
+  # Any other shape is rejected with an external_analyser/response_invalid
+  # diagnostic. See docs/phases/phase-6-external.html#response-contract.
+  # Use `/nio doctor` to verify an endpoint conforms before relying on it.
+  #
   # Authentication is optional: omit `auth` for unauthenticated endpoints,
   # or choose `bearer` (static API key) / `oauth` (OAuth2
   # client_credentials grant with disk-backed token cache at ~/.nio/oauth-cache/).
@@ -185,9 +193,6 @@ guard:
   #     enabled: true
   #     endpoint: "https://scoring.example.com/api/scores/agent?agent-name=cc"
   #     weight: 2.0
-  #     # lookback_seconds: 3600      # optional; appends &start=<iso>&end=<iso>
-  #     #                             # (ISO 8601, start = now - N seconds).
-  #     #                             # Required by time-windowed scoring APIs.
   #     # headers:                    # optional
   #     #   X-Tenant-Id: "..."
   #     auth:

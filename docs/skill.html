@@ -198,7 +198,7 @@
         <p>What doctor does:</p>
         <ol>
           <li><strong>Configuration</strong> — re-runs Zod schema validation against the on-disk <code>~/.nio/config.yaml</code>.</li>
-          <li><strong>External analysers</strong> — for each entry with <code>auth.type: oauth</code>, performs a real <code>client_credentials</code> grant POST against <code>{oauth_url}/token</code>.</li>
+          <li><strong>External analysers</strong> — for every enabled entry, builds the same <code>ExternalAnalyser</code> the orchestrator uses (auth strategy, custom headers) and issues a real GET against the configured URL. On success, prints the parsed <code>score</code>; on failure, prints HTTP status / response body preview / hint. This catches typos, missing query params, auth failures, AND <a href="../docs/phases/phase-6-external.html#response-contract">response-contract</a> violations like the endpoint returning a different shape.</li>
           <li><strong>LLM analyser</strong> — flags <code>guard.llm_analyser.enabled=true</code> paired with an empty <code>api_key</code>.</li>
           <li><strong>Collector</strong> — HEAD-probes <code>collector.endpoint</code> if set.</li>
         </ol>

@@ -60,6 +60,16 @@
           </tbody>
         </table>
 
+        <h2 id="response-contract">Response contract</h2>
+        <p>Your scoring endpoint <strong>must</strong> return a JSON body of this exact shape:</p>
+        <pre><code>{
+  "score":  0.42,      // required: number, clamped to [0, 1]
+  "reason": "..."      // optional: string explanation
+}</code></pre>
+        <p>Anything else — wrong field name, nested score, score as a string, JSON array, non-JSON body — is rejected with an <a href="../diagnostics.html#external_analyser-response_invalid"><code>external_analyser / response_invalid</code></a> diagnostic that includes a 200-byte preview of what the endpoint actually returned, so you can see expected-vs-actual at a glance.</p>
+        <p>nio does <strong>not</strong> support custom field names, nested paths (<code>data.score</code>), or template responses. If your existing scoring service returns a different shape, deploy a thin shim service on your side that maps it to this contract. The shim is typically 10 lines of code and keeps nio's surface area small.</p>
+        <p>You can verify your endpoint conforms before triggering any hook by running <a href="../skill.html#doctor"><code>/nio doctor</code></a> — it issues a real request and reports the parsed score, or the validation failure with the body preview.</p>
+
         <h2>Enable</h2>
         <pre><code>guard:
   external_analyser:
@@ -83,7 +93,6 @@
     - name: scorer_primary
       endpoint: "https://scoring.example.com/api/scores/agent?agent-name=cc"
       weight: 2.0
-      lookback_seconds: 3600        # append &start=<iso>&end=<iso> (ISO 8601)
       # headers:                    # optional custom headers
       #   X-Tenant-Id: "..."
       auth:

@@ -470,7 +470,7 @@ interface DryRunResult {
 /**
  * Probe a single external_analyser entry end-to-end: build its auth strategy,
  * GET the scoring endpoint with all the configured machinery (headers,
- * lookback window, auth), and verify the response shape. Returns the actual
+ * headers, auth), and verify the response shape. Returns the actual
  * returned score on success so the user can confirm the endpoint is
  * answering plausibly. Uses a silent DiagnosticCollector so the probe does
  * not write anything to the audit log.
@@ -494,12 +494,11 @@ async function probeExternalAnalyser(
   }
 
   const scorer = new ExternalAnalyser({
-    name:            entry.name,
-    endpoint:        entry.endpoint,
-    headers:         entry.headers,
-    lookbackSeconds: entry.lookback_seconds,
-    timeout:         entry.timeout,
-    weight:          entry.weight,
+    name:     entry.name,
+    endpoint: entry.endpoint,
+    headers:  entry.headers,
+    timeout:  entry.timeout,
+    weight:   entry.weight,
     auth,
   });
 

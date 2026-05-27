@@ -110,12 +110,6 @@ export const ExternalAnalyserEntrySchema = z.object({
    * here only if you intentionally want to bypass `auth`.
    */
   headers:  z.record(z.string(), z.string()).optional(),
-  /**
-   * When set, nio appends `start` and `end` query parameters to the endpoint
-   * URL at request time, scoping the score to the last N seconds. Used for
-   * time-windowed scoring APIs that require an explicit window.
-   */
-  lookback_seconds: z.number().int().positive().optional(),
   timeout:  z.number().positive().optional(),
   weight:   z.number().nonnegative().optional(),
   auth:     ExternalAnalyserAuthSchema.optional(),

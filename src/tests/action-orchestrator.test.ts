@@ -302,8 +302,15 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
 interface ScorerOpts {
-  /** Score returned by the endpoint. */
-  score: number;
+  /**
+   * Score returned by the endpoint. Used to construct the default
+   * `{ score, reason }` body when `body` / `rawBody` aren't set.
+   */
+  score?: number;
+  /** Explicit JSON body — takes precedence over `score`. */
+  body?: unknown;
+  /** Raw text body — takes precedence over `body` (for "not JSON" tests). */
+  rawBody?: string;
   /** When true, the listener closes the socket without responding. */
   drop?: boolean;
 }
@@ -324,11 +331,17 @@ function startScorer(opts: ScorerOpts): Promise<{ url: string; server: Server; o
     observed.method = req.method;
     observed.headers = req.headers as Record<string, string | string[] | undefined>;
     observed.url = req.url;
-    let body = '';
-    req.on('data', c => { body += c; });
+    let reqBody = '';
+    req.on('data', c => { reqBody += c; });
     req.on('end', () => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ score: opts.score, reason: `scored ${opts.score}` }));
+      if (opts.rawBody !== undefined) {
+        res.end(opts.rawBody);
+      } else if (opts.body !== undefined) {
+        res.end(JSON.stringify(opts.body));
+      } else {
+        res.end(JSON.stringify({ score: opts.score ?? 0, reason: `scored ${opts.score ?? 0}` }));
+      }
     });
   });
   return new Promise(resolve => {
@@ -469,36 +482,7 @@ describe('ActionOrchestrator: Phase 6 multi-endpoint', () => {
     }
   });
 
-  it('appends start/end query params as ISO 8601 when lookback_seconds is set', async () => {
-    const scorer = await startScorer({ score: 0.4 });
-    try {
-      const before = Date.now();
-      const analyser = new ActionOrchestrator({
-        externalAnalysers: [{ name: 's', endpoint: scorer.url, weight: 1.0, lookback_seconds: 3600 }],
-      });
-      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
-      const after = Date.now();
-
-      const observedUrl = scorer.observed.url ?? '';
-      const parsed = new URL(`http://x${observedUrl}`);
-      const startStr = parsed.searchParams.get('start') ?? '';
-      const endStr = parsed.searchParams.get('end') ?? '';
-
-      // ISO 8601 with millisecond precision and Z suffix
-      assert.match(startStr, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-      assert.match(endStr,   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
-
-      const start = Date.parse(startStr);
-      const end = Date.parse(endStr);
-      assert.equal(end - start, 3600 * 1000, 'window width equals lookback_seconds (in ms)');
-      assert.ok(end >= before && end <= after,
-        `end (${end}) should be in [${before}, ${after}]`);
-    } finally {
-      await stopScorer(scorer.server);
-    }
-  });
-
-  it('preserves existing query params when appending start/end (uses & not ?)', async () => {
+  it('GETs the endpoint URL verbatim (nio does not inject query params)', async () => {
     const scorer = await startScorer({ score: 0.4 });
     try {
       const analyser = new ActionOrchestrator({
@@ -506,36 +490,117 @@ describe('ActionOrchestrator: Phase 6 multi-endpoint', () => {
           name: 's',
           endpoint: `${scorer.url}/?agent-name=cc`,
           weight: 1.0,
-          lookback_seconds: 60,
         }],
       });
       await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
 
       const observedUrl = scorer.observed.url ?? '';
       const parsed = new URL(`http://x${observedUrl}`);
-      assert.equal(parsed.searchParams.get('agent-name'), 'cc',
-        'pre-existing query param survives');
-      assert.ok(parsed.searchParams.has('start'));
-      assert.ok(parsed.searchParams.has('end'));
+      // User-encoded query param preserved.
+      assert.equal(parsed.searchParams.get('agent-name'), 'cc');
+      // nio doesn't append anything of its own.
+      assert.ok(!parsed.searchParams.has('start'));
+      assert.ok(!parsed.searchParams.has('end'));
     } finally {
       await stopScorer(scorer.server);
     }
   });
+});
 
-  it('does NOT append start/end when lookback_seconds is unset', async () => {
-    const scorer = await startScorer({ score: 0.4 });
+// ─────────────────────────────────────────────────────────────────────────────
+// ActionOrchestrator: Phase 6 response schema validation
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('ActionOrchestrator: Phase 6 response schema', () => {
+  async function evaluateWith(body: unknown | undefined, rawBody?: string): Promise<{
+    final?: number;
+    external?: Record<string, number>;
+    error?: { kind: string; detail?: string };
+    diagnostics?: Array<{ kind?: string; detail?: string; message?: string }>;
+  }> {
+    const scorer = await startScorer({ body, rawBody });
     try {
       const analyser = new ActionOrchestrator({
         externalAnalysers: [{ name: 's', endpoint: scorer.url, weight: 1.0 }],
       });
-      await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
-
-      const observedUrl = scorer.observed.url ?? '';
-      assert.doesNotMatch(observedUrl, /start=/);
-      assert.doesNotMatch(observedUrl, /end=/);
+      const result = await analyser.evaluate(makeEnvelope('exec_command', { command: 'echo hi' }));
+      return {
+        final: result.scores.final,
+        external: result.scores.external,
+        error: result.phase_timings?.external?.['s']?.error,
+        diagnostics: result.diagnostics?.filter(
+          d => d.source === 'external_analyser',
+        ) as Array<{ kind?: string; detail?: string; message?: string }>,
+      };
     } finally {
       await stopScorer(scorer.server);
     }
+  }
+
+  it('accepts the contract shape: { score }', async () => {
+    const r = await evaluateWith({ score: 0.5 });
+    assert.deepEqual(r.external, { s: 0.5 });
+    assert.equal(r.error, undefined);
+  });
+
+  it('accepts the contract shape with reason: { score, reason }', async () => {
+    const r = await evaluateWith({ score: 0.4, reason: 'production bucket' });
+    assert.deepEqual(r.external, { s: 0.4 });
+    assert.equal(r.error, undefined);
+  });
+
+  it('clamps score > 1 to 1', async () => {
+    const r = await evaluateWith({ score: 1.5 });
+    assert.deepEqual(r.external, { s: 1 });
+  });
+
+  it('clamps score < 0 to 0', async () => {
+    const r = await evaluateWith({ score: -0.2 });
+    assert.deepEqual(r.external, { s: 0 });
+  });
+
+  it('rejects: missing score field — emits response_invalid (score_missing)', async () => {
+    const r = await evaluateWith({ value: 0.5, agent: 'x' });
+    assert.equal(r.external, undefined, 'endpoint must not contribute a score');
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=score_missing/);
+    // Body preview echoes what the server actually returned:
+    assert.match(r.error?.detail ?? '', /"value":0\.5/);
+    assert.ok(r.diagnostics && r.diagnostics.length >= 1);
+  });
+
+  it('rejects: score is a string — emits response_invalid (score_not_a_number)', async () => {
+    const r = await evaluateWith({ score: '0.5' });
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=score_not_a_number/);
+  });
+
+  it('rejects: score is NaN-like (we send Infinity since JSON.stringify drops NaN)', async () => {
+    // JSON.stringify(NaN) → "null", so we send the raw text "{\"score\":NaN}"
+    // — invalid JSON, which exercises not_json. To exercise score_not_a_number
+    // specifically, send score as null (number-typed but not finite).
+    const r = await evaluateWith({ score: null });
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=score_not_a_number/);
+  });
+
+  it('rejects: response is a JSON array, not an object', async () => {
+    const r = await evaluateWith([{ score: 0.5 }]);
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=not_object/);
+  });
+
+  it('rejects: response is a raw number, not an object', async () => {
+    const r = await evaluateWith(0.5);
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=not_object/);
+  });
+
+  it('rejects: response body is not valid JSON at all', async () => {
+    const r = await evaluateWith(undefined, 'this is not json');
+    assert.equal(r.error?.kind, 'response_invalid');
+    assert.match(r.error?.detail ?? '', /kind=not_json/);
+    assert.match(r.error?.detail ?? '', /this is not json/);
   });
 });
 

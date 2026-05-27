@@ -185,6 +185,29 @@ describe('/nio doctor', () => {
     }
   });
 
+  it('flags response that violates the schema contract — shows body preview', async () => {
+    // Endpoint returns 200 but with the wrong field name (`value` instead of `score`).
+    // Doctor must catch this and surface the actual body so the user can see why.
+    const scorer = await startMockScorer({ body: { value: 0.42, agent: 'x' } });
+    try {
+      writeConfig({
+        guard: {
+          protection_level: 'balanced',
+          external_analyser: [{ name: 'scorer_badshape', endpoint: scorer.url, weight: 1 }],
+        },
+      });
+      const out = await dispatchNioCommand('doctor', stubDeps);
+      assert.match(out, /✗ scorer_badshape/);
+      // The doctor row should show the actual response body so users can
+      // compare expected vs. actual.
+      assert.match(out, /"value":0\.42/);
+      // And a hint pointing them at the schema contract.
+      assert.match(out, /hint:.*phase-6-external/);
+    } finally {
+      await stopServer(scorer.server);
+    }
+  });
+
   it('reports HTTP error body in the failure detail (e.g. 422 with JSON detail)', async () => {
     const scorer = await startMockScorer({
       status: 422,

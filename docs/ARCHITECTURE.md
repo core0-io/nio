@@ -322,7 +322,6 @@ guard:
   external_analyser:
     - name: scorer_primary
       endpoint: "https://my-security-api.example.com/scores/agent?agent-name=cc"
-      lookback_seconds: 600          # appends &start=<iso>&end=<iso>
       weight: 2.0
       timeout: 3000
       # headers: { X-Tenant-Id: "..." }   # optional custom headers

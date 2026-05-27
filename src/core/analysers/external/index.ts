@@ -31,12 +31,6 @@ export interface ExternalAnalyserOptions {
    * Authorization header from `auth`). User entries override defaults.
    */
   headers?: Record<string, string>;
-  /**
-   * When set, nio appends `&start=<iso>&end=<iso>` (ISO 8601 timestamps) to
-   * the endpoint URL at request time, scoping the score to the last N
-   * seconds. Required by time-windowed scoring APIs.
-   */
-  lookbackSeconds?: number;
 }
 
 /** Response from the external endpoint. */
@@ -54,7 +48,6 @@ export class ExternalAnalyser {
   private timeout: number;
   private auth?: AuthStrategy;
   private customHeaders?: Record<string, string>;
-  private lookbackSeconds?: number;
 
   constructor(opts: ExternalAnalyserOptions) {
     this.name = opts.name;
@@ -63,21 +56,6 @@ export class ExternalAnalyser {
     this.weight = opts.weight ?? 1.0;
     this.auth = opts.auth;
     this.customHeaders = opts.headers;
-    this.lookbackSeconds = opts.lookbackSeconds;
-  }
-
-  /**
-   * Build the final request URL, optionally appending `start`/`end` query
-   * parameters when `lookbackSeconds` is configured. Timestamps use ISO 8601
-   * (RFC 3339) with millisecond precision and a `Z` suffix.
-   */
-  private buildUrl(): string {
-    if (!this.lookbackSeconds) return this.endpoint;
-    const nowMs = Date.now();
-    const end = new Date(nowMs).toISOString();
-    const start = new Date(nowMs - this.lookbackSeconds * 1000).toISOString();
-    const sep = this.endpoint.includes('?') ? '&' : '?';
-    return `${this.endpoint}${sep}start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`;
   }
 
   /**
@@ -153,8 +131,7 @@ export class ExternalAnalyser {
       if (authHeader) headers['Authorization'] = authHeader;
       if (this.customHeaders) Object.assign(headers, this.customHeaders);
 
-      const url = this.buildUrl();
-      const response = await fetch(url, {
+      const response = await fetch(this.endpoint, {
         method: 'GET',
         headers,
         signal: controller.signal,
@@ -185,11 +162,56 @@ export class ExternalAnalyser {
         return null;
       }
 
-      const data = await response.json() as ExternalScoreResponse;
+      // ── Strict response schema validation ─────────────────────────
+      // The endpoint MUST return `{ "score": number, "reason"?: string }`.
+      // Anything else is rejected with a `response_invalid` diagnostic
+      // carrying a preview of what was actually returned, so users can
+      // see expected-vs-actual at a glance. nio does not support custom
+      // field names or nested paths — services with a different response
+      // shape must adapt via a shim.
 
-      // Clamp score to [0, 1]
-      const score = Math.max(0, Math.min(1, data.score ?? 0));
-      return { score, reason: data.reason };
+      // We read the body as text first so we can both parse JSON AND
+      // include the raw bytes in the diagnostic on failure.
+      const bodyText = await response.text();
+      const preview = bodyText.length > 200 ? bodyText.slice(0, 200) + '…' : bodyText;
+
+      const emitInvalid = (kind: string, message: string): null => {
+        reporter?.collect({
+          severity: 'error',
+          source: 'external_analyser',
+          kind: 'response_invalid',
+          component: this.name,
+          message: `${this.endpoint}: ${message}`,
+          detail: `kind=${kind}; body=${preview}`,
+          hint: 'Endpoint must return { "score": number, "reason"?: string }. See docs/phases/phase-6-external.html#response-contract.',
+        });
+        return null;
+      };
+
+      let data: unknown;
+      try {
+        data = JSON.parse(bodyText);
+      } catch {
+        return emitInvalid('not_json', 'response body was not valid JSON');
+      }
+
+      if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+        return emitInvalid('not_object', 'response was not a JSON object');
+      }
+
+      const obj = data as Record<string, unknown>;
+      if (!('score' in obj)) {
+        return emitInvalid('score_missing', 'response object has no `score` field');
+      }
+      const raw = obj.score;
+      if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+        return emitInvalid('score_not_a_number', '`score` is not a finite number');
+      }
+
+      const score = Math.max(0, Math.min(1, raw));
+      const reasonRaw = obj.reason;
+      const reason = typeof reasonRaw === 'string' ? reasonRaw : undefined;
+      return { score, reason };
     } catch (err: unknown) {
       const error = err as { name?: string; message?: string };
       if (error.name === 'AbortError') {
