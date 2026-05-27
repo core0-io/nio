@@ -181,6 +181,7 @@ View or update the Nio configuration.
 |-------|--------|
 | `config` or `config show` | Run `node scripts/config-cli.js show` |
 | `config <level>` (strict/balanced/permissive) | Read `~/.nio/config.yaml`, update only the `guard.level` field (preserve all other settings), write back, confirm to user |
+| `config import <path>` | Read the YAML at `<path>`, validate it against the schema, run the full `/nio doctor` probe suite against it, and — only if every check passes — replace `~/.nio/config.yaml`. The previous file is preserved as `config.yaml.bak.<ISO-stamp>`. If doctor reports any `✗`, the import is rejected and the live config is not touched. Use this to apply an operator-provided config in one shot instead of copy-pasting. |
 
 ### Config File
 

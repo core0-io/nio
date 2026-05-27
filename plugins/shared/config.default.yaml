@@ -1,4 +1,10 @@
 # Runtime guard pipeline settings (phases 0–6) + scan rules.
+#
+# To apply an operator-provided version of this file in one shot, run:
+#   /nio config import <path>
+# nio runs `/nio doctor` against the incoming config first; if any check
+# fails, your live ~/.nio/config.yaml is NOT modified. On success the old
+# file is preserved as config.yaml.bak.<ISO-stamp>.
 guard:
   # Protection level: strict | balanced | permissive
   #   strict      — block all risky actions (deny + confirm)

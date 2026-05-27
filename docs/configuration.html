@@ -55,6 +55,7 @@
           <li>Reset to defaults: <code>/nio reset</code> or <code>setup.sh --reset-config</code></li>
         </ul>
         <p>You can edit the file directly or use <code>/nio config &lt;level&gt;</code> to change the protection level without opening an editor.</p>
+        <p>To apply an operator-provided config in one shot, run <code>/nio config import &lt;path&gt;</code>. nio runs <a href="skill.html#doctor"><code>/nio doctor</code></a> against the incoming YAML first and refuses to overwrite if any probe fails; on success the previous file is preserved as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code>.</p>
 
         <h2>guard</h2>
 

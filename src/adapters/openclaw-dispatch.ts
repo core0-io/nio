@@ -9,9 +9,9 @@
  * entirely. This module is the body of that tool.
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { dump as yamlDump } from 'js-yaml';
 import { loadConfig, resetConfig } from './common.js';
 import type { NioConfig } from './config-schema.js';
@@ -47,9 +47,9 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
   switch (head) {
     case '':
     case 'config':
-      return handleConfig(restStr);
+      return await handleConfig(restStr);
     case 'reset':
-      return handleConfig('reset');
+      return await handleConfig('reset');
     case 'action':
       return handleAction(restStr, deps.orchestrator);
     case 'scan':
@@ -69,6 +69,7 @@ function usageText(): string {
     '  /nio config [show]                        — show current config',
     '  /nio config <strict|balanced|permissive>  — set protection level',
     '  /nio config reset                         — reset config to defaults',
+    '  /nio config import <path>                 — replace config from <path> (doctor-gated; backs up to config.yaml.bak.<stamp>)',
     '  /nio action <type>: <body>                — evaluate a runtime action',
     '     types: exec_command, network_request, read_file, write_file, secret_access',
     '     examples:',
@@ -84,7 +85,7 @@ function usageText(): string {
 
 // ── config ───────────────────────────────────────────────────────────────────
 
-function handleConfig(rest: string): string {
+async function handleConfig(rest: string): Promise<string> {
   const sub = rest.trim();
 
   if (sub === '' || sub === 'show') {
@@ -94,6 +95,14 @@ function handleConfig(rest: string): string {
   if (sub === 'reset') {
     const cfg = resetConfig();
     return `Config reset to defaults.\n\n${JSON.stringify(cfg, null, 2)}`;
+  }
+
+  if (sub.startsWith('import ') || sub === 'import') {
+    const path = sub === 'import' ? '' : sub.slice('import '.length).trim();
+    if (!path) {
+      return `config import requires a path.\n\n${usageText()}`;
+    }
+    return await importConfig(path);
   }
 
   if ((VALID_LEVELS as readonly string[]).includes(sub)) {
@@ -112,6 +121,88 @@ function setProtectionLevel(level: Level): NioConfig {
   };
   writeFileSync(configYamlPath(), yamlDump(merged));
   return merged;
+}
+
+/**
+ * Apply an operator-provided config file. Runs the full doctor probe suite
+ * against the incoming config; only overwrites ~/.nio/config.yaml when every
+ * check passes. The previous file (if any) is saved with a timestamped
+ * `.bak.<ISO-stamp>` suffix so the user can roll back manually.
+ *
+ * Returns a markdown report — same shape as /nio doctor, plus a header that
+ * says OK / REJECTED / FAILED.
+ */
+async function importConfig(filePath: string): Promise<string> {
+  const expanded = filePath.startsWith('~/')
+    ? join(homedir(), filePath.slice(2))
+    : filePath;
+  const absolute = resolve(expanded);
+
+  if (!existsSync(absolute)) {
+    return [
+      '# config import FAILED',
+      `Source: ${absolute}`,
+      'Error: file not found',
+      'Current ~/.nio/config.yaml was NOT modified.',
+    ].join('\n');
+  }
+
+  let validated: NioConfig;
+  try {
+    const { load: yamlLoad } = await import('js-yaml');
+    const { validateConfig } = await import('./config-schema.js');
+    const raw = readFileSync(absolute, 'utf8');
+    const parsed = yamlLoad(raw);
+    validated = validateConfig(parsed, absolute);
+  } catch (err) {
+    return [
+      '# config import FAILED',
+      `Source: ${absolute}`,
+      `Error: ${err instanceof Error ? err.message : String(err)}`,
+      'Current ~/.nio/config.yaml was NOT modified.',
+    ].join('\n');
+  }
+
+  // Doctor-gate: probe the INCOMING config before touching disk.
+  const { ok, report } = await runDoctor(validated);
+  if (!ok) {
+    return [
+      '# config import REJECTED',
+      `Source: ${absolute}`,
+      'Doctor check failed — current ~/.nio/config.yaml was NOT modified.',
+      '',
+      report,
+    ].join('\n');
+  }
+
+  // All probes passed — commit. Ensure parent dir exists for clean installs.
+  const dir = nioDir();
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+
+  const current = configYamlPath();
+  let backupPath: string | null = null;
+  if (existsSync(current)) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    backupPath = `${current}.bak.${stamp}`;
+    renameSync(current, backupPath);
+  }
+
+  const tmp = `${current}.tmp`;
+  writeFileSync(tmp, yamlDump(validated));
+  renameSync(tmp, current);   // atomic on same filesystem
+
+  return [
+    '# config import OK',
+    `Source: ${absolute}`,
+    `Backup: ${backupPath ?? '(no previous config)'}`,
+    '',
+    report,
+    '',
+    '## New config',
+    '```yaml',
+    yamlDump(validated).trimEnd(),
+    '```',
+  ].join('\n');
 }
 
 // ── action ───────────────────────────────────────────────────────────────────
@@ -375,40 +466,65 @@ function formatDiagnosticsAggregate(entries: ReadonlyArray<Record<string, unknow
  * triggering a hook to validate setup.
  */
 async function handleDoctor(): Promise<string> {
+  const { report } = await runDoctor();
+  return report;
+}
+
+export interface DoctorOutcome {
+  ok: boolean;
+  report: string;
+}
+
+/**
+ * Internal doctor probe runner. Takes an optional config override so callers
+ * like `config import` can validate an incoming-but-not-yet-written config
+ * before committing it to disk. Returns a structured result so callers can
+ * gate behaviour on whether every probe passed.
+ */
+async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   const out: string[] = ['## Nio Doctor', ''];
+  let ok = true;
+  const markFail = (line: string): void => { ok = false; out.push(line); };
 
   // ─── Configuration ──────────────────────────────────────────────────
   out.push('### Configuration');
 
   let config: NioConfig;
-  let configLoadOk = true;
-  try {
-    config = loadConfig();
-  } catch (err) {
-    configLoadOk = false;
-    out.push(`- ✗ ${configYamlPath()}: ${err instanceof Error ? err.message : String(err)}`);
-    config = {} as NioConfig;
-  }
-  if (configLoadOk) {
-    // Even when loadConfig returns successfully, it may have logged a
-    // diagnostic and silently fallen back to defaults. Detect that by
-    // re-running validateConfig on the raw YAML.
-    let validationIssues: string[] = [];
-    if (existsSync(configYamlPath())) {
-      try {
-        const { load: yamlLoad } = await import('js-yaml');
-        const { validateConfig } = await import('./config-schema.js');
-        const raw = yamlLoad(readFileSync(configYamlPath(), 'utf-8'));
-        validateConfig(raw, configYamlPath());
-      } catch (err) {
-        validationIssues = String(err instanceof Error ? err.message : err).split('\n').filter(Boolean);
-      }
+  if (configOverride !== undefined) {
+    // Caller already validated the config against the schema before passing
+    // it in; skip the load-from-disk + re-validate dance.
+    config = configOverride;
+    out.push('- ✓ provided config validated against schema');
+  } else {
+    let configLoadOk = true;
+    try {
+      config = loadConfig();
+    } catch (err) {
+      configLoadOk = false;
+      markFail(`- ✗ ${configYamlPath()}: ${err instanceof Error ? err.message : String(err)}`);
+      config = {} as NioConfig;
     }
-    if (validationIssues.length === 0) {
-      out.push(`- ✓ ${configYamlPath()} loaded successfully`);
-    } else {
-      out.push(`- ✗ ${configYamlPath()} has schema issues:`);
-      for (const issue of validationIssues) out.push(`    ${issue}`);
+    if (configLoadOk) {
+      // Even when loadConfig returns successfully, it may have logged a
+      // diagnostic and silently fallen back to defaults. Detect that by
+      // re-running validateConfig on the raw YAML.
+      let validationIssues: string[] = [];
+      if (existsSync(configYamlPath())) {
+        try {
+          const { load: yamlLoad } = await import('js-yaml');
+          const { validateConfig } = await import('./config-schema.js');
+          const raw = yamlLoad(readFileSync(configYamlPath(), 'utf-8'));
+          validateConfig(raw, configYamlPath());
+        } catch (err) {
+          validationIssues = String(err instanceof Error ? err.message : err).split('\n').filter(Boolean);
+        }
+      }
+      if (validationIssues.length === 0) {
+        out.push(`- ✓ ${configYamlPath()} loaded successfully`);
+      } else {
+        markFail(`- ✗ ${configYamlPath()} has schema issues:`);
+        for (const issue of validationIssues) out.push(`    ${issue}`);
+      }
     }
   }
 
@@ -426,7 +542,7 @@ async function handleDoctor(): Promise<string> {
       if (result.ok) {
         out.push(`- ✓ ${entry.name} (${entry.endpoint}) — ${result.message}${authLabel}`);
       } else {
-        out.push(`- ✗ ${entry.name} (${entry.endpoint})${authLabel}: ${result.message}`);
+        markFail(`- ✗ ${entry.name} (${entry.endpoint})${authLabel}: ${result.message}`);
         if (result.hint) out.push(`    hint: ${result.hint}`);
       }
     }
@@ -437,7 +553,7 @@ async function handleDoctor(): Promise<string> {
   if (llm?.enabled || llm?.api_key) {
     out.push('', '### LLM Analyser');
     if (llm?.enabled && !llm?.api_key) {
-      out.push('- ✗ guard.llm_analyser.enabled=true but api_key is empty');
+      markFail('- ✗ guard.llm_analyser.enabled=true but api_key is empty');
       out.push('    hint: Set guard.llm_analyser.api_key to an Anthropic API key, or set enabled: false.');
     } else if (llm?.api_key && !llm?.enabled) {
       out.push('- · guard.llm_analyser.api_key set but enabled=false (Phase 5 is OFF)');
@@ -454,11 +570,11 @@ async function handleDoctor(): Promise<string> {
     if (result.ok) {
       out.push(`- ✓ ${collector.endpoint} reachable (${result.message})`);
     } else {
-      out.push(`- ✗ ${collector.endpoint}: ${result.message}`);
+      markFail(`- ✗ ${collector.endpoint}: ${result.message}`);
     }
   }
 
-  return out.join('\n');
+  return { ok, report: out.join('\n') };
 }
 
 interface DryRunResult {

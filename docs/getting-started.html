@@ -71,12 +71,13 @@
         <h2>First commands</h2>
         <p>Once installed, the <code>/nio</code> skill is available in your agent. Start with:</p>
 
-        <pre><code>/nio config show            # display current protection level + config path
-/nio config balanced        # switch between strict | balanced | permissive
-/nio scan .                 # scan the current working directory
-/nio action "rm -rf /"      # evaluate a proposed command without running it
-/nio report                 # last 50 guard decisions + diagnostics summary
-/nio doctor                 # validate config + dry-run OAuth/LLM/collector</code></pre>
+        <pre><code>/nio config show              # display current protection level + config path
+/nio config balanced          # switch between strict | balanced | permissive
+/nio config import nio.yaml   # apply an operator-provided config (doctor-gated; auto-backup)
+/nio scan .                   # scan the current working directory
+/nio action "rm -rf /"        # evaluate a proposed command without running it
+/nio report                   # last 50 guard decisions + diagnostics summary
+/nio doctor                   # validate config + dry-run OAuth/LLM/collector</code></pre>
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
 

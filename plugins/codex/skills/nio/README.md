@@ -16,6 +16,7 @@ Execution assurance and observability for autonomous AI agents.
 /nio action <description> — Evaluate runtime action safety
 /nio report               — View agent execution audit log
 /nio config <level>       — Set protection level (strict/balanced/permissive)
+/nio config import <path> — Apply an operator-provided config (doctor-gated; backs up the previous file)
 ```
 
 ## Requirements

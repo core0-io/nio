@@ -218,6 +218,7 @@
             <tr><td><code>/nio config strict</code></td><td>Block all risky actions (deny + confirm).</td></tr>
             <tr><td><code>/nio config balanced</code></td><td>Block dangerous, confirm risky. <strong>Default.</strong></td></tr>
             <tr><td><code>/nio config permissive</code></td><td>Only block critical threats. Minimal friction.</td></tr>
+            <tr><td><code>/nio config import &lt;path&gt;</code></td><td>Apply an operator-provided YAML. Runs <code>/nio doctor</code> against it first and refuses to overwrite if any check fails. Previous file kept as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code>.</td></tr>
           </tbody>
         </table>
 
