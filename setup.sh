@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ---- Partition args between sub-scripts ----
 # --cc-home → claude-code; --openclaw-home → openclaw; --hermes-home → hermes.
-# Everything else (--uninstall, --reset-config, --dry-run, --yes, etc.) goes
+# Everything else (--uninstall, --reset-to-defaults, --dry-run, --yes, etc.) goes
 # to whichever sub-scripts accept it (each ignores unknown flags where safe).
 UNINSTALL=0
 CC_HOME_ARG=""
@@ -71,7 +71,7 @@ while [ $# -gt 0 ]; do
       HERMES_ARGS+=("--accept-hooks")
       shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--config <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--config <path>] [--reset-to-defaults] [--uninstall]"
       echo ""
       echo "  --cc-home <path>        Path to .claude directory."
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
@@ -90,9 +90,9 @@ while [ $# -gt 0 ]; do
       echo "                          Runs /nio doctor against the file and aborts the"
       echo "                          install if any probe fails. Existing config is"
       echo "                          saved as config.yaml.bak.<ISO-stamp>. Mutually"
-      echo "                          exclusive with --reset-config. \$NIO_CONFIG env"
-      echo "                          var is honoured as a fallback."
-      echo "  --reset-config          Overwrite existing nio config with defaults."
+      echo "                          exclusive with --reset-to-defaults. \$NIO_CONFIG"
+      echo "                          env var is honoured as a fallback."
+      echo "  --reset-to-defaults     Overwrite existing nio config with bundled defaults."
       echo "  --uninstall             Remove the plugin and config."
       echo ""
       echo "  INSTALL_ALL=1           Force install for all platforms (env var)."

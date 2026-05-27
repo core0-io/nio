@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall|uninstall)
       UNINSTALL=1; shift ;;
-    --reset-config)
+    --reset-to-defaults)
       RESET_CONFIG=1; shift ;;
     --cc-home)
       CC_HOME_ARG="${2:-}"; shift 2 ;;
@@ -29,17 +29,17 @@ while [ $# -gt 0 ]; do
     --config=*)
       CONFIG_FILE_ARG="${1#*=}"; shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--config <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--config <path>] [--reset-to-defaults] [--uninstall]"
       echo ""
-      echo "  --cc-home <path>  Path to .claude directory."
-      echo "                    Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
-      echo "  --config <path>   Apply an operator-provided ~/.nio/config.yaml. Runs"
-      echo "                    /nio doctor against the file and aborts the install"
-      echo "                    if any probe fails. Existing config is saved as"
-      echo "                    config.yaml.bak.<ISO-stamp>. Mutually exclusive with"
-      echo "                    --reset-config. \$NIO_CONFIG env var is honoured as a"
-      echo "                    fallback when --config is not given."
-      echo "  --reset-config    Overwrite existing nio config with defaults."
+      echo "  --cc-home <path>      Path to .claude directory."
+      echo "                        Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
+      echo "  --config <path>       Apply an operator-provided ~/.nio/config.yaml. Runs"
+      echo "                        /nio doctor against the file and aborts the install"
+      echo "                        if any probe fails. Existing config is saved as"
+      echo "                        config.yaml.bak.<ISO-stamp>. Mutually exclusive with"
+      echo "                        --reset-to-defaults. \$NIO_CONFIG env var is honoured"
+      echo "                        as a fallback when --config is not given."
+      echo "  --reset-to-defaults   Overwrite existing nio config with bundled defaults."
       echo "  --uninstall       Remove the plugin and config."
       exit 0 ;;
     *)
@@ -61,7 +61,7 @@ if [ -n "$NIO_CONFIG" ]; then
 fi
 
 if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
-  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  echo "  ERROR: --config and --reset-to-defaults are mutually exclusive." >&2
   exit 1
 fi
 if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then

@@ -21,12 +21,12 @@ Nio installer — see ${DOCS_URL}
 Args:
   --platform NAME       claude-code | codex | openclaw | hermes (repeatable)
   --uninstall           uninstall instead of install
-  --reset-config        reset ~/.nio/config.yaml to defaults
+  --reset-to-defaults   reset ~/.nio/config.yaml to bundled defaults
   --config PATH         apply an operator ~/.nio/config.yaml (runs /nio doctor;
                         aborts install if any probe fails; previous file kept
                         as config.yaml.bak.<ISO-stamp>). Resolved to absolute
                         path here so the extracted setup.sh finds it from any
-                        cwd. Mutually exclusive with --reset-config.
+                        cwd. Mutually exclusive with --reset-to-defaults.
   --cc-home PATH        passed through to claude-code setup.sh
   --codex-home PATH     passed through to codex setup.sh
   --openclaw-home PATH  passed through to openclaw setup.sh
@@ -56,7 +56,7 @@ while [ $# -gt 0 ]; do
       PLATFORM_ARGS+=("${1#*=}"); shift ;;
     --uninstall)
       UNINSTALL=1; shift ;;
-    --reset-config)
+    --reset-to-defaults)
       PASS_THROUGH+=("$1"); shift ;;
     --config)
       [ $# -ge 2 ] || die "--config requires a path"

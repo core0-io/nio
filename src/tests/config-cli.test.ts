@@ -154,3 +154,44 @@ describe('config-cli import', () => {
   // branch at the spawned-process level. The dispatcher path is the source
   // of truth — and it's tested.
 });
+
+// ── Setup-script flag rename: --reset-config → --reset-to-defaults ──────
+//
+// One representative plugin setup (claude-code) — all four follow the
+// same pattern, so a single sanity check is enough. We exercise --help
+// and --reset-config to verify the old name is fully gone (errors as
+// unknown option) and the new name is documented.
+
+const REPO_ROOT = join(HERE, '..', '..');
+const CC_SETUP = join(REPO_ROOT, 'plugins', 'claude-code', 'setup.sh');
+
+function runSetup(args: string[]): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const proc = spawn('bash', [CC_SETUP, ...args], {
+      env: { ...process.env, NIO_HOME: nioHome },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+    proc.on('close', (code) => resolve({ stdout, stderr, code }));
+    proc.stdin.end();
+  });
+}
+
+describe('setup.sh --reset-to-defaults rename', () => {
+  it('--help advertises --reset-to-defaults and not --reset-config', async () => {
+    const { stdout, code } = await runSetup(['--help']);
+    assert.equal(code, 0);
+    assert.match(stdout, /--reset-to-defaults/);
+    assert.doesNotMatch(stdout, /--reset-config\b/);
+  });
+
+  it('old --reset-config name is rejected as Unknown option', async () => {
+    const { stderr, stdout, code } = await runSetup(['--reset-config']);
+    assert.notEqual(code, 0);
+    // The error goes via stdout in the existing setup.sh pattern.
+    assert.match(stdout + stderr, /Unknown option:\s*--reset-config/);
+  });
+});

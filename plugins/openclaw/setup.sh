@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --uninstall|uninstall)
       UNINSTALL=1; shift ;;
-    --reset-config)
+    --reset-to-defaults)
       RESET_CONFIG=1; shift ;;
     --openclaw-home)
       OPENCLAW_HOME_ARG="${2:-}"; shift 2 ;;
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --config=*)
       CONFIG_FILE_ARG="${1#*=}"; shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--openclaw-home <path>] [--config <path>] [--reset-config] [--uninstall]"
+      echo "Usage: $(basename "$0") [--openclaw-home <path>] [--config <path>] [--reset-to-defaults] [--uninstall]"
       echo ""
       echo "  --openclaw-home <path>  Path to .openclaw directory."
       echo "                          Defaults to \$OPENCLAW_STATE_DIR, then \$HOME/.openclaw."
@@ -37,9 +37,9 @@ while [ $# -gt 0 ]; do
       echo "                          Runs /nio doctor against the file and aborts the"
       echo "                          install if any probe fails. Existing config is"
       echo "                          saved as config.yaml.bak.<ISO-stamp>. Mutually"
-      echo "                          exclusive with --reset-config. \$NIO_CONFIG env var"
-      echo "                          is honoured as a fallback."
-      echo "  --reset-config          Overwrite existing nio config with defaults."
+      echo "                          exclusive with --reset-to-defaults. \$NIO_CONFIG"
+      echo "                          env var is honoured as a fallback."
+      echo "  --reset-to-defaults     Overwrite existing nio config with bundled defaults."
       echo "  --uninstall             Remove the plugin and config."
       exit 0 ;;
     *)
@@ -61,7 +61,7 @@ if [ -n "$NIO_CONFIG" ]; then
 fi
 
 if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
-  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  echo "  ERROR: --config and --reset-to-defaults are mutually exclusive." >&2
   exit 1
 fi
 if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then

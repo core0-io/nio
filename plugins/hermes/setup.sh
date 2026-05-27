@@ -12,7 +12,8 @@
 #   bash plugins/hermes/setup.sh --accept-hooks   # also pre-approve in Hermes's
 #                                                 # allowlist (so the hook fires
 #                                                 # immediately, non-interactive)
-#   bash plugins/hermes/setup.sh --reset-config   # overwrite ~/.nio/config.yaml
+#   bash plugins/hermes/setup.sh --reset-to-defaults
+#                                                 # overwrite ~/.nio/config.yaml
 #                                                 # with the bundled defaults
 #                                                 # (Nio runtime config; does
 #                                                 # not touch ~/.hermes/config.yaml)
@@ -20,7 +21,7 @@
 #                                                 # /nio doctor first and aborts
 #                                                 # the install if any probe
 #                                                 # fails. Mutually exclusive
-#                                                 # with --reset-config.
+#                                                 # with --reset-to-defaults.
 #   bash plugins/hermes/setup.sh --uninstall      # remove the Nio entry
 #
 # Environment:
@@ -66,10 +67,10 @@ else
 fi
 HOOK_CLI="$HOOK_CLI_REGISTERED"   # back-compat alias for any later use
 
-# Partition args: `--accept-hooks` and `--reset-config` are ours (handled
+# Partition args: `--accept-hooks` and `--reset-to-defaults` are ours (handled
 # locally below); everything else is forwarded to install-hook.py verbatim.
-# `--reset-config` resets the Nio runtime config at ~/.nio/config.yaml — it
-# has nothing to do with Hermes's own ~/.hermes/config.yaml hook entries,
+# `--reset-to-defaults` resets the Nio runtime config at ~/.nio/config.yaml —
+# it has nothing to do with Hermes's own ~/.hermes/config.yaml hook entries,
 # so it must NOT be forwarded to install-hook.py (which rejects it).
 ACCEPT_HOOKS=0
 DRY_RUN=0
@@ -84,7 +85,7 @@ while [ $i -le $# ]; do
   case "$arg" in
     --accept-hooks|--approve)
       ACCEPT_HOOKS=1; i=$((i+1)) ;;
-    --reset-config)
+    --reset-to-defaults)
       RESET_CONFIG=1; i=$((i+1)) ;;
     --config)
       CONFIG_FILE_ARG="${all_args[$i]:-}"; i=$((i+2)) ;;
@@ -113,7 +114,7 @@ if [ -n "$NIO_CONFIG" ]; then
 fi
 
 if [ "$RESET_CONFIG" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
-  echo "  ERROR: --config and --reset-config are mutually exclusive." >&2
+  echo "  ERROR: --config and --reset-to-defaults are mutually exclusive." >&2
   exit 1
 fi
 if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
@@ -357,10 +358,10 @@ fi
 
 # ── Nio runtime config (~/.nio/config.yaml) ─────────────────────────────
 # Same behaviour as the Claude Code + OpenClaw plugin setup scripts:
-# - --config <path>:  doctor-gated import of an operator-provided file
-# - --reset-config:   copy bundled defaults
-# - first install:    copy bundled defaults
-# - otherwise:        leave the existing config alone
+# - --config <path>:     doctor-gated import of an operator-provided file
+# - --reset-to-defaults: copy bundled defaults
+# - first install:       copy bundled defaults
+# - otherwise:           leave the existing config alone
 # Independent of the Hermes hook merge above.
 if [ "$DRY_RUN" -eq 0 ] && [ "$UNINSTALL" -eq 0 ]; then
   mkdir -p "$NIO_DIR"

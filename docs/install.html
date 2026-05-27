@@ -162,8 +162,8 @@
               <p>The <code>--config</code> argument is a path on your machine — not a URL. Download the file first. The path is resolved to absolute at the top of <code>install.sh</code> so the extracted <code>setup.sh</code> (running from <code>/tmp/nio-install-XXXXXX/</code>) can still find it.</p>
             </div>
             <div class="callout">
-              <div class="title">Mutually exclusive with <code>--reset-config</code></div>
-              <p>You can't use <code>--config &lt;path&gt;</code> and <code>--reset-config</code> in the same invocation — operationally that would mean "wipe the config then immediately overwrite it from the file," which is just <code>--config</code>. setup.sh refuses the combination and exits non-zero.</p>
+              <div class="title">Mutually exclusive with <code>--reset-to-defaults</code></div>
+              <p>You can't use <code>--config &lt;path&gt;</code> and <code>--reset-to-defaults</code> in the same invocation — operationally that would mean "wipe the config then immediately overwrite it from the file," which is just <code>--config</code>. setup.sh refuses the combination and exits non-zero.</p>
             </div>
           </section>
 
@@ -282,14 +282,14 @@
           <pre><code id="cmd-up">NIO_VERSION=v2.3.0 bash -c "$(curl -fsSL https://core0-io.github.io/nio/install.sh)"</code></pre>
           <button class="copy-btn" type="button" data-target="cmd-up" aria-label="Copy command">Copy</button>
         </div>
-        <p>After a release that changed the config schema, append <code>--reset-config</code> to overwrite <code>~/.nio/config.yaml</code> with the new bundled template:</p>
+        <p>After a release that changed the config schema, append <code>--reset-to-defaults</code> to overwrite <code>~/.nio/config.yaml</code> with the new bundled template:</p>
         <div class="code-block">
-          <pre><code id="cmd-up-reset">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-config</code></pre>
+          <pre><code id="cmd-up-reset">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --reset-to-defaults</code></pre>
           <button class="copy-btn" type="button" data-target="cmd-up-reset" aria-label="Copy command">Copy</button>
         </div>
         <div class="callout warn">
-          <div class="title">Heads up — <code>--reset-config</code> wipes your customisations</div>
-          <p><code>--reset-config</code> replaces your existing <code>config.yaml</code> with the upgraded template, so any tuned fields (allowed commands, permitted tools, collector endpoint, scoring weights, …) are gone and have to be reapplied on top of the new defaults. Back the file up first if you're not sure what you customised: <code>cp ~/.nio/config.yaml ~/.nio/config.yaml.bak</code>.</p>
+          <div class="title">Heads up — <code>--reset-to-defaults</code> wipes your customisations</div>
+          <p><code>--reset-to-defaults</code> replaces your existing <code>config.yaml</code> with the upgraded template, so any tuned fields (allowed commands, permitted tools, collector endpoint, scoring weights, …) are gone and have to be reapplied on top of the new defaults. Back the file up first if you're not sure what you customised: <code>cp ~/.nio/config.yaml ~/.nio/config.yaml.bak</code>.</p>
         </div>
         <p>To roll a new operator-tuned config in the same upgrade step, pass <code>--config /path/to/new.yaml</code> instead — the previous file is automatically preserved as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code> and the install aborts if <code>/nio doctor</code> flags any issue:</p>
         <div class="code-block">
@@ -310,7 +310,7 @@
           <pre><code id="cmd-cust">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code --cc-home /path/to/.claude</code></pre>
           <button class="copy-btn" type="button" data-target="cmd-cust" aria-label="Copy command">Copy</button>
         </div>
-        <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>, <code>--config &lt;path&gt;</code>, <code>--reset-config</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>). See <a href="#shared-config">Onboarding with a shared config</a> above for what <code>--config</code> does.</p>
+        <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>, <code>--config &lt;path&gt;</code>, <code>--reset-to-defaults</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>). See <a href="#shared-config">Onboarding with a shared config</a> above for what <code>--config</code> does.</p>
 
         <h2>Manual install or from source</h2>
         <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, extract it (<code>unzip</code>, or <code>python3 -m zipfile -e</code> if <code>unzip</code> isn't installed), then <code>cd</code> into the directory and run <code>./setup.sh</code> — or <code>./setup.sh --config /path/to/nio.yaml</code> to apply an operator-provided config in the same step (doctor-gated). To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#development">Development</a> section in the README.</p>
