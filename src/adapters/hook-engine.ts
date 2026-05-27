@@ -271,13 +271,20 @@ export async function evaluateHook(
 ): Promise<HookOutput> {
   const input = adapter.parseInput(rawInput);
 
+  // Resolve telemetry identity: user-configured `agent_name` overrides
+  // the platform-derived default. Empty/unset → fall back to platform
+  // (preserves today's behaviour where gen_ai.agent.name = platform).
+  const agentName = options.config.agent_name && options.config.agent_name.length > 0
+    ? options.config.agent_name
+    : undefined;
+
   // Phase 0: Tool-level gate
   const t0 = performance.now();
   const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name, options.mcpRegistry);
   const t0End = performance.now();
   if (toolGate) {
     const skill = await adapter.inferInitiatingSkill(input);
-    const entry = buildGuardAuditEntry(input, null, skill, adapter.name);
+    const entry = buildGuardAuditEntry(input, null, skill, adapter.name, undefined, agentName);
     entry.decision = 'deny';
     entry.risk_level = 'critical';
     entry.risk_score = 1.0;
@@ -322,14 +329,14 @@ export async function evaluateHook(
     const rd: ActionDecision = await options.nio.orchestrator.evaluate(envelope, level);
 
     const entry = buildGuardAuditEntry(
-      input, rd, initiatingSkill, adapter.name, envelope.action.type,
+      input, rd, initiatingSkill, adapter.name, envelope.action.type, agentName,
     );
     writeAuditLog(entry, auditOpts);
 
     return runtimeDecisionToHookOutput(rd, initiatingSkill);
   } catch {
     // Engine error → fail open
-    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name);
+    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, undefined, agentName);
     entry.decision = 'error';
     entry.risk_tags = ['ENGINE_ERROR'];
     writeAuditLog(entry, auditOpts);

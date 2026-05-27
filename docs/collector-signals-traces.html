@@ -61,7 +61,7 @@
             <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>invoke_agent</code></td><td>turn close</td><td>all</td></tr>
             <tr><td><code>gen_ai.provider.name</code></td><td>Constant <code>nio</code></td><td>turn close</td><td>all</td></tr>
             <tr><td><code>gen_ai.conversation.id</code></td><td>Host session ID</td><td>turn close</td><td>all</td></tr>
-            <tr><td><code>gen_ai.agent.name</code></td><td>Platform name acting as agent identifier</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.agent.name</code></td><td>User-configured <a href="configuration.html#agent_name"><code>agent_name</code></a>; falls back to platform when unset</td><td>turn close</td><td>all</td></tr>
             <tr><td><code>session.id</code></td><td>Mirror of <code>gen_ai.conversation.id</code> for OTel base-spec consumers</td><td>turn close</td><td>all</td></tr>
             <tr><td><code>gen_ai.usage.input_tokens</code></td><td>Input tokens consumed across the turn</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
             <tr><td><code>gen_ai.usage.output_tokens</code></td><td>Output tokens generated across the turn</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>

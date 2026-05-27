@@ -127,6 +127,12 @@ export function registerOpenClawPlugin(
   const adapter = new OpenClawAdapter({ nativeToolMapping: guard?.native_tool_mapping?.openclaw });
   const confirmAction = guard?.confirm_action ?? 'allow';
 
+  // Telemetry identity (alias). Falls back to platform when unset/empty so
+  // gen_ai.agent.name matches today's behaviour for unconfigured users.
+  const agentName = (config.agent_name && config.agent_name.length > 0)
+    ? config.agent_name
+    : 'openclaw';
+
   const collectorConfig = loadCollectorConfig();
   const tracerProvider = createTracerProvider(collectorConfig);
   const meterProvider = createMeterProvider(collectorConfig);
@@ -443,7 +449,7 @@ export function registerOpenClawPlugin(
       state = r.state;
     }
 
-    await endTurn(tracerProvider, state, 'openclaw', process.cwd());
+    await endTurn(tracerProvider, state, 'openclaw', agentName, process.cwd());
     sessionState.delete(sessionId);
     pendingGuardAttrs.forEach((_, k) => { if (k.startsWith(`${sessionId}:`)) pendingGuardAttrs.delete(k); });
     await tracerProvider.forceFlush();

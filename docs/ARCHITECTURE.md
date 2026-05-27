@@ -657,7 +657,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `gen_ai.operation.name` | Constant: `invoke_agent` |
 | `gen_ai.provider.name` | Constant: `nio` |
 | `gen_ai.conversation.id` | Hook stdin `session_id` |
-| `gen_ai.agent.name` | Same value as `nio.platform` (acts as the agent identifier) |
+| `gen_ai.agent.name` | User-configured top-level `agent_name` from `~/.nio/config.yaml`; falls back to `nio.platform` when unset. See [Configuration → agent_name](configuration.html#agent_name). |
 | `session.id` | Hook stdin `session_id` (mirror of `gen_ai.conversation.id` for OTel base-spec consumers) |
 | `gen_ai.usage.input_tokens` | Sum of API call input tokens for this turn |
 | `gen_ai.usage.output_tokens` | Sum of API call output tokens for this turn |

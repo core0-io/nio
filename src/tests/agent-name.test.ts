@@ -1,0 +1,116 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * agent_name config field — telemetry-identity override coverage.
+ *
+ * Verifies the four observable contracts:
+ *   1. NioConfigSchema accepts top-level agent_name
+ *   2. genAiInvokeAgentAttributes emits gen_ai.agent.name = agentName
+ *   3. auditEntryAttributes emits gen_ai.agent.name only when entry carries it
+ *   4. buildGuardAuditEntry writes agent_name only when given
+ *
+ * The full end-to-end (config → dispatch → real span) is covered by
+ * the dispatchCollectorEvent path; here we cover the seams.
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { NioConfigSchema } from '../adapters/config-schema.js';
+import { genAiInvokeAgentAttributes } from '../scripts/lib/traces-collector.js';
+import { auditEntryAttributes } from '../scripts/lib/logs-collector.js';
+import { buildGuardAuditEntry } from '../adapters/common.js';
+import type { HookInput } from '../adapters/types.js';
+
+// ── 1. Schema acceptance ────────────────────────────────────────────────
+
+describe('NioConfigSchema.agent_name', () => {
+  it('accepts a top-level string', () => {
+    const parsed = NioConfigSchema.parse({ agent_name: 'alice-laptop' });
+    assert.equal(parsed.agent_name, 'alice-laptop');
+  });
+
+  it('is optional (no error when omitted)', () => {
+    const parsed = NioConfigSchema.parse({});
+    assert.equal(parsed.agent_name, undefined);
+  });
+
+  it('rejects non-string values', () => {
+    assert.throws(() => NioConfigSchema.parse({ agent_name: 42 }));
+  });
+});
+
+// ── 2. genAiInvokeAgentAttributes — span attribute ──────────────────────
+
+describe('genAiInvokeAgentAttributes', () => {
+  it('emits gen_ai.agent.name = agentName (no longer derived from platform)', () => {
+    const attrs = genAiInvokeAgentAttributes('sess-xyz', 'alice-laptop');
+    assert.equal(attrs['gen_ai.agent.name'], 'alice-laptop');
+    assert.equal(attrs['gen_ai.conversation.id'], 'sess-xyz');
+    assert.equal(attrs['session.id'], 'sess-xyz');
+  });
+
+  it('passes through extra attributes', () => {
+    const attrs = genAiInvokeAgentAttributes('sess-1', 'agent-a', { 'nio.custom': 1 });
+    assert.equal(attrs['nio.custom'], 1);
+    assert.equal(attrs['gen_ai.agent.name'], 'agent-a');
+  });
+});
+
+// ── 3. auditEntryAttributes — OTEL log attribute ────────────────────────
+
+describe('auditEntryAttributes', () => {
+  const baseEntry = {
+    event: 'guard',
+    platform: 'claude-code',
+    session_id: 'sess-1',
+  };
+
+  it('emits gen_ai.agent.name when entry.agent_name is set', () => {
+    const attrs = auditEntryAttributes({ ...baseEntry, agent_name: 'alice-laptop' });
+    assert.equal(attrs['gen_ai.agent.name'], 'alice-laptop');
+    assert.equal(attrs['nio.platform'], 'claude-code');
+  });
+
+  it('omits gen_ai.agent.name when agent_name is empty', () => {
+    const attrs = auditEntryAttributes({ ...baseEntry, agent_name: '' });
+    assert.equal(attrs['gen_ai.agent.name'], undefined);
+    assert.equal(attrs['nio.platform'], 'claude-code');
+  });
+
+  it('omits gen_ai.agent.name when agent_name is absent', () => {
+    const attrs = auditEntryAttributes(baseEntry);
+    assert.equal(attrs['gen_ai.agent.name'], undefined);
+    assert.equal(attrs['nio.platform'], 'claude-code');
+  });
+});
+
+// ── 4. buildGuardAuditEntry — JSONL audit-log shape ─────────────────────
+
+describe('buildGuardAuditEntry agent_name handling', () => {
+  const input: HookInput = {
+    toolName: 'Bash',
+    toolInput: { command: 'ls /tmp' },
+    sessionId: 'sess-1',
+    eventType: 'pre',
+    raw: {},
+  } as unknown as HookInput;
+
+  it('includes agent_name field when provided', () => {
+    const entry = buildGuardAuditEntry(input, null, null, 'claude-code', undefined, 'alice-laptop');
+    assert.equal(entry.platform, 'claude-code');
+    assert.equal(entry.agent_name, 'alice-laptop');
+  });
+
+  it('omits agent_name field when not provided (back-compat)', () => {
+    const entry = buildGuardAuditEntry(input, null, null, 'claude-code');
+    assert.equal(entry.platform, 'claude-code');
+    assert.equal(entry.agent_name, undefined);
+  });
+
+  it('omits agent_name when given an empty string', () => {
+    const entry = buildGuardAuditEntry(input, null, null, 'claude-code', undefined, '');
+    assert.equal(entry.agent_name, undefined);
+  });
+});

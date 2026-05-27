@@ -50,6 +50,7 @@ export interface AuditGuardEntry {
   event: 'guard';
   timestamp: string;
   platform: string;
+  agent_name?: string;
   session_id?: string;
   cwd?: string;
 
@@ -87,6 +88,7 @@ export interface AuditScanEntry {
   event: 'session_scan';
   timestamp: string;
   platform: string;
+  agent_name?: string;
   session_id?: string;
   skill_name: string;
   risk_level: string;
@@ -100,6 +102,7 @@ export interface AuditLifecycleEntry {
   event: 'lifecycle';
   timestamp: string;
   platform: string;
+  agent_name?: string;
   session_id?: string;
   lifecycle_type:
     | 'subagent_spawning'
@@ -169,6 +172,7 @@ export interface AuditHookEntry {
   event: HookEventName;
   timestamp: string;
   platform: string;
+  agent_name?: string;
   session_id?: string;
   cwd?: string | null;
   transcript_path?: string;

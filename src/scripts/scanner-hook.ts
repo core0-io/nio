@@ -23,7 +23,7 @@ import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { loadCollectorConfig } from './lib/config-loader.js';
+import { loadCollectorConfig, loadAgentName } from './lib/config-loader.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { createNio, ScanCache } from '../index.js';
 import { loadConfig, writeAuditLog } from '../adapters/index.js';
@@ -51,6 +51,7 @@ function getArg(name: string): string | undefined {
   return argv[idx + 1];
 }
 const PLATFORM = getArg('platform') ?? 'claude-code';
+const AGENT_NAME = loadAgentName();   // empty when unset/empty
 
 // ---------------------------------------------------------------------------
 // Config
@@ -198,6 +199,7 @@ async function main(): Promise<void> {
         event: 'session_scan',
         timestamp: new Date().toISOString(),
         platform: PLATFORM,
+        ...(AGENT_NAME ? { agent_name: AGENT_NAME } : {}),
         skill_name: skill.name,
         risk_level: result.risk_level,
         risk_tags: result.risk_tags,

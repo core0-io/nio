@@ -117,6 +117,18 @@ export function loadCollectorConfig(): CollectorConfig {
   };
 }
 
+/**
+ * Read the optional top-level `agent_name` field from ~/.nio/config.yaml.
+ * Returns empty string when unset / empty / wrong-type so callers can
+ * cheaply do `agentName || platform` to fall back. Hook scripts use this
+ * lightweight loader to avoid importing the full validateConfig graph.
+ */
+export function loadAgentName(): string {
+  const raw = readRawConfig();
+  const value = raw['agent_name'];
+  return (typeof value === 'string' && value.length > 0) ? value : '';
+}
+
 export function loadLogsConfig(): LogsConfig {
   const raw = readRawConfig();
 

@@ -85,6 +85,12 @@ export interface DispatchOptions {
   input: HookStdinPayload;
   /** Platform tag for span/metric attributes ('claude-code' / 'hermes' / 'openclaw'). */
   platform: string;
+  /**
+   * User-configured telemetry identity (from `agent_name` in ~/.nio/config.yaml).
+   * Lands as `gen_ai.agent.name` on traces + log records, and as `agent_name`
+   * on audit-log entries. Empty string / undefined means "fall back to platform".
+   */
+  agentName?: string;
   config: CollectorConfig;
   meterProvider: MeterProvider | null;
   tracerProvider: NodeTracerProvider | null;
@@ -166,10 +172,14 @@ function isKnownHookEvent(event: string): event is HookEventName {
  */
 export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<void> {
   const {
-    event, input, platform,
+    event, input, platform, agentName,
     meterProvider, tracerProvider,
     loggerProvider = null, logsConfig,
   } = opts;
+
+  // Resolved telemetry identity. Falls back to platform when agentName is
+  // unset / empty so existing behaviour is preserved.
+  const resolvedAgentName = (agentName && agentName.length > 0) ? agentName : platform;
 
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
@@ -179,10 +189,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   const auditOpts = { loggerProvider, logsConfig };
 
   // Shared base fields for every audit entry shape. Branches augment with
-  // event-specific fields (task_id/task_summary, …) before writing.
+  // event-specific fields (task_id/task_summary, …) before writing. We
+  // include agent_name on the entry only when the user configured an alias
+  // (distinct from platform) — the fallback-to-platform case keeps the
+  // entry shape minimal for unconfigured users.
   const baseFields: Omit<AuditHookEntry, 'event'> = {
     timestamp: new Date().toISOString(),
     platform,
+    ...(agentName && agentName.length > 0 ? { agent_name: agentName } : {}),
     session_id: sessionId,
     cwd,
     ...(transcriptPath ? { transcript_path: transcriptPath } : {}),
@@ -299,7 +313,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
         if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, platform, cwd, transcriptPath);
+          const next = await endTurn(tracerProvider, state, platform, resolvedAgentName, cwd, transcriptPath);
           if (next) saveState(logsConfig, next);
         }
       }

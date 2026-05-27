@@ -81,6 +81,7 @@ export interface NioInstance {
  */
 export interface EngineOptions {
   config: {
+    agent_name?: string;
     guard?: {
       protection_level?: string;
       permitted_tools?: Record<string, string[]>;

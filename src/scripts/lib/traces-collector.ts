@@ -71,10 +71,9 @@ export const GEN_AI_PROVIDER_NAME = 'nio';
 
 export function genAiInvokeAgentAttributes(
   sessionId: string,
-  platform: string,
+  agentName: string,
   extra?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const agentName = platform;
   return {
     'gen_ai.operation.name': 'invoke_agent',
     'gen_ai.provider.name': GEN_AI_PROVIDER_NAME,
@@ -565,6 +564,7 @@ export async function endTurn(
   provider: NodeTracerProvider,
   state: CollectorState,
   platform: string,
+  agentName: string,
   cwd: string | null,
   transcriptPath?: string | null,
 ): Promise<CollectorState | null> {
@@ -604,7 +604,7 @@ export async function endTurn(
     {
       startTime: state.turn_start_ms,
       attributes: {
-        ...genAiInvokeAgentAttributes(state.session_id, platform),
+        ...genAiInvokeAgentAttributes(state.session_id, agentName),
         'nio.turn_number': state.turn_number,
         'nio.platform': platform,
         ...(cwd ? { 'nio.cwd': cwd } : {}),

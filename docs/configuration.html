@@ -57,6 +57,15 @@
         <p>You can edit the file directly or use <code>/nio config &lt;level&gt;</code> to change the protection level without opening an editor.</p>
         <p>To apply an operator-provided config in one shot, run <code>/nio config import &lt;path&gt;</code>. nio runs <a href="skill.html#doctor"><code>/nio doctor</code></a> against the incoming YAML first and refuses to overwrite if any probe fails; on success the previous file is preserved as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code>.</p>
 
+        <h2>Top-level</h2>
+
+        <h3 id="agent_name"><code>agent_name</code></h3>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code> · <strong>Scope:</strong> telemetry only</p>
+        <p>User-provided telemetry identity (alias). When non-empty, it overrides the platform-derived value on <code>gen_ai.agent.name</code> in <strong>traces</strong> and <strong>log records</strong>, and lands as the <code>agent_name</code> field in <code>~/.nio/audit.jsonl</code>. Use it to split telemetry by deployment / machine / user when multiple installations share one collector backend ("alice-laptop", "ci-runner-3", "prod-scoring-east").</p>
+        <p>The <code>nio.platform</code> dimension is <em>not</em> overridden — backends still see both axes (<code>nio.platform</code> = the underlying CLI host like <code>claude-code</code>, <code>gen_ai.agent.name</code> = the operator's alias). When empty / unset, behaviour is identical to today: <code>gen_ai.agent.name</code> falls back to platform.</p>
+        <p><strong>Not emitted on metrics</strong> — keeping per-deployment slicing out of metric labels avoids ballooning the backend's cardinality budget; query <code>nio.platform</code> for host-level metric slicing.</p>
+        <pre><code>agent_name: "alice-laptop"</code></pre>
+
         <h2>guard</h2>
 
         <h3 id="guard.protection_level"><code>guard.protection_level</code></h3>

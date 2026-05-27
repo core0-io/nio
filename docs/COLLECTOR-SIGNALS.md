@@ -95,6 +95,8 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 | `nio.decision.count` | `nio.guard.decision` · `nio.guard.risk_level` · `gen_ai.tool.name` · `nio.platform` |
 | `nio.risk.score` | `gen_ai.tool.name` · `nio.platform` |
 
+**Note — `agent_name` deliberately not a metric label.** The user-configured [`agent_name`](configuration.html#agent_name) lands on traces (`gen_ai.agent.name`) and on audit-log records (`agent_name` field), but **not** on metrics. Adding it as a metric label would multiply every series by the number of distinct agent names and inflate the backend's cardinality budget. Use `nio.platform` for host-level metric slicing; query the trace / log layer if you need to attribute metrics back to a specific deployment.
+
 > **Claude Code · Task → Agent**
 >
 > The user-facing **Task** tool (subagent dispatch) is reported as `tool_name="Agent"` in Claude Code hook payloads, so PreToolUse / PostToolUse counters use `Agent` as the `gen_ai.tool.name` label. The literal value `Task` only appears as a counter label when `TaskCreated` / `TaskCompleted` fire (Teammates / cloud-agent flows; never fired by the regular Task tool subagent on current Claude Code builds — see [`e2e-test/hook-subagent-e2e-task.md`](../e2e-test/hook-subagent-e2e-task.md)). OpenClaw and Hermes use their own native tool names.
@@ -123,7 +125,7 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `gen_ai.operation.name` | Constant `invoke_agent` | turn close | all |
 | `gen_ai.provider.name` | Constant `nio` | turn close | all |
 | `gen_ai.conversation.id` | Host session ID | turn close | all |
-| `gen_ai.agent.name` | Platform name acting as agent identifier | turn close | all |
+| `gen_ai.agent.name` | User-configured [`agent_name`](configuration.html#agent_name) from `~/.nio/config.yaml`; falls back to platform when unset | turn close | all |
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | turn close | all |
 | `gen_ai.usage.input_tokens` | Input tokens consumed across the turn | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.output_tokens` | Output tokens generated across the turn | Stop · SubagentStop · SessionEnd | all |
@@ -202,6 +204,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | `event` | `"guard"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` |
+| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
 | `cwd` | string? | working dir |
 | `tool_name` | string | host tool name |
@@ -227,6 +230,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | `event` | `"session_scan"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
+| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
 | `skill_name` | string | scanned skill / dir |
 | `risk_level` | string | aggregated severity |
@@ -240,6 +244,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | `event` | `"lifecycle"` | discriminator |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
+| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
 | `lifecycle_type` | string | `subagent_spawning` / `subagent_ended` / `agent_end` / `session_start` / `session_end` |
 | `details` | `Record<string, unknown>?` | platform-specific (e.g. OpenClaw: `{subagent_id, run_id}`) |
@@ -262,6 +267,7 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 | `event` | `HookEventName` | one of the 9 above |
 | `timestamp` | string | ISO-8601 |
 | `platform` | string | host |
+| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
 | `cwd` | string \| null | working dir |
 | `transcript_path` | string? | Claude Code-only — path to session transcript JSONL |
@@ -292,6 +298,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `nio.task_id` | Task id from the dispatch event | TaskCreated · TaskCompleted | Claude Code + OpenClaw |
 | `nio.task_summary` | Derived from task input | TaskCreated | Claude Code + OpenClaw |
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | every audit entry | all |
+| `gen_ai.agent.name` | User-configured [`agent_name`](configuration.html#agent_name) from `~/.nio/config.yaml`; only emitted when set | every audit entry (when configured) | all |
 | `nio.cwd` | Working dir at hook fire | every audit entry with cwd | all |
 | `nio.event` | Discriminator — hook event name vs guard / lifecycle / scan / config_error | every audit entry | all |
 | `nio.event_type` | `pre` / `post` for guard entries | guard decision | all |

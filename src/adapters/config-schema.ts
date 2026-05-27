@@ -158,6 +158,7 @@ export type GuardConfig = z.infer<typeof GuardConfigSchema>;
 // ---------------------------------------------------------------------------
 
 export const NioConfigSchema = z.object({
+  agent_name: z.string().optional(),
   guard: GuardConfigSchema.optional(),
   collector: CollectorConfigSchema.optional(),
 });

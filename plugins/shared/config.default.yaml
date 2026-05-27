@@ -5,6 +5,16 @@
 # nio runs `/nio doctor` against the incoming config first; if any check
 # fails, your live ~/.nio/config.yaml is NOT modified. On success the old
 # file is preserved as config.yaml.bak.<ISO-stamp>.
+
+# Telemetry agent identity (alias). When set, replaces the platform-derived
+# `gen_ai.agent.name` attribute on emitted traces + log records, and lands
+# as a separate `agent_name` field in ~/.nio/audit.jsonl. The `nio.platform`
+# dimension stays untouched, so backends still see both axes (platform +
+# agent_name). Leave empty to keep the current behaviour where
+# gen_ai.agent.name = platform. Metrics intentionally do NOT carry this
+# attribute (cardinality budget).
+agent_name: ""
+
 guard:
   # Protection level: strict | balanced | permissive
   #   strict      — block all risky actions (deny + confirm)

@@ -275,11 +275,13 @@ export function buildGuardAuditEntry(
   initiatingSkill: string | null | undefined,
   platform: string | null | undefined,
   actionType?: string,
+  agentName?: string | null | undefined,
 ): AuditGuardEntry {
   const entry: AuditGuardEntry = {
     event: 'guard',
     timestamp: new Date().toISOString(),
     platform: platform || 'unknown',
+    ...(agentName && agentName.length > 0 ? { agent_name: agentName } : {}),
     tool_name: input.toolName,
     tool_input_summary: summariseToolInput(input),
     decision: rd?.decision || 'allow',

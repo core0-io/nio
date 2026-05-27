@@ -19,7 +19,7 @@ export {};
  * Always exits 0 — telemetry never blocks the agent.
  */
 
-import { loadCollectorConfig, loadLogsConfig } from './lib/config-loader.js';
+import { loadCollectorConfig, loadLogsConfig, loadAgentName } from './lib/config-loader.js';
 import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
@@ -39,6 +39,7 @@ function getArg(name: string): string | undefined {
   return argv[idx + 1];
 }
 const PLATFORM = getArg('platform') ?? 'claude-code';
+const AGENT_NAME = loadAgentName();   // empty string when unset/empty
 
 const config = loadCollectorConfig();
 const logsConfig = loadLogsConfig();
@@ -79,6 +80,7 @@ async function main(): Promise<void> {
     event: input.hook_event_name ?? '',
     input,
     platform: PLATFORM,
+    agentName: AGENT_NAME,
     config,
     meterProvider,
     tracerProvider,
