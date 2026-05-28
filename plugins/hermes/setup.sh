@@ -201,6 +201,12 @@ install_python_plugin() {
   # is exactly this destination. Doing it in the other order would leave
   # a brief window where Hermes points at a path that doesn't yet exist.
   cp -f "$HOOK_CLI_INSTALL"              "$PLUGIN_DST/scripts/hook-cli.js"
+  # The bundled CLIs are emitted as ESM (`import` at top) but with a `.js`
+  # extension; Node walks up to the nearest package.json to decide ESM vs
+  # CJS, so without this sentinel here it falls back to CJS and crashes
+  # with SyntaxError on first `import`. ~/.hermes/ has no parent
+  # package.json declaring "type": "module", so install one alongside.
+  cp -f "$SCRIPT_DIR/scripts/package.json" "$PLUGIN_DST/scripts/package.json"
   echo "[nio-hermes] Installed /nio Python plugin → $PLUGIN_DST"
 
   # Hermes user plugins are opt-in: discover_and_load() only loads names
