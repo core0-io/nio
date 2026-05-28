@@ -56,7 +56,7 @@ import {
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
 } from './traces-collector.js';
-import { loadState, saveState } from './traces-state-store.js';
+import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -140,9 +140,45 @@ export function toolSummary(toolName: string, toolInput: Record<string, unknown>
   }
 }
 
-/** Stable per-tool-call key. Prefers tool_use_id when supplied. */
+/** Stable per-tool-call key. Prefers tool_use_id when supplied;
+ * otherwise falls back to a DETERMINISTIC composite of
+ * `tool_name + tool_summary` so the PRE and POST sides can compute
+ * the same key without sharing identifiers. Hermes's pre_tool_call
+ * shell-hook payload doesn't include tool_call_id (see
+ * agent/agent_runtime_helpers.py invoke_tool() — it passes only
+ * task_id to get_pre_tool_call_block_message), while post_tool_call
+ * does include it. With the old `Date.now()` fallback, every
+ * Hermes pre/post pair ended up under different keys and no
+ * execute_tool span ever reached OTLP for the allow path.
+ *
+ * Composite fallback risk: two SIMULTANEOUS calls of the same tool
+ * with identical args would collide on the same key (second pre
+ * overwrites first; first post closes second pre's pending). Worth
+ * the trade-off since Hermes tool calls in a single session run
+ * serially, and tool_use_id-bearing platforms (Claude Code,
+ * OpenClaw, Codex) bypass this branch entirely. */
 export function spanKey(input: HookStdinPayload): string {
-  return input.tool_use_id || `${input.tool_name ?? 'unknown'}:${Date.now()}`;
+  if (input.tool_use_id) return input.tool_use_id;
+  const name = input.tool_name ?? 'unknown';
+  const summary = toolSummary(name, input.tool_input ?? {});
+  return `${name}:${summary}`;
+}
+
+/** Resolve the actual key that has a pending entry — primary spanKey
+ * first, composite-fallback second. Handles the Hermes asymmetry
+ * where pre's tool_use_id is empty (composite key saved) but post
+ * has the real tool_use_id (would generate a tool_use_id-based key
+ * that misses the composite entry). */
+function resolveSpanKey(
+  state: CollectorState,
+  input: HookStdinPayload,
+): string {
+  const primary = spanKey(input);
+  if (state.pending_spans[primary]) return primary;
+  const name = input.tool_name ?? 'unknown';
+  const fallback = `${name}:${toolSummary(name, input.tool_input ?? {})}`;
+  if (state.pending_spans[fallback]) return fallback;
+  return primary;
 }
 
 const KNOWN_HOOK_EVENTS: ReadonlySet<HookEventName> = new Set<HookEventName>([
@@ -242,11 +278,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     } else if (event === 'PostToolUse') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      const key = spanKey(input);
-
       if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
+        // Resolve the pending entry's key with composite-fallback. Hermes's
+        // pre_tool_call hook doesn't carry tool_call_id while post_tool_call
+        // does, so pre saved under `${tool_name}:${tool_summary}` while
+        // post would by default look up by tool_use_id and miss.
+        const key = resolveSpanKey(state, input);
         // Drain guard attrs parked by the PreToolUse-side guard process
         // (separate Node process on Claude Code / Codex). Merged into
         // the closing span so allow-path spans carry nio.guard.* too.

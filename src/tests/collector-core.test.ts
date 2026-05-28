@@ -95,9 +95,17 @@ describe('collector-core: spanKey', () => {
     assert.equal(key, 'tc-123');
   });
 
-  it('falls back to tool_name:timestamp when tool_use_id absent', () => {
-    const k1 = spanKey({ tool_name: 'Bash' } as HookStdinPayload);
-    assert.ok(k1.startsWith('Bash:'));
+  it('falls back to tool_name:tool_summary when tool_use_id absent', () => {
+    const k = spanKey({ tool_name: 'Bash', tool_input: { command: 'ls /tmp' } } as HookStdinPayload);
+    assert.equal(k, 'Bash:ls /tmp');
+  });
+
+  it('fallback is DETERMINISTIC — same inputs produce the same key', () => {
+    // Pre/post bridge depends on this. Old impl used Date.now() so the
+    // fallback diverged between pre and post invocations.
+    const a = spanKey({ tool_name: 'terminal', tool_input: { command: 'date -u' } } as HookStdinPayload);
+    const b = spanKey({ tool_name: 'terminal', tool_input: { command: 'date -u' } } as HookStdinPayload);
+    assert.equal(a, b);
   });
 
   it('handles fully empty input', () => {
@@ -365,6 +373,58 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
 
     // Do NOT shutdown — the global tracer is shared across tests, and
     // shutting it down here would break later tests that re-register.
+
+    void auditPath;
+  });
+
+  it('PostToolUse falls back to composite key when pre saved without tool_use_id (Hermes asymmetry)', async () => {
+    // Hermes ships `pre_tool_call` without `tool_call_id` (its
+    // invoke_tool() path forgets to thread it). post_tool_call DOES
+    // include the real tool_call_id. Without composite-fallback, the
+    // post side computes spanKey(tool_use_id="call_xyz") and misses
+    // the pre's entry under spanKey="terminal:date -u".
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { auditPath, logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+
+    const sessionId = 'hermes-async-sess';
+
+    // PRE: simulate Hermes payload — has tool_name + tool_input but NO tool_use_id.
+    await dispatchCollectorEvent({
+      event: 'PreToolUse',
+      input: {
+        tool_name: 'terminal',
+        tool_input: { command: 'date -u' },
+        session_id: sessionId,
+        // tool_use_id intentionally absent
+      },
+      platform: 'hermes',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    // POST: simulate Hermes post_tool_call payload — now WITH tool_use_id.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse',
+      input: {
+        tool_name: 'terminal',
+        tool_input: { command: 'date -u' },
+        session_id: sessionId,
+        tool_use_id: 'call_LLMassigned',  // present here but not in pre
+        tool_response: { output: '2026-05-28T11:00:00Z' },
+      },
+      platform: 'hermes',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 1, 'one execute_tool span should be emitted via composite fallback');
+    assert.equal(spans[0]!.name, 'execute_tool terminal');
 
     void auditPath;
   });
