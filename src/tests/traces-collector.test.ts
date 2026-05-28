@@ -130,6 +130,45 @@ describe('ensureTurn', () => {
     const next = ensureTurn(prev, 'session-b');
     assert.deepEqual(next.pending_spans, {});
   });
+
+  it('ignores sentinel session_id ("") when prev is on a real session — continues current turn', () => {
+    // Hermes pre_tool_call sometimes arrives with session_id="" mid-
+    // session. Accepting that at face value would reset turn_number
+    // and re-derive a different traceId. Instead, fall back to the
+    // real session_id we already have.
+    const prev = seed({
+      session_id: 'real-A',
+      turn_number: 5,
+      turn_trace_id: 'b'.repeat(32),
+    });
+    const next = ensureTurn(prev, '');
+    assert.equal(next, prev, 'should return prev unchanged (continue current turn)');
+    assert.equal(next.session_id, 'real-A');
+    assert.equal(next.turn_number, 5);
+    assert.equal(next.turn_trace_id, 'b'.repeat(32));
+  });
+
+  it('ignores sentinel session_id ("unknown") when prev is on a real session', () => {
+    const prev = seed({ session_id: 'real-A', turn_number: 3, turn_trace_id: 'c'.repeat(32) });
+    const next = ensureTurn(prev, 'unknown');
+    assert.equal(next, prev);
+    assert.equal(next.session_id, 'real-A');
+  });
+
+  it('mints a fresh non-deterministic turn_trace_id per new turn', () => {
+    // The old MD5(session:turn) scheme produced cross-day collisions:
+    // identical (session_id, turn_number) values rederived the same
+    // trace id over and over. Verify that two fresh-turn states for
+    // the same inputs now get DIFFERENT ids.
+    const prev = seed({ session_id: 'sess-X', turn_number: 9, turn_trace_id: '' });
+    const a = ensureTurn(prev, 'sess-X');
+    const b = ensureTurn(prev, 'sess-X');
+    assert.equal(a.turn_number, 10);
+    assert.equal(b.turn_number, 10);
+    assert.notEqual(a.turn_trace_id, b.turn_trace_id, 'two turn_trace_id mints for the same inputs must differ');
+    assert.equal(a.turn_trace_id.length, 32, 'OTel trace id is 32 hex chars');
+    assert.match(a.turn_trace_id, /^[0-9a-f]{32}$/);
+  });
 });
 
 // ── setTurnAttributes ───────────────────────────────────────────────────

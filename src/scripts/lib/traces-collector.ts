@@ -20,7 +20,7 @@ export {};
  */
 
 import { readFileSync } from 'node:fs';
-import { createHash, randomBytes } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { trace, TraceFlags, ROOT_CONTEXT, SpanStatusCode } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
@@ -222,8 +222,30 @@ export function recordCacheHitRate(state: CollectorState): CollectorState {
 // Trace ID derivation
 // ---------------------------------------------------------------------------
 
-function turnToTraceId(sessionId: string, turnNumber: number): string {
-  return createHash('md5').update(`${sessionId}:${turnNumber}`).digest('hex');
+/**
+ * Generate a fresh OTel trace id (16 bytes / 32 hex chars).
+ *
+ * Earlier versions derived this from `MD5(session_id + ":" + turn_number)`
+ * so PRE and POST hook processes could agree on the id without sharing
+ * memory. But that's deterministic — any (session_id, turn_number)
+ * combination produces the same trace id forever. Two failure modes:
+ *
+ *   1. Cross-day collision: Hermes session `agent:main:...:539162220`
+ *      runs for hours and at turn N today derives the same id as turn N
+ *      yesterday — span IDs from yesterday's emit appear stitched
+ *      into today's trace tree on the backend.
+ *   2. Session-promotion turn_number reset: when ensureTurn promotes
+ *      a sentinel-session state to a real session, turn_number resets
+ *      to 1. Every promoted turn re-derives MD5(real:1), so every
+ *      turn within one Hermes session collapses onto the same trace.
+ *
+ * The pre/post bridge is now state-file-based — both processes
+ * `loadState()` and read the persisted `turn_trace_id` directly.
+ * That means we no longer need a deterministic derivation; a random
+ * id stored in state works for everyone.
+ */
+function freshTraceId(): string {
+  return randomBytes(16).toString('hex');
 }
 
 function randomSpanId(): string {
@@ -317,22 +339,34 @@ export function ensureTurn(
   prev: CollectorState | null,
   sessionId: string,
 ): CollectorState {
+  // Hermes asymmetry: `pre_tool_call` shell-hook payload sometimes
+  // arrives with `session_id=""` while the matching `post_tool_call`
+  // carries the real session id. If we accept the sentinel "" at face
+  // value we'd reset turn_number, derive a new turn_trace_id, and
+  // wipe pending_spans — three different ways to corrupt the
+  // pre/post bridge. Instead, when a sentinel ("" or "unknown")
+  // arrives but we already know the real session, ignore the
+  // sentinel and continue the existing turn.
+  const isSentinelIn = sessionId === '' || sessionId === 'unknown';
+  if (
+    isSentinelIn
+    && prev?.session_id
+    && prev.session_id !== ''
+    && prev.session_id !== 'unknown'
+  ) {
+    sessionId = prev.session_id;
+  }
+
   if (prev && prev.session_id === sessionId && prev.turn_trace_id) {
     return prev;
   }
 
-  // Hermes asymmetry workaround: its `pre_tool_call` shell-hook payload
-  // sometimes arrives with `session_id=""` while the matching
-  // `post_tool_call` carries the real session id. Without this carry-
-  // over, the pre process saves the pending tool-span entry under
-  // session="" and the post process — which starts a fresh turn for the
-  // real session — wipes the pending_spans map and can't find anything
-  // to close. Result: no `execute_tool` span ever reaches OTLP for the
-  // allow path.
-  //
-  // The fix: when the previous state was on a sentinel session
-  // (empty or "unknown") and a real session arrives, migrate the
-  // pending tool-call state into the new turn instead of resetting it.
+  // Migration: when the prev state was on a sentinel session and a
+  // real one is arriving, carry the pending tool-call state into the
+  // new turn instead of resetting it. Covers the case where the very
+  // first event of a turn was a sentinel pre, followed by a real
+  // post (state file initially empty so the sentinel-passthrough
+  // above couldn't kick in).
   // pending_task_spans + turn_attributes are NOT migrated — they're
   // genuinely turn-scoped and shouldn't outlive a session change.
   const prevWasSentinel = prev && (prev.session_id === '' || prev.session_id === 'unknown');
@@ -347,7 +381,10 @@ export function ensureTurn(
   return {
     session_id: sessionId,
     turn_number: turnNumber,
-    turn_trace_id: turnToTraceId(sessionId, turnNumber),
+    // Random per-turn id stored in state; PRE/POST processes share it
+    // via the on-disk state file rather than re-deriving from
+    // (session_id, turn_number). See freshTraceId() for the why.
+    turn_trace_id: freshTraceId(),
     turn_start_ms: Date.now(),
     ...carryPending,
     pending_task_spans: {},
