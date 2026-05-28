@@ -321,15 +321,36 @@ export function ensureTurn(
     return prev;
   }
 
+  // Hermes asymmetry workaround: its `pre_tool_call` shell-hook payload
+  // sometimes arrives with `session_id=""` while the matching
+  // `post_tool_call` carries the real session id. Without this carry-
+  // over, the pre process saves the pending tool-span entry under
+  // session="" and the post process — which starts a fresh turn for the
+  // real session — wipes the pending_spans map and can't find anything
+  // to close. Result: no `execute_tool` span ever reaches OTLP for the
+  // allow path.
+  //
+  // The fix: when the previous state was on a sentinel session
+  // (empty or "unknown") and a real session arrives, migrate the
+  // pending tool-call state into the new turn instead of resetting it.
+  // pending_task_spans + turn_attributes are NOT migrated — they're
+  // genuinely turn-scoped and shouldn't outlive a session change.
+  const prevWasSentinel = prev && (prev.session_id === '' || prev.session_id === 'unknown');
+  const carryPending = prevWasSentinel
+    ? {
+        pending_spans: prev.pending_spans ?? {},
+        pending_guard_attrs: prev.pending_guard_attrs ?? {},
+      }
+    : { pending_spans: {}, pending_guard_attrs: {} };
+
   const turnNumber = (prev?.session_id === sessionId ? prev.turn_number : 0) + 1;
   return {
     session_id: sessionId,
     turn_number: turnNumber,
     turn_trace_id: turnToTraceId(sessionId, turnNumber),
     turn_start_ms: Date.now(),
-    pending_spans: {},
+    ...carryPending,
     pending_task_spans: {},
-    pending_guard_attrs: {},
     turn_attributes: {},
   };
 }

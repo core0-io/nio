@@ -74,6 +74,62 @@ describe('ensureTurn', () => {
     const next = ensureTurn(prev, 'new-session');
     assert.deepEqual(next.pending_guard_attrs, {});
   });
+
+  it('migrates pending_spans + pending_guard_attrs when sentinel session ("") gets promoted to a real one', () => {
+    // Hermes asymmetry: pre_tool_call arrives with session_id="" but
+    // the matching post_tool_call has the real session id. The pending
+    // entry pre saved must survive the session-id promotion so post
+    // can find it.
+    const prev = seed({
+      session_id: '',
+      pending_spans: {
+        'tc-x': {
+          tool_name: 'shell',
+          tool_summary: 'echo hi',
+          start_ms: 1700000000000,
+          span_id: 'a'.repeat(16),
+          attributes: { 'gen_ai.tool.name': 'shell' },
+        },
+      },
+      pending_guard_attrs: { 'tc-x': { 'nio.guard.decision': 'allow' } },
+    });
+    const next = ensureTurn(prev, 'real-session');
+    assert.equal(next.session_id, 'real-session');
+    assert.ok(next.pending_spans['tc-x'], 'pending_spans must survive empty→real promotion');
+    assert.ok(next.pending_guard_attrs?.['tc-x'], 'pending_guard_attrs must survive empty→real promotion');
+  });
+
+  it('migrates pending state from "unknown" sentinel too', () => {
+    const prev = seed({
+      session_id: 'unknown',
+      pending_spans: {
+        'tc-y': {
+          tool_name: 'read_file',
+          tool_summary: '/etc/hosts',
+          start_ms: 1700000000000,
+          span_id: 'b'.repeat(16),
+        },
+      },
+    });
+    const next = ensureTurn(prev, 'real-session');
+    assert.ok(next.pending_spans['tc-y']);
+  });
+
+  it('does NOT migrate pending state when changing between two real sessions', () => {
+    const prev = seed({
+      session_id: 'session-a',
+      pending_spans: {
+        'tc-z': {
+          tool_name: 'shell',
+          tool_summary: 'echo',
+          start_ms: 1700000000000,
+          span_id: 'c'.repeat(16),
+        },
+      },
+    });
+    const next = ensureTurn(prev, 'session-b');
+    assert.deepEqual(next.pending_spans, {});
+  });
 });
 
 // ── setTurnAttributes ───────────────────────────────────────────────────
