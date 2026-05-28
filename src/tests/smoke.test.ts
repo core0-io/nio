@@ -86,6 +86,22 @@ describe('Smoke: guard-hook.js E2E', () => {
     });
     assert.equal(exitCode, 0);
   });
+
+  it('deny path does not crash when tracerProvider/loggerProvider are absent (no collector configured)', async () => {
+    // No collector.endpoint in the temp HOME config → tracerProvider stays null,
+    // so the deny-emit code path falls through harmlessly. Regression guard
+    // against an early reference / null deref.
+    const { exitCode, stderr } = await runGuardHook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Bash',
+      tool_input: { command: 'rm -rf /' },
+      session_id: 'smoke-deny-no-collector',
+      tool_use_id: 'tc-smoke-1',
+    });
+    assert.equal(exitCode, 2);
+    assert.ok(stderr.length > 0, 'should still write deny reason to stderr');
+    assert.doesNotMatch(stderr, /TypeError|Cannot read/, `unexpected error: ${stderr}`);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

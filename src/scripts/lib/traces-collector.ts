@@ -138,12 +138,16 @@ export function nioGuardAttributes(
   riskLevel: string,
   riskScore: number,
   riskTags?: string[],
+  phaseStopped?: number,
+  topFindingRule?: string,
 ): Record<string, unknown> {
   return {
     'nio.guard.decision': decision,
     'nio.guard.risk_level': riskLevel,
     'nio.guard.risk_score': riskScore,
     ...(riskTags?.length ? { 'nio.guard.risk_tags': riskTags.join(',') } : {}),
+    ...(typeof phaseStopped === 'number' ? { 'nio.guard.phase_stopped': phaseStopped } : {}),
+    ...(topFindingRule ? { 'nio.guard.top_finding_rule': topFindingRule } : {}),
   };
 }
 
@@ -305,28 +309,74 @@ export function ensureTurn(
     turn_start_ms: Date.now(),
     pending_spans: {},
     pending_task_spans: {},
+    pending_guard_attrs: {},
     turn_attributes: {},
   };
 }
 
-/** Records a pending tool span. Returns a new state object. */
+/** Records a pending tool span. Returns a new state object.
+ *
+ * `startMs` overrides the default `Date.now()` — callers that emit a
+ * complete span synchronously (guard deny path) pass the real eval-start
+ * time so the span's wall-clock matches the guard window, not the sync
+ * emit moment.
+ */
 export function recordPreToolUse(
   state: CollectorState,
   spanKey: string,
   toolName: string,
   toolSummary: string,
   attributes?: Record<string, unknown>,
+  startMs?: number,
 ): CollectorState {
   const next: PendingToolSpan = {
     tool_name: toolName,
     tool_summary: toolSummary,
-    start_ms: Date.now(),
+    start_ms: startMs ?? Date.now(),
     span_id: randomSpanId(),
     ...(attributes ? { attributes } : {}),
   };
   return {
     ...state,
     pending_spans: { ...state.pending_spans, [spanKey]: next },
+  };
+}
+
+/**
+ * Park guard-decision attrs against `spanKey` so a later
+ * `recordPostToolUse` (possibly in a separate process) can merge them
+ * into the closing tool span. Written by the guard-hook process on
+ * every decision (allow / ask / deny); drained by the collector-hook
+ * PostToolUse handler via `takePendingGuardAttrs`.
+ */
+export function setPendingGuardAttrs(
+  state: CollectorState,
+  spanKey: string,
+  attrs: Record<string, unknown>,
+): CollectorState {
+  return {
+    ...state,
+    pending_guard_attrs: { ...(state.pending_guard_attrs ?? {}), [spanKey]: attrs },
+  };
+}
+
+/**
+ * Drain the guard attrs stashed for `spanKey` (if any). Returns the
+ * attrs map and a state object with the entry removed. When no entry
+ * exists, returns `{}` for `attrs` and `state` unchanged.
+ */
+export function takePendingGuardAttrs(
+  state: CollectorState,
+  spanKey: string,
+): { state: CollectorState; attrs: Record<string, unknown> } {
+  const map = state.pending_guard_attrs ?? {};
+  const attrs = map[spanKey];
+  if (!attrs) return { state, attrs: {} };
+  const { [spanKey]: _removed, ...remaining } = map;
+  void _removed;
+  return {
+    state: { ...state, pending_guard_attrs: remaining },
+    attrs,
   };
 }
 
@@ -635,6 +685,7 @@ export async function endTurn(
     turn_start_ms: 0,
     pending_spans: {},
     pending_task_spans: {},
+    pending_guard_attrs: {},
     turn_attributes: {},
   };
 }

@@ -206,10 +206,12 @@ export function registerOpenClawPlugin(
         recordToolUse(meterProvider, toolName, 'PreToolUse', 'openclaw').catch(() => {});
       }
 
+      const evalStartMs = Date.now();
       const result = await evaluateHook(adapter, event, {
         config,
         nio: getNio(),
       }, auditOpts);
+      const evalMs = Date.now() - evalStartMs;
 
       // Record guard decision metrics
       if (meterProvider) {
@@ -236,12 +238,17 @@ export function registerOpenClawPlugin(
               ? 'confirm_denied'
               : 'confirm_allowed'
             : 'allow';
-      const guardAttrs = nioGuardAttributes(
-        decisionTag,
-        result.riskLevel || (decisionTag === 'allow' ? 'low' : 'unknown'),
-        result.riskScore ?? 0,
-        result.riskTags,
-      );
+      const guardAttrs: Record<string, unknown> = {
+        ...nioGuardAttributes(
+          decisionTag,
+          result.riskLevel || (decisionTag === 'allow' ? 'low' : 'unknown'),
+          result.riskScore ?? 0,
+          result.riskTags,
+          result.phaseStopped,
+          result.topFindingRule,
+        ),
+        'nio.guard.eval_ms': evalMs,
+      };
       pendingGuardAttrs.set(fullKey, guardAttrs);
 
       // Block path: after_tool_call won't fire because the tool didn't

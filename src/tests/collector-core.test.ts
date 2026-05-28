@@ -292,3 +292,147 @@ describe('collector-core: dispatchCollectorEvent → audit.jsonl', () => {
     assert.ok(existsSync(auditPath));
   });
 });
+
+// ── PostToolUse drains pending_guard_attrs onto the closing span ────────
+
+describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
+  it('merges guard attrs parked by the guard-hook process into the tool span', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { setPendingGuardAttrs, ensureTurn } = await import('../scripts/lib/traces-collector.js');
+    const { loadState, saveState } = await import('../scripts/lib/traces-state-store.js');
+    const { spanKey: spanKeyFn } = await import('../scripts/lib/collector-core.js');
+
+    const { auditPath, logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+
+    const sessionId = 'sess-guard-bridge';
+    const toolUseId = 'tc-guard-1';
+    const preInput: HookStdinPayload = {
+      tool_name: 'Bash',
+      tool_input: { command: 'echo hi' },
+      session_id: sessionId,
+      tool_use_id: toolUseId,
+      cwd: '/tmp',
+    };
+
+    // Pre: open the pending span via the real collector path.
+    await dispatchCollectorEvent({
+      event: 'PreToolUse',
+      input: preInput,
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    // Simulate the separate guard-hook process parking guard attrs.
+    const key = spanKeyFn(preInput);
+    let s = ensureTurn(loadState(logsConfig), sessionId);
+    s = setPendingGuardAttrs(s, key, {
+      'nio.guard.decision': 'allow',
+      'nio.guard.risk_level': 'medium',
+      'nio.guard.risk_score': 0.4,
+      'nio.guard.eval_ms': 7,
+    });
+    saveState(logsConfig, s);
+
+    // Post: close the span. Guard attrs should be drained + merged in.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse',
+      input: {
+        ...preInput,
+        tool_response: { output: 'hi' },
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 1, 'exactly one tool span exported');
+    const attrs = spans[0]!.attributes as Record<string, unknown>;
+    assert.equal(attrs['nio.guard.decision'], 'allow');
+    assert.equal(attrs['nio.guard.risk_level'], 'medium');
+    assert.equal(attrs['nio.guard.risk_score'], 0.4);
+    assert.equal(attrs['nio.guard.eval_ms'], 7);
+
+    // And the state file should no longer carry the drained entry.
+    const after = loadState(logsConfig);
+    assert.equal(after?.pending_guard_attrs?.[key], undefined);
+
+    // Do NOT shutdown — the global tracer is shared across tests, and
+    // shutting it down here would break later tests that re-register.
+
+    void auditPath;
+  });
+});
+
+// ── Deny-path one-shot emit (guard-hook / hermes hook-cli pattern) ─────
+
+describe('deny-path one-shot span emit', () => {
+  it('emits a complete tool span with ERROR status, deny attrs, guard.eval_ms, and a real start time', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const {
+      ensureTurn, recordPreToolUse, recordPostToolUse,
+      nioGuardAttributes, genAiToolCallInputAttributes,
+    } = await import('../scripts/lib/traces-collector.js');
+
+    const tracer = makeInMemoryTracer();
+
+    // Simulate what guard-hook does on deny: time eval, build guardAttrs,
+    // open + close + flush a single span with the real eval-start time.
+    const evalStartMs = Date.now() - 50;  // pretend eval took ~50 ms
+    const evalMs = Date.now() - evalStartMs;
+    const guardAttrs = {
+      ...nioGuardAttributes('deny', 'critical', 1.0, ['BASH_RMRF'], 2, 'BASH_RMRF'),
+      'nio.guard.eval_ms': evalMs,
+    };
+
+    let state = ensureTurn(null, 'sess-deny');
+    const key = 'tc-deny-1';
+    state = recordPreToolUse(
+      state, key, 'Bash', 'rm -rf /',
+      genAiToolCallInputAttributes({ command: 'rm -rf /' }, key),
+      evalStartMs,
+    );
+    const r = await recordPostToolUse(
+      tracer.provider, state, key, 'claude-code', '/tmp',
+      guardAttrs,
+      'Blocked by Nio: critical risk',
+    );
+    state = r.state;
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 1);
+    const span = spans[0]!;
+    assert.equal(span.name, 'execute_tool Bash');
+    assert.equal(span.status.code, 2, 'span status should be ERROR (SpanStatusCode.ERROR=2)');
+    assert.match(String(span.status.message), /Blocked by Nio/);
+
+    const attrs = span.attributes as Record<string, unknown>;
+    assert.equal(attrs['nio.guard.decision'], 'deny');
+    assert.equal(attrs['nio.guard.risk_level'], 'critical');
+    assert.equal(attrs['nio.guard.risk_score'], 1.0);
+    assert.equal(attrs['nio.guard.risk_tags'], 'BASH_RMRF');
+    assert.equal(attrs['nio.guard.phase_stopped'], 2);
+    assert.equal(attrs['nio.guard.top_finding_rule'], 'BASH_RMRF');
+    assert.ok(typeof attrs['nio.guard.eval_ms'] === 'number' && (attrs['nio.guard.eval_ms'] as number) >= 0);
+
+    // Wall-clock should reflect the real eval window (start at evalStartMs).
+    // hrTime is [sec, nanos] — convert to ms.
+    const spanStartMs = span.startTime[0] * 1000 + Math.round(span.startTime[1] / 1_000_000);
+    assert.ok(
+      Math.abs(spanStartMs - evalStartMs) <= 5,
+      `span start (${spanStartMs}) should be within ~5ms of evalStartMs (${evalStartMs})`,
+    );
+
+    // Pending entry should have been drained.
+    assert.equal(state.pending_spans[key], undefined);
+
+    // Do NOT shutdown — the global tracer is shared across tests, and
+    // shutting it down here would break later tests that re-register.
+  });
+});

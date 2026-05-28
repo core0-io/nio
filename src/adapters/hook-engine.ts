@@ -41,6 +41,8 @@ function runtimeDecisionToHookOutput(
   const finalScore = rd.scores.final ?? 0;
 
   const diagnostics = rd.diagnostics?.length ? rd.diagnostics : undefined;
+  const phaseStopped = rd.phase_stopped;
+  const topFindingRule = rd.findings[0]?.rule_id;
 
   if (rd.decision === 'deny') {
     return {
@@ -55,6 +57,8 @@ function runtimeDecisionToHookOutput(
       riskLevel: rd.risk_level,
       riskScore: finalScore,
       riskTags: uniqueTags,
+      phaseStopped,
+      ...(topFindingRule ? { topFindingRule } : {}),
       initiatingSkill,
       diagnostics,
     };
@@ -73,6 +77,8 @@ function runtimeDecisionToHookOutput(
       riskLevel: rd.risk_level,
       riskScore: finalScore,
       riskTags: uniqueTags,
+      phaseStopped,
+      ...(topFindingRule ? { topFindingRule } : {}),
       initiatingSkill,
       diagnostics,
     };
@@ -82,6 +88,8 @@ function runtimeDecisionToHookOutput(
     decision: 'allow',
     riskLevel: rd.risk_level,
     riskScore: finalScore,
+    phaseStopped,
+    ...(topFindingRule ? { topFindingRule } : {}),
     initiatingSkill,
     diagnostics,
   };
@@ -226,6 +234,8 @@ function checkToolGate(
       riskLevel: 'critical',
       riskScore: 1.0,
       riskTags: ['TOOL_GATE_BLOCKED'],
+      phaseStopped: 0,
+      topFindingRule: 'TOOL_GATE_BLOCKED',
     };
   }
 
@@ -254,6 +264,8 @@ function denyNotPermitted(toolName: string): HookOutput {
     riskLevel: 'critical',
     riskScore: 1.0,
     riskTags: ['TOOL_GATE_NOT_PERMITTED'],
+    phaseStopped: 0,
+    topFindingRule: 'TOOL_GATE_NOT_PERMITTED',
   };
 }
 

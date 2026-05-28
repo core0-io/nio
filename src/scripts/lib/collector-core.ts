@@ -54,6 +54,7 @@ import {
   recordUserPrompt,
   genAiToolCallInputAttributes,
   genAiToolCallOutputAttributes,
+  takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState } from './traces-state-store.js';
 
@@ -245,12 +246,20 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
-        const state = ensureTurn(prev, sessionId);
+        let state = ensureTurn(prev, sessionId);
+        // Drain guard attrs parked by the PreToolUse-side guard process
+        // (separate Node process on Claude Code / Codex). Merged into
+        // the closing span so allow-path spans carry nio.guard.* too.
+        const drained = takePendingGuardAttrs(state, key);
+        state = drained.state;
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
         const result = await recordPostToolUse(
           tracerProvider, state, key, platform, cwd,
-          genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+          {
+            ...drained.attrs,
+            ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+          },
           err ?? null,
         );
         saveState(logsConfig, result.state);

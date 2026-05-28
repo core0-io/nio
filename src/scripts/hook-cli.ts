@@ -39,10 +39,18 @@ import type { HookAdapter, HookOutput } from '../index.js';
 import { formatDiagnosticsForUser } from '../adapters/diagnostics.js';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
-import { createTracerProvider } from './lib/traces-collector.js';
+import {
+  createTracerProvider,
+  ensureTurn,
+  nioGuardAttributes,
+  recordPostToolUse,
+  setPendingGuardAttrs,
+} from './lib/traces-collector.js';
+import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import {
   dispatchCollectorEvent,
+  spanKey,
   type HookStdinPayload,
 } from './lib/collector-core.js';
 
@@ -322,14 +330,17 @@ async function main(): Promise<void> {
     const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
       ? createLoggerProvider(collectorConfig) : null;
 
+    const evalStartMs = Date.now();
     const result = await evaluateHook(
       adapter, payload, { config, nio },
       { loggerProvider, logsConfig },
     );
+    const evalMs = Date.now() - evalStartMs;
+
+    const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
 
     // Guard decision metric (nio.decision.count).
     if (meterProvider) {
-      const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
       await recordGuardDecision(
         meterProvider,
         result.decision,
@@ -356,6 +367,48 @@ async function main(): Promise<void> {
       });
     }
 
+    // Bridge guard attrs to the eventual PostToolUse span (allow path)
+    // and synchronously close + emit the span for the block path —
+    // mirrors what guard-hook does for Claude Code / Codex.
+    const confirmAction = config.guard?.confirm_action ?? 'allow';
+    const resolvedDecision =
+      result.decision === 'deny' ? 'deny'
+      : result.decision === 'ask'
+        ? (confirmAction === 'allow' ? 'confirm_allowed'
+          : confirmAction === 'deny'  ? 'confirm_denied'
+          : 'confirm_denied')  // 'ask' fallback on hermes = deny
+        : 'allow';
+    const isBlock = resolvedDecision === 'deny' || resolvedDecision === 'confirm_denied';
+    const guardAttrs: Record<string, unknown> = {
+      ...nioGuardAttributes(
+        resolvedDecision,
+        result.riskLevel || 'low',
+        result.riskScore ?? 0,
+        result.riskTags,
+        result.phaseStopped,
+        result.topFindingRule,
+      ),
+      'nio.guard.eval_ms': evalMs,
+    };
+    if (tracerProvider) {
+      const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
+      const sessionId = collectorInput.session_id ?? 'unknown';
+      const key = spanKey(collectorInput);
+      let state = ensureTurn(loadState(logsConfig), sessionId);
+      state = setPendingGuardAttrs(state, key, guardAttrs);
+      if (isBlock) {
+        const cwd = collectorInput.cwd ?? process.cwd();
+        const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
+        const r = await recordPostToolUse(
+          tracerProvider, state, key, 'hermes', cwd,
+          guardAttrs,
+          reason,
+        );
+        state = r.state;
+      }
+      saveState(logsConfig, state);
+    }
+
     // Make sure network exports complete before the subprocess exits;
     // the PeriodicExportingMetricReader batches by default and would
     // drop the counter we just recorded without an explicit flush.
@@ -365,7 +418,6 @@ async function main(): Promise<void> {
       loggerProvider?.forceFlush(),
     ]);
 
-    const confirmAction = config.guard?.confirm_action ?? 'allow';
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
     process.stdout.write(stdout + '\n');

@@ -18,6 +18,8 @@ import {
   recordUserPrompt,
   recordAssistantReply,
   recordCacheHitRate,
+  setPendingGuardAttrs,
+  takePendingGuardAttrs,
 } from '../scripts/lib/traces-collector.js';
 import type { CollectorState } from '../scripts/lib/traces-state-store.js';
 
@@ -62,6 +64,15 @@ describe('ensureTurn', () => {
     const next = ensureTurn(prev, 'new-session');
     assert.equal(next.session_id, 'new-session');
     assert.equal(next.turn_number, 1);
+  });
+
+  it('resets pending_guard_attrs along with pending_spans on a new turn', () => {
+    const prev = seed({
+      session_id: 'old',
+      pending_guard_attrs: { 'k1': { 'nio.guard.decision': 'allow' } },
+    });
+    const next = ensureTurn(prev, 'new-session');
+    assert.deepEqual(next.pending_guard_attrs, {});
   });
 });
 
@@ -120,6 +131,64 @@ describe('recordPreToolUse', () => {
     const next = recordPreToolUse(prev, 'new', 'Write', '/y', undefined);
     assert.ok(next.pending_spans['old']);
     assert.ok(next.pending_spans['new']);
+  });
+
+  it('uses caller-supplied startMs when provided (deny-path emit)', () => {
+    const prev = seed();
+    const next = recordPreToolUse(prev, 'k1', 'Bash', 'rm -rf', undefined, 1700000123456);
+    assert.equal(next.pending_spans['k1']!.start_ms, 1700000123456);
+  });
+
+  it('falls back to Date.now() when startMs omitted', () => {
+    const prev = seed();
+    const before = Date.now();
+    const next = recordPreToolUse(prev, 'k1', 'Bash', 'ls', undefined);
+    const after = Date.now();
+    const ms = next.pending_spans['k1']!.start_ms;
+    assert.ok(ms >= before && ms <= after, `start_ms ${ms} not in [${before}, ${after}]`);
+  });
+});
+
+// ── pending_guard_attrs bridge ─────────────────────────────────────────
+
+describe('setPendingGuardAttrs / takePendingGuardAttrs', () => {
+  it('round-trips an attribute map under spanKey', () => {
+    const s0 = seed();
+    const s1 = setPendingGuardAttrs(s0, 'tc-1', { 'nio.guard.decision': 'deny', 'nio.guard.eval_ms': 12 });
+    assert.deepEqual(s1.pending_guard_attrs?.['tc-1'], {
+      'nio.guard.decision': 'deny',
+      'nio.guard.eval_ms': 12,
+    });
+    const { state: s2, attrs } = takePendingGuardAttrs(s1, 'tc-1');
+    assert.deepEqual(attrs, { 'nio.guard.decision': 'deny', 'nio.guard.eval_ms': 12 });
+    assert.equal(s2.pending_guard_attrs?.['tc-1'], undefined, 'entry should be drained');
+  });
+
+  it('does not mutate input state on set', () => {
+    const s0 = seed();
+    setPendingGuardAttrs(s0, 'tc-1', { a: 1 });
+    assert.equal(s0.pending_guard_attrs, undefined, 'caller state stays untouched');
+  });
+
+  it('does not mutate input state on take', () => {
+    const s0 = seed({ pending_guard_attrs: { 'tc-1': { a: 1 } } });
+    takePendingGuardAttrs(s0, 'tc-1');
+    assert.deepEqual(s0.pending_guard_attrs, { 'tc-1': { a: 1 } });
+  });
+
+  it('preserves siblings when draining one entry', () => {
+    const s0 = setPendingGuardAttrs(seed(), 'k1', { a: 1 });
+    const s1 = setPendingGuardAttrs(s0, 'k2', { b: 2 });
+    const { state: s2, attrs } = takePendingGuardAttrs(s1, 'k1');
+    assert.deepEqual(attrs, { a: 1 });
+    assert.deepEqual(s2.pending_guard_attrs, { k2: { b: 2 } });
+  });
+
+  it('returns empty attrs and unchanged state when key absent', () => {
+    const s0 = seed();
+    const { state, attrs } = takePendingGuardAttrs(s0, 'missing');
+    assert.deepEqual(attrs, {});
+    assert.equal(state, s0);
   });
 });
 
@@ -240,6 +309,24 @@ describe('nioGuardAttributes', () => {
     const out = nioGuardAttributes('allow', 'low', 0);
     assert.equal(out['nio.guard.risk_tags'], undefined);
     assert.equal(Object.keys(out).length, 3);
+  });
+
+  it('includes phase_stopped and top_finding_rule when provided', () => {
+    const out = nioGuardAttributes('deny', 'critical', 1.0, ['SHELL_EXEC'], 2, 'BASH_RMRF');
+    assert.equal(out['nio.guard.phase_stopped'], 2);
+    assert.equal(out['nio.guard.top_finding_rule'], 'BASH_RMRF');
+  });
+
+  it('phase_stopped=0 still emits the key (tool-gate denies)', () => {
+    const out = nioGuardAttributes('deny', 'critical', 1.0, ['TOOL_GATE_BLOCKED'], 0, 'TOOL_GATE_BLOCKED');
+    assert.equal(out['nio.guard.phase_stopped'], 0);
+    assert.equal(out['nio.guard.top_finding_rule'], 'TOOL_GATE_BLOCKED');
+  });
+
+  it('omits phase_stopped + top_finding_rule when undefined', () => {
+    const out = nioGuardAttributes('allow', 'low', 0, undefined, undefined, undefined);
+    assert.equal(out['nio.guard.phase_stopped'], undefined);
+    assert.equal(out['nio.guard.top_finding_rule'], undefined);
   });
 });
 

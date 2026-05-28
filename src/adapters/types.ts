@@ -36,6 +36,10 @@ export interface HookOutput {
   riskScore?: number;
   /** Risk tags */
   riskTags?: string[];
+  /** Phase that produced the short-circuit (0 = aggregated end-of-pipeline). */
+  phaseStopped?: number;
+  /** rule_id of the highest-ranked finding, if any. */
+  topFindingRule?: string;
   /** Initiating skill (if detected) */
   initiatingSkill?: string | null;
   /**

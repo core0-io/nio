@@ -594,7 +594,12 @@ For the full per-signal schema (every metric instrument, every span attribute, e
 │        + state via traces-state-store.json (cross-process bridge)   │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
-│     └─ MeterProvider → guard decision + risk score metrics          │
+│     ├─ MeterProvider → guard decision + risk score metrics          │
+│     ├─ TracerProvider → on deny / confirm-denied, emits a complete  │
+│     │  execute_tool span synchronously (PostToolUse never fires)    │
+│     └─ pending_guard_attrs in state file → handed off to            │
+│        collector-hook PostToolUse so allow spans also carry         │
+│        nio.guard.* attrs                                            │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐

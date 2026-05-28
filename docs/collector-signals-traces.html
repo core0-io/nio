@@ -95,13 +95,17 @@
             <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>PostToolUse (when set)</td><td>all</td></tr>
-            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>confirm_allowed</code> / <code>confirm_denied</code></td><td>PreToolUse</td><td>OpenClaw only</td></tr>
-            <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code> / <code>unknown</code></td><td>PreToolUse</td><td>OpenClaw only</td></tr>
-            <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
-            <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>confirm_allowed</code> / <code>confirm_denied</code></td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code> / <code>unknown</code></td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.phase_stopped</code></td><td>Phase that produced the verdict (<code>0</code> = tool-gate, <code>1</code>–<code>6</code> = runtime pipeline)</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.top_finding_rule</code></td><td><code>rule_id</code> of the highest-ranked finding (when any fired)</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.guard.eval_ms</code></td><td>Wall-clock cost of the guard evaluation (ms)</td><td>PreToolUse</td><td>all</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise. <strong><code>nio.guard.*</code> on Claude Code?</strong> Not yet — Claude Code's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Deny / confirm-denied spans.</strong> When the guard blocks a tool, <code>PostToolUse</code> never fires — so the span is emitted synchronously by the same process that ran the guard (the <code>guard-hook.ts</code> PreToolUse on Claude Code / Codex; the <code>hook-cli.ts</code> <code>pre_tool_call</code> branch on Hermes; the <code>before_tool_call</code> handler in the OpenClaw plugin). Span name is the same <code>execute_tool &lt;tool&gt;</code> as the allow path — the discrimination is on <code>nio.guard.decision</code> + ERROR status + the reason in the exception message. Wall-clock starts at the real <code>evalStartMs</code> so the span duration reflects the guard window, and <code>nio.guard.eval_ms</code> carries the same value as an explicit attribute for filtering.</p>
 
         <h2 id="span-task">Span: <code>task:execute</code> <span style="color: var(--fg-3); font-weight: 400;">— task span</span></h2>
         <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (Claude Code, Teammates / cloud-agent flows) or <code>subagent_spawning</code> (OpenClaw); closes at the matching completion event.</p>

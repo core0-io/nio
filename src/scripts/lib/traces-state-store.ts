@@ -51,6 +51,13 @@ export interface CollectorState {
   turn_start_ms: number;
   pending_spans: Record<string, PendingToolSpan>;        // keyed by tool_use_id or fallback
   pending_task_spans: Record<string, PendingTaskSpan>;   // keyed by task_id
+  /**
+   * Guard-decision attrs handed off from PreToolUse (guard-hook process)
+   * to PostToolUse (collector-hook process). Drained + cleared when the
+   * matching tool span is closed. Keyed by the same spanKey as
+   * `pending_spans`.
+   */
+  pending_guard_attrs?: Record<string, Record<string, unknown>>;
   turn_attributes?: Record<string, unknown>;
 }
 

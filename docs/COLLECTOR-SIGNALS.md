@@ -159,14 +159,18 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | PostToolUse | all |
 | `nio.turn_number` | Parent turn's number | PostToolUse | all |
 | `nio.cwd` | Working dir at hook fire | PostToolUse (when set) | all |
-| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | PreToolUse | OpenClaw only |
-| `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` / `unknown` | PreToolUse | OpenClaw only |
-| `nio.guard.risk_score` | Guard risk score, 0–1 | PreToolUse | OpenClaw only |
-| `nio.guard.risk_tags` | Comma-joined rule IDs that fired | PreToolUse | OpenClaw only |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | PreToolUse | all |
+| `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` / `unknown` | PreToolUse | all |
+| `nio.guard.risk_score` | Guard risk score, 0–1 | PreToolUse | all |
+| `nio.guard.risk_tags` | Comma-joined rule IDs that fired | PreToolUse | all |
+| `nio.guard.phase_stopped` | Phase that produced the verdict (`0` = tool-gate, `1`–`6` = runtime pipeline) | PreToolUse | all |
+| `nio.guard.top_finding_rule` | `rule_id` of the highest-ranked finding (when any fired) | PreToolUse | all |
+| `nio.guard.eval_ms` | Wall-clock cost of the guard evaluation (ms) | PreToolUse | all |
+| `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run) | PostToolUse | OpenClaw only |
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
-**`nio.guard.*` on Claude Code?** Not yet — Claude Code's guard decisions go to the audit log only; symmetric trace-span adoption is queued as a follow-up.
+**Deny / confirm-denied spans.** When the guard blocks a tool, `PostToolUse` never fires — so the span is emitted synchronously by the same process that ran the guard (the `guard-hook.ts` PreToolUse on Claude Code / Codex; the `hook-cli.ts` `pre_tool_call` branch on Hermes; the `before_tool_call` handler in the OpenClaw plugin). Span name is the same `execute_tool <tool>` as the allow path — the discrimination is on `nio.guard.decision` + ERROR status + the reason in the exception message. Wall-clock starts at the real `evalStartMs` so the span duration reflects the guard window, and `nio.guard.eval_ms` carries the same value as an explicit attribute for filtering.
 
 ### Span: `task:execute` (task span)
 
