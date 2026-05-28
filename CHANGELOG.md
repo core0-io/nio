@@ -1,5 +1,268 @@
 # @core0-io/nio
 
+## 2.4.2
+
+### Patch Changes
+
+- ff53ac9: **Deny-path trace span emission + allow-path guard-attrs parity across platforms.**
+
+  Before this change, when the guard blocked a tool call (`risk_score=1`, any deny threshold crossed, or tool-gate hit), the audit log and `nio.decision.count` metric captured the verdict — but **no `execute_tool` span ever reached OTLP traces**. Reason: spans were opened in `PreToolUse` and closed in `PostToolUse`; on deny, `PostToolUse` never fires, so the span sat orphaned in the state file. Trace UIs were silently missing exactly the events most worth investigating.
+
+  OpenClaw already handled this correctly via its in-memory `pendingGuardAttrs` bridge; this change brings claude-code, codex, and hermes to parity, and adds three new attributes everywhere.
+
+  **What changes on a deny / confirm-denied call:**
+
+  ```text
+  Trace span: execute_tool Bash       ← same name as allow; discrimination via attrs + status
+    status:       ERROR                 (reason in span.exception message)
+    start / end:  real evalStartMs → end-of-guard       (not a ~0ms synthesized span)
+    attributes:
+      gen_ai.tool.name              = "Bash"
+      gen_ai.tool.call.id           = "<tool_use_id>"
+      gen_ai.tool.call.arguments    = redacted JSON
+      nio.tool_summary              = "rm -rf /"
+      nio.platform / nio.turn_number / nio.cwd
+      nio.guard.decision            = "deny"
+      nio.guard.risk_level          = "critical"
+      nio.guard.risk_score          = 1
+      nio.guard.risk_tags           = "BASH_RMRF"
+      nio.guard.phase_stopped       = 2          ← new
+      nio.guard.top_finding_rule    = "BASH_RMRF" ← new
+      nio.guard.eval_ms             = 47          ← new
+  ```
+
+  **Allow spans now carry the same `nio.guard.*` set** (decision = `allow` / `confirm_allowed`). Previously this was OpenClaw-only — claude-code, codex, and hermes recorded the guard decision in metrics + audit log but never on the tool span itself, so trace UIs couldn't filter "all high-risk allow calls." Now they can.
+
+  **Cross-process plumbing.** Claude Code and Codex run guard-hook (PreToolUse, sync) and collector-hook (PostToolUse, separate process); they can't share an in-memory map. A new `pending_guard_attrs` field on `CollectorState` bridges via the existing on-disk state file: guard-hook parks the attrs on every decision, collector-hook PostToolUse drains and merges them into the closing span. Hermes runs as a single dispatcher and openclaw as an in-process daemon, so they use simpler in-process paths.
+
+  **New API surface (internal):**
+
+  - `HookOutput`: optional `phaseStopped?: number` + `topFindingRule?: string`. Plumbed from `ActionDecision` through `runtimeDecisionToHookOutput` for runtime denies (`phase_stopped` = 1–6) and from the early tool-gate path with `phase_stopped: 0`.
+  - `nioGuardAttributes(decision, riskLevel, riskScore, riskTags?, phaseStopped?, topFindingRule?)`: two new optional params; backwards-compatible.
+  - `recordPreToolUse(state, key, name, summary, attrs?, startMs?)`: optional `startMs` override so deny-path emission stamps the real eval-start time onto the span.
+  - `setPendingGuardAttrs` / `takePendingGuardAttrs`: new helper pair on `traces-collector` for the disk-backed bridge between separate hook processes.
+  - `CollectorState.pending_guard_attrs?: Record<spanKey, Record<string, unknown>>`: new state-file field; reset by `ensureTurn` / `endTurn` alongside `pending_spans`.
+
+  **Span name decision.** `execute_tool <toolName>` for both allow and deny, matching gen_ai semantic conventions. Filtering allow vs deny is via `nio.guard.decision` + span status — not via name suffix — so the same span name aggregates across attempts of the same tool.
+
+  **Genuinely missing from a deny span** (acceptable — the tool didn't run):
+
+  - `gen_ai.tool.call.result` (no output)
+  - `nio.tool.duration_ms` (no tool execution wall-clock — replaced by `nio.guard.eval_ms` which measures the guard evaluation window instead)
+
+  **Tests added (14, full suite 1093/1093 green):**
+
+  - `nioGuardAttributes` extended cases (`phase_stopped` = 0/non-zero/undefined, `top_finding_rule`)
+  - `recordPreToolUse` honours caller-supplied `startMs` + falls back to `Date.now()` when omitted
+  - `setPendingGuardAttrs` / `takePendingGuardAttrs` lifecycle (set / take / preserve siblings / drain on absent key / no mutation of input state)
+  - `ensureTurn` resets `pending_guard_attrs` on new turn
+  - collector-core PostToolUse drains `pending_guard_attrs` and merges them into the closing span (end-to-end with `InMemorySpanExporter`)
+  - Deny-path one-shot span emit produces ERROR status + full deny attribute set + real wall-clock from `evalStartMs` (end-to-end)
+  - Smoke regression: guard-hook deny path doesn't crash when no collector is configured (tracerProvider/loggerProvider stay null)
+
+  **Docs updated:**
+
+  - `docs/COLLECTOR-SIGNALS.md`: `nio.guard.*` attribute rows flipped from "OpenClaw only" to "all"; new attribute rows added; deleted the "Claude Code adoption queued as follow-up" note; new paragraph documenting the deny / confirm-denied synchronous emission contract.
+  - `docs/ARCHITECTURE.md`: Claude Code box updated to show guard-hook's new TracerProvider responsibilities (synchronous deny-span emission + `pending_guard_attrs` bridge to collector-hook).
+
+  **Files touched:**
+
+  - `src/adapters/types.ts`, `src/adapters/hook-engine.ts` — HookOutput extension + plumbing
+  - `src/scripts/lib/traces-collector.ts` — `nioGuardAttributes` signature, `recordPreToolUse` `startMs` param, `setPendingGuardAttrs` / `takePendingGuardAttrs` helpers
+  - `src/scripts/lib/traces-state-store.ts` — `pending_guard_attrs` field + ensureTurn / endTurn reset
+  - `src/scripts/lib/collector-core.ts` — PostToolUse handler drains the bridge
+  - `src/scripts/guard-hook.ts` — tracerProvider setup + deny-emit + per-decision bridge write
+  - `src/scripts/hook-cli.ts` — hermes pre_tool_call: time eval, set bridge, deny-emit
+  - `src/adapters/openclaw-plugin.ts` — time eval, pass new fields, add `nio.guard.eval_ms`
+
+- f335650: **Hermes trace pipeline — five bug fixes for end-to-end span delivery.**
+
+  Hermes was silently dropping every `execute_tool` span before this
+  release — only the `invoke_agent UserPromptSubmit` root reached
+  OTLP backends, child tool spans never showed up. Five distinct
+  bugs along the path; fixing only one in isolation wouldn't have
+  restored the pipeline.
+
+  **1. ESM sentinel beside bundled CLIs (commit `97fe3a5`).** Bun
+  emits the hook-cli / guard-hook / nio-cli bundles as ESM (`import` at
+  the top) but writes them with a `.js` extension. Node walks up from
+  the script file to the nearest `package.json` to decide ESM vs CJS,
+  and the install dirs (`~/.hermes/plugins/nio/scripts/`, the Claude
+  Code plugin cache, etc.) have no parent declaring `"type": "module"`.
+  So every hook invocation crashed with:
+
+  ```text
+  SyntaxError: Cannot use import statement outside a module
+  ```
+
+  Fix: `scripts/build.js` writes a minimal `{"type":"module"}` to
+  `package.json` beside each bundle output dir; `plugins/hermes/setup.sh`
+  explicitly copies the sentinel alongside the two CLIs (its install
+  flow copies individual files, not a recursive directory).
+
+  **2. `provider.getTracer()` instead of global `trace.getTracer()`
+  (commit `7818cb7`).** Bun's single-file bundle ships two physical
+  copies of `@opentelemetry/api` (one direct, one via
+  `@opentelemetry/sdk-trace-node`). `provider.register()` writes the
+  global to API-instance A; `trace.getTracer()` reads from API-instance
+  B and gets a no-op tracer. Spans get `.startSpan()`/`.end()`/
+  `.forceFlush()`'d silently — never reach `SimpleSpanProcessor`, never
+  reach `OTLPTraceExporter`, no `TraceService/Export` RPC fires.
+
+  Fix: three call sites in `traces-collector.ts` (`recordPostToolUse`,
+  `recordPostTaskToolUse`, `endTurn`) now use `provider.getTracer(...)`
+  directly with the locally-passed `NodeTracerProvider`, bypassing the
+  global registry entirely.
+
+  **3. Pending state migration on session-id promotion (commit
+  `8bc988b`).** Hermes's `pre_tool_call` shell-hook payload sometimes
+  arrives with `session_id=""` while the matching `post_tool_call`
+  carries the real session id. `ensureTurn()` was treating that as a
+  session change between the two hook-cli subprocess invocations,
+  wiping `pending_spans` mid-flight. Post then couldn't find the
+  pre's entry and `recordPostToolUse` early-returned.
+
+  Fix: when previous state was on a sentinel session (`""` or
+  `"unknown"`) and a real session arrives, migrate `pending_spans` +
+  `pending_guard_attrs` into the new turn instead of resetting.
+
+  **4. Non-deterministic `turn_trace_id` + sentinel passthrough
+  (commit `58a4242`).** `turn_trace_id` was derived from
+  `MD5(session_id + ":" + turn_number)`. Identical (session, turn)
+  combinations produced identical 32-char hex forever, so a Hermes
+  session at turn N today derived the same trace id as turn N
+  yesterday — yesterday's span ids appeared stitched into today's
+  trace tree. Worse, the session-promotion fix in #3 was incorrectly
+  resetting `turn_number` to 1 each time, so every promoted turn
+  across one entire Hermes session re-derived `MD5(real:1)` and
+  collapsed onto a single trace id.
+
+  Fix (two parts):
+
+  - `turn_trace_id` is now a fresh 16-byte random hex per turn,
+    generated in `ensureTurn` and persisted to the state file. PRE/POST
+    processes share it via state-file load rather than re-deriving.
+  - `ensureTurn` ignores sentinel `session_id` when prev holds a real
+    session — falls back to `prev.session_id` and continues the
+    current turn instead of resetting.
+
+  **5. Composite spanKey fallback for Hermes pre/post asymmetry
+  (commit `42f194c`).** Hermes's `pre_tool_call` doesn't carry
+  `tool_call_id` while `post_tool_call` does (the asymmetry is at
+  `agent/agent_runtime_helpers.py invoke_tool()` —
+  `get_pre_tool_call_block_message()` is called without threading the
+  in-scope `tool_call_id`). Old `spanKey()` used
+  `tool_use_id || ${tool_name}:${Date.now()}` as key — pre saved under
+  a random timestamp-based key, post looked up the real
+  `tool_use_id`, lookup missed.
+
+  Fix:
+
+  - `spanKey()` fallback is now DETERMINISTIC —
+    `${tool_name}:${tool_summary}` instead of `${tool_name}:${Date.now()}`.
+  - New `resolveSpanKey()` in collector-core's `PostToolUse` path
+    tries the primary spanKey first, then the composite fallback if
+    the primary missed. Handles asymmetric platforms where pre's
+    spanKey is the composite but post's is the real tool_use_id.
+
+  **End-to-end verified** against the bundled `~/.hermes/plugins/nio/scripts/hook-cli.js`
+  with an OTLP HTTP sink intercepting the wire payload. Two
+  consecutive turns under one Hermes session produce 4 spans each
+  (1 turn root + 3 tool children) with distinct trace ids and
+  correct parent-child structure.
+
+- f335650: **Promote `nio.platform` + `gen_ai.agent.name` to OTel resource attributes.**
+
+  Three telemetry-identity attributes were previously per-span (or
+  per-log) attributes only, making them invisible as top-level
+  dimensions in most OTLP backends:
+
+  ```text
+  Before:
+    service.name      = "nio"          (shared across all four platforms)
+    nio.platform      = span attribute (each tool span)
+    gen_ai.agent.name = on turn span + log records only
+  ```
+
+  After this release, all three live on the OTel `Resource` that every
+  provider (tracer / logger / meter) constructs — so every signal nio
+  emits (every span, log record, metric data point) carries them
+  automatically at the resource level. SigNoz and similar backends
+  surface resource attributes as primary service selectors / filter
+  columns:
+
+  ```text
+  After:
+    service.name      = "nio-<platform>"     (nio-hermes / nio-openclaw / nio-claude-code / nio-codex)
+    nio.platform      = "<platform>"         (raw value, no parsing)
+    gen_ai.agent.name = "<configured value>" (only when user set agent_name)
+  ```
+
+  Provider factory signatures all gain `(platform: string, agentName?: string)`:
+
+  ```ts
+  createTracerProvider(config, platform, agentName?)
+  createLoggerProvider(config, platform, agentName?)
+  createMeterProvider(config, platform, agentName?)
+  ```
+
+  A shared `buildNioResource(platform, agentName?)` helper in
+  `traces-collector.ts` is the single source of truth.
+
+  Threaded through every provider call site:
+  `src/scripts/guard-hook.ts`, `src/scripts/collector-hook.ts`,
+  `src/scripts/scanner-hook.ts`, `src/scripts/hook-cli.ts`
+  (runHermesCollector + pre_tool_call branch), `src/adapters/openclaw-plugin.ts`.
+
+  `agent_name` is read from config and passed only when configured;
+  empty/unset means "no `gen_ai.agent.name` on the resource". The
+  span-level fallback used by `endTurn()` still defaults to platform
+  for unconfigured users, so the turn-span behaviour is unchanged.
+
+  **Breaking change**: `service.name` changes from `"nio"` to
+  `"nio-<platform>"`. Existing SigNoz / Grafana / Datadog dashboards
+  filtered on `service.name="nio"` will not match new data — re-target
+  to `service.name=nio-*` (wildcard) or filter on
+  `nio.platform` instead. Historical data is unaffected.
+
+- f335650: **Test isolation + trace pipeline e2e task docs.**
+
+  `pnpm test` used to silently pollute `~/.nio/audit.jsonl` on every
+  run. Integration tests construct `HookAdapter` instances and call
+  `evaluateHook` without passing `auditOpts`, so `writeAuditLog`
+  fell back to `resolveAuditPath(undefined)` →
+  `${NIO_HOME ?? ~/.nio}/audit.jsonl`. Tests never set `NIO_HOME`, so
+  each test run appended ~100 fake guard entries to the developer's
+  real audit log, making it unreliable for debugging real activity.
+
+  Fix: new tiny `src/tests/helpers/isolate-nio-home.ts` pins
+  `process.env.NIO_HOME` to a per-process `mkdtempSync()` tmpdir if
+  not already set. Wired in via `node --import` at the front of the
+  `test` script in `package.json` — runs once per test process before
+  any production module is imported. Subprocess-spawning tests
+  (`hook-cli.test.ts`, `nio-cli.test.ts`) already pass an isolated
+  `NIO_HOME` via the spawned child's env and are unaffected.
+
+  Verified: a full `pnpm test` run no longer adds entries to
+  `~/.nio/audit.jsonl` (measured the per-platform count delta — 0
+  new entries).
+
+  **Also adds two e2e task docs** for the trace pipeline:
+
+  - `e2e-test/hermes-trace-e2e-task.md` — sandbox-isolated
+    (`NIO_HOME=$(mktemp -d)`), three benign `terminal` commands,
+    verify 4 spans (1 turn root + 3 tool children) reach OTLP under
+    `service.name=nio-hermes`. Never touches the user's real
+    `~/.nio/` or `~/.hermes/plugins/nio/`.
+  - `e2e-test/openclaw-trace-e2e-task.md` — sandbox NIO_HOME + parallel
+    daemon via `openclaw --profile trace-e2e gateway`, nio plugin
+    installed into `~/.openclaw-trace-e2e/` via setup.sh's
+    `--openclaw-home` flag. Real launchctl-managed gateway keeps
+    running undisturbed.
+
+  Each doc's "regression coverage" section names the commits the smoke
+  pins so future changes can be cross-checked.
+
 ## 2.4.1
 
 ### Patch Changes
