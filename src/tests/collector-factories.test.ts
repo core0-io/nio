@@ -26,15 +26,15 @@ const baseEnabled: CollectorConfig = {
 
 describe('createMeterProvider', () => {
   it('returns null when endpoint is missing', () => {
-    assert.equal(createMeterProvider({ ...baseEnabled, endpoint: '' }), null);
+    assert.equal(createMeterProvider({ ...baseEnabled, endpoint: '' }, 'test'), null);
   });
 
   it('returns null when metrics_enabled is false (even with endpoint set)', () => {
-    assert.equal(createMeterProvider({ ...baseEnabled, metrics_enabled: false }), null);
+    assert.equal(createMeterProvider({ ...baseEnabled, metrics_enabled: false }, 'test'), null);
   });
 
   it('returns a provider when endpoint set and metrics_enabled true', () => {
-    const p = createMeterProvider(baseEnabled);
+    const p = createMeterProvider(baseEnabled, 'test');
     assert.notEqual(p, null);
     p?.shutdown();
   });
@@ -42,15 +42,15 @@ describe('createMeterProvider', () => {
 
 describe('createTracerProvider', () => {
   it('returns null when endpoint is missing', () => {
-    assert.equal(createTracerProvider({ ...baseEnabled, endpoint: '' }), null);
+    assert.equal(createTracerProvider({ ...baseEnabled, endpoint: '' }, 'test'), null);
   });
 
   it('returns null when traces_enabled is false (even with endpoint set)', () => {
-    assert.equal(createTracerProvider({ ...baseEnabled, traces_enabled: false }), null);
+    assert.equal(createTracerProvider({ ...baseEnabled, traces_enabled: false }, 'test'), null);
   });
 
   it('returns a provider when endpoint set and traces_enabled true', () => {
-    const p = createTracerProvider(baseEnabled);
+    const p = createTracerProvider(baseEnabled, 'test');
     assert.notEqual(p, null);
     p?.shutdown();
   });
@@ -58,15 +58,15 @@ describe('createTracerProvider', () => {
 
 describe('createLoggerProvider', () => {
   it('returns null when endpoint is missing', () => {
-    assert.equal(createLoggerProvider({ ...baseEnabled, endpoint: '' }), null);
+    assert.equal(createLoggerProvider({ ...baseEnabled, endpoint: '' }, 'test'), null);
   });
 
   it('returns null when logs_enabled is false (even with endpoint set)', () => {
-    assert.equal(createLoggerProvider({ ...baseEnabled, logs_enabled: false }), null);
+    assert.equal(createLoggerProvider({ ...baseEnabled, logs_enabled: false }, 'test'), null);
   });
 
   it('returns a provider when endpoint set and logs_enabled true', () => {
-    const p = createLoggerProvider(baseEnabled);
+    const p = createLoggerProvider(baseEnabled, 'test');
     assert.notEqual(p, null);
     p?.shutdown();
   });

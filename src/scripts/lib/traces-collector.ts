@@ -234,7 +234,27 @@ function randomSpanId(): string {
 // OTEL provider factory
 // ---------------------------------------------------------------------------
 
-export function createTracerProvider(config: CollectorConfig): NodeTracerProvider | null {
+/**
+ * Build the shared resource for every OTel provider nio constructs.
+ * Three attributes promoted to resource-level so they surface as
+ * top-level columns / filter chips in backends:
+ *   - `service.name`        = `nio-<platform>`   (splits hermes / claude-code / codex / openclaw into separate services)
+ *   - `nio.platform`        = `<platform>`      (raw value for users who want to filter without parsing service.name)
+ *   - `gen_ai.agent.name`   = `<agentName>`    (when configured) — auto-attached to every span / log / metric record
+ */
+export function buildNioResource(platform: string, agentName?: string) {
+  return resourceFromAttributes({
+    [ATTR_SERVICE_NAME]: `nio-${platform}`,
+    'nio.platform': platform,
+    ...(agentName && agentName.length > 0 ? { 'gen_ai.agent.name': agentName } : {}),
+  });
+}
+
+export function createTracerProvider(
+  config: CollectorConfig,
+  platform: string,
+  agentName?: string,
+): NodeTracerProvider | null {
   if (!config.endpoint) return null;
   if (!config.traces_enabled) return null;
 
@@ -263,7 +283,7 @@ export function createTracerProvider(config: CollectorConfig): NodeTracerProvide
   }
 
   const provider = new NodeTracerProvider({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'nio' }),
+    resource: buildNioResource(platform, agentName),
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
   provider.register();

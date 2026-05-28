@@ -133,13 +133,16 @@ async function main(): Promise<void> {
 
   // Set up OTEL providers for metrics + audit logs + traces
   const collectorConfig = loadCollectorConfig();
-  const meterProvider = createMeterProvider(collectorConfig);
+  const resourceAgentName = config.agent_name && config.agent_name.length > 0
+    ? config.agent_name
+    : undefined;
+  const meterProvider = createMeterProvider(collectorConfig, PLATFORM, resourceAgentName);
   const tracerProvider = collectorConfig.enabled
-    ? createTracerProvider(collectorConfig)
+    ? createTracerProvider(collectorConfig, PLATFORM, resourceAgentName)
     : null;
   const logsConfig = config.collector?.logs;
   const loggerProvider = (logsConfig?.enabled !== false)
-    ? createLoggerProvider(collectorConfig)
+    ? createLoggerProvider(collectorConfig, PLATFORM, resourceAgentName)
     : null;
 
   // Time the guard evaluation so we can stamp it onto the tool span

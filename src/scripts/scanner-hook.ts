@@ -70,7 +70,8 @@ let _loggerProvider: import('@opentelemetry/sdk-logs').LoggerProvider | null | u
 function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider | null {
   if (_loggerProvider === undefined) {
     try {
-      _loggerProvider = createLoggerProvider(loadCollectorConfig());
+      const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
+      _loggerProvider = createLoggerProvider(loadCollectorConfig(), PLATFORM, resourceAgentName);
     } catch {
       _loggerProvider = null;
     }

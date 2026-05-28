@@ -134,11 +134,18 @@ export function registerOpenClawPlugin(
     : 'openclaw';
 
   const collectorConfig = loadCollectorConfig();
-  const tracerProvider = createTracerProvider(collectorConfig);
-  const meterProvider = createMeterProvider(collectorConfig);
+  // Resource-level agent name is only set when the operator actually
+  // configured one — empty / unset means "no gen_ai.agent.name on the
+  // resource". Span-level fallback (used by endTurn below) keeps its
+  // own platform-default behaviour.
+  const resourceAgentName = config.agent_name && config.agent_name.length > 0
+    ? config.agent_name
+    : undefined;
+  const tracerProvider = createTracerProvider(collectorConfig, 'openclaw', resourceAgentName);
+  const meterProvider = createMeterProvider(collectorConfig, 'openclaw', resourceAgentName);
   const logsConfig = config.collector?.logs;
   const loggerProvider = (logsConfig?.enabled !== false)
-    ? createLoggerProvider(collectorConfig)
+    ? createLoggerProvider(collectorConfig, 'openclaw', resourceAgentName)
     : null;
   const auditOpts: WriteAuditLogOptions = { loggerProvider, logsConfig };
 

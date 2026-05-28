@@ -58,12 +58,17 @@ import { OTLPMetricExporter as OTLPMetricExporterHttp } from '@opentelemetry/exp
 import { OTLPMetricExporter as OTLPMetricExporterGrpc } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
+import { buildNioResource } from './traces-collector.js';
 
 // ---------------------------------------------------------------------------
 // Provider factory
 // ---------------------------------------------------------------------------
 
-export function createMeterProvider(config: CollectorConfig): MeterProvider | null {
+export function createMeterProvider(
+  config: CollectorConfig,
+  platform: string,
+  agentName?: string,
+): MeterProvider | null {
   if (!config.endpoint) return null;
   if (!config.metrics_enabled) return null;
 
@@ -92,6 +97,7 @@ export function createMeterProvider(config: CollectorConfig): MeterProvider | nu
   }
 
   return new MeterProvider({
+    resource: buildNioResource(platform, agentName),
     readers: [
       new PeriodicExportingMetricReader({
         exporter,

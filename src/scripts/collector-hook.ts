@@ -66,10 +66,11 @@ function readStdin(): Promise<HookStdinPayload | null> {
   });
 }
 
-const meterProvider = createMeterProvider(config);
-const tracerProvider = createTracerProvider(config);
+const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
+const meterProvider = createMeterProvider(config, PLATFORM, resourceAgentName);
+const tracerProvider = createTracerProvider(config, PLATFORM, resourceAgentName);
 const loggerProvider = (config.enabled && logsConfig.enabled !== false)
-  ? createLoggerProvider(config)
+  ? createLoggerProvider(config, PLATFORM, resourceAgentName)
   : null;
 
 async function main(): Promise<void> {

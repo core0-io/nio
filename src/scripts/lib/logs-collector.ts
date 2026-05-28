@@ -21,11 +21,9 @@ import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-log
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import { OTLPLogExporter as OTLPLogExporterHttp } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPLogExporter as OTLPLogExporterGrpc } from '@opentelemetry/exporter-logs-otlp-grpc';
-import { resourceFromAttributes } from '@opentelemetry/resources';
-import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
-import { nioGuardAttributes } from './traces-collector.js';
+import { nioGuardAttributes, buildNioResource } from './traces-collector.js';
 
 /** Minimal audit entry shape for OTEL log emission (avoids cross-rootDir import). */
 interface AuditEntry {
@@ -50,7 +48,11 @@ const RISK_TO_SEVERITY: Record<string, SeverityNumber> = {
 // Provider factory
 // ---------------------------------------------------------------------------
 
-export function createLoggerProvider(config: CollectorConfig): LoggerProvider | null {
+export function createLoggerProvider(
+  config: CollectorConfig,
+  platform: string,
+  agentName?: string,
+): LoggerProvider | null {
   if (!config.endpoint) return null;
   if (!config.logs_enabled) return null;
 
@@ -79,7 +81,7 @@ export function createLoggerProvider(config: CollectorConfig): LoggerProvider | 
   }
 
   return new LoggerProvider({
-    resource: resourceFromAttributes({ [ATTR_SERVICE_NAME]: 'nio' }),
+    resource: buildNioResource(platform, agentName),
     processors: [new SimpleLogRecordProcessor(exporter)],
   });
 }

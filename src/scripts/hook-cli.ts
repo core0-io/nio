@@ -191,10 +191,13 @@ async function runHermesCollector(
   // when both OTLP and local logging are off.
   if (!collectorConfig.enabled && logsConfig?.local === false) return;
 
-  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig) : null;
-  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig) : null;
+  const resourceAgentName = config.agent_name && config.agent_name.length > 0
+    ? config.agent_name
+    : undefined;
+  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
   const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
-    ? createLoggerProvider(collectorConfig)
+    ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
   await dispatchCollectorEvent({
@@ -318,17 +321,20 @@ async function main(): Promise<void> {
     const adapter = selectAdapter(platform!, config);
 
     const collectorConfig = loadCollectorConfig();
+    const resourceAgentName = config.agent_name && config.agent_name.length > 0
+      ? config.agent_name
+      : undefined;
     const meterProvider = collectorConfig.enabled
-      ? createMeterProvider(collectorConfig) : null;
+      ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
     const tracerProvider = collectorConfig.enabled
-      ? createTracerProvider(collectorConfig) : null;
+      ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
     // LoggerProvider sends guard decisions to OTLP /v1/logs — matches
     // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
     // "Logs" view stays empty for Hermes guard activity even though
     // metrics and traces flow correctly.
     const logsConfig = config.collector?.logs;
     const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
-      ? createLoggerProvider(collectorConfig) : null;
+      ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
 
     const evalStartMs = Date.now();
     const result = await evaluateHook(
