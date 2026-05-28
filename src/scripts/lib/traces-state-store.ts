@@ -47,7 +47,7 @@ export interface PendingTaskSpan {
 export interface CollectorState {
   session_id: string;
   turn_number: number;
-  turn_trace_id: string;    // MD5(session_id + ":" + turn_number)
+  turn_trace_id: string;    // 16-byte random hex, minted once per turn in ensureTurn()
   turn_start_ms: number;
   pending_spans: Record<string, PendingToolSpan>;        // keyed by tool_use_id or fallback
   pending_task_spans: Record<string, PendingTaskSpan>;   // keyed by task_id

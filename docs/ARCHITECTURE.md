@@ -641,6 +641,22 @@ All three platforms feed the same `traces-collector` pure-function API and the s
 - `risk.score` — histogram of 0–1 risk scores, enables avg/p50/p99 queries
 - `tool_use.count` and `turn.count` — recorded by collector-hook / openclaw-plugin on hook events
 
+### Resource attributes
+
+Every Nio provider (tracer / logger / meter) constructs an OTel `Resource`
+with three identity attributes that flow onto **every** span, log
+record, and metric data point that provider emits:
+
+| Attribute | Value |
+| --- | --- |
+| `service.name` | `nio-<platform>` — one independent service per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw` |
+| `nio.platform` | Raw platform string, same value as the suffix of `service.name` (offered separately so backends that don't expose `service.name` as a queryable attribute still have a filter handle) |
+| `gen_ai.agent.name` | Operator-set [`agent_name`](configuration.html#agent_name) from `~/.nio/config.yaml`; **absent on the resource when unconfigured** (turn span carries a platform-default fallback as a span attribute instead) |
+
+Single source of truth: [`buildNioResource(platform, agentName?)`](../src/scripts/lib/traces-collector.ts) — called from each provider factory (`createTracerProvider` / `createLoggerProvider` / `createMeterProvider`) at provider construction. Resource is sent once per OTLP export batch and inherited by every contained span/log/metric.
+
+> **Breaking in v2.4.2** — earlier releases used `service.name="nio"` for all platforms and put `nio.platform` only on individual spans. Existing dashboards filtered on `service.name="nio"` should be re-targeted to `service.name=nio-*` or filter on `nio.platform`.
+
 ### Traces
 
 One trace per conversation turn, with child spans per tool call / task. Span

@@ -47,6 +47,18 @@
 
       <div class="doc">
 
+        <h2 id="resource-attrs">Resource attributes</h2>
+        <p>Every Nio provider (tracer / logger / meter) constructs an OTel <code>Resource</code> with three identity attributes that flow onto <strong>every</strong> span, log record, and metric data point that provider emits. Backends surface them as top-level service selectors / filter columns.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>service.name</code></td><td><code>nio-&lt;platform&gt;</code> — one independent service per agent runtime: <code>nio-claude-code</code>, <code>nio-codex</code>, <code>nio-hermes</code>, <code>nio-openclaw</code></td></tr>
+            <tr><td><code>nio.platform</code></td><td>Raw platform string, same value as the suffix of <code>service.name</code> (offered separately so backends that don't expose <code>service.name</code> as a queryable attribute still have a filter handle)</td></tr>
+            <tr><td><code>gen_ai.agent.name</code></td><td>Operator-set <a href="configuration.html#agent_name"><code>agent_name</code></a> from <code>~/.nio/config.yaml</code>; <strong>absent on the resource when unconfigured</strong> (turn span carries a platform-default fallback as a span attribute instead — see the turn-span table below)</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Behaviour change in v2.4.2.</strong> Earlier releases set <code>service.name="nio"</code> for every platform and put <code>nio.platform</code> only on individual spans. Existing dashboards filtered on <code>service.name="nio"</code> will not match new data — re-target to <code>service.name=nio-*</code> (wildcard) or filter on <code>nio.platform</code>. Historical traces / logs / metrics keep their original <code>service.name=nio</code>.</p>
+
         <h2 id="hierarchy">Span hierarchy</h2>
         <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
   ├─ Span: execute_tool &lt;name&gt;   (PreToolUse → PostToolUse)
@@ -89,7 +101,7 @@
             <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.tool.error</code></td><td>Error message when the tool failed</td><td>PostToolUse</td><td>all</td></tr>
-            <tr><td><code>nio.tool.duration_ms</code></td><td>Wall-clock tool execution time (ms)</td><td>PostToolUse</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.tool.duration_ms</code></td><td>Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use <code>nio.guard.eval_ms</code> instead)</td><td>PostToolUse</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.tool.run_id</code></td><td>OpenClaw-internal run identifier</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>PostToolUse</td><td>all</td></tr>

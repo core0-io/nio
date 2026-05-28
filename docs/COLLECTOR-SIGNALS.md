@@ -63,6 +63,24 @@ Cross-signal: the same key name carries the same meaning across metrics, traces,
 
 ---
 
+## Resource attributes
+
+Three identity attributes live on the OTel `Resource` that every Nio
+provider (tracer / logger / meter) constructs. Resource attrs flow to
+every span, log record, and metric data point that provider emits —
+backends surface them as top-level service selectors / filter
+columns.
+
+| Attribute | Value | Notes |
+| --- | --- | --- |
+| `service.name` | `nio-<platform>` | One per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw`. Backends like SigNoz / Jaeger split these into independent services in their main selector. |
+| `nio.platform` | `<platform>` | Raw value of the platform tag (`claude-code` / `codex` / `hermes` / `openclaw`). Provided as a separate attr so users who don't want to parse `service.name` can filter on it directly. |
+| `gen_ai.agent.name` | `<configured value>` | Only set when the operator configures [`agent_name`](configuration.html#agent_name) in `~/.nio/config.yaml`. Absent on the resource when unset. The turn span carries the same key as a span-level attribute with a platform-default fallback for unconfigured users (see the turn-span attribute table below). |
+
+> **Behaviour change in v2.4.2.** Earlier releases set `service.name=nio` for every platform and put `nio.platform` only on individual spans. Existing dashboards / alerts filtered on `service.name="nio"` will not match new data — re-target to `service.name=nio-*` (wildcard) or filter on `nio.platform` instead. Historical traces / logs / metrics keep their original `service.name=nio`.
+
+---
+
 ## Metrics
 
 Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
@@ -153,7 +171,7 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
 | `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
-| `nio.tool.duration_ms` | Wall-clock tool execution time (ms) | PostToolUse | OpenClaw only |
+| `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
 | `nio.tool_summary` | One-line summary derived from tool input | PostToolUse | all |
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | PostToolUse | all |
@@ -166,7 +184,6 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.guard.phase_stopped` | Phase that produced the verdict (`0` = tool-gate, `1`–`6` = runtime pipeline) | PreToolUse | all |
 | `nio.guard.top_finding_rule` | `rule_id` of the highest-ranked finding (when any fired) | PreToolUse | all |
 | `nio.guard.eval_ms` | Wall-clock cost of the guard evaluation (ms) | PreToolUse | all |
-| `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run) | PostToolUse | OpenClaw only |
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
