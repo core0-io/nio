@@ -435,7 +435,14 @@ export async function recordPostToolUse(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('nio-collector', '1.0.0');
+  // Use provider.getTracer instead of trace.getTracer(global) so that
+  // bundled hook scripts emit spans correctly. Bun's hook-cli bundle
+  // can resolve @opentelemetry/api separately from
+  // @opentelemetry/sdk-trace-node, leaving the global registry split
+  // between two API instances — provider.register() writes to one,
+  // trace.getTracer() reads from the other and gets a no-op tracer.
+  // Going through the provider directly side-steps the global path.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
   const toolCallId =
     (pending.attributes?.['gen_ai.tool.call.id'] as string | undefined) ??
     undefined;
@@ -497,7 +504,14 @@ export async function recordPostTaskToolUse(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('nio-collector', '1.0.0');
+  // Use provider.getTracer instead of trace.getTracer(global) so that
+  // bundled hook scripts emit spans correctly. Bun's hook-cli bundle
+  // can resolve @opentelemetry/api separately from
+  // @opentelemetry/sdk-trace-node, leaving the global registry split
+  // between two API instances — provider.register() writes to one,
+  // trace.getTracer() reads from the other and gets a no-op tracer.
+  // Going through the provider directly side-steps the global path.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     'task:execute',
     {
@@ -648,7 +662,14 @@ export async function endTurn(
     isRemote: true,
   });
 
-  const tracer = trace.getTracer('nio-collector', '1.0.0');
+  // Use provider.getTracer instead of trace.getTracer(global) so that
+  // bundled hook scripts emit spans correctly. Bun's hook-cli bundle
+  // can resolve @opentelemetry/api separately from
+  // @opentelemetry/sdk-trace-node, leaving the global registry split
+  // between two API instances — provider.register() writes to one,
+  // trace.getTracer() reads from the other and gets a no-op tracer.
+  // Going through the provider directly side-steps the global path.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
   const span = tracer.startSpan(
     'invoke_agent UserPromptSubmit',
     {

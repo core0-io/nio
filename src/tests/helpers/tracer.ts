@@ -32,10 +32,10 @@ export function makeInMemoryTracer(): InMemoryTracer {
   const provider = new NodeTracerProvider({
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
-  // recordPostToolUse / guard-hook deny-path emit fetch via the GLOBAL
-  // `trace.getTracer(...)` API rather than `provider.getTracer(...)`,
-  // so we have to register this provider as the global one for the
-  // exporter to see anything.
+  // Spans flow through `provider.getTracer(...)` now (not the global
+  // API), but `.register()` is still cheap and lets any auto-
+  // instrumentation in this process find the provider too. Kept for
+  // parity with how nio's real createTracerProvider sets up.
   provider.register();
   return {
     provider,
