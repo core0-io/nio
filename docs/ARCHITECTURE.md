@@ -104,9 +104,9 @@ if it exceeds the deny threshold for the active protection level.
 │   │  path traversal · sensitive path detection          │           │
 │   └─────────────────────────────────────────────────────┘           │
 │                                                                     │
-│   Finding[] → runtime score ──► critical? ──YES──► DENY (exit)     │
+│   Finding[] → runtime score ──► ≥ deny threshold? ──YES──► DENY    │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not critical
+                     │ below deny threshold
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 3: Static Analysis (<50ms) → `static` score                   │
@@ -115,9 +115,9 @@ if it exceeds the deny threshold for the active protection level.
 │   file content ──► 15 regex rules ──► base64 decode pass           │
 │   (SHELL_EXEC, REMOTE_LOADER, OBFUSCATION, WEBHOOK_EXFIL, ...)    │
 │                                                                     │
-│   Finding[] → static score ──► critical? ──YES──► DENY (exit)      │
+│   Finding[] → static score ──► ≥ deny threshold? ──YES──► DENY     │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not critical
+                     │ below deny threshold
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 4: Behavioural Analysis (<200ms) → `behavioural` score          │
@@ -141,9 +141,9 @@ if it exceeds the deny threshold for the active protection level.
 │              Cross-file Context Aggregation                         │
 │              capability detection (C2, eval)                        │
 │                                                                     │
-│   Finding[] → behavioural score ──► critical? ──YES──► DENY (exit)  │
+│   Finding[] → behavioural score ──► ≥ deny threshold? ──YES──► DENY │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not critical
+                     │ below deny threshold
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 5: LLM Analysis (2–10s) → `llm` score                        │
@@ -152,9 +152,9 @@ if it exceeds the deny threshold for the active protection level.
 │   action context ──► Claude semantic analysis                       │
 │   (Write: file content, Bash: shell script, Network: request JSON) │
 │                                                                     │
-│   Finding[] → llm score ──► critical? ──YES──► DENY (exit)         │
+│   Finding[] → llm score ──► ≥ deny threshold? ──YES──► DENY        │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not critical
+                     │ below deny threshold
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Phase 6: External Scoring APIs → `external` scores (0..N endpoints) │
@@ -165,9 +165,9 @@ if it exceeds the deny threshold for the active protection level.
 │   ← { score: 0.0–1.0, reason?: string }                            │
 │                                                                     │
 │   All enabled endpoints run concurrently; each contributes via      │
-│   its own `weight`. Any endpoint at critical ──► DENY (exit).       │
+│   its own `weight`. Any endpoint ≥ deny threshold ──► DENY (exit).  │
 └────────────────────┬────────────────────────────────────────────────┘
-                     │ not critical
+                     │ below deny threshold
                      ▼
 ┌─────────────────────────────────────────────────────────────────────┐
 │ Final: Weighted Score Aggregation                                   │

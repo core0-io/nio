@@ -55,7 +55,7 @@
             <tr><td>Engine</td><td>Runtime · regex + substring</td></tr>
             <tr><td>Score weight</td><td><code>scoring_weights.runtime</code> — default <strong>1.0</strong></td></tr>
             <tr><td>Decodes</td><td>base64 → re-scan</td></tr>
-            <tr><td>Short-circuit</td><td>any CRITICAL finding → deny immediately</td></tr>
+            <tr><td>Short-circuit</td><td>score ≥ active level's deny threshold → deny immediately (<a href="scoring.html#short-circuit">strict 0.5 / balanced 0.8 / permissive 0.9</a>)</td></tr>
           </tbody>
         </table>
 

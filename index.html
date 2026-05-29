@@ -1465,7 +1465,7 @@
     <div>
       <div class="eyebrow">The Execution Pipeline · PreToolUse</div>
       <h1>Seven phases decide the fate of every <em>tool call</em>.</h1>
-      <p>Each call enters at Phase 0 and descends through gates and scoring engines. The pipeline short-circuits the moment any phase lands a critical finding; otherwise the final score is a weighted average across every engine that ran.</p>
+      <p>Each call enters at Phase 0 and descends through gates and scoring engines. The pipeline short-circuits the moment any phase emits a score that crosses the active level's deny threshold (strict 0.5, balanced 0.8, permissive 0.9); otherwise the final score is a weighted average across every engine that ran.</p>
     </div>
     <div class="legend">
       <div class="legend-item"><span class="legend-swatch" style="background:var(--sev-0)"></span>score → safe</div>
@@ -1688,7 +1688,7 @@ model:  <span class="bad">intent mismatch · 0.81</span>` },
 
 // ——— scenarios ———
 // Scoring protocol:
-//   If any phase short-circuits (CRIT finding), final = MAX of scored phases up to that point.
+//   If any phase short-circuits (score ≥ active deny threshold), final = MAX of scored phases up to that point.
 //   If the pipeline runs to completion, final = Σ(weight × score) / Σ(weight).
 // Phases 0 and 1 are gates — they pass or deny but don't emit a score.
 const SCENARIOS = [
@@ -1738,8 +1738,8 @@ function verdictFor(score, protection) {
 }
 
 // The verdict actually shown for a scenario under the current protection level.
-//   - Short-circuit allow/deny (Phase 0/1 gate, or any phase with a critical
-//     finding) is level-independent — the hardcoded scenario.verdict wins.
+//   - Short-circuit allow/deny (Phase 0/1 gate, or any phase score ≥ deny
+//     threshold) is level-independent — the hardcoded scenario.verdict wins.
 //   - Otherwise (full pipeline ran), derive the verdict from the final
 //     weighted score using THRESHOLDS for the active protection level.
 function actualVerdict(scenario, protection) {
@@ -1758,10 +1758,13 @@ function computeFinal(scenario, uptoPhase) {
     return { value: 0, method: 'allow-gate', parts: [] };
   }
 
-  // Short-circuit DENY → final is 1.0 (critical finding = max possible).
+  // Short-circuit DENY → final is the highest scoring phase's score. The
+  // orchestrator takes Math.max(weighted_avg, triggering_score), and when
+  // only one phase has fired the triggering score IS the max — so we just
+  // surface the top entry's score here.
   if (scenario.shortCircuit && scenario.verdict === 'deny' && uptoPhase >= scenario.verdictAt) {
     const top = entries.length ? entries.reduce((a, b) => b.score > a.score ? b : a) : null;
-    return { value: 1.0, method: 'short-circuit', parts: entries, top };
+    return { value: top ? top.score : 0, method: 'short-circuit', parts: entries, top };
   }
 
   if (entries.length === 0) return { value: 0, method: 'none', parts: [] };
@@ -2134,7 +2137,7 @@ function applyVerdict() {
     vIcon.textContent = '■';
     vTitle.textContent = `DENY · blocked at phase ${layer.phase}`;
     vSub.textContent = final.method === 'short-circuit'
-      ? `short-circuit · critical finding = max score`
+      ? `short-circuit · phase score ≥ ${THRESHOLDS[state.protection].deny}`
       : `${state.protection} · score ≥ ${THRESHOLDS[state.protection].deny}`;
   } else if (v === 'allow') {
     vIcon.textContent = '→';

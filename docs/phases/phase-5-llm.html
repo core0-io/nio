@@ -55,7 +55,7 @@
             <tr><td>Engine</td><td>Claude API (default model: <code>claude-sonnet-4-20250514</code>)</td></tr>
             <tr><td>Score weight</td><td><code>scoring_weights.llm</code> — default <strong>1.0</strong></td></tr>
             <tr><td>Default state</td><td><strong>disabled</strong> — needs explicit enable + API key</td></tr>
-            <tr><td>Short-circuit</td><td>any CRITICAL finding → deny immediately</td></tr>
+            <tr><td>Short-circuit</td><td>score ≥ active level's deny threshold → deny immediately (<a href="scoring.html#short-circuit">strict 0.5 / balanced 0.8 / permissive 0.9</a>)</td></tr>
           </tbody>
         </table>
 
@@ -82,7 +82,7 @@
 
         <h2>Trade-offs</h2>
         <ul>
-          <li><strong>Cost</strong>: every guarded action that reaches Phase 5 makes a Claude API call. Phases 2–4 short-circuit on critical findings, so most malicious actions never reach Phase 5 — but benign ones do, and the bill scales with your usage.</li>
+          <li><strong>Cost</strong>: every guarded action that reaches Phase 5 makes a Claude API call. Phases 2–4 short-circuit when a phase score crosses the active deny threshold, so most malicious actions never reach Phase 5 — but benign ones do, and the bill scales with your usage.</li>
           <li><strong>Latency</strong>: 2–10 seconds per call. The agent waits.</li>
           <li><strong>Privacy</strong>: file content and command details leave your machine. Confirm policy with your team before enabling on private repos.</li>
         </ul>
