@@ -57,7 +57,7 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 curl -fsSL https://core0-io.github.io/nio/install.sh | bash
 ```
 
-Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.2.0`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
+Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.4.3`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
 
 **Onboarding with a shared config.** If someone handed you a pre-configured `nio.yaml` (e.g. an org-wide `external_analyser` + collector setup), pass it at install time:
 
