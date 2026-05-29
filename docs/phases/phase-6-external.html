@@ -55,7 +55,7 @@
             <tr><td>Endpoints</td><td>0..N, each with its own <code>weight</code> in the aggregate</td></tr>
             <tr><td>Concurrency</td><td>All enabled endpoints called in parallel (<code>Promise.allSettled</code>)</td></tr>
             <tr><td>Default state</td><td><strong>disabled</strong> — empty array (<code>external_analyser: []</code>)</td></tr>
-            <tr><td>Short-circuit</td><td>any endpoint at CRITICAL → deny immediately, siblings ignored</td></tr>
+            <tr><td>Short-circuit</td><td>any endpoint scoring ≥ active deny threshold → deny immediately, siblings ignored (<a href="#per-endpoint-short-circuit">details</a>)</td></tr>
             <tr><td>On auth/HTTP failure</td><td>endpoint drops out of the average; the failure is surfaced via <a href="../diagnostics.html#oauth"><strong>diagnostics</strong></a></td></tr>
           </tbody>
         </table>
@@ -115,6 +115,19 @@
         <p>Each endpoint declares its own <code>weight</code> (default <strong>1.0</strong>). The final score is the weighted average across all phases that ran:</p>
         <pre><code>final_score = Σ(wᵢ × sᵢ) / Σ(wᵢ)</code></pre>
         <p>An endpoint that fails (network / HTTP / auth) drops out of both numerator and denominator — its weight does not pollute the average.</p>
+
+        <h2 id="per-endpoint-short-circuit">Per-endpoint short-circuit</h2>
+        <p>Weights only matter when the pipeline reaches the weighted-average step. <strong>Phase 6 evaluates short-circuit per endpoint:</strong> if any single enabled endpoint returns a score that crosses the active deny threshold (<code>strict</code> 0.5, <code>balanced</code> 0.8, <code>permissive</code> 0.9), the pipeline short-circuits on that endpoint alone and the verdict is <em>deny</em>. Sibling endpoints — even with high weights — cannot pull the verdict back down.</p>
+        <p>Concretely, suppose three endpoints answer at balanced level:</p>
+        <pre><code>scorer_ffwd_agent_1hr     = 0.0953
+scorer_ffwd_agent_10min   = 0.0755
+scorer_ffwd_agent_env     = 0.8898   ← crosses balanced deny (≥ 0.8)
+
+weighted avg (would have been): (0.0953 + 0.0755 + 0.8898) / 3 ≈ 0.35
+final  : 0.89  (single-endpoint short-circuit)
+verdict: DENY</code></pre>
+        <p>The <code>0.89</code> endpoint short-circuits the pipeline; the two low-scoring siblings do not enter the verdict. This is intentional — a single authoritative DLP / compliance endpoint should be able to deny without being averaged away by quieter scorers. See <a href="scoring.html#short-circuit">Scoring · Short-circuit</a> for the full rule set.</p>
+        <p>If you want the opposite behaviour — every endpoint always participates in a weighted vote — keep each endpoint's individual score below the deny threshold (have your service return at most the warning band) and let nio's aggregator do the maths.</p>
 
         <h2>OAuth identity sharing</h2>
         <p>When multiple endpoints share the same OAuth identity (<code>oauth_url</code> + <code>client_id</code> + <code>client_secret</code>), they automatically share a single token cache file under <code>~/.nio/oauth-cache/&lt;host&gt;-&lt;sha256-fingerprint&gt;.json</code> and a single in-process <code>OAuthAuthStrategy</code>. The <code>/token</code> POST runs only once even when N endpoints fire concurrently. Endpoints with different <code>client_id</code>s get isolated caches. The OAuth client must be pre-registered with the OAuth provider.</p>

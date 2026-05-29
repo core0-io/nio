@@ -4,7 +4,7 @@ description: Nio — AI agent execution assurance. Use for evaluating action saf
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "2.4.2"
+  version: "2.4.3"
 user-invocable: true
 command-dispatch: tool
 command-tool: nio_command
@@ -278,11 +278,13 @@ Set `NIO_HOME` environment variable to change the config directory (default: `~/
 
 ### Protection Levels
 
-| Level | Behaviour |
-|-------|----------|
-| `strict` | Block all risky actions — every dangerous or suspicious command is denied |
-| `balanced` | Block dangerous, confirm risky — default level, good for daily use |
-| `permissive` | Only block critical threats — for experienced users who want minimal friction |
+| Level | allow | confirm | deny | Behaviour |
+|-------|-------|---------|------|----------|
+| `strict` | 0 – 0.5 | — | 0.5 – 1.0 | Block all risky actions — every dangerous or suspicious command is denied |
+| `balanced` (default) | 0 – 0.5 | 0.5 – 0.8 | 0.8 – 1.0 | Block dangerous, confirm risky — good for daily use |
+| `permissive` | 0 – 0.9 | — | 0.9 – 1.0 | Only block critical threats — for users who want minimal friction |
+
+**Per-phase short-circuit.** Any single phase (2 / 3 / 4 / 5, or any single Phase 6 endpoint) whose score crosses the active level's deny threshold short-circuits the pipeline with `deny` — downstream phases are skipped and the weighted average is bypassed. A single high score is not diluted by quieter sibling phases or endpoints. Concretely, at `balanced` a single Phase 6 endpoint returning `0.89` will deny even if its siblings returned `0.07` and `0.09` (which would have averaged to `0.35`). See [`docs/phases/scoring.html`](https://core0.io/nio/docs/phases/scoring.html#short-circuit) for worked examples.
 
 ---
 

@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Pipeline · Overview</div>
         <h1>Seven phases decide the fate of every <em>tool call</em>.</h1>
-        <p class="lead">Every <code>PreToolUse</code> event enters at Phase 0 and descends through gates and scoring engines. Phases 0–1 are fast gates; 2–6 are scoring engines. The pipeline short-circuits the moment any phase lands a critical finding; otherwise the final score is a <a href="scoring.html">weighted average</a> across every engine that ran.</p>
+        <p class="lead">Every <code>PreToolUse</code> event enters at Phase 0 and descends through gates and scoring engines. Phases 0–1 are fast gates; 2–6 are scoring engines. The pipeline short-circuits the moment any phase emits a score that crosses the active <a href="scoring.html#thresholds">deny threshold</a>; otherwise the final score is a <a href="scoring.html">weighted average</a> across every engine that ran.</p>
       </div>
 
       <div class="doc">
@@ -50,7 +50,7 @@
         <h2>The phases</h2>
         <ul>
           <li><strong>Gates</strong> (<a href="phase-0-tool-gate.html">0</a>, <a href="phase-1-allowlist.html">1</a>) — match / no-match, no score. Short-circuit with <em>allow</em> or <em>deny</em>.</li>
-          <li><strong>Scoring engines</strong> (<a href="phase-2-pattern.html">2</a>, <a href="phase-3-static.html">3</a>, <a href="phase-4-behavioural.html">4</a>, <a href="phase-5-llm.html">5</a>, <a href="phase-6-external.html">6</a>) — produce a 0–1 score. A critical finding in any of them short-circuits the pipeline with <em>deny</em>.</li>
+          <li><strong>Scoring engines</strong> (<a href="phase-2-pattern.html">2</a>, <a href="phase-3-static.html">3</a>, <a href="phase-4-behavioural.html">4</a>, <a href="phase-5-llm.html">5</a>, <a href="phase-6-external.html">6</a>) — produce a 0–1 score. Any single phase scoring at or above the active level's deny threshold (<code>strict</code> 0.5, <code>balanced</code> 0.8, <code>permissive</code> 0.9) short-circuits the pipeline with <em>deny</em>; downstream phases do not run.</li>
         </ul>
 
         <table>
@@ -73,7 +73,7 @@
         <ul>
           <li><strong>Phase 0</strong>: blocked → deny; available (no guard) → allow; guarded → fall through to Phase 1.</li>
           <li><strong>Phase 1</strong>: matched AND <code>allowlist_mode: exit</code> → allow. <code>allowlist_mode: continue</code> (default) records a hint but still runs 2–6.</li>
-          <li><strong>Phases 2–6</strong>: any CRITICAL finding → deny immediately. Otherwise each phase contributes a score.</li>
+          <li><strong>Phases 2–6</strong>: any single phase scoring ≥ the active deny threshold (<code>strict</code> 0.5, <code>balanced</code> 0.8, <code>permissive</code> 0.9) → deny immediately, downstream phases skipped. Phase 6 evaluates this <em>per endpoint</em> — one external scorer crossing the line is enough, sibling endpoints cannot dilute it. Otherwise each phase contributes a score.</li>
           <li>If no phase short-circuits, the <strong>weighted average</strong> of scored phases determines the decision.</li>
         </ul>
 
