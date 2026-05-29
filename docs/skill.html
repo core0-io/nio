@@ -200,8 +200,8 @@
           <li><strong>Configuration</strong> — re-runs Zod schema validation against the on-disk <code>~/.nio/config.yaml</code>.</li>
           <li><strong>External analysers</strong> — for every enabled entry, builds the same <code>ExternalAnalyser</code> the orchestrator uses (auth strategy, custom headers) and issues a real GET against the configured URL. On success, prints the parsed <code>score</code>; on failure, prints HTTP status / response body preview / hint. This catches typos, missing query params, auth failures, AND <a href="../docs/phases/phase-6-external.html#response-contract">response-contract</a> violations like the endpoint returning a different shape.</li>
           <li><strong>LLM analyser</strong> — flags <code>guard.llm_analyser.enabled=true</code> paired with an empty <code>api_key</code>.</li>
-          <li><strong>Collector</strong> — HEAD-probes <code>collector.endpoint</code> if set.</li>
         </ol>
+        <p>Doctor does <strong>not</strong> probe <code>collector.endpoint</code> reachability — its config correctness is covered by the schema check above, and bare HTTP probes would skip the routing headers (e.g. <code>x-event-pipeline-id</code>) that gateways often require, producing misleading 401/403 reports. Export failures surface at runtime via <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
 
         <p>Output is a markdown checklist with <code>✓ / ✗ / ·</code> per check and an inline <code>hint:</code> line pointing at the specific config path to fix. Doctor's own probes use a scoped diagnostic collector that's discarded after the command returns, so repeated <code>doctor</code> runs do not pollute <code>/nio report</code>.</p>
 

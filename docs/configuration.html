@@ -43,7 +43,7 @@
         <div class="eyebrow">Configuration · Reference</div>
         <h1>Every field in <em>config.yaml</em>.</h1>
         <p class="lead">Nio reads <code>~/.nio/config.yaml</code> (or <code>$NIO_HOME/config.yaml</code>). Two top-level sections: <code>guard</code> for the runtime pipeline + scan rules, <code>collector</code> for OTLP telemetry. The bundled template at <code>config.default.yaml</code> has inline comments for every field.</p>
-        <p class="lead"><strong>Something not working?</strong> Run <code>/nio doctor</code> to validate the current config and dry-run OAuth / LLM / collector connectivity. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
+        <p class="lead"><strong>Something not working?</strong> Run <code>/nio doctor</code> to validate the current config schema and dry-run OAuth / LLM connectivity. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
       </div>
 
       <div class="doc">
@@ -266,7 +266,7 @@
 
         <h3 id="collector.endpoint"><code>collector.endpoint</code></h3>
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>"http://localhost:4318"</code></p>
-        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal. Reachability dry-run by <a href="diagnostics.html"><code>/nio doctor</code></a>; export failures emit <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
+        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal. <code>/nio doctor</code> validates the schema only — it does <strong>not</strong> probe the endpoint, since collector gateways are commonly gated by routing headers (e.g. <code>x-event-pipeline-id</code>) that a bare reachability probe wouldn't include. Export failures surface at runtime as <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
 
         <h3 id="collector.api_key"><code>collector.api_key</code></h3>
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code></p>

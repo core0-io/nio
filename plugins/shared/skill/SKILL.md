@@ -434,7 +434,8 @@ What doctor checks:
 1. **Configuration** — re-runs Zod schema validation against the live `~/.nio/config.yaml`. Flags any field with a path + message (e.g. `guard.external_analyser[2].auth.client_secret: required field is empty`).
 2. **External analysers** — for each entry with `auth.type: oauth`, performs a real `client_credentials` grant POST against `{oauth_url}/token`. ✓ when a token is acquired; ✗ with the underlying HTTP status when the flow fails. Bearer-auth entries are listed but cannot be validated without firing an actual scoring request.
 3. **LLM analyser** — flags `guard.llm_analyser.enabled=true` paired with an empty `api_key` (otherwise Phase 5 silently skips, which is a common misconfig).
-4. **Collector** — HEAD-probes `collector.endpoint` if set. 4xx/5xx still counts as reachable since OTLP collectors commonly 405 a bare HEAD.
+
+Collector reachability is intentionally **not** probed — its config correctness is covered by the schema check above, and OTLP gateways commonly require routing headers (e.g. `x-event-pipeline-id`) that a bare reachability probe wouldn't include, producing misleading 401/403 reports. Export failures surface at runtime via the `collector / otlp_export_failed` diagnostic.
 
 Use doctor when:
 - You changed `~/.nio/config.yaml` and want to confirm it loaded.

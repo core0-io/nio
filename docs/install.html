@@ -156,7 +156,7 @@
               <button class="copy-btn" type="button" data-target="cmd-cfg" aria-label="Copy command">Copy</button>
             </div>
             <p>The flag works on every form of the installer — auto-detect, per-platform (<code>--platform claude-code --config ...</code>), and the post-clone <code>./setup.sh --config ...</code>. <code>NIO_CONFIG=/path/to/nio.yaml</code> is honoured as a fallback when the flag isn't given.</p>
-            <p>Before touching disk, Nio runs the full <code>/nio doctor</code> probe suite against the incoming file (schema validation + <code>external_analyser</code> reachability + LLM key sanity + collector connectivity). If any probe fails, the install aborts and your live config is not modified. On a clean pass, the previous <code>~/.nio/config.yaml</code> is preserved as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code> — keep multiple stamps to roll back manually.</p>
+            <p>Before touching disk, Nio runs the full <code>/nio doctor</code> probe suite against the incoming file (schema validation + <code>external_analyser</code> reachability + LLM key sanity). If any probe fails, the install aborts and your live config is not modified. On a clean pass, the previous <code>~/.nio/config.yaml</code> is preserved as <code>config.yaml.bak.&lt;ISO-stamp&gt;</code> — keep multiple stamps to roll back manually.</p>
             <div class="callout">
               <div class="title">File must be local</div>
               <p>The <code>--config</code> argument is a path on your machine — not a URL. Download the file first. The path is resolved to absolute at the top of <code>install.sh</code> so the extracted <code>setup.sh</code> (running from <code>/tmp/nio-install-XXXXXX/</code>) can still find it.</p>

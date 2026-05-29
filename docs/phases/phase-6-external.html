@@ -56,7 +56,7 @@
             <tr><td>Concurrency</td><td>All enabled endpoints called in parallel (<code>Promise.allSettled</code>)</td></tr>
             <tr><td>Default state</td><td><strong>disabled</strong> — empty array (<code>external_analyser: []</code>)</td></tr>
             <tr><td>Short-circuit</td><td>any endpoint scoring ≥ active deny threshold → deny immediately, siblings ignored (<a href="#per-endpoint-short-circuit">details</a>)</td></tr>
-            <tr><td>On auth/HTTP failure</td><td>endpoint drops out of the average; the failure is surfaced via <a href="../diagnostics.html#oauth"><strong>diagnostics</strong></a></td></tr>
+            <tr><td>On auth/HTTP failure</td><td>endpoint drops out of the average; the failure is surfaced via <a href="../diagnostics.html#oauth-token_failed"><strong>diagnostics</strong></a></td></tr>
           </tbody>
         </table>
 
