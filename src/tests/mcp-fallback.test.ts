@@ -244,7 +244,7 @@ describe('evaluateHook: UNCATEGORIZED_TOOL fallback', () => {
     assert.equal(entries.length, 1, 'audit entry must be written for uncategorised tools');
     assert.equal(entries[0]!['event'], 'guard');
     assert.equal(entries[0]!['decision'], 'allow');
-    assert.deepEqual(entries[0]!['risk_tags'], ['UNCATEGORIZED_TOOL']);
+    assert.deepEqual(entries[0]!['risk_tags'], ['UNCATEGORIZED_TOOL:SomeRandomTool']);
     assert.equal(entries[0]!['phase_stopped'], 0);
   });
 });

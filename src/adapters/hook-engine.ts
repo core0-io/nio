@@ -393,13 +393,15 @@ export async function evaluateHook(
   if (!envelope) {
     // Truly uncategorised tool — not in `native_tool_mapping`, not an MCP
     // call. Allow but record the pass-through so the audit log has a row
-    // for every tool invocation. The `UNCATEGORIZED_TOOL` risk tag makes
-    // these visible in /nio report and downstream queries.
+    // for every tool invocation. The `UNCATEGORIZED_TOOL:<tool_name>` risk
+    // tag (same `TAG:identifier` shape as `EXTERNAL_SCORE:<scorer>`) lets
+    // downstream queries group / filter by which tool was unmapped without
+    // having to parse `explanation` or join on `tool_name`.
     const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, undefined, agentName);
     entry.decision = 'allow';
     entry.risk_level = 'low';
     entry.risk_score = 0;
-    entry.risk_tags = ['UNCATEGORIZED_TOOL'];
+    entry.risk_tags = [`UNCATEGORIZED_TOOL:${input.toolName}`];
     entry.explanation =
       `Tool "${input.toolName}" has no action mapping; passed through without Phase 1-6 analysis`;
     entry.phase_stopped = 0;

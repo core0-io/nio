@@ -194,7 +194,7 @@ if it exceeds the deny threshold for the active protection level.
 Native tools absent from `native_tool_mapping` follow a fallback chain in `evaluateHook`:
 
 1. If the tool name matches the platform's MCP convention, it dispatches as `mcp_tool_call` (server / tool / args inferred from the hook payload) and runs through Phase 1–6. Phase 3 / 5 / 6 see the JSON-serialised arguments; Phase 1 (allowlist) and Phase 2 (pattern) execute but currently have no MCP-specific rules — user-defined `action_guard_rules` don't route to MCP today.
-2. Otherwise it is allowed through with an `UNCATEGORIZED_TOOL` audit entry (`phase_stopped: 0`) and Phase 1–6 are skipped.
+2. Otherwise it is allowed through with a `UNCATEGORIZED_TOOL:<tool_name>` risk tag in the audit entry (`phase_stopped: 0`) and Phase 1–6 are skipped. The colon-suffixed tool name (same shape as `EXTERNAL_SCORE:<scorer>`) lets downstream queries group / filter by which tool was unmapped without joining on `tool_name`.
 
 ### Phase 0: Tool Gate (<1ms)
 
@@ -203,7 +203,7 @@ Runs in `hook-engine.ts` before envelope building. Four checks in order:
 1. **blocked_tools** — if tool is listed → DENY
 2. **permitted_tools** — if list is non-empty and tool is not listed → DENY
 3. **native_tool_mapping** — if tool is mapped → continue to Phase 1 with the mapped action type
-4. **MCP fallback** — if the tool name matches an MCP convention (see MCP routing below) → continue to Phase 1 as a synthetic `mcp_tool_call` action; otherwise → ALLOW with an `UNCATEGORIZED_TOOL` audit entry (skip Phase 1–6)
+4. **MCP fallback** — if the tool name matches an MCP convention (see MCP routing below) → continue to Phase 1 as a synthetic `mcp_tool_call` action; otherwise → ALLOW with a `UNCATEGORIZED_TOOL:<tool_name>` audit entry (skip Phase 1–6)
 
 After Phase 0 and envelope construction (but before Phase 1), a further
 short-circuit fires when the incoming `exec_command` is Nio invoking its
@@ -360,6 +360,19 @@ Final score is a weighted average of all phases that ran:
 ```
 final_score = Σ(wi × si) / Σ(wi)
 ```
+
+**Short-circuit override.** Before the weighted average is taken, the
+orchestrator checks each phase's score against the active level's deny
+threshold (strict: 0.5, balanced: 0.8, permissive: 0.9). The first phase
+whose score crosses that threshold short-circuits the pipeline: that
+score becomes the final score, downstream phases are skipped, and the
+verdict is `deny`. Phase 6 evaluates this **per endpoint** — any single
+`external_analyser` endpoint that crosses the threshold short-circuits,
+even if its sibling endpoints would have dragged the weighted average
+back into the allow zone. Rationale: a high score from one phase should
+not be diluted by quieter siblings — this preserves symmetry with
+Phase 2 critical findings, which would have stopped the pipeline before
+any later phase could run.
 
 Default weights:
 

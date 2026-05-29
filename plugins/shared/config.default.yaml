@@ -306,8 +306,10 @@ guard:
   #      receive the same payload. (Phase 2 has no built-in MCP rule set
   #      yet; user-defined patterns in `action_guard_rules` don't apply
   #      to MCP today.)
-  #   2. Anything else is logged as `UNCATEGORIZED_TOOL` in the audit
-  #      log and allowed through without Phase 1-6 analysis.
+  #   2. Anything else is logged with risk tag `UNCATEGORIZED_TOOL:<tool_name>`
+  #      in the audit log and allowed through without Phase 1-6 analysis.
+  #      Filter / group on the `UNCATEGORIZED_TOOL:` prefix downstream to
+  #      see which tools are running un-analysed.
   native_tool_mapping:
     claude_code:
       Bash: exec_command
