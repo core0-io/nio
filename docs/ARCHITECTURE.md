@@ -181,25 +181,29 @@ if it exceeds the deny threshold for the active protection level.
 
 ### Which phases run per action type
 
-| Phase | Bash | Write/Edit | WebFetch | Read/Grep/Glob/etc. |
-|-------|------|------------|----------|---------------------|
-| 0 Tool Gate | yes | yes | yes | yes |
-| 1 Allowlist | yes | yes | yes | skip (no envelope) |
-| 2 Pattern Analysis | yes | yes | yes | skip |
-| 3 Static Analysis | skip | yes (file content) | skip | skip |
-| 4 Behavioural Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip | skip |
-| 5 LLM (optional) | yes | yes | yes | skip |
-| 6 External API (optional) | yes | yes | yes | skip |
+| Phase | Bash | Write/Edit | WebFetch | MCP tool call | Read/Grep/Glob/etc. |
+|-------|------|------------|----------|---------------|---------------------|
+| 0 Tool Gate | yes | yes | yes | yes | yes |
+| 1 Allowlist | yes | yes | yes | runs, no match | skip (no envelope) |
+| 2 Pattern Analysis | yes | yes | yes | runs, no built-in rules | skip |
+| 3 Static Analysis | skip | yes (file content) | skip | yes (args as `.json`) | skip |
+| 4 Behavioural Analysis | skip | yes (.js/.ts/.py/.sh/.rb/.php/.go) | skip | skip (not executable) | skip |
+| 5 LLM (optional) | yes | yes | yes | yes | skip |
+| 6 External API (optional) | yes | yes | yes | yes | skip |
 
-Tools not in `native_tool_mapping` pass Phase 0 but skip Phases 1–6 (auto-allow).
+Native tools absent from `native_tool_mapping` follow a fallback chain in `evaluateHook`:
+
+1. If the tool name matches the platform's MCP convention, it dispatches as `mcp_tool_call` (server / tool / args inferred from the hook payload) and runs through Phase 1–6. Phase 3 / 5 / 6 see the JSON-serialised arguments; Phase 1 (allowlist) and Phase 2 (pattern) execute but currently have no MCP-specific rules — user-defined `action_guard_rules` don't route to MCP today.
+2. Otherwise it is allowed through with an `UNCATEGORIZED_TOOL` audit entry (`phase_stopped: 0`) and Phase 1–6 are skipped.
 
 ### Phase 0: Tool Gate (<1ms)
 
-Runs in `hook-engine.ts` before envelope building. Three checks in order:
+Runs in `hook-engine.ts` before envelope building. Four checks in order:
 
 1. **blocked_tools** — if tool is listed → DENY
 2. **permitted_tools** — if list is non-empty and tool is not listed → DENY
-3. **native_tool_mapping** — if tool is not mapped → ALLOW (skip Phase 1–6)
+3. **native_tool_mapping** — if tool is mapped → continue to Phase 1 with the mapped action type
+4. **MCP fallback** — if the tool name matches an MCP convention (see MCP routing below) → continue to Phase 1 as a synthetic `mcp_tool_call` action; otherwise → ALLOW with an `UNCATEGORIZED_TOOL` audit entry (skip Phase 1–6)
 
 After Phase 0 and envelope construction (but before Phase 1), a further
 short-circuit fires when the incoming `exec_command` is Nio invoking its
@@ -215,11 +219,20 @@ any shell metacharacter in the command disqualifies the match.
 
 `permitted_tools` and `blocked_tools` are keyed by platform (`claude_code`,
 `codex`, `openclaw`, `hermes`) with one reserved cross-platform key `mcp`.
-Incoming MCP tool names are parsed into `{server, local}` — OpenClaw and
-Hermes use `<server>__<tool>`, Claude Code and Codex use
-`mcp__<server>__<tool>` — and matched against the `mcp` list
-in either bare (`HassTurnOn` — any server) or server-qualified
-(`hass__HassTurnOn` — that server only) form. Blocked lists across namespaces
+Incoming MCP tool names are parsed into `{server?, local}`:
+
+- Claude Code / Codex: `mcp__<server>__<tool>` (double underscore).
+- OpenClaw: `<server>__<tool>` (double underscore).
+- Hermes: either `<server>__<tool>` (double underscore — server-qualified) or
+  the flattened `mcp_<...>` single-underscore form Hermes emits when it can't
+  preserve the separator. The single-underscore form has no reliable server /
+  tool split, so the full tool name is kept as the local name and `server` is
+  unset — list it verbatim in `permitted_tools.mcp` (e.g.
+  `mcp_config_db_get_current_config`), no prefix stripping.
+
+Allowlist entries match either bare (`HassTurnOn` — any server, plus Hermes's
+single-underscore form when listed verbatim) or server-qualified
+(`hass__HassTurnOn` — that server only). Blocked lists across namespaces
 are additive; permitted lists are independent per namespace, with the
 platform list acting as fallback when `permitted_tools.mcp` is absent.
 Matching is case-insensitive throughout.

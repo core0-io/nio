@@ -30,6 +30,7 @@ const VALID_ACTION_TYPES: ActionType[] = [
   'read_file',
   'write_file',
   'secret_access',
+  'mcp_tool_call',
 ];
 const VALID_LEVELS = ['strict', 'balanced', 'permissive'] as const;
 type Level = (typeof VALID_LEVELS)[number];
@@ -275,6 +276,36 @@ function parseActionEnvelope(rest: string): ParseResult {
         secret_name: sm[1],
         access_type: (sm[2] ?? 'read') as 'read' | 'write',
       };
+      break;
+    }
+    case 'mcp_tool_call': {
+      // Body format: "<tool_name> [json_args]". When tool_name contains
+      // `__`, split as `<server>__<tool>`; otherwise leave server null.
+      const mm = body.match(/^(\S+)(?:\s+([\s\S]+))?$/);
+      if (!mm) {
+        return { ok: false, error: 'mcp_tool_call: expected "<tool_name> [json_args]"' };
+      }
+      let server: string | null = null;
+      let tool = mm[1];
+      const dbl = tool.indexOf('__');
+      if (dbl > 0 && dbl < tool.length - 2) {
+        server = tool.slice(0, dbl);
+        tool = tool.slice(dbl + 2);
+      }
+      let parsedArgs: Record<string, unknown> = {};
+      if (mm[2]) {
+        try {
+          const v = JSON.parse(mm[2]);
+          if (v && typeof v === 'object' && !Array.isArray(v)) {
+            parsedArgs = v as Record<string, unknown>;
+          } else {
+            return { ok: false, error: 'mcp_tool_call: json_args must be a JSON object' };
+          }
+        } catch (err) {
+          return { ok: false, error: `mcp_tool_call: invalid JSON args: ${(err as Error).message}` };
+        }
+      }
+      data = { server, tool, args: parsedArgs };
       break;
     }
   }

@@ -12,7 +12,8 @@ export type ActionType =
   | 'exec_command'
   | 'read_file'
   | 'write_file'
-  | 'secret_access';
+  | 'secret_access'
+  | 'mcp_tool_call';
 
 /**
  * Policy decision
@@ -88,13 +89,27 @@ export interface SecretAccessData {
 }
 
 /**
+ * MCP tool invocation action data.
+ *
+ * `server` may be null when the platform's tool naming convention does not
+ * give a reliable way to split server from tool (e.g. Hermes flattens MCP
+ * calls as `mcp_<server>_<tool>` with single-underscore separators).
+ */
+export interface McpToolCallData {
+  server: string | null;
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/**
  * Union type for all action data
  */
 export type ActionData =
   | NetworkRequestData
   | ExecCommandData
   | FileOperationData
-  | SecretAccessData;
+  | SecretAccessData
+  | McpToolCallData;
 
 /**
  * Action context

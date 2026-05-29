@@ -267,6 +267,16 @@ export class ActionOrchestrator {
           phase34Path = inline.virtualPath;
         }
       }
+    } else if (envelope.action.type === 'mcp_tool_call') {
+      // Serialise MCP args into a virtual .json file so Phase 3 static
+      // analysis runs JSON/secret rules over the payload (API keys,
+      // credentials, URLs, dangerous parameter values). Phase 4
+      // behavioural analysis is gated on executable file extensions
+      // (.js/.ts/.py/.sh/...) below, so .json virtual paths naturally
+      // skip Phase 4 — MCP args aren't executable code.
+      const data = envelope.action.data as { server?: string | null; tool?: string; args?: unknown };
+      phase34Content = JSON.stringify(data.args ?? {}, null, 2);
+      phase34Path = `mcp-call/${data.server ?? 'unknown'}/${data.tool ?? 'unknown'}.json`;
     }
 
     // ── Phase 3: StaticAnalyser on resolved content ──────────────────
@@ -509,6 +519,10 @@ export class ActionOrchestrator {
       const data = envelope.action.data as { url?: string; method?: string; body_preview?: string };
       content = JSON.stringify(data, null, 2);
       filePath = 'request.json';
+    } else if (envelope.action.type === 'mcp_tool_call') {
+      const data = envelope.action.data as { server?: string | null; tool?: string; args?: unknown };
+      content = JSON.stringify({ server: data.server, tool: data.tool, args: data.args ?? {} }, null, 2);
+      filePath = 'mcp-call.json';
     } else {
       return [];
     }

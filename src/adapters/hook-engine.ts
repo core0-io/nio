@@ -6,6 +6,7 @@ import { writeAuditLog, buildGuardAuditEntry } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
+import type { ActionEnvelope, McpToolCallData } from '../types/action.js';
 import {
   detectMcpCalls,
   extractCommandString,
@@ -128,10 +129,68 @@ export function parseMcpToolName(toolName: string, platform: string): ParsedMcpT
     if (idx > 0 && idx < name.length - 2) {
       return { isMcp: true, server: name.slice(0, idx), local: name.slice(idx + 2) };
     }
+    // Hermes-only fallback: `mcp_<...>` single-underscore convention.
+    // Hermes flattens MCP server+tool with `_` separators
+    // (`mcp_<server>_<tool>`), making a reliable server/tool split
+    // impossible. We keep the FULL tool name as `local` and leave
+    // `server` unset — so users can list the tool name verbatim in
+    // `permitted_tools.mcp` / `blocked_tools.mcp` exactly as they see
+    // it in the Hermes hook payload (no prefix-stripping mental gymnastics).
+    if (platform === 'hermes' && name.startsWith('mcp_') && name.length > 4) {
+      return { isMcp: true, local: name };
+    }
     return { isMcp: false };
   }
 
   return { isMcp: false };
+}
+
+/**
+ * Build an `mcp_tool_call` envelope from a parsed MCP tool name plus the
+ * raw `tool_input` payload. Adapters call this from `buildEnvelope()` as
+ * the fallback path when their `nativeToolMapping` doesn't match —
+ * MCP tools are dynamic and not enumerated in the mapping table, but
+ * they should still flow through Phase 1-6 deep analysis.
+ *
+ * `parsed.server` may be undefined when the platform's naming convention
+ * doesn't permit a reliable server/tool split (e.g. Hermes single-
+ * underscore `mcp_<...>` form). Stored as `null` in the envelope so it
+ * round-trips through JSON cleanly.
+ */
+export function buildMcpEnvelope(
+  input: HookInput,
+  parsed: ParsedMcpToolName,
+  initiatingSkill: string | null | undefined,
+  platform: string,
+): ActionEnvelope {
+  const actor = {
+    skill: {
+      id: initiatingSkill || `${platform}-session`,
+      source: initiatingSkill || platform,
+      version_ref: '0.0.0',
+      artifact_hash: '',
+    },
+  };
+
+  const context = {
+    session_id: input.sessionId || `${platform}-mcp-${Date.now()}`,
+    user_present: true,
+    env: 'prod' as const,
+    time: new Date().toISOString(),
+    initiating_skill: initiatingSkill || undefined,
+  };
+
+  const data: McpToolCallData = {
+    server: parsed.server ?? null,
+    tool: parsed.local ?? input.toolName,
+    args: input.toolInput ?? {},
+  };
+
+  return {
+    actor,
+    action: { type: 'mcp_tool_call', data },
+    context,
+  };
 }
 
 function matchesCaseInsensitive(list: readonly string[], candidates: readonly string[]): boolean {
@@ -187,8 +246,10 @@ function checkToolGate(
   const permittedMcp = config.guard?.permitted_tools?.['mcp'] ?? [];
 
   const parsed = parseMcpToolName(toolName, platform);
-  const nameMcpCandidates = parsed.isMcp && parsed.local && parsed.server
-    ? [parsed.local, `${parsed.server}__${parsed.local}`]
+  const nameMcpCandidates = parsed.isMcp && parsed.local
+    ? (parsed.server
+        ? [parsed.local, `${parsed.server}__${parsed.local}`]
+        : [parsed.local])
     : [];
 
   const registry = injectedRegistry ?? loadMCPRegistry();
@@ -315,9 +376,34 @@ export async function evaluateHook(
 
   // Build envelope
   const initiatingSkill = await adapter.inferInitiatingSkill(input);
-  const envelope = adapter.buildEnvelope(input, initiatingSkill);
+  let envelope = adapter.buildEnvelope(input, initiatingSkill);
+
+  // MCP fallback: when the adapter can't classify the tool via its native
+  // mapping, check whether the name matches the platform's MCP convention
+  // and build an `mcp_tool_call` envelope so Phase 1-6 still runs. This
+  // lifts MCP calls from "silent allow" to first-class actions evaluated
+  // by all rules + analysers.
+  if (!envelope && input.toolName) {
+    const parsed = parseMcpToolName(input.toolName, adapter.name);
+    if (parsed.isMcp && parsed.local) {
+      envelope = buildMcpEnvelope(input, parsed, initiatingSkill, adapter.name);
+    }
+  }
 
   if (!envelope) {
+    // Truly uncategorised tool — not in `native_tool_mapping`, not an MCP
+    // call. Allow but record the pass-through so the audit log has a row
+    // for every tool invocation. The `UNCATEGORIZED_TOOL` risk tag makes
+    // these visible in /nio report and downstream queries.
+    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, undefined, agentName);
+    entry.decision = 'allow';
+    entry.risk_level = 'low';
+    entry.risk_score = 0;
+    entry.risk_tags = ['UNCATEGORIZED_TOOL'];
+    entry.explanation =
+      `Tool "${input.toolName}" has no action mapping; passed through without Phase 1-6 analysis`;
+    entry.phase_stopped = 0;
+    writeAuditLog(entry, auditOpts);
     return { decision: 'allow' };
   }
 

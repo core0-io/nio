@@ -78,6 +78,28 @@ describe('parseMcpToolName: Hermes', () => {
   it('rejects trailing __ with no tool part', () => {
     assert.deepEqual(parseMcpToolName('hass__', 'hermes'), { isMcp: false });
   });
+
+  it('falls back to mcp_ single-underscore convention with no reliable server split', () => {
+    // local is the FULL tool name (including `mcp_` prefix) so users can
+    // match it verbatim in permitted_tools.mcp without stripping prefixes.
+    const r = parseMcpToolName('mcp_config_db_get_current_config', 'hermes');
+    assert.deepEqual(r, { isMcp: true, local: 'mcp_config_db_get_current_config' });
+  });
+
+  it('prefers __ double-underscore split when both prefixes could match', () => {
+    // Both `mcp_` prefix and `__` separator present — `__` is canonical and wins
+    const r = parseMcpToolName('mcp_srv__do_thing', 'hermes');
+    assert.deepEqual(r, { isMcp: true, server: 'mcp_srv', local: 'do_thing' });
+  });
+
+  it('rejects bare mcp_ prefix with empty body', () => {
+    assert.deepEqual(parseMcpToolName('mcp_', 'hermes'), { isMcp: false });
+  });
+
+  it('does not apply mcp_ fallback to non-hermes platforms', () => {
+    assert.deepEqual(parseMcpToolName('mcp_config_db_get_current_config', 'openclaw'), { isMcp: false });
+    assert.deepEqual(parseMcpToolName('mcp_config_db_get_current_config', 'claude-code'), { isMcp: false });
+  });
 });
 
 describe('parseMcpToolName: miscellaneous', () => {

@@ -17,9 +17,18 @@ agent_name: ""
 
 guard:
   # Protection level: strict | balanced | permissive
-  #   strict      — block all risky actions (deny + confirm)
-  #   balanced    — block dangerous, confirm on risky (default)
-  #   permissive  — only block critical threats
+  # Maps the aggregated final score (0.0 — 1.0) to allow / confirm / deny:
+  #
+  #   level       | allow      | confirm    | deny
+  #   ------------|------------|------------|----------
+  #   strict      | 0.0 — 0.5  | (none)     | 0.5 — 1.0
+  #   balanced    | 0.0 — 0.5  | 0.5 — 0.8  | 0.8 — 1.0  (default)
+  #   permissive  | 0.0 — 0.9  | (none)     | 0.9 — 1.0
+  #
+  # The deny threshold also acts as the per-phase short-circuit cutoff: if
+  # any single phase reaches it, the pipeline stops and denies immediately.
+  # See docs/phases/scoring.html for how the final score is aggregated
+  # across phases.
   protection_level: balanced
 
   # Confirm fallback: what to do when the guard decision is "confirm"
@@ -237,9 +246,13 @@ guard:
   # Strict allowlist: when non-empty for a namespace, ONLY listed tools pass
   # Phase 0 on that platform; everything else is denied.
   # The `mcp` list is platform-agnostic and applies whenever the incoming tool
-  # is an MCP tool. Entries accept either a bare local name (`HassTurnOn` —
-  # matches any MCP server) or a server-qualified name (`hass__HassTurnOn` —
-  # that server only). Matching is case-insensitive.
+  # is an MCP tool. List entries as you would see the tool name in the hook
+  # payload — no prefix-stripping needed. Two forms are supported:
+  #   • Bare local name (e.g. `HassTurnOn`) — matches any MCP server, plus
+  #     any Hermes single-underscore form like `mcp_config_db_get_current_config`.
+  #   • Server-qualified (e.g. `hass__HassTurnOn`) — that server only;
+  #     applies to claude-code / codex / openclaw and Hermes's `__` form.
+  # Matching is case-insensitive throughout.
   #
   # The `mcp` list also covers indirect MCP invocations embedded in
   # shell commands. Phase 0 unwraps the command (16 layers covering
@@ -284,9 +297,17 @@ guard:
   # Native tool name → action type mapping, per platform. NOT a third
   # allow/deny list — this is the classification table that decides which
   # Phase 1-6 rule set runs for each platform-native tool. Tools listed
-  # here enter Phase 1-6 deep analysis with the mapped action type;
-  # others pass Phase 0 (if permitted) and skip Phase 1-6 (auto-approved,
-  # log only). MCP tools are dynamic and not categorised here.
+  # here enter Phase 1-6 deep analysis with the mapped action type.
+  #
+  # Unmapped tools follow this fallback chain in the hook engine:
+  #   1. MCP tools (auto-detected by name) dispatch as `mcp_tool_call`
+  #      and flow through Phase 1-6 — Phase 3 statically scans the
+  #      JSON-serialised args, Phase 5/6 LLM and external scorers
+  #      receive the same payload. (Phase 2 has no built-in MCP rule set
+  #      yet; user-defined patterns in `action_guard_rules` don't apply
+  #      to MCP today.)
+  #   2. Anything else is logged as `UNCATEGORIZED_TOOL` in the audit
+  #      log and allowed through without Phase 1-6 analysis.
   native_tool_mapping:
     claude_code:
       Bash: exec_command

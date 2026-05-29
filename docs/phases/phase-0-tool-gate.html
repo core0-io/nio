@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Pipeline · Phase 0</div>
         <h1><em>Tool Gate</em> — is this tool blocked, permitted, or analysed?</h1>
-        <p class="lead">The first checkpoint. Looks at the tool name only — no command, no file content. Decides whether to deny outright (blocked or not on a non-empty allowlist), pass through without further analysis (permitted but not in the native-tool mapping), or hand the call to Phase 1+ (mapped to an action type for deeper analysis).</p>
+        <p class="lead">The first checkpoint. Looks at the tool name only — no command, no file content. Decides whether to deny outright (blocked or not on a non-empty allowlist), hand the call to Phase 1+ as a mapped native action, or — if the tool is an MCP call — dispatch it as <code>mcp_tool_call</code> through Phase 1+ for content scan over the arguments. Truly uncategorised tools fall through to allow with an <code>UNCATEGORIZED_TOOL</code> audit entry.</p>
       </div>
 
       <div class="doc">
@@ -54,7 +54,7 @@
             <tr><td>Scope</td><td>All tools</td></tr>
             <tr><td>Type</td><td>Gate (no score emitted)</td></tr>
             <tr><td>Weight</td><td>—</td></tr>
-            <tr><td>Short-circuit</td><td>blocked → deny · permitted (no native mapping) → allow</td></tr>
+            <tr><td>Short-circuit</td><td>blocked → deny · uncategorised (non-MCP, no native mapping) → allow with <code>UNCATEGORIZED_TOOL</code> audit</td></tr>
           </tbody>
         </table>
 
@@ -62,7 +62,9 @@
         <ol>
           <li>Look up the tool name in <a href="../configuration.html#guard.blocked_tools"><code>guard.blocked_tools</code></a> for the active platform (and <code>mcp</code> if it's an MCP tool). Match → <strong>deny</strong>.</li>
           <li>If <a href="../configuration.html#guard.permitted_tools"><code>guard.permitted_tools</code></a> for the platform is non-empty AND the tool isn't on it → <strong>deny</strong> (strict allowlist).</li>
-          <li>Look up the tool in <a href="../configuration.html#guard.native_tool_mapping"><code>guard.native_tool_mapping</code></a>. Mapped → continue to Phase 1 with the mapped action type. Unmapped → <strong>allow</strong> (auto-approve, log only).</li>
+          <li>Look up the tool in <a href="../configuration.html#guard.native_tool_mapping"><code>guard.native_tool_mapping</code></a>. Mapped → continue to Phase 1 with the mapped action type.</li>
+          <li>If unmapped but the tool name matches an MCP convention (see <a href="#mcp-routing">MCP Tool Routing</a> below) → continue to Phase 1 as a synthetic <code>mcp_tool_call</code> action; the arguments are JSON-serialised for Phase 3 content scan.</li>
+          <li>Otherwise → <strong>allow</strong> and emit an <code>UNCATEGORIZED_TOOL</code> audit entry (Phase 1–6 are skipped).</li>
         </ol>
 
         <h2>Rules</h2>
@@ -71,7 +73,7 @@
           <tbody>
             <tr><td><code>blocked_tools</code></td><td>Hard-deny list — never runs.</td></tr>
             <tr><td><code>permitted_tools</code></td><td>Strict allowlist — when non-empty, only listed tools may run; everything else is denied.</td></tr>
-            <tr><td><code>native_tool_mapping</code></td><td>Native tool → action-type classification. Mapped tools enter Phase 1–6 deep analysis with the chosen action type; unmapped tools auto-allow (log only).</td></tr>
+            <tr><td><code>native_tool_mapping</code></td><td>Native tool → action-type classification. Mapped tools enter Phase 1–6 with the chosen action type. Unmapped MCP tools enter Phase 1–6 as <code>mcp_tool_call</code>; anything else allows and logs <code>UNCATEGORIZED_TOOL</code>.</td></tr>
           </tbody>
         </table>
 
@@ -84,7 +86,7 @@
         </ul>
 
         <h2 id="mcp-routing">MCP Tool Routing — direct and indirect, one allowlist</h2>
-        <p>An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code / Codex <code>mcp__hass__HassTurnOff</code>; OpenClaw / Hermes <code>hass__HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist.</p>
+        <p>An agent can drive an MCP server two ways: directly through the platform's MCP tool surface (Claude Code / Codex <code>mcp__hass__HassTurnOff</code>; OpenClaw <code>hass__HassTurnOff</code>; Hermes either <code>hass__HassTurnOff</code> or its flattened single-underscore form like <code>mcp_hass_HassTurnOff</code>) or indirectly via a Bash command that talks to the server through some other channel (<code>mcporter</code>, <code>curl</code>, <code>python -c</code>, stdio pipes, package runners, …). Phase 0 routes both paths through a single <a href="../configuration.html#guard.permitted_tools"><code>permitted_tools.mcp</code></a> allowlist; list tool names verbatim as you see them in the hook payload (no prefix-stripping).</p>
 
         <h3>Why the indirect path needs handling</h3>
         <p>From the platform's point of view, when an agent shells out, the tool name is just <code>Bash</code> — the actual MCP invocation lives in the command's content. Without further inspection, indirect calls escape the allowlist that direct calls obey. Nio closes that gap by adding <strong>content detection at Phase 0</strong>: unwrap nested forms, run detectors against each fragment, map every hit back to <code>{server, tool}</code> via an endpoint registry, and feed the resulting candidates into the same allowlist check. The policy layer is unchanged.</p>
@@ -123,7 +125,7 @@
             │   permitted_tools.mcp / blocked_tools.mcp              │
             └────────────────────────────────────────────────────────┘</code></pre>
         <p>Stage 1 unwraps shells, heredocs, evals, encodings, package wrappers, and remote-shell prefixes until each fragment is plain enough that a detector can match it. Pass-through flags (<code>remote</code>, <code>background</code>, <code>compiled</code>) propagate from outer wrappers so the audit log can name the channel. Stage 2 runs every detector against every fragment; hits become <code>RoutedMcpCall { server, tool?, via, evidence, flags?, auditOnly? }</code>. Stage 3 flattens hits to <code>{tool, server__tool}</code> candidates and runs the existing allowlist check.</p>
-        <p>Allowlist entries accept either a bare local name (<code>HassTurnOn</code>) or server-qualified (<code>hass__HassTurnOn</code>). Matching is case-insensitive.</p>
+        <p>Allowlist entries accept either a bare local name (<code>HassTurnOn</code> — matches any server, and matches Hermes's single-underscore form when the name is listed verbatim, e.g. <code>mcp_config_db_get_current_config</code>) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive.</p>
 
         <h3 id="endpoint-registry">MCP server registry</h3>
         <p>For Stage 2 to know that <code>http://localhost:5173/mcp</code> <em>is</em> an MCP server, Phase 0 loads a registry on hook entry. Sources are auto-discovered:</p>

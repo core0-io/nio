@@ -198,7 +198,7 @@
         <h3 id="guard.permitted_tools"><code>guard.permitted_tools</code></h3>
         <p><strong>Type:</strong> object · <strong>Default:</strong> <code>{ claude_code: [], codex: [], openclaw: [], hermes: [], mcp: [] }</code></p>
         <p>Phase 0 strict allowlist, per platform. When non-empty for a namespace, ONLY listed tools pass on that platform; everything else is denied. The <code>mcp</code> key is platform-agnostic and applies whenever the incoming tool is an MCP tool.</p>
-        <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server) or server-qualified (<code>hass__HassTurnOn</code> — that server only). Matching is case-insensitive.</p>
+        <p>MCP entries accept either a bare local name (<code>HassTurnOn</code> — matches any MCP server; also matches Hermes's flattened single-underscore form when listed verbatim, e.g. <code>mcp_config_db_get_current_config</code>) or server-qualified (<code>hass__HassTurnOn</code> — that server only). List tool names exactly as they appear in the hook payload — no prefix stripping. Matching is case-insensitive.</p>
         <p>The <code>mcp</code> list also catches <strong>indirect MCP invocations</strong> embedded in shell commands — Phase 0 unwraps the command (16 layers covering shells, heredocs, evals, encodings, package wrappers, ssh/docker exec, …) and runs detectors against every fragment (mcporter, curl/wget/HTTPie, language-runtime one-liners, TCP/socket multiplexers, stdio JSON-RPC pipes, package runners, etc.), mapping each hit back to <code>{server, tool}</code> via the MCP server registry. The full capture model lives at <a href="phases/phase-0-tool-gate.html#mcp-routing">Phase 0 — Tool Gate · MCP Tool Routing</a>.</p>
 
         <h3 id="guard.blocked_tools"><code>guard.blocked_tools</code></h3>
@@ -219,7 +219,7 @@
 
         <h3 id="guard.native_tool_mapping"><code>guard.native_tool_mapping</code></h3>
         <p><strong>Type:</strong> object</p>
-        <p>Native tool → action type classification, per platform. <em>Not a third allow/deny list</em> — this is the table that decides which Phase 1–6 rule set runs for each platform-native tool. Mapped tools enter Phase 1–6 with the chosen action type; tools absent from the map skip Phase 1–6 (auto-allow, log only). MCP tools are dynamic and not categorised here.</p>
+        <p>Native tool → action type classification, per platform. <em>Not a third allow/deny list</em> — this is the table that decides which Phase 1–6 rule set runs for each platform-native tool. Mapped tools enter Phase 1–6 with the chosen action type. Unmapped tools follow a fallback chain in the hook engine: tools that match an MCP convention are dispatched as <code>mcp_tool_call</code> and flow through Phase 1–6 (Phase 3 runs over the JSON-serialised args; Phase 5 LLM and Phase 6 external scorers receive the same payload); any other unmapped tool is allowed through with an <code>UNCATEGORIZED_TOOL</code> audit entry, skipping Phase 1–6.</p>
         <pre><code>native_tool_mapping:
   claude_code:
     Bash: exec_command

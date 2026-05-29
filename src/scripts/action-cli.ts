@@ -31,12 +31,15 @@ export {};
  *
  *   read_file / write_file:
  *     --path <filepath>
+ *
+ *   mcp_tool_call:
+ *     --tool <name> [--server <name>] [--args-json <json_object>]
  */
 
 import { createNio } from '../index.js';
 import type { ActionEnvelope as TypedActionEnvelope } from '../types/action.js';
 
-type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access';
+type ActionType = 'network_request' | 'exec_command' | 'read_file' | 'write_file' | 'secret_access' | 'mcp_tool_call';
 
 interface ActionEnvelope {
   actor: {
@@ -80,7 +83,7 @@ Commands:
 
 evaluate options:
   --type <type>        Action type: exec_command, network_request,
-                       secret_access, read_file, write_file
+                       secret_access, read_file, write_file, mcp_tool_call
 
   For exec_command:
     --command <cmd>    Command string (required)
@@ -98,7 +101,12 @@ evaluate options:
     --access-type <t>  read or write (required)
 
   For read_file / write_file:
-    --path <filepath>  File path (required)`);
+    --path <filepath>  File path (required)
+
+  For mcp_tool_call:
+    --server <name>    MCP server name (optional, may be empty)
+    --tool <name>      MCP tool name (required)
+    --args-json <json> Tool arguments as JSON object (optional)`);
   process.exit(1);
 }
 
@@ -142,6 +150,25 @@ function buildEnvelope(): ActionEnvelope {
         path: getArg('path') || '',
       };
       break;
+
+    case 'mcp_tool_call': {
+      const argsJson = getArg('args-json');
+      let parsedArgs: Record<string, unknown> = {};
+      if (argsJson) {
+        try {
+          parsedArgs = JSON.parse(argsJson);
+        } catch (err) {
+          console.error(`Error: --args-json is not valid JSON: ${(err as Error).message}`);
+          process.exit(1);
+        }
+      }
+      data = {
+        server: getArg('server') || null,
+        tool: getArg('tool') || '',
+        args: parsedArgs,
+      };
+      break;
+    }
 
     default:
       console.error(`Error: unknown action type '${type}'`);
