@@ -7,8 +7,8 @@
  * Driven through dispatchNioCommand() with a temp NIO_HOME so we exercise
  * the real config-load + import paths without touching the user's ~/.nio/.
  *
- * Network probes (external_analyser, collector) are pointed at local HTTP
- * servers brought up per-test so doctor-gate behaviour is deterministic.
+ * Network probes (external_analyser) are pointed at local HTTP servers
+ * brought up per-test so doctor-gate behaviour is deterministic.
  */
 
 import { after, afterEach, before, beforeEach, describe, it } from 'node:test';
@@ -181,21 +181,6 @@ describe('/nio config import', () => {
     const out = await dispatchNioCommand(`config import ${src}`, stubDeps);
     assert.match(out, /# config import REJECTED/);
     assert.match(out, /api_key is empty/);
-    assert.match(liveConfigYaml(), /protection_level: strict/);
-    assert.equal(listBackups().length, 0);
-  });
-
-  it('doctor-gate rejects collector endpoint that is unreachable', async () => {
-    writeFileSync(join(nioHome, 'config.yaml'), yamlDump({ guard: { protection_level: 'strict' } }));
-    const src = writeImportSource('incoming.yaml', {
-      guard: { protection_level: 'balanced' },
-      collector: { endpoint: 'http://127.0.0.1:1', timeout: 500 },
-    });
-
-    const out = await dispatchNioCommand(`config import ${src}`, stubDeps);
-    assert.match(out, /# config import REJECTED/);
-    assert.match(out, /### Collector/);
-    assert.match(out, /✗ http:\/\/127\.0\.0\.1:1/);
     assert.match(liveConfigYaml(), /protection_level: strict/);
     assert.equal(listBackups().length, 0);
   });

@@ -79,7 +79,7 @@ function usageText(): string {
     '       action secret_access: AWS_KEY read',
     '  /nio scan <path>                          — static scan of a directory',
     '  /nio report                               — recent audit events + diagnostics summary',
-    '  /nio doctor                               — dry-run validate config + test OAuth/LLM/collector connectivity',
+    '  /nio doctor                               — dry-run validate config + test OAuth/LLM connectivity',
   ].join('\n');
 }
 
@@ -461,9 +461,12 @@ function formatDiagnosticsAggregate(entries: ReadonlyArray<Record<string, unknow
 
 /**
  * Run a series of dry-run health checks against the current config and report
- * each as ✓ / ✗. Network checks (OAuth, collector reachability) actually hit
- * the configured endpoints, so this is the canonical place users go BEFORE
- * triggering a hook to validate setup.
+ * each as ✓ / ✗. Network checks (OAuth) actually hit the configured
+ * endpoints, so this is the canonical place users go BEFORE triggering a
+ * hook to validate setup. Collector connectivity is intentionally NOT
+ * probed — its config is validated as part of the schema check above, but
+ * the OTLP endpoint may be gated by routing headers / auth that this
+ * surface-level probe wouldn't honour, producing misleading 403s.
  */
 async function handleDoctor(): Promise<string> {
   const { report } = await runDoctor();
@@ -562,17 +565,11 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
     }
   }
 
-  // ─── Collector ──────────────────────────────────────────────────────
-  const collector = config.collector;
-  if (collector?.endpoint) {
-    out.push('', '### Collector');
-    const result = await dryRunCollector(collector.endpoint, collector.timeout);
-    if (result.ok) {
-      out.push(`- ✓ ${collector.endpoint} reachable (${result.message})`);
-    } else {
-      markFail(`- ✗ ${collector.endpoint}: ${result.message}`);
-    }
-  }
+  // Collector connectivity is intentionally not probed here — schema
+  // validation (above) covers config correctness; the OTLP endpoint may be
+  // routed through a gateway that requires per-request headers (e.g.
+  // `x-event-pipeline-id`, bearer auth) that a bare reachability probe
+  // would not include, producing misleading 403/401 reports.
 
   return { ok, report: out.join('\n') };
 }
@@ -635,17 +632,3 @@ async function probeExternalAnalyser(
   };
 }
 
-async function dryRunCollector(endpoint: string, timeoutMs?: number): Promise<DryRunResult> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs ?? 3000);
-  try {
-    const resp = await fetch(endpoint, { method: 'HEAD', signal: controller.signal });
-    clearTimeout(timer);
-    // 4xx/5xx is still "reachable" — OTLP collectors commonly 405 a bare HEAD.
-    return { ok: true, message: `HTTP ${resp.status} on HEAD` };
-  } catch (err) {
-    clearTimeout(timer);
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, message };
-  }
-}

