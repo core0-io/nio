@@ -99,16 +99,6 @@ High-level layout: **[Architecture at a glance](#architecture-at-a-glance)** (to
 
 Captures every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`) as **OpenTelemetry** signals — metrics, traces, and logs — exported over OTLP (gRPC or HTTP). Audit log entries are also dual-written to a local JSONL backup at `~/.nio/audit.jsonl`, so you have a queryable record even when no OTLP endpoint is configured.
 
-> **Optional but strongly recommended for enterprise deployments.** The local JSONL backup works out of the box; to export full telemetry to an observability platform, set `collector.endpoint` in your config.
-
-Custom OTLP request headers are configured under `collector.headers`:
-
-```yaml
-collector:
-  headers:
-    x-event-pipeline-id: "YOUR_PIPELINE_ID"
-```
-
 ### Guard
 
 Pre-execution risk evaluation in two modes:
