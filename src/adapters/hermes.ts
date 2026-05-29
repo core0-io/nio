@@ -19,6 +19,15 @@ const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, string> = {
   read_file: 'read_file',
   fetch: 'network_request',
   http_request: 'network_request',
+  // Read-only metadata / lookup tools. Mapped to `read_file` so they
+  // surface as recognised actions in the audit log instead of falling
+  // to `UNCATEGORIZED_TOOL:<name>`. Phase 2 is a no-op for `read_file`
+  // (runtime/index.ts), so this adds no false positives on its own;
+  // Phase 5/6 (LLM + external scorer) still receive the envelope and
+  // may produce platform-specific scores against an empty `path`.
+  session_search: 'read_file',
+  search_files: 'read_file',
+  skill_view: 'read_file',
 };
 
 export interface HermesAdapterOptions {

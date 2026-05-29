@@ -416,6 +416,12 @@ describe('HermesAdapter', () => {
       assert.equal(adapter.mapToolToActionType('read_file'), 'read_file');
     });
 
+    it('should map read-only metadata/lookup tools to read_file', () => {
+      assert.equal(adapter.mapToolToActionType('session_search'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('search_files'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('skill_view'), 'read_file');
+    });
+
     it('should map fetch / http_request to network_request', () => {
       assert.equal(adapter.mapToolToActionType('fetch'), 'network_request');
       assert.equal(adapter.mapToolToActionType('http_request'), 'network_request');
