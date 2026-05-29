@@ -106,7 +106,7 @@ Custom OTLP request headers are configured under `collector.headers`:
 ```yaml
 collector:
   headers:
-    x-event-pipeline-id: "a7f966c2-02a1-46f3-92cf-51d6889c52f4"
+    x-event-pipeline-id: "YOUR_PIPELINE_ID"
 ```
 
 ### Guard
