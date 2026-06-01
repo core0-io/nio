@@ -44,6 +44,21 @@ Parse `$ARGUMENTS` to determine the subcommand:
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
 
+### Focused skills (Claude Code & Codex)
+
+On Claude Code and Codex, each capability is **also** exposed as a focused standalone skill for sharper natural-language discovery and direct invocation. Prefer these when the user's intent is unambiguous; this unified `/nio` remains the umbrella entry point and full reference.
+
+| Focused skill | Capability | Equivalent here |
+|---------------|------------|-----------------|
+| `nio-scan` | Scan code/skills for execution risks | `scan` |
+| `nio-action` | Evaluate a runtime action's safety | `action` |
+| `nio-report` | Recent execution audit + diagnostics | `report` |
+| `nio-config` | View / set protection level | `config` |
+| `nio-doctor` | Validate config + connectivity | `doctor` |
+| `nio-external-score` | Snapshot external scoring-endpoint scores | `external-score` |
+
+(These focused skills exist only on Claude Code and Codex. On OpenClaw and Hermes there is no `nio-*` skill — use the `/nio <subcommand>` form documented below.)
+
 ### Natural-language routing
 
 This skill is also triggered passively (without an explicit subcommand) when the user asks in plain language. Map the intent to a subcommand:
@@ -464,7 +479,13 @@ Use doctor when:
 - A Bash/Write tool call appeared to be evaluated but you don't see an expected `external_analyser` score in the report — doctor will tell you which endpoint is broken.
 - You rotated an OAuth `client_secret` or LLM `api_key` and want to confirm credentials are working.
 
-Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
+To run it, invoke the bundled CLI (resolve `scripts/` to this skill directory's absolute path per the rules at the top of this file, and issue a **single** `node` command):
+
+```bash
+node scripts/doctor-cli.js
+```
+
+Print its stdout verbatim. Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
 
 ## Subcommand: external-score
 
