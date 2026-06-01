@@ -185,6 +185,7 @@
               <li>Type <code>/nio config show</code> in chat. The current protection level prints.</li>
               <li>Try <code>/nio scan .</code>, then <code>/nio report</code>.</li>
             </ol>
+            <p style="margin-top:.6rem">Each capability is also a <strong>focused skill</strong> on Claude Code — <code>/nio-scan</code>, <code>/nio-config</code>, <code>/nio-external-score</code>, … — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
             <div class="callout ok">
               <div class="title">If <code>/nio</code> isn't available</div>
               <p>Re-run the one-liner — Nio's <code>setup.sh</code> re-registers the marketplace idempotently. The path bound to the marketplace updates if the unzip directory moved.</p>
@@ -211,7 +212,7 @@
             </ol>
             <div class="callout warn">
               <div class="title">Caveat</div>
-              <p><code>plugin_hooks</code> is still under-development in Codex 0.128, but it's the only feature flag that lets plugin-bundled <code>hooks.json</code> fire. Codex also doesn't support custom slash commands — use <code>$nio</code> as the explicit skill trigger.</p>
+              <p><code>plugin_hooks</code> is still under-development in Codex 0.128, but it's the only feature flag that lets plugin-bundled <code>hooks.json</code> fire. Codex has no custom slash commands — use <code>$nio</code> as the explicit skill trigger. Each capability is also a <strong>focused skill</strong>: trigger <code>$nio-scan</code>, <code>$nio-config</code>, <code>$nio-external-score</code>, … or describe the task in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
             </div>
           </section>
 

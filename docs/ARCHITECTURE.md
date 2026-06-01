@@ -882,6 +882,19 @@ npm install && npm run build && npm test
 
 The same `SKILL.md` file behaves very differently depending on the host. Two distinct invocation contracts exist today.
 
+### Umbrella skill + focused skills
+
+nio ships **one umbrella skill** (`nio`, invoked as `/nio <subcommand>`) plus **six focused single-purpose skills** — `nio-scan`, `nio-action`, `nio-report`, `nio-config`, `nio-doctor`, `nio-external-score`. The umbrella is the full reference and routes subcommands; the focused skills each carry a sharp `description` so a plain-language request (e.g. "what's my nio score") routes straight to the right capability instead of matching the broad umbrella and re-routing.
+
+Focused skills exist **only on the LLM-driven hosts — Claude Code and Codex** (where invocation = the model reading `SKILL.md` and running a bundled script). Tool-dispatch (OpenClaw) and shell-hook (Hermes) route the single `nio_command` / `nio-cli.js` surface and have **no per-skill registration**, so they keep the unified `/nio` only.
+
+Mechanics:
+- Sources live under `plugins/shared/skills/<name>/` — the umbrella `nio/` and the focused `nio-*/` side by side; `sync-shared.js` copies the umbrella to all skill plugins and the focused skills to Claude Code + Codex only.
+- Focused skills are pure LLM-driven: no `command-dispatch` / `command-tool` frontmatter. Script-running ones (`nio-action`, `nio-config`, `nio-doctor`, `nio-external-score`) **sibling-reference** the umbrella's bundled scripts via `../nio/scripts/<cli>.js` rather than duplicating the multi-MB bundle.
+- Rule docs are owned by their capability: `SCAN-RULES.md` in `nio-scan/`, `ACTION-POLICIES.md` in `nio-action/`; the umbrella borrows a copy of each (its `SKILL.md` links them).
+- `doctor-cli.js` (bundled) lets `/nio-doctor` — and the unified `/nio doctor` — run standalone on Claude Code / Codex.
+- Hooks (guard / collector / scanner) are unaffected — they fire on tool events regardless of which skill, if any, was invoked.
+
 ### LLM-driven (Claude Code)
 
 Claude Code interprets `/nio` by loading `SKILL.md` into the LLM context and letting the model follow the instructions step-by-step.

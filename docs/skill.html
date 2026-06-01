@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
-<!-- source: plugins/shared/skill/SKILL.md, plugins/shared/skill/SCAN-RULES.md, plugins/shared/skill/ACTION-POLICIES.md -->
+<!-- source: plugins/shared/skills/nio/SKILL.md, plugins/shared/skills/nio-scan/SCAN-RULES.md, plugins/shared/skills/nio-action/ACTION-POLICIES.md -->
 
 <div class="app">
   <div class="topbar">
@@ -41,8 +41,8 @@
 
       <div class="doc-hero">
         <div class="eyebrow">Skill · /nio commands</div>
-        <h1>The <em>/nio</em> skill — one entry, five subcommands.</h1>
-        <p class="lead">After install, your agent has a single skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>doctor</code>, <code>config</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>.</p>
+        <h1>The <em>/nio</em> skill — one umbrella entry, plus focused skills.</h1>
+        <p class="lead">After install, your agent has an umbrella skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>doctor</code>, <code>config</code>, <code>external-score</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>. On Claude Code and Codex each capability is <em>also</em> a focused standalone skill — see <a href="#focused">Focused skills</a>.</p>
       </div>
 
       <div class="doc">
@@ -51,7 +51,24 @@
         <pre><code>/nio &lt;subcommand&gt; [args...]
 /nio &lt;path&gt;                   # shorthand for `scan &lt;path&gt;`</code></pre>
 
-        <p><strong>Trigger by platform:</strong> Claude Code, OpenClaw, and Hermes route <code>/nio</code> through their slash-command surface. Codex CLI does not currently support custom slash commands — there, the same skill is reachable via Codex's skill-trigger conventions: type <code>$nio</code> to invoke explicitly, or describe the action in natural language and Codex picks the skill from <code>SKILL.md</code>. The subcommand grammar below is identical across all platforms.</p>
+        <p><strong>Trigger by platform:</strong> Claude Code, OpenClaw, and Hermes route <code>/nio</code> through their slash-command surface. Codex CLI does not currently support custom slash commands — there, the same skill is reachable via Codex's skill-trigger conventions: type <code>$nio</code> to invoke explicitly, or describe the action in natural language and Codex picks the skill from <code>SKILL.md</code>. The subcommand grammar below is identical across all platforms. See <a href="#focused">Focused skills</a> for the per-capability standalone skills on Claude Code and Codex.</p>
+
+        <h2 id="focused">Focused skills (Claude Code &amp; Codex)</h2>
+        <p>On <strong>Claude Code</strong> and <strong>Codex</strong>, each capability is <em>also</em> published as a focused, single-purpose skill — so a plain-language request routes straight to the right tool instead of matching the broad umbrella and re-routing. The unified <code>/nio</code> stays the umbrella entry point and full reference.</p>
+        <table>
+          <thead><tr><th>Focused skill</th><th>Does</th><th>Same as</th></tr></thead>
+          <tbody>
+            <tr><td><code>nio-scan</code></td><td>Scan code / a skill for execution risks</td><td><code>/nio scan</code></td></tr>
+            <tr><td><code>nio-action</code></td><td>Evaluate a runtime action's safety</td><td><code>/nio action</code></td></tr>
+            <tr><td><code>nio-report</code></td><td>Recent execution audit + diagnostics</td><td><code>/nio report</code></td></tr>
+            <tr><td><code>nio-config</code></td><td>View / set protection level</td><td><code>/nio config</code></td></tr>
+            <tr><td><code>nio-doctor</code></td><td>Validate config + connectivity</td><td><code>/nio doctor</code></td></tr>
+            <tr><td><code>nio-external-score</code></td><td>Snapshot external scoring-endpoint scores</td><td><code>/nio external-score</code></td></tr>
+          </tbody>
+        </table>
+        <p>On Claude Code these are slash commands (<code>/nio-scan</code>, <code>/nio-config</code>, …). Codex has no slash commands — trigger with <code>$nio-scan</code> / <code>$nio-external-score</code> or natural language. <strong>OpenClaw and Hermes</strong> do not ship the focused skills; use the unified <code>/nio &lt;subcommand&gt;</code> there.</p>
+
+        <hr>
 
         <h2 id="scan"><code>scan &lt;path&gt;</code></h2>
         <p>Scan a directory or a single file for execution risks. Applies 15 static rules + base64 decode pass across all supported file types.</p>
@@ -206,6 +223,21 @@
         <p>Output is a markdown checklist with <code>✓ / ✗ / ·</code> per check and an inline <code>hint:</code> line pointing at the specific config path to fix. Doctor's own probes use a scoped diagnostic collector that's discarded after the command returns, so repeated <code>doctor</code> runs do not pollute <code>/nio report</code>.</p>
 
         <p>See the <a href="diagnostics.html#nio-doctor">Diagnostics page</a> for a full example output and a walkthrough.</p>
+
+        <hr>
+
+        <h2 id="external-score"><code>external-score</code></h2>
+        <p>Query every <strong>enabled</strong> Phase 6 external scoring endpoint (<code>guard.external_analyser</code>) and list each one's current score. A focused snapshot — unlike <a href="#doctor"><code>doctor</code></a> it skips the config-schema and LLM checks. No arguments.</p>
+        <p>Each endpoint is keyed by its configured <code>name</code>; nio issues a real GET, sends auth, and validates the strict <a href="../docs/phases/phase-6-external.html#response-contract"><code>{ score, reason? }</code></a> contract. <strong>Disabled entries are skipped entirely</strong> — neither probed nor listed. The probe uses a scoped collector, so it never writes to <code>/nio report</code>.</p>
+        <h3>Output</h3>
+        <pre><code>## Nio External Scores
+
+2 enabled endpoint(s) queried.
+
+- [0.42] — guardrail (https://score.example.com)
+- [0.1] — reputation (https://rep.example.com)
+- [✗] — legacy (https://old.example.com): HTTP 401 Unauthorized</code></pre>
+        <p>Successful rows lead with the bracketed score, then the endpoint <code>name</code> and URL; only failed rows carry the error reason.</p>
 
         <hr>
 
