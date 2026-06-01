@@ -23,7 +23,12 @@
  * Whitelist intent:
  *   - Leading `node` then an absolute path ending in
  *     `/skills/nio/scripts/<name>.js` where <name> is one of Nio's
- *     six bundled scripts.
+ *     eight bundled scripts. The action-cli/guard-hook/collector-hook/
+ *     scanner-hook/hook-cli/config-cli calls re-run analysis inside
+ *     their own subprocess; the read-only diagnostic scripts
+ *     (doctor-cli, external-score-cli) have no dangerous action to
+ *     analyse but legitimately reach Nio's own endpoints — they must
+ *     not be flagged by the outer Phase 6 external scorer.
  *   - Optional args, but NO shell metacharacters (`& | ; ` ` $ ( ) < >`)
  *     anywhere in the raw string. Quotes and common arg chars
  *     (letters, digits, `-`, `=`, `.`, `/`, spaces) are allowed.
@@ -44,7 +49,7 @@
  */
 
 const NIO_SELF_INVOCATION =
-  /^\s*node\s+\S+\/skills\/nio\/scripts\/(action-cli|hook-cli|scanner-hook|guard-hook|config-cli|collector-hook)\.js(\s+[^&|;`$()<>]*)?\s*$/;
+  /^\s*node\s+\S+\/skills\/nio\/scripts\/(action-cli|hook-cli|scanner-hook|guard-hook|config-cli|collector-hook|doctor-cli|external-score-cli)\.js(\s+[^&|;`$()<>]*)?\s*$/;
 
 /**
  * Return true if the command string is a Nio self-invocation that

@@ -48,7 +48,15 @@ describe('isNioSelfInvocation: matches legitimate self-calls', () => {
     );
   });
 
-  it('allows each of the six whitelisted script names', () => {
+  it('doctor-cli with no args (as the /nio doctor skill invokes it)', () => {
+    assert.equal(isNioSelfInvocation(`node ${BASE}/doctor-cli.js`), true);
+  });
+
+  it('external-score-cli with no args (as the /nio external-score skill invokes it)', () => {
+    assert.equal(isNioSelfInvocation(`node ${BASE}/external-score-cli.js`), true);
+  });
+
+  it('allows each of the eight whitelisted script names', () => {
     for (const name of [
       'action-cli',
       'hook-cli',
@@ -56,6 +64,8 @@ describe('isNioSelfInvocation: matches legitimate self-calls', () => {
       'guard-hook',
       'config-cli',
       'collector-hook',
+      'doctor-cli',
+      'external-score-cli',
     ]) {
       assert.equal(
         isNioSelfInvocation(`node ${BASE}/${name}.js`),
