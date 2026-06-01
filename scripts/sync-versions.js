@@ -30,7 +30,15 @@ const targets = [
   { path: 'plugins/codex/.codex-plugin/plugin.json', re: /("version"\s*:\s*)"[^"]*"/, replacement: (v) => `$1"${v}"` },
   // SKILL.md frontmatter (source of truth — sync-shared.js copies this to
   // both claude-code and openclaw plugin skill dirs).
-  { path: 'plugins/shared/skill/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  // Focused per-capability skills (source of truth — sync-shared.js copies
+  // these to the claude-code + codex skill dirs).
+  { path: 'plugins/shared/skills/nio-scan/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio-action/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio-report/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio-config/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio-doctor/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
+  { path: 'plugins/shared/skills/nio-external-score/SKILL.md', re: /^(\s*version:\s*)"[^"]*"/m, replacement: (v) => `$1"${v}"` },
   // Hermes Python plugin manifest — Hermes reads ~/.hermes/plugins/nio/plugin.yaml.
   { path: 'plugins/hermes/python-plugin/plugin.yaml', re: /^(version:\s*).+$/m, replacement: (v) => `$1${v}` },
 ];
