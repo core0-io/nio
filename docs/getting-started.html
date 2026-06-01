@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="../assets/shared.css">
 </head>
 <body>
-<!-- source: README.md, CLAUDE.md, plugins/shared/skill/SKILL.md -->
+<!-- source: README.md, CLAUDE.md, plugins/shared/skills/nio/SKILL.md -->
 
 <div class="app">
   <div class="topbar">
@@ -77,9 +77,12 @@
 /nio scan .                   # scan the current working directory
 /nio action "rm -rf /"        # evaluate a proposed command without running it
 /nio report                   # last 50 guard decisions + diagnostics summary
-/nio doctor                   # validate config + dry-run OAuth/LLM</code></pre>
+/nio doctor                   # validate config + dry-run OAuth/LLM
+/nio external-score           # snapshot scores from external scoring endpoints</code></pre>
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
+
+        <p>On <strong>Claude Code</strong> and <strong>Codex</strong> each capability is also a focused standalone skill (<code>/nio-scan</code>, <code>/nio-config</code>, <code>/nio-external-score</code>, …) — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
 
         <p><strong>Already have a team config?</strong> Skip the per-machine tuning and apply an operator-provided <code>nio.yaml</code> at install time with <code>./setup.sh --config /path/to/nio.yaml</code> (or via the curl one-liner). Nio runs <code>/nio doctor</code> against the file first and aborts the install if any probe fails — see <a href="install.html#shared-config">Onboarding with a shared config</a>.</p>
 
