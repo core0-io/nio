@@ -60,6 +60,7 @@ const cc = await Bun.build({
     'collector-hook',
     'action-cli',
     'config-cli',
+    'external-score-cli',
     'hook-cli',
   ].map((n) => join(ROOT, `src/scripts/${n}.ts`)),
   outdir: CC_SKILL_SCRIPTS,

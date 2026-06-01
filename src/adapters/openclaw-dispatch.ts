@@ -59,6 +59,9 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
       return handleReport();
     case 'doctor':
       return handleDoctor();
+    case 'external-score':
+    case 'external':
+      return handleExternalScore();
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -81,6 +84,7 @@ function usageText(): string {
     '  /nio scan <path>                          — static scan of a directory',
     '  /nio report                               — recent audit events + diagnostics summary',
     '  /nio doctor                               — dry-run validate config + test OAuth/LLM connectivity',
+    '  /nio external-score                       — query all enabled external scoring endpoints and list their current scores',
   ].join('\n');
 }
 
@@ -609,6 +613,7 @@ interface DryRunResult {
   ok: boolean;
   message: string;
   hint?: string;
+  score?: number;
 }
 
 /**
@@ -652,7 +657,7 @@ async function probeExternalAnalyser(
 
   if (result) {
     const reason = result.reason ? ` — ${result.reason}` : '';
-    return { ok: true, message: `score ${result.score}${reason}` };
+    return { ok: true, message: `score ${result.score}${reason}`, score: result.score };
   }
 
   const last = reporter.take().pop();
@@ -661,5 +666,65 @@ async function probeExternalAnalyser(
     message: last?.detail ?? last?.message ?? 'request failed',
     hint: last?.hint,
   };
+}
+
+// ── external-score ─────────────────────────────────────────────────────────
+
+/**
+ * Query every *enabled* Phase 6 external scoring endpoint and list its current
+ * score. Unlike `doctor` (which folds external probes in with config + LLM
+ * checks), this is a focused snapshot: one line per endpoint, keyed by the
+ * configured `name`, showing the live score on success or the error on
+ * failure. Disabled entries (`enabled: false`) are skipped entirely — they are
+ * neither probed nor listed. Reuses the same silent probe as doctor, so it
+ * never writes to the audit log.
+ */
+async function handleExternalScore(): Promise<string> {
+  const config = loadConfig();
+  const all = config.guard?.external_analyser ?? [];
+
+  if (all.length === 0) {
+    return [
+      '## Nio External Scores',
+      '',
+      'No external scoring endpoints configured.',
+      '',
+      'Add them under `guard.external_analyser` in ~/.nio/config.yaml, then run `/nio external-score` again.',
+    ].join('\n');
+  }
+
+  const enabled = all.filter(e => e.enabled !== false);
+  if (enabled.length === 0) {
+    return [
+      '## Nio External Scores',
+      '',
+      `${all.length} endpoint(s) configured, all disabled — nothing to query.`,
+      '',
+      'Set `enabled: true` (or remove the `enabled` field) on a `guard.external_analyser` entry to include it.',
+    ].join('\n');
+  }
+
+  // Probe concurrently — mirrors how Phase 6 fires all enabled endpoints at
+  // once, and gives a faster snapshot than doctor's serial loop.
+  const results = await Promise.all(
+    enabled.map(entry => probeExternalAnalyser(entry).then(r => ({ entry, r }))),
+  );
+
+  const out: string[] = [
+    '## Nio External Scores',
+    '',
+    `${enabled.length} enabled endpoint(s) queried.`,
+    '',
+  ];
+  for (const { entry, r } of results) {
+    if (r.ok) {
+      // Score first (bracketed), then the endpoint name + URL. No auth label, no reason.
+      out.push(`- [${r.score}] — ${entry.name} (${entry.endpoint})`);
+    } else {
+      // Only failures carry an explanation (the error reason).
+      out.push(`- [✗] — ${entry.name} (${entry.endpoint}): ${r.message}`);
+    }
+  }
+  return out.join('\n');
 }
 

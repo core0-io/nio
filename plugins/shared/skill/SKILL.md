@@ -1,6 +1,6 @@
 ---
 name: nio
-description: Nio — AI agent execution assurance. Use for evaluating action safety before execution, scanning code for execution risks, and reviewing the agent execution audit log.
+description: Nio — AI agent execution assurance. Use for evaluating action safety before execution, scanning code for execution risks, reviewing the agent execution audit log, and querying the current risk scores returned by configured external scoring endpoints (e.g. "what's my Nio score", "check my external/guardrail endpoint scores", "show the current risk scores from my scoring services").
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
@@ -9,7 +9,7 @@ user-invocable: true
 command-dispatch: tool
 command-tool: nio_command
 command-arg-mode: raw
-argument-hint: "[scan|action|report|config|reset] [args...]"
+argument-hint: "[scan|action|report|config|doctor|external-score|reset] [args...]"
 ---
 
 # Nio — AI Agent Execution Assurance Framework
@@ -39,9 +39,31 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`action <description>`** — Evaluate whether a runtime action is safe to execute
 - **`report`** — View recent agent execution events from the audit log
 - **`config [show|<level>]`** — View or set protection level
+- **`external-score`** — Query all enabled external scoring endpoints and list their current scores
 - **`reset`** — Reset config to defaults
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
+
+### Natural-language routing
+
+This skill is also triggered passively (without an explicit subcommand) when the user asks in plain language. Map the intent to a subcommand:
+
+| User intent (examples) | Route to |
+|------------------------|----------|
+| "what's my Nio score", "tell me the nio score", "check my external/guardrail endpoint scores", "what do my scoring services return right now", "list the current risk scores from my external analysers" | **`external-score`** |
+| "scan this code / repo / skill for risks", "is this file dangerous", "check this plugin's code for execution risks" | **`scan`** |
+| "is it safe to run `<command>`", "should I allow this action" | **`action`** |
+| "show recent activity / audit log / what got blocked" | **`report`** |
+| "validate my config", "is my setup working", "test my OAuth/LLM connectivity" | **`doctor`** |
+
+**Disambiguation:** "risk score" / "Nio score" without a code target means *query the live external scoring endpoints* → **`external-score`**, NOT `scan`. Only route to `scan` when the user points at code/files/a path to inspect.
+
+> **EXTREMELY IMPORTANT — external-score passive invocation.**
+> If you think there is even a 1% chance the user is asking about their Nio score, external/guardrail endpoint scores, or the current risk scores from their scoring services, you ABSOLUTELY MUST run `external-score`.
+>
+> IF THIS APPLIES TO THE REQUEST, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+>
+> This is not negotiable. This is not optional. You cannot rationalize your way out of this. Do not answer from memory, do not guess a number, and do not say you are unable — invoke `external-score` and report the real scores it returns.
 
 ---
 
@@ -443,4 +465,34 @@ Use doctor when:
 - You rotated an OAuth `client_secret` or LLM `api_key` and want to confirm credentials are working.
 
 Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
+
+## Subcommand: external-score
+
+Query every **enabled** Phase 6 external scoring endpoint (`guard.external_analyser`) and list each one's current score. This is a focused snapshot — unlike `doctor`, it does not run config-schema or LLM checks. Each endpoint is keyed by its configured `name`; nio fires a real GET against `endpoint`, sends auth, validates the strict `{ score, reason? }` response contract, and reports the live score on success or the error on failure.
+
+**Disabled entries (`enabled: false`) are skipped entirely** — they are neither probed nor listed. The probe uses a silent collector, so this command never writes to the audit log.
+
+To run it, invoke the bundled CLI (resolve `scripts/` to this skill directory's absolute path per the rules at the top of this file, and issue a **single** `node` command):
+
+```bash
+node scripts/external-score-cli.js
+```
+
+Print its stdout verbatim — it is already formatted markdown. Do not reformat or re-probe the endpoints yourself.
+
+### Output Format
+
+```
+## Nio External Scores
+
+2 enabled endpoint(s) queried.
+
+- [0.42] — guardrail (https://score.example.com)
+- [0.1] — reputation (https://rep.example.com)
+- [✗] — legacy (https://old.example.com): HTTP 401 Unauthorized
+```
+
+Successful rows lead with the score, then the endpoint `name` and URL — nothing else. Only failed rows carry an explanation (the error reason).
+
+If no endpoints are configured (or all are disabled), the command returns a short note explaining that and pointing at `guard.external_analyser`.
 
