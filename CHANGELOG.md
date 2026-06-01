@@ -1,5 +1,79 @@
 # @core0-io/nio
 
+## 2.5.0
+
+### Minor Changes
+
+- d222ba0: **New `/nio external-score` subcommand — snapshot every enabled external scoring endpoint's current score.**
+
+  Adds a focused command that queries all enabled Phase 6 endpoints
+  (`guard.external_analyser`) and lists each one's live score, keyed by its
+  configured `name`. Unlike `/nio doctor` — which folds external probes in
+  with config-schema and LLM checks — this is a single-purpose snapshot:
+  one line per endpoint showing the score (and `reason`, if returned) on
+  success, or the error + hint on failure.
+
+  Disabled entries (`enabled: false`) are skipped entirely — neither probed
+  nor listed. The probe reuses doctor's silent `probeExternalAnalyser`, so
+  the command never writes to the audit log. Endpoints are queried
+  concurrently, mirroring how Phase 6 fires them at runtime.
+
+  Wiring:
+
+  - `handleExternalScore()` + `external-score` (alias `external`) case in
+    `src/adapters/openclaw-dispatch.ts` — picked up automatically by OpenClaw
+    (`nio_command` tool) and Hermes (`nio-cli.js`).
+  - New bundled `src/scripts/external-score-cli.ts` so Claude Code / Codex
+    (which read `SKILL.md` and shell out to scripts) can run it via
+    `node scripts/external-score-cli.js`.
+  - `SKILL.md` routing + subcommand section; `argument-hint` updated.
+
+- f1dcfc1: **Each `/nio` capability is now also a focused single-purpose skill (Claude Code + Codex).**
+
+  Alongside the unified `/nio`, six focused skills are added for sharper
+  passive (natural-language) discovery and direct slash use: `nio-scan`,
+  `nio-action`, `nio-report`, `nio-config`, `nio-doctor`, and
+  `nio-external-score`. Each carries its own focused `description` so the
+  model routes intent precisely (e.g. "what's my Nio score" →
+  `nio-external-score`, "scan this repo for risks" → `nio-scan`) instead of
+  matching the broad unified skill and re-routing.
+
+  Scope and mechanics:
+
+  - Synced only to the LLM-driven platforms — Claude Code and Codex. OpenClaw
+    (tool-dispatch via the single `nio_command` tool) and Hermes (`nio-cli.js`)
+    keep using the unified `/nio`. The unified `/nio` is unchanged.
+  - Source of truth: `plugins/shared/skills/<name>/SKILL.md`, synced by
+    `scripts/sync-shared.js`; versions tracked in `scripts/sync-versions.js`.
+  - Script-running skills (action/config/doctor/external-score) sibling-reference
+    the kept `nio` skill's bundled scripts via `../nio/scripts/<cli>.js` — no
+    multi-MB bundle duplication. `nio-scan` / `nio-action` carry their companion
+    `SCAN-RULES.md` / `ACTION-POLICIES.md`.
+  - New `src/scripts/doctor-cli.ts` (bundled) so `/nio-doctor` — and the unified
+    `/nio doctor` — can run as a standalone command on Claude Code / Codex,
+    closing the gap where doctor had no invocable CLI on those platforms.
+  - Hooks (guard/collector/scanner) are untouched — splitting skills does not
+    affect the PreToolUse/PostToolUse pipeline.
+
+### Patch Changes
+
+- **Fix: `/nio doctor` and `/nio external-score` no longer self-block under the outer guard.**
+
+  The `NIO_SELF_INVOCATION` whitelist still listed only the original six
+  bundled scripts, so when `doctor-cli.js` / `external-score-cli.js` were
+  run via a shell-exec tool (e.g. Claude Code's `Bash`) the outer guard
+  hook skipped the self-invocation short-circuit and ran full Phase 1-6
+  analysis on the command. Phase 6's external scorer then flagged nio's own
+  read-only diagnostic commands — whose entire job is to reach those
+  scoring endpoints — denying them with an `EXTERNAL_SCORE` critical
+  verdict.
+
+  Both scripts are now added to the whitelist regex so they short-circuit
+  after Phase 0 like the other bundled scripts. Same safety envelope: an
+  exact `/skills/nio/scripts/<name>.js` path, no shell metacharacters, and
+  `blocked_tools` (Phase 0) still applies. Unit and integration coverage is
+  extended to the full eight-script set.
+
 ## 2.4.4
 
 ### Patch Changes
