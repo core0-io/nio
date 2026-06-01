@@ -13,7 +13,13 @@
       { label: 'Installation', path: '/docs/install.html' },
     ]},
     { id: 'skill', title: 'Skill', openByDefault: true, items: [
-      { label: '/nio commands', path: '/docs/skill.html' },
+      { label: '/nio', path: '/docs/skill.html' },
+      { label: '/nio-scan', path: '/docs/nio-scan.html' },
+      { label: '/nio-action', path: '/docs/nio-action.html' },
+      { label: '/nio-report', path: '/docs/nio-report.html' },
+      { label: '/nio-config', path: '/docs/nio-config.html' },
+      { label: '/nio-doctor', path: '/docs/nio-doctor.html' },
+      { label: '/nio-external-score', path: '/docs/nio-external-score.html' },
     ]},
     { id: 'configuration', title: 'Configuration', openByDefault: true, items: [
       { label: 'Config reference', path: '/docs/configuration.html' },

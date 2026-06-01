@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>/nio-doctor — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio (also known as nio-agent-guard) — execution-assurance and observability for autonomous AI agents. Blocks risky commands, scans third-party skills, and captures OTEL telemetry. Supports Claude Code, OpenClaw, and more.">
+<meta name="keywords" content="nio, nio-agent-guard, agent-guard, nio-agent-harness, agent-harness, ai-agent-harness, ai agent security, ai agent harness, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, openclaw, hermes, hermes-agent, skill scanner, otel">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/shared/skills/nio-doctor/SKILL.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.4.4">v2.4.4</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Skill · /nio-doctor</div>
+        <h1><code>/nio-doctor</code> — validate config + connectivity.</h1>
+        <p class="lead">Catch config issues before they cause silent failures: schema validation, a real probe of every enabled external scoring endpoint, and LLM-key sanity checks.</p>
+      </div>
+
+      <div class="doc">
+
+        <p><strong>Invoke:</strong> <code>/nio-doctor </code> (Claude Code) · <code>$nio-doctor</code> or natural language (Codex) · or via the umbrella <code>/nio doctor </code> on any platform (incl. OpenClaw / Hermes). See <a href="skill.html#focused">Focused skills</a>.</p>
+
+        <h2 id="doctor"><code>doctor</code></h2>
+        <p>Validate the current configuration end-to-end. Doctor catches issues <em>before</em> they cause silent failures during real tool calls. No arguments.</p>
+
+        <p>What doctor does:</p>
+        <ol>
+          <li><strong>Configuration</strong> — re-runs Zod schema validation against the on-disk <code>~/.nio/config.yaml</code>.</li>
+          <li><strong>External analysers</strong> — for every enabled entry, builds the same <code>ExternalAnalyser</code> the orchestrator uses (auth strategy, custom headers) and issues a real GET against the configured URL. On success, prints the parsed <code>score</code>; on failure, prints HTTP status / response body preview / hint. This catches typos, missing query params, auth failures, AND <a href="../docs/phases/phase-6-external.html#response-contract">response-contract</a> violations like the endpoint returning a different shape.</li>
+          <li><strong>LLM analyser</strong> — flags <code>guard.llm_analyser.enabled=true</code> paired with an empty <code>api_key</code>.</li>
+        </ol>
+        <p>Doctor does <strong>not</strong> probe <code>collector.endpoint</code> reachability — its config correctness is covered by the schema check above, and bare HTTP probes would skip the routing headers (e.g. <code>x-event-pipeline-id</code>) that gateways often require, producing misleading 401/403 reports. Export failures surface at runtime via <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
+
+        <p>Output is a markdown checklist with <code>✓ / ✗ / ·</code> per check and an inline <code>hint:</code> line pointing at the specific config path to fix. Doctor's own probes use a scoped diagnostic collector that's discarded after the command returns, so repeated <code>doctor</code> runs do not pollute <code>/nio report</code>.</p>
+
+        <p>See the <a href="diagnostics.html#nio-doctor">Diagnostics page</a> for a full example output and a walkthrough.</p>
+      </div>
+
+      <div class="page-nav">
+        <a href="nio-config.html">
+          <span class="dir">← Prev</span>
+          <span class="label">/nio-config</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="nio-external-score.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">/nio-external-score</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.4.4">v2.4.4</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>
