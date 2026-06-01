@@ -787,7 +787,7 @@ describe('Integration: Nio self-invocation short-circuit', () => {
     assert.equal(result.riskTags, undefined);
   });
 
-  it('ALLOW: each of the six bundled Nio scripts', async () => {
+  it('ALLOW: each of the eight bundled Nio scripts', async () => {
     ctx = createTestContext('balanced');
     const scripts = [
       'action-cli',
@@ -796,6 +796,8 @@ describe('Integration: Nio self-invocation short-circuit', () => {
       'guard-hook',
       'config-cli',
       'collector-hook',
+      'doctor-cli',
+      'external-score-cli',
     ];
     for (const name of scripts) {
       const result = await evaluateHook(
