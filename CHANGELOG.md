@@ -1,5 +1,18 @@
 # @core0-io/nio
 
+## 2.5.1
+
+### Patch Changes
+
+- 0ec947b: Audit collector send failures. OTLP export failures (connection refused, auth rejected, bad protocol/URL, timeout) were silently swallowed by the OTEL SDK — the documented `collector / otlp_export_failed` diagnostic was never actually emitted. The trace/metric/log exporters are now wrapped so a FAILED export result (or a synchronous throw) is reported via `reportDiagnostic()` into the audit log, tagged with the failing signal as `component`. A rejected `forceFlush()` at hook-subprocess shutdown is likewise captured as the new `collector / otlp_flush_failed` diagnostic instead of becoming an unhandled rejection.
+- 9da6c81: De-duplicate collector identity attributes. `nio.platform` and
+  `gen_ai.agent.name` were written both onto the OTEL Resource and onto every
+  span, log record, and metric data-point. They are now emitted only on the
+  Resource (OTEL keeps Resource and element attributes in separate namespaces,
+  so the copies were genuinely redundant). The dead `platform` / `agentName`
+  parameters that only fed the duplicate copies were removed from the trace
+  and metric record functions.
+
 ## 2.5.0
 
 ### Minor Changes

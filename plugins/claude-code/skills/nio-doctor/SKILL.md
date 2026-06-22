@@ -4,7 +4,7 @@ description: Nio config validator + connectivity check. Use when the user wants 
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "2.5.0"
+  version: "2.5.1"
 user-invocable: true
 command-arg-mode: raw
 argument-hint: ""

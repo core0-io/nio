@@ -4,7 +4,7 @@ description: Nio runtime action safety evaluator. Use when the user asks whether
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "2.5.0"
+  version: "2.5.1"
 user-invocable: true
 command-arg-mode: raw
 argument-hint: "<type>: <description>"

@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Nio (aka nio-agent-guard) — AI agent execution assurance framework",
-    "version": "2.5.0"
+    "version": "2.5.1"
   },
   "plugins": [
     {
