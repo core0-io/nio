@@ -581,39 +581,4 @@ describe('recordPostToolUse — deny/block path', () => {
 
     await shutdown();
   });
-
-  it('would capture wrong attribute if cwd and postAttributes were swapped (swapped-arg guard)', async () => {
-    // Demonstrates that if someone accidentally passes a platform string as
-    // cwd and the real cwd as postAttributes, the nio.cwd attribute would
-    // contain 'hermes' rather than the real path — catching the original bug.
-    const { provider, finished, shutdown } = makeInMemoryTracer();
-
-    let state = seed({ turn_trace_id: 'e'.repeat(32) });
-    state = recordPreToolUse(state, 'tc-swap', 'Bash', 'echo hi', {});
-
-    // Deliberately pass the OLD broken order: platform string in cwd slot,
-    // cwd string as postAttributes (to prove the test is order-sensitive)
-    await recordPostToolUse(
-      provider,
-      state,
-      'tc-swap',
-      'hermes',                             // wrong: platform where cwd should be
-      { 'nio.guard.decision': 'allow' },    // wrong: cwd where postAttrs should be
-    );
-
-    const spans = finished();
-    assert.equal(spans.length, 1);
-    const span = spans[0]!;
-
-    // With swapped args, nio.cwd is 'hermes' — the exact bug this fixes.
-    // This assertion PASSES to document what the broken call looked like;
-    // the previous test confirms the corrected call gives the right value.
-    assert.equal(
-      span.attributes['nio.cwd'],
-      'hermes',
-      'swapped-arg call produces "hermes" in nio.cwd — demonstrates the original bug',
-    );
-
-    await shutdown();
-  });
 });
