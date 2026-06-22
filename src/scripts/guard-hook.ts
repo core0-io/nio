@@ -220,7 +220,7 @@ async function main(): Promise<void> {
       );
       const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
       const r = await recordPostToolUse(
-        tracerProvider, state, key, PLATFORM, cwd,
+        tracerProvider, state, key, cwd,
         guardAttrs,
         reason,
       );

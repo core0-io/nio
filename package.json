@@ -11,6 +11,7 @@
   },
   "scripts": {
     "build": "rm -rf dist plugins/claude-code/skills/nio/scripts && tsc -p tsconfig.lib.json && bun scripts/build.js && node scripts/sync-shared.js && node scripts/sync-site-version.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "dev": "tsc -w -p tsconfig.lib.json",
     "test": "node --import ./dist/tests/helpers/isolate-nio-home.js --test dist/tests/*.test.js dist/tests/**/*.test.js",
     "prepublishOnly": "npm run build",

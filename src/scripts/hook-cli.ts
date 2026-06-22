@@ -406,7 +406,7 @@ async function main(): Promise<void> {
         const cwd = collectorInput.cwd ?? process.cwd();
         const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
         const r = await recordPostToolUse(
-          tracerProvider, state, key, 'hermes', cwd,
+          tracerProvider, state, key, cwd,
           guardAttrs,
           reason,
         );

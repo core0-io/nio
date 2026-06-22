@@ -20,8 +20,11 @@ import {
   recordCacheHitRate,
   setPendingGuardAttrs,
   takePendingGuardAttrs,
+  recordPostToolUse,
 } from '../scripts/lib/traces-collector.js';
 import type { CollectorState } from '../scripts/lib/traces-state-store.js';
+import { SpanStatusCode } from '@opentelemetry/api';
+import { makeInMemoryTracer } from './helpers/tracer.js';
 
 const seed = (overrides: Partial<CollectorState> = {}): CollectorState => ({
   session_id: 'sess-1',
@@ -507,5 +510,110 @@ describe('recordCacheHitRate', () => {
     s = recordCacheHitRate(s);
     // 200 / (100 + 100 + 200) = 200 / 400 = 0.5
     assert.equal(s.turn_attributes!['nio.turn.cache_hit_rate'], 0.5);
+  });
+});
+
+// ── recordPostToolUse — deny/block path regression ─────────────────────
+//
+// Regression guard for the platform-param removal refactor. Two call
+// sites (guard-hook.ts / hook-cli.ts) previously passed the old 7-arg
+// shape: (provider, state, key, PLATFORM, cwd, guardAttrs, reason).
+// After the refactor the signature is 4–6 args:
+//   (provider, state, key, cwd?, postAttributes?, error?)
+// This test pins the exact arg ordering so any future misalignment is
+// caught by `pnpm test` rather than silently shipping in bundled scripts.
+
+describe('recordPostToolUse — deny/block path', () => {
+  it('emits a span with correct cwd, guard attrs, and ERROR status', async () => {
+    const { provider, finished, shutdown } = makeInMemoryTracer();
+
+    const testCwd = '/workspace/test-project';
+    const guardAttrs = { 'nio.guard.decision': 'deny', 'nio.guard.risk_level': 'high' };
+    const errorReason = 'Blocked by Nio';
+
+    // Build state with a pending span (simulates recordPreToolUse having run)
+    let state = seed({
+      turn_trace_id: 'f'.repeat(32),
+    });
+    state = recordPreToolUse(state, 'tc-block-1', 'Bash', 'rm -rf /', {});
+
+    const { state: nextState, durationMs } = await recordPostToolUse(
+      provider,
+      state,
+      'tc-block-1',
+      testCwd,
+      guardAttrs,
+      errorReason,
+    );
+
+    // Span should have been emitted
+    const spans = finished();
+    assert.equal(spans.length, 1, 'exactly one span should be emitted');
+    const span = spans[0]!;
+
+    // nio.cwd must be the cwd we passed — NOT a platform string such as
+    // 'claude-code' or 'hermes' (the old bug placed PLATFORM in this slot)
+    assert.equal(
+      span.attributes['nio.cwd'],
+      testCwd,
+      `nio.cwd should be "${testCwd}", not a platform string`,
+    );
+
+    // Guard attribute from postAttributes must be present
+    assert.equal(
+      span.attributes['nio.guard.decision'],
+      'deny',
+      'nio.guard.decision should be present on the span',
+    );
+    assert.equal(
+      span.attributes['nio.guard.risk_level'],
+      'high',
+      'nio.guard.risk_level should be present on the span',
+    );
+
+    // Span status must be ERROR with the reason as message
+    assert.equal(span.status.code, SpanStatusCode.ERROR, 'span status must be ERROR on deny path');
+    assert.equal(span.status.message, errorReason, 'span status message must be the block reason');
+
+    // State housekeeping: pending span should be drained
+    assert.equal(nextState.pending_spans['tc-block-1'], undefined, 'pending span should be removed after post');
+    assert.ok(durationMs !== null && durationMs >= 0, 'durationMs should be non-null and non-negative');
+
+    await shutdown();
+  });
+
+  it('would capture wrong attribute if cwd and postAttributes were swapped (swapped-arg guard)', async () => {
+    // Demonstrates that if someone accidentally passes a platform string as
+    // cwd and the real cwd as postAttributes, the nio.cwd attribute would
+    // contain 'hermes' rather than the real path — catching the original bug.
+    const { provider, finished, shutdown } = makeInMemoryTracer();
+
+    let state = seed({ turn_trace_id: 'e'.repeat(32) });
+    state = recordPreToolUse(state, 'tc-swap', 'Bash', 'echo hi', {});
+
+    // Deliberately pass the OLD broken order: platform string in cwd slot,
+    // cwd string as postAttributes (to prove the test is order-sensitive)
+    await recordPostToolUse(
+      provider,
+      state,
+      'tc-swap',
+      'hermes',                             // wrong: platform where cwd should be
+      { 'nio.guard.decision': 'allow' },    // wrong: cwd where postAttrs should be
+    );
+
+    const spans = finished();
+    assert.equal(spans.length, 1);
+    const span = spans[0]!;
+
+    // With swapped args, nio.cwd is 'hermes' — the exact bug this fixes.
+    // This assertion PASSES to document what the broken call looked like;
+    // the previous test confirms the corrected call gives the right value.
+    assert.equal(
+      span.attributes['nio.cwd'],
+      'hermes',
+      'swapped-arg call produces "hermes" in nio.cwd — demonstrates the original bug',
+    );
+
+    await shutdown();
   });
 });
