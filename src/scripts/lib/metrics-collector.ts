@@ -59,6 +59,7 @@ import { OTLPMetricExporter as OTLPMetricExporterGrpc } from '@opentelemetry/exp
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { buildNioResource } from './traces-collector.js';
+import { instrumentExporter } from './exporter-diagnostics.js';
 
 // ---------------------------------------------------------------------------
 // Provider factory
@@ -95,6 +96,7 @@ export function createMeterProvider(
       timeoutMillis: config.timeout,
     });
   }
+  instrumentExporter(exporter, 'metrics', config.endpoint);
 
   return new MeterProvider({
     resource: buildNioResource(platform, agentName),

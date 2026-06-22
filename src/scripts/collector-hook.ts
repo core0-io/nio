@@ -23,6 +23,7 @@ import { loadCollectorConfig, loadLogsConfig, loadAgentName } from './lib/config
 import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
@@ -93,9 +94,9 @@ async function main(): Promise<void> {
   // Without this, span/log/metric records can sit in batchers and never
   // reach OTLP.
   await Promise.all([
-    meterProvider?.forceFlush(),
-    tracerProvider?.forceFlush(),
-    loggerProvider?.forceFlush(),
+    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', config.endpoint, e)),
+    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', config.endpoint, e)),
+    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', config.endpoint, e)),
   ]);
 
   process.exit(0);

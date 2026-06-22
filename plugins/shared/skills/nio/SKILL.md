@@ -407,7 +407,9 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 | `external_analyser` | `http_error` | error | Scoring endpoint returned non-2xx |
 | `external_analyser` | `timeout` | error | Request exceeded `timeout` |
 | `external_analyser` | `network_error` | error | DNS / connection refused / etc. |
-| `collector` | `otlp_export_failed` | warning | OTLP exporter could not deliver telemetry |
+| `collector` | `otlp_export_failed` | warning | OTLP exporter could not deliver telemetry (connection refused, auth rejected, bad protocol/URL); `component` is the signal (`traces` / `metrics` / `logs`) |
+| `collector` | `otlp_flush_failed` | warning | `forceFlush()` rejected while draining a signal before the hook subprocess exits; `component` is the signal |
+| `collector` | `collector_core_error` | warning | collector-core threw while processing a hook event |
 | `scanner` | `file_read_failed` | warning | File walker couldn't read a file |
 
 Aggregate by `(source, kind, component, config_path)` and surface a Diagnostics summary section below the decisions table.

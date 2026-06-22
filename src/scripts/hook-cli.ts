@@ -48,6 +48,7 @@ import {
 } from './lib/traces-collector.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -217,9 +218,9 @@ async function runHermesCollector(
   // explicit flush here the recorded metric/span/log can sit in-memory
   // and never reach OTLP before the process dies.
   await Promise.all([
-    meterProvider?.forceFlush(),
-    tracerProvider?.forceFlush(),
-    loggerProvider?.forceFlush(),
+    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
   ]);
 }
 
@@ -419,9 +420,9 @@ async function main(): Promise<void> {
     // the PeriodicExportingMetricReader batches by default and would
     // drop the counter we just recorded without an explicit flush.
     await Promise.all([
-      meterProvider?.forceFlush(),
-      tracerProvider?.forceFlush(),
-      loggerProvider?.forceFlush(),
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
     ]);
 
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);

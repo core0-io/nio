@@ -29,6 +29,7 @@ import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/expor
 import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
+import { instrumentExporter } from './exporter-diagnostics.js';
 import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
@@ -303,6 +304,7 @@ export function createTracerProvider(
       timeoutMillis: config.timeout,
     });
   }
+  instrumentExporter(exporter, 'traces', config.endpoint);
 
   const provider = new NodeTracerProvider({
     resource: buildNioResource(platform, agentName),

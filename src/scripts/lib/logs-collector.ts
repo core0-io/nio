@@ -24,6 +24,7 @@ import { OTLPLogExporter as OTLPLogExporterGrpc } from '@opentelemetry/exporter-
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { nioGuardAttributes, buildNioResource } from './traces-collector.js';
+import { instrumentExporter } from './exporter-diagnostics.js';
 
 /** Minimal audit entry shape for OTEL log emission (avoids cross-rootDir import). */
 interface AuditEntry {
@@ -79,6 +80,7 @@ export function createLoggerProvider(
       timeoutMillis: config.timeout,
     });
   }
+  instrumentExporter(exporter, 'logs', config.endpoint);
 
   return new LoggerProvider({
     resource: buildNioResource(platform, agentName),
