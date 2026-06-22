@@ -214,10 +214,6 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     loggerProvider = null, logsConfig,
   } = opts;
 
-  // Resolved telemetry identity. Falls back to platform when agentName is
-  // unset / empty so existing behaviour is preserved.
-  const resolvedAgentName = (agentName && agentName.length > 0) ? agentName : platform;
-
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
@@ -294,7 +290,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
         const result = await recordPostToolUse(
-          tracerProvider, state, key, platform, cwd,
+          tracerProvider, state, key, cwd,
           {
             ...drained.attrs,
             ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
@@ -341,7 +337,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
         const result = await recordPostTaskToolUse(
-          tracerProvider, state, taskId, platform, cwd,
+          tracerProvider, state, taskId, cwd,
         );
         saveState(logsConfig, result.state);
       }
@@ -361,7 +357,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
         if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, platform, resolvedAgentName, cwd, transcriptPath);
+          const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
           if (next) saveState(logsConfig, next);
         }
       }

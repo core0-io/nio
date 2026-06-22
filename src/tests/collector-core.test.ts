@@ -459,7 +459,7 @@ describe('deny-path one-shot span emit', () => {
       evalStartMs,
     );
     const r = await recordPostToolUse(
-      tracer.provider, state, key, 'claude-code', '/tmp',
+      tracer.provider, state, key, '/tmp',
       guardAttrs,
       'Blocked by Nio: critical risk',
     );

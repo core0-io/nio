@@ -127,12 +127,6 @@ export function registerOpenClawPlugin(
   const adapter = new OpenClawAdapter({ nativeToolMapping: guard?.native_tool_mapping?.openclaw });
   const confirmAction = guard?.confirm_action ?? 'allow';
 
-  // Telemetry identity (alias). Falls back to platform when unset/empty so
-  // gen_ai.agent.name matches today's behaviour for unconfigured users.
-  const agentName = (config.agent_name && config.agent_name.length > 0)
-    ? config.agent_name
-    : 'openclaw';
-
   const collectorConfig = loadCollectorConfig();
   // Resource-level agent name is only set when the operator actually
   // configured one — empty / unset means "no gen_ai.agent.name on the
@@ -267,7 +261,7 @@ export function registerOpenClawPlugin(
           const state = sessionState.get(sessionId);
           if (state) {
             const r = await recordPostToolUse(
-              tracerProvider, state, spanKey, 'openclaw', cwd,
+              tracerProvider, state, spanKey, cwd,
               guardAttrs,
               reason,
             );
@@ -321,7 +315,7 @@ export function registerOpenClawPlugin(
             }),
           };
           const r = await recordPostToolUse(
-            tracerProvider, state, spanKey, 'openclaw', cwd,
+            tracerProvider, state, spanKey, cwd,
             postAttrs,
             toolEvent.error ?? null,
           );
@@ -386,7 +380,7 @@ export function registerOpenClawPlugin(
       if (tracerProvider) {
         const state = sessionState.get(sessionId);
         if (state) {
-          const r = await recordPostTaskToolUse(tracerProvider, state, taskId, 'openclaw', cwd);
+          const r = await recordPostTaskToolUse(tracerProvider, state, taskId, cwd);
           sessionState.set(sessionId, r.state);
         }
       }
@@ -455,15 +449,15 @@ export function registerOpenClawPlugin(
     state = recordCacheHitRate(state);
 
     for (const k of Object.keys(state.pending_spans)) {
-      const r = await recordPostToolUse(tracerProvider, state, k, 'openclaw', process.cwd(), {}, null);
+      const r = await recordPostToolUse(tracerProvider, state, k, process.cwd(), {}, null);
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {
-      const r = await recordPostTaskToolUse(tracerProvider, state, k, 'openclaw', process.cwd());
+      const r = await recordPostTaskToolUse(tracerProvider, state, k, process.cwd());
       state = r.state;
     }
 
-    await endTurn(tracerProvider, state, 'openclaw', agentName, process.cwd());
+    await endTurn(tracerProvider, state, process.cwd());
     sessionState.delete(sessionId);
     pendingGuardAttrs.forEach((_, k) => { if (k.startsWith(`${sessionId}:`)) pendingGuardAttrs.delete(k); });
     await tracerProvider.forceFlush();

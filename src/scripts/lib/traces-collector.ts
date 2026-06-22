@@ -72,14 +72,12 @@ export const GEN_AI_PROVIDER_NAME = 'nio';
 
 export function genAiInvokeAgentAttributes(
   sessionId: string,
-  agentName: string,
   extra?: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
     'gen_ai.operation.name': 'invoke_agent',
     'gen_ai.provider.name': GEN_AI_PROVIDER_NAME,
     'gen_ai.conversation.id': sessionId,
-    'gen_ai.agent.name': agentName,
     'session.id': sessionId,
     ...extra,
   };
@@ -508,7 +506,6 @@ export async function recordPostToolUse(
   provider: NodeTracerProvider,
   state: CollectorState,
   spanKey: string,
-  platform: string,
   cwd: string | null,
   postAttributes?: Record<string, unknown>,
   error?: string | null,
@@ -545,7 +542,6 @@ export async function recordPostToolUse(
       attributes: {
         ...genAiToolAttributes(pending.tool_name, toolCallId),
         'nio.tool_summary': pending.tool_summary,
-        'nio.platform': platform,
         'nio.turn_number': state.turn_number,
         ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(pending.attributes ?? {}),
@@ -579,7 +575,6 @@ export async function recordPostTaskToolUse(
   provider: NodeTracerProvider,
   state: CollectorState,
   taskId: string,
-  platform: string,
   cwd: string | null,
 ): Promise<PostSpanResult> {
   const pending = state.pending_task_spans?.[taskId];
@@ -611,7 +606,6 @@ export async function recordPostTaskToolUse(
       attributes: {
         'nio.task_id': taskId,
         'nio.task_summary': pending.task_summary,
-        'nio.platform': platform,
         'nio.session_id': state.session_id,
         'nio.turn_number': state.turn_number,
         ...(cwd ? { 'nio.cwd': cwd } : {}),
@@ -719,8 +713,6 @@ export function parseTranscriptUsage(
 export async function endTurn(
   provider: NodeTracerProvider,
   state: CollectorState,
-  platform: string,
-  agentName: string,
   cwd: string | null,
   transcriptPath?: string | null,
 ): Promise<CollectorState | null> {
@@ -767,9 +759,8 @@ export async function endTurn(
     {
       startTime: state.turn_start_ms,
       attributes: {
-        ...genAiInvokeAgentAttributes(state.session_id, agentName),
+        ...genAiInvokeAgentAttributes(state.session_id),
         'nio.turn_number': state.turn_number,
-        'nio.platform': platform,
         ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(state.turn_attributes ?? {}),
       } as Record<string, string | number | boolean>,

@@ -6,7 +6,7 @@
  *
  * Verifies the four observable contracts:
  *   1. NioConfigSchema accepts top-level agent_name
- *   2. genAiInvokeAgentAttributes emits gen_ai.agent.name = agentName
+ *   2. genAiInvokeAgentAttributes does NOT emit gen_ai.agent.name (identity on Resource)
  *   3. auditEntryAttributes emits gen_ai.agent.name only when entry carries it
  *   4. buildGuardAuditEntry writes agent_name only when given
  *
@@ -44,17 +44,18 @@ describe('NioConfigSchema.agent_name', () => {
 // ── 2. genAiInvokeAgentAttributes — span attribute ──────────────────────
 
 describe('genAiInvokeAgentAttributes', () => {
-  it('emits gen_ai.agent.name = agentName (no longer derived from platform)', () => {
-    const attrs = genAiInvokeAgentAttributes('sess-xyz', 'alice-laptop');
-    assert.equal(attrs['gen_ai.agent.name'], 'alice-laptop');
-    assert.equal(attrs['gen_ai.conversation.id'], 'sess-xyz');
-    assert.equal(attrs['session.id'], 'sess-xyz');
+  it('does NOT emit gen_ai.agent.name (identity comes from the Resource)', () => {
+    const attrs = genAiInvokeAgentAttributes('sess-1');
+    assert.equal(attrs['gen_ai.agent.name'], undefined);
+    assert.equal(attrs['gen_ai.conversation.id'], 'sess-1');
+    assert.equal(attrs['session.id'], 'sess-1');
+    assert.equal(attrs['gen_ai.operation.name'], 'invoke_agent');
   });
 
   it('passes through extra attributes', () => {
-    const attrs = genAiInvokeAgentAttributes('sess-1', 'agent-a', { 'nio.custom': 1 });
-    assert.equal(attrs['nio.custom'], 1);
-    assert.equal(attrs['gen_ai.agent.name'], 'agent-a');
+    const attrs = genAiInvokeAgentAttributes('sess-2', { 'nio.turn_number': 3 });
+    assert.equal(attrs['nio.turn_number'], 3);
+    assert.equal(attrs['gen_ai.agent.name'], undefined);
   });
 });
 
