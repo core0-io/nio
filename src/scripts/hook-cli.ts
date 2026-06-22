@@ -358,7 +358,7 @@ async function main(): Promise<void> {
     }
 
     // Also run the collector PreToolUse path so a pending_span is
-    // saved AND nio.tool_use.count{event=PreToolUse,platform=hermes}
+    // saved AND nio.tool_use.count{event=PreToolUse}
     // is emitted, mirroring Claude Code's parallel hook chain.
     if (collectorConfig.enabled || logsConfig?.local !== false) {
       await dispatchCollectorEvent({

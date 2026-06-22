@@ -262,7 +262,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `agent_name` | string | `""` | Telemetry identity alias. When non-empty, becomes `gen_ai.agent.name` on traces + log records and surfaces as `agent_name` in `~/.nio/audit.jsonl`. Empty / unset falls back to the underlying `nio.platform` value. Metrics deliberately do NOT carry this attribute (cardinality budget). |
+| `agent_name` | string | `""` | Telemetry identity alias. When non-empty, becomes the `gen_ai.agent.name` Resource attribute (shared across all signals) and surfaces as `agent_name` in `~/.nio/audit.jsonl`. Empty / unset falls back to the underlying `nio.platform` value. |
 | `guard.protection_level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
 | `guard.confirm_action` | string | `"allow"` | Confirm fallback: `allow` (let through + audit log), `deny` (block), or `ask` (platform confirm if available, else allow) |
 | `guard.file_scan_rules` | object | `{}` | Extra scan patterns (Phase 3 + scan command) |

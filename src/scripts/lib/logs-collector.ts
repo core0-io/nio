@@ -105,7 +105,7 @@ export function createLoggerProvider(
  *                     OpenClaw tool span guard attrs)
  *
  * Nio-specific (no GenAI equivalent, kept under `nio.*`):
- * `nio.event`, `nio.platform`, `nio.event_type`, `nio.action_type`,
+ * `nio.event`, `nio.event_type`, `nio.action_type`,
  * `nio.phase_stopped`, `nio.max_finding_severity`, `nio.explanation`,
  * `nio.phases.{name}.{score,finding_count,duration_ms}`, `nio.tool_summary`,
  * `nio.task_id`, `nio.task_summary`, `nio.cwd`, `nio.transcript_path`.

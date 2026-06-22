@@ -278,6 +278,10 @@ export function nioResourceAttributes(
  *   - `service.name`        = `nio-<platform>`   (splits hermes / claude-code / codex / openclaw into separate services)
  *   - `nio.platform`        = `<platform>`      (raw value for users who want to filter without parsing service.name)
  *   - `gen_ai.agent.name`   = `<agentName>`    (when configured) — auto-attached to every span / log / metric record
+ *
+ * These three are emitted ONLY on the Resource — never duplicated onto
+ * individual spans / log records / metric labels. Per-event builders rely
+ * on the Resource for platform + agent identity.
  */
 export function buildNioResource(platform: string, agentName?: string) {
   return resourceFromAttributes(nioResourceAttributes(platform, agentName));
