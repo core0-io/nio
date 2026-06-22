@@ -165,7 +165,6 @@ async function main(): Promise<void> {
       result.riskLevel || 'low',
       result.riskScore ?? 0,
       toolName,
-      PLATFORM,
     );
   }
 

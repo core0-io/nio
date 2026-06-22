@@ -204,7 +204,7 @@ export function registerOpenClawPlugin(
         sessionState.set(sessionId, state);
       }
       if (meterProvider) {
-        recordToolUse(meterProvider, toolName, 'PreToolUse', 'openclaw').catch(() => {});
+        recordToolUse(meterProvider, toolName, 'PreToolUse').catch(() => {});
       }
 
       const evalStartMs = Date.now();
@@ -222,7 +222,6 @@ export function registerOpenClawPlugin(
           result.riskLevel || 'low',
           result.riskScore ?? 0,
           toolName,
-          'openclaw',
         ).catch(() => {});
       }
 
@@ -323,7 +322,7 @@ export function registerOpenClawPlugin(
         }
       }
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, 'PostToolUse', 'openclaw');
+        await recordToolUse(meterProvider, toolName, 'PostToolUse');
       }
     } catch {
       // Non-critical
@@ -353,7 +352,7 @@ export function registerOpenClawPlugin(
         sessionState.set(sessionId, state);
       }
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', 'TaskCreated', 'openclaw');
+        await recordToolUse(meterProvider, 'Task', 'TaskCreated');
       }
     } catch {
       // Non-critical
@@ -385,7 +384,7 @@ export function registerOpenClawPlugin(
         }
       }
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', 'TaskCompleted', 'openclaw');
+        await recordToolUse(meterProvider, 'Task', 'TaskCompleted');
       }
     } catch {
       // Non-critical
@@ -516,7 +515,7 @@ export function registerOpenClawPlugin(
       writeAuditLog(agentEndEntry, auditOpts);
       await flushSessionTurn(sessionId);
       if (meterProvider) {
-        await recordTurn(meterProvider, 'openclaw');
+        await recordTurn(meterProvider);
       }
       if (loggerProvider) {
         await loggerProvider.forceFlush();

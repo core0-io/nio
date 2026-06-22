@@ -16,16 +16,13 @@ export const METRICS_SCHEMA = {
     labels: {
       'gen_ai.tool.name': 'Name of the tool being invoked (Bash, Write, Edit, WebFetch, Agent, etc.). Matches the tool-span attribute in the traces signal.',
       'nio.event': 'Hook event name (PreToolUse, PostToolUse, TaskCreated, TaskCompleted)',
-      'nio.platform': 'Runtime platform identifier (claude-code, hermes, openclaw)',
     },
   },
   turnCount: {
     name: 'nio.turn.count',
     description: 'Number of conversation turns completed (Stop or SubagentStop events)',
     unit: '{turns}',
-    labels: {
-      'nio.platform': 'Runtime platform identifier',
-    },
+    labels: {},
   },
   decisionCount: {
     name: 'nio.decision.count',
@@ -35,7 +32,6 @@ export const METRICS_SCHEMA = {
       'nio.guard.decision': 'Guard decision (allow, deny, ask). Matches the tool-span guard attribute via nioGuardAttributes().',
       'nio.guard.risk_level': 'Risk level (low, medium, high, critical). Matches the tool-span guard attribute.',
       'gen_ai.tool.name': 'Name of the tool being evaluated. Matches the tool-span attribute.',
-      'nio.platform': 'Runtime platform identifier',
     },
   },
   riskScore: {
@@ -44,7 +40,6 @@ export const METRICS_SCHEMA = {
     unit: '{score}',
     labels: {
       'gen_ai.tool.name': 'Name of the tool being evaluated',
-      'nio.platform': 'Runtime platform identifier',
     },
   },
 } as const;
@@ -117,7 +112,6 @@ export async function recordToolUse(
   provider: MeterProvider,
   toolName: string,
   event: string,
-  platform: string,
 ): Promise<void> {
   const meter = provider.getMeter('nio-collector', '1.0.0');
   const counter = meter.createCounter(METRICS_SCHEMA.toolUseCount.name, {
@@ -127,7 +121,6 @@ export async function recordToolUse(
   counter.add(1, {
     'gen_ai.tool.name': toolName,
     'nio.event': event,
-    'nio.platform': platform,
   });
   await provider.forceFlush();
 }
@@ -139,7 +132,6 @@ export async function recordGuardDecision(
   riskLevel: string,
   riskScore: number,
   toolName: string,
-  platform: string,
 ): Promise<void> {
   const meter = provider.getMeter('nio-collector', '1.0.0');
 
@@ -151,7 +143,6 @@ export async function recordGuardDecision(
     'nio.guard.decision': decision,
     'nio.guard.risk_level': riskLevel,
     'gen_ai.tool.name': toolName,
-    'nio.platform': platform,
   });
 
   const histogram = meter.createHistogram(METRICS_SCHEMA.riskScore.name, {
@@ -160,7 +151,6 @@ export async function recordGuardDecision(
   });
   histogram.record(riskScore, {
     'gen_ai.tool.name': toolName,
-    'nio.platform': platform,
   });
 
   await provider.forceFlush();
@@ -169,15 +159,12 @@ export async function recordGuardDecision(
 
 export async function recordTurn(
   provider: MeterProvider,
-  platform: string,
 ): Promise<void> {
   const meter = provider.getMeter('nio-collector', '1.0.0');
   const counter = meter.createCounter(METRICS_SCHEMA.turnCount.name, {
     description: METRICS_SCHEMA.turnCount.description,
     unit: METRICS_SCHEMA.turnCount.unit,
   });
-  counter.add(1, {
-    'nio.platform': platform,
-  });
+  counter.add(1);
   await provider.forceFlush();
 }

@@ -268,7 +268,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event, platform);
+        await recordToolUse(meterProvider, toolName, event);
       }
 
     } else if (event === 'PostToolUse') {
@@ -301,7 +301,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event, platform);
+        await recordToolUse(meterProvider, toolName, event);
       }
 
     } else if (event === 'TaskCreated') {
@@ -322,7 +322,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event, platform);
+        await recordToolUse(meterProvider, 'Task', event);
       }
 
     } else if (event === 'TaskCompleted') {
@@ -343,7 +343,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event, platform);
+        await recordToolUse(meterProvider, 'Task', event);
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
@@ -363,7 +363,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordTurn(meterProvider, platform);
+        await recordTurn(meterProvider);
       }
 
     } else if (event === 'SessionStart') {

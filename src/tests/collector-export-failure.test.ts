@@ -74,7 +74,7 @@ describe('collector export failures land in the audit log', () => {
   it('metrics: failed metric export is audited', async () => {
     const provider = createMeterProvider(unreachable, 'test');
     assert.ok(provider);
-    await recordToolUse(provider!, 'Bash', 'PreToolUse', 'test');
+    await recordToolUse(provider!, 'Bash', 'PreToolUse');
     await provider!.forceFlush();
     await provider!.shutdown();
 
