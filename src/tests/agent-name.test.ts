@@ -18,7 +18,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { NioConfigSchema } from '../adapters/config-schema.js';
-import { genAiInvokeAgentAttributes } from '../scripts/lib/traces-collector.js';
+import { genAiInvokeAgentAttributes, nioResourceAttributes } from '../scripts/lib/traces-collector.js';
 import { auditEntryAttributes } from '../scripts/lib/logs-collector.js';
 import { buildGuardAuditEntry } from '../adapters/common.js';
 import type { HookInput } from '../adapters/types.js';
@@ -112,5 +112,21 @@ describe('buildGuardAuditEntry agent_name handling', () => {
   it('omits agent_name when given an empty string', () => {
     const entry = buildGuardAuditEntry(input, null, null, 'claude-code', undefined, '');
     assert.equal(entry.agent_name, undefined);
+  });
+});
+
+// ── 5. nioResourceAttributes — pure attribute builder ─────────────────────
+
+describe('nioResourceAttributes', () => {
+  it('carries service.name, nio.platform, and gen_ai.agent.name when configured', () => {
+    const r = nioResourceAttributes('claude-code', 'alice-laptop');
+    assert.equal(r['service.name'], 'nio-claude-code');
+    assert.equal(r['nio.platform'], 'claude-code');
+    assert.equal(r['gen_ai.agent.name'], 'alice-laptop');
+  });
+
+  it('omits gen_ai.agent.name when agentName is empty or absent', () => {
+    assert.equal(nioResourceAttributes('hermes', '')['gen_ai.agent.name'], undefined);
+    assert.equal(nioResourceAttributes('hermes')['gen_ai.agent.name'], undefined);
   });
 });

@@ -258,6 +258,22 @@ function randomSpanId(): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Compute the nio resource attributes: service.name, nio.platform, and
+ * gen_ai.agent.name (only when agentName is a non-empty string).
+ * Pure builder for the Resource contract — no OTel provider creation.
+ */
+export function nioResourceAttributes(
+  platform: string,
+  agentName?: string,
+): Record<string, string> {
+  return {
+    [ATTR_SERVICE_NAME]: `nio-${platform}`,
+    'nio.platform': platform,
+    ...(agentName && agentName.length > 0 ? { 'gen_ai.agent.name': agentName } : {}),
+  };
+}
+
+/**
  * Build the shared resource for every OTel provider nio constructs.
  * Three attributes promoted to resource-level so they surface as
  * top-level columns / filter chips in backends:
@@ -266,11 +282,7 @@ function randomSpanId(): string {
  *   - `gen_ai.agent.name`   = `<agentName>`    (when configured) — auto-attached to every span / log / metric record
  */
 export function buildNioResource(platform: string, agentName?: string) {
-  return resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: `nio-${platform}`,
-    'nio.platform': platform,
-    ...(agentName && agentName.length > 0 ? { 'gen_ai.agent.name': agentName } : {}),
-  });
+  return resourceFromAttributes(nioResourceAttributes(platform, agentName));
 }
 
 export function createTracerProvider(
