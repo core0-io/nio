@@ -113,15 +113,7 @@ export function createLoggerProvider(
 export function auditEntryAttributes(entry: AuditEntry): Record<string, string | number> {
   const attrs: Record<string, string | number> = {
     'nio.event': entry.event,
-    'nio.platform': entry.platform,
   };
-
-  // Telemetry identity alias. Only emitted when the operator configured
-  // `agent_name`; unconfigured users keep the existing nio.platform-only shape.
-  const agentName = entry['agent_name'];
-  if (typeof agentName === 'string' && agentName.length > 0) {
-    attrs['gen_ai.agent.name'] = agentName;
-  }
 
   // Tool identity (overlaps with tool span)
   const toolName = entry['tool_name'];

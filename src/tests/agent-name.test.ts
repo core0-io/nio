@@ -62,28 +62,13 @@ describe('genAiInvokeAgentAttributes', () => {
 // ── 3. auditEntryAttributes — OTEL log attribute ────────────────────────
 
 describe('auditEntryAttributes', () => {
-  const baseEntry = {
-    event: 'guard',
-    platform: 'claude-code',
-    session_id: 'sess-1',
-  };
-
-  it('emits gen_ai.agent.name when entry.agent_name is set', () => {
-    const attrs = auditEntryAttributes({ ...baseEntry, agent_name: 'alice-laptop' });
-    assert.equal(attrs['gen_ai.agent.name'], 'alice-laptop');
-    assert.equal(attrs['nio.platform'], 'claude-code');
-  });
-
-  it('omits gen_ai.agent.name when agent_name is empty', () => {
-    const attrs = auditEntryAttributes({ ...baseEntry, agent_name: '' });
+  it('does NOT emit gen_ai.agent.name or nio.platform (Resource carries them)', () => {
+    const attrs = auditEntryAttributes({
+      event: 'PreToolUse', platform: 'claude-code', agent_name: 'alice-laptop',
+    } as never);
     assert.equal(attrs['gen_ai.agent.name'], undefined);
-    assert.equal(attrs['nio.platform'], 'claude-code');
-  });
-
-  it('omits gen_ai.agent.name when agent_name is absent', () => {
-    const attrs = auditEntryAttributes(baseEntry);
-    assert.equal(attrs['gen_ai.agent.name'], undefined);
-    assert.equal(attrs['nio.platform'], 'claude-code');
+    assert.equal(attrs['nio.platform'], undefined);
+    assert.equal(attrs['nio.event'], 'PreToolUse');
   });
 });
 
