@@ -60,7 +60,7 @@ user prompt → tool call → thinking → tool call → thinking → … → re
 | D5 | tool span 归属 | 嵌套在发起它的 chat span 下 |
 | D6 | 发送时机 | span 结构延迟至 turn 结束统一发；内容实时发 |
 | D7 | 采集总闸 | 默认静默，`/nio-monitor` 显式开启 |
-| D8 | 回溯 | 默认不回溯，`--backfill` 显式触发 |
+| D8 | 回溯 | 不提供。采集严格从 `/nio-monitor` 执行后开始 |
 | D9 | 本地 audit | 继续写（仅元数据），总闸只管外发 |
 | D10 | guard 拦截 | 与采集开关正交，始终工作 |
 | D11 | 采集架构 | 双模抽象 `ConversationSource` → `ChatCall[]` |
@@ -85,14 +85,12 @@ collector:
   "sessions": {
     "<session-id>": {
       "armed_at": 1754300000,
-      "cwd": "/path/to/project",
-      "backfilled": false
+      "cwd": "/path/to/project"
     }
   },
   "pending_arm": {
     "at": 1754300000,
-    "cwd": "/path/to/project",
-    "backfill": false
+    "cwd": "/path/to/project"
   }
 }
 ```
@@ -121,13 +119,12 @@ collector:
 
 ### 技能形态
 
-新增 focused skill `nio-monitor`（源于 `plugins/shared/skills/nio-monitor/`），同时在 umbrella skill 挂载 `/nio monitor <on|off|status> [--backfill]`。脚本沿用 sibling-reference 模式引用 `../nio/scripts/`，不重复打包。
+新增 focused skill `nio-monitor`（源于 `plugins/shared/skills/nio-monitor/`），同时在 umbrella skill 挂载 `/nio monitor <on|off|status>`。脚本沿用 sibling-reference 模式引用 `../nio/scripts/`，不重复打包。
 
 CLI 契约：
 
 ```
 /nio-monitor              开启当前 session 的采集
-/nio-monitor --backfill   开启并回溯本 session 已发生的部分
 /nio-monitor off          关闭
 /nio-monitor status       显示当前 session 与全局状态
 ```
@@ -136,13 +133,13 @@ CLI 契约：
 
 状态文件在每个 hook 进程启动时读取，因此 `/nio-monitor` 的开启/关闭**从下一个 hook 事件开始生效**。已在执行中的当前工具调用不受影响。这是 per-hook 进程模型的固有行为，非缺陷。
 
-### backfill 的平台限制
+### 不提供回溯
 
-`--backfill` 依赖平台落盘的会话文件，**仅在 Claude Code 与 Codex 上可用**（前提是 Phase 2 确认 Codex rollout 可解析）。
+采集严格从 `/nio-monitor` 执行后开始，开启前发生的调用不予补采。
 
-Hermes 与 OpenClaw 走实时事件通路，进程内不保留历史事件，开启前发生的调用无从恢复。在这两个平台上执行 `--backfill` 须明确提示"当前平台不支持回溯，已按普通方式开启"，不得静默忽略。
+原因是平台能力不一致：Claude Code 与 Codex 有会话文件可回放，Hermes 与 OpenClaw 走实时事件通路、进程内不留历史，物理上无法回溯。与其提供一个"部分平台可用、部分平台静默降级"的选项，不如统一为不提供——行为一致，用户心智无歧义。
 
-backfill 产生的 span 标记 `nio.backfilled = true`，与实时采集的数据区分——其时间戳来自会话文件，与实时采集路径的时钟基准可能存在细微差异。
+**注意**：不回溯 ≠ 不读会话文件。Claude Code 无 LLM 调用级 hook，thinking 与 chat span 仍只能从 transcript 解析获得。区别在于每个 turn 结束时只解析该 turn 新增的条目（以 `turn_start_ms` 为界），而非回放整个 session。
 
 ### GC
 
@@ -286,6 +283,14 @@ LogRecord
 
 按类型分别配置，超限截断并标记 `nio.content.truncated = true` 与原始长度 `nio.content.original_bytes`。
 
+**截断的目的是拦截异常输出，而非限制正常内容。** 内容改走 logs 信号后，trace 后端的 attribute 长度限制不再适用，阈值得以从 2 KB 量级放大至 64 KB 量级。正常的 thinking（2–10 KB）与 LLM 回复不会触及上限；触及上限的通常是失控的工具输出（`cat` 大文件、`find /` 全盘遍历等）。
+
+保留上限的三个硬约束：
+
+1. **OTLP 请求大小**：gRPC 默认单 message 上限 4 MB，超限为整条发送失败而非截断
+2. **hook 阻塞**：hook 同步阻塞宿主 agent，读取并脱敏扫描超大内容会直接拖慢用户
+3. **后端单条日志限制**：Loki 等对单行长度有限制，超限该条被拒收
+
 | 内容类型 | `nio.content.type` | 默认上限 |
 |---|---|---|
 | thinking | `thinking` | 64 KB |
@@ -293,6 +298,20 @@ LogRecord
 | 用户 prompt | `user_prompt` | 32 KB |
 | 工具参数 | `tool_input` | 16 KB |
 | 工具结果 | `tool_output` | 32 KB |
+
+配置形如：
+
+```yaml
+collector:
+  content_limits:
+    thinking: 65536
+    text: 65536
+    user_prompt: 32768
+    tool_input: 16384
+    tool_output: 32768
+```
+
+**逃生阀**：任一项设为 `0` 表示不限制该类型。默认值保留上限——触发失控输出的通常不是用户的主动操作，而是 agent 自行执行了预期外的命令，此时上限是保护而非阻碍。
 
 span 上保留短摘要（沿用现有 `nio.tool_summary`，前 200 字符），便于在 trace 列表中扫视而无需下钻。
 
