@@ -91,3 +91,24 @@ export function isSessionMonitored(
     return false;
   }
 }
+
+/**
+ * Drop a session's arm record. Called on SessionEnd so a finished
+ * session does not linger in the store until the 7-day backstop.
+ * Never throws — cleanup failure must not break session teardown.
+ */
+export function forgetSession(
+  sessionId: string,
+  logsConfig?: CollectorLogsConfig,
+): void {
+  try {
+    const store = loadMonitorStore(logsConfig);
+    if (!(sessionId in store.sessions)) return;
+    const sessions = { ...store.sessions };
+    delete sessions[sessionId];
+    const next = { sessions, ...(store.pending_arm ? { pending_arm: store.pending_arm } : {}) };
+    saveMonitorStore(logsConfig, next);
+  } catch {
+    // Cleanup is best-effort; the TTL backstop covers failures.
+  }
+}

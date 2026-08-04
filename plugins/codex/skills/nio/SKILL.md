@@ -9,7 +9,7 @@ user-invocable: true
 command-dispatch: tool
 command-tool: nio_command
 command-arg-mode: raw
-argument-hint: "[scan|action|report|config|doctor|external-score|reset] [args...]"
+argument-hint: "[scan|action|report|config|doctor|external-score|monitor|reset] [args...]"
 ---
 
 # Nio — AI Agent Execution Assurance Framework
@@ -40,6 +40,7 @@ Parse `$ARGUMENTS` to determine the subcommand:
 - **`report`** — View recent agent execution events from the audit log
 - **`config [show|<level>]`** — View or set protection level
 - **`external-score`** — Query all enabled external scoring endpoints and list their current scores
+- **`monitor [on|off|status]`** — Turn telemetry capture on or off for the current session
 - **`reset`** — Reset config to defaults
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
@@ -56,6 +57,7 @@ On Claude Code and Codex, each capability is **also** exposed as a focused stand
 | `nio-config` | View / set protection level | `config` |
 | `nio-doctor` | Validate config + connectivity | `doctor` |
 | `nio-external-score` | Snapshot external scoring-endpoint scores | `external-score` |
+| `nio-monitor` | Turn telemetry capture on/off for this session | `monitor` |
 
 (These focused skills exist only on Claude Code and Codex. On OpenClaw and Hermes there is no `nio-*` skill — use the `/nio <subcommand>` form documented below.)
 
@@ -518,4 +520,16 @@ Print its stdout verbatim — it is already formatted markdown. Do not reformat 
 Successful rows lead with the score, then the endpoint `name` and URL — nothing else. Only failed rows carry an explanation (the error reason).
 
 If no endpoints are configured (or all are disabled), the command returns a short note explaining that and pointing at `guard.external_analyser`.
+
+## Subcommand: monitor
+
+Turn telemetry capture on or off for the current session. See the focused `nio-monitor` skill for full behaviour details (scope of capture, what the switch does and does not control).
+
+### Routing
+
+| Input | Action |
+|-------|--------|
+| `monitor`, `monitor on` | Run `node scripts/monitor-cli.js on` and report the returned `mode` |
+| `monitor off` | Run `node scripts/monitor-cli.js off` |
+| `monitor status` | Run `node scripts/monitor-cli.js status` |
 

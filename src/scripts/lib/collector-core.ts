@@ -44,6 +44,7 @@ import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
 import { writeAuditLog } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
+import { forgetSession } from './monitor-check.js';
 import {
   ensureTurn,
   recordPreToolUse,
@@ -364,6 +365,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
       if (meterProvider) {
         await recordTurn(meterProvider);
+      }
+
+      if (event === 'SessionEnd') {
+        forgetSession(sessionId, logsConfig);
       }
 
     } else if (event === 'SessionStart') {

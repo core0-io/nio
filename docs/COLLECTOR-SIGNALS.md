@@ -53,6 +53,32 @@ The four host platforms each have their own runtime model — Claude Code, Codex
 
 Claude Code and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
 
+## Capture gating
+
+Nio exports nothing by default. Each of the three signals is created only
+for sessions the user explicitly armed with `/nio-monitor`, or for every
+session when `collector.monitor_all_sessions: true` is set.
+
+The gate sits **before OTEL provider creation** — an unmonitored session
+does not initialise exporters at all, so the cost is one small file read
+per hook event.
+
+Two things are outside the gate:
+
+- **Guard enforcement.** Phase 0–6 risk evaluation and blocking run
+  regardless. The switch controls reporting, not enforcement.
+- **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
+  it never leaves the machine and backs `/nio report`.
+
+State lives in `${NIO_HOME}/monitored-sessions.json`, separate from
+`traces-state-store.json` — session-scoped durable state versus
+turn-scoped ephemeral state.
+
+There is **no backfill**: capture starts at the moment `/nio-monitor`
+runs. Platforms differ in whether historical session data exists at all
+(Claude Code and Codex keep session files; Hermes and OpenClaw do not),
+so retroactive capture is not offered anywhere, keeping behaviour uniform.
+
 ## Naming conventions
 
 - `gen_ai.*` — keys that follow the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.
