@@ -13,6 +13,7 @@ import {
   type HookStdinPayload,
 } from '../scripts/lib/collector-core.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
+import type { MeterProvider } from '@opentelemetry/sdk-metrics';
 
 // Each test gets its own tmpdir + audit file; we never delete — OS reaps
 // /tmp. Keeps the test file free of fs-destructive calls that Nio's own
@@ -491,6 +492,107 @@ describe('deny-path one-shot span emit', () => {
 
     // Pending entry should have been drained.
     assert.equal(state.pending_spans[key], undefined);
+
+    // Do NOT shutdown — the global tracer is shared across tests, and
+    // shutting it down here would break later tests that re-register.
+  });
+});
+
+// ── SessionEnd after Stop must not mint a phantom empty turn ──────────
+//
+// Regression test for a bug introduced (and fixed in the same pass) while
+// wiring SessionEnd cleanup: Stop / SubagentStop / SessionEnd share one
+// branch in dispatchCollectorEvent. That branch used to call
+// `ensureTurn(prev, sessionId)` unconditionally — which MINTS a fresh
+// turn when the previous one was already closed (turn_trace_id === '').
+// On any platform that fires more than one of these events for the same
+// session (Claude Code fires both Stop and SessionEnd), the second event
+// would manufacture an empty turn and `endTurn` would immediately export
+// it as a real "invoke_agent UserPromptSubmit" span with no children and
+// no user prompt, plus an extra `nio.turn.count` increment. Neither
+// represents a real turn boundary.
+
+describe('collector-core: SessionEnd after Stop does not mint a phantom turn', () => {
+  it('SessionEnd immediately following Stop on the same session emits no extra span and does not bump nio.turn.count', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+
+    const sessionId = 'sess-phantom-turn';
+
+    // Fake meter that only counts adds against the turn-count instrument
+    // by name — recordToolUse (fired by PreToolUse below) creates its own
+    // separate 'nio.tool_use.count' counter and must not be conflated
+    // with 'nio.turn.count'.
+    let turnCounterAdds = 0;
+    const fakeMeterProvider = {
+      getMeter: () => ({
+        createCounter: (name: string) => ({
+          add: (n: number) => {
+            if (name === 'nio.turn.count') turnCounterAdds += n;
+          },
+        }),
+        createHistogram: () => ({ record: () => {} }),
+      }),
+      forceFlush: async () => {},
+    } as unknown as MeterProvider;
+
+    // PreToolUse opens a turn (real activity) but is never closed by a
+    // matching PostToolUse before Stop fires — mirrors the review's own
+    // repro (PreToolUse → Stop → SessionEnd).
+    await dispatchCollectorEvent({
+      event: 'PreToolUse',
+      input: {
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hi' },
+        session_id: sessionId,
+        tool_use_id: 'call-1',
+        cwd: '/tmp',
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    // Stop closes the real turn: exactly one span, one turn-count tick.
+    await dispatchCollectorEvent({
+      event: 'Stop',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    const spansAfterStop = tracer.finished().length;
+    const turnCountAfterStop = turnCounterAdds;
+    assert.equal(spansAfterStop, 1, 'Stop should close exactly one turn span');
+    assert.equal(turnCountAfterStop, 1, 'Stop should bump nio.turn.count exactly once');
+
+    // SessionEnd fires right after, same session, no activity in between
+    // (Claude Code's hooks.json now registers both Stop and SessionEnd
+    // pointing at collector-hook.js).
+    await dispatchCollectorEvent({
+      event: 'SessionEnd',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    assert.equal(
+      tracer.finished().length, spansAfterStop,
+      'SessionEnd after an already-closed turn must not emit a phantom empty turn span',
+    );
+    assert.equal(
+      turnCounterAdds, turnCountAfterStop,
+      'SessionEnd after an already-closed turn must not bump nio.turn.count',
+    );
 
     // Do NOT shutdown — the global tracer is shared across tests, and
     // shutting it down here would break later tests that re-register.

@@ -349,21 +349,28 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
       // SessionEnd is a Hermes-driven addition: on Claude Code, Stop /
-      // SubagentStop already close the turn. SessionEnd in Hermes is the
-      // hard session boundary; we treat it the same way as a defensive
-      // turn-close so any in-flight span gets flushed.
+      // SubagentStop already close the turn. SessionEnd is a defensive
+      // turn-close so any in-flight span gets flushed on platforms that
+      // fire it as the hard session boundary.
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      if (tracerProvider) {
-        const prev = loadState(logsConfig);
-        const state = ensureTurn(prev, sessionId);
-        if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
-          if (next) saveState(logsConfig, next);
-        }
+      // Do NOT call ensureTurn here: it mints a fresh turn when the
+      // previous one was already closed (turn_trace_id === ''), which
+      // endTurn would then export as an empty span. A turn boundary with
+      // no active turn is a no-op, not a new turn. This matters on any
+      // platform that fires more than one of Stop / SubagentStop /
+      // SessionEnd for the same session — e.g. Claude Code firing both
+      // Stop (closes the turn) and SessionEnd (would otherwise mint and
+      // immediately export a phantom empty turn on top of it).
+      const prev = loadState(logsConfig);
+      const hasActiveTurn = Boolean(prev?.turn_trace_id);
+
+      if (hasActiveTurn && tracerProvider) {
+        const next = await endTurn(tracerProvider, prev!, cwd, transcriptPath);
+        if (next) saveState(logsConfig, next);
       }
 
-      if (meterProvider) {
+      if (hasActiveTurn && meterProvider) {
         await recordTurn(meterProvider);
       }
 
