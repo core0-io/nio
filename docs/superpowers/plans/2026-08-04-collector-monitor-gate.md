@@ -1129,6 +1129,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, symlinkSync,
+  realpathSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1207,9 +1208,14 @@ describe('isSessionMonitored', () => {
 
     saveMonitorStore(logsConfig, {
       sessions: {},
-      pending_arm: { at: Date.now(), cwd: realDir },
+      // monitor-cli stamps this from process.cwd(), which POSIX reports
+      // resolved. Mirror that here — writing the raw mkdtemp path would
+      // simulate a state the CLI never produces, and the assertion would
+      // then prove nothing.
+      pending_arm: { at: Date.now(), cwd: realpathSync(realDir) },
     });
 
+    // The hook reports the unresolved symlink path.
     const result = withNioHome(home, null, () =>
       isSessionMonitored('sess-symlink', linkDir, logsConfig));
     assert.equal(result, true);
