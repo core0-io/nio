@@ -107,4 +107,53 @@ describe('isSessionMonitored', () => {
     withNioHome(home, null, () => isSessionMonitored('sess-1', '/work', logsConfig));
     assert.equal(existsSync(join(home, 'monitored-sessions.json')), false);
   });
+
+  it('treats the "unknown" sentinel id as never monitored', () => {
+    const { home, logsConfig } = freshHome();
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('unknown', '/work', logsConfig));
+    assert.equal(result, false);
+  });
+
+  it('treats an empty session id as never monitored', () => {
+    const { home, logsConfig } = freshHome();
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('', '/work', logsConfig));
+    assert.equal(result, false);
+  });
+
+  it('does not match "unknown" against a pre-existing "unknown" session record', () => {
+    // Simulates store pollution from before this guard existed (or from
+    // a corrupt/hand-edited store): even if a literal "unknown" key
+    // somehow ended up armed, treating an id-less event as monitored
+    // would turn one shared key into blanket capture across every
+    // session/directory that fails to report an id.
+    const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: { unknown: { armed_at: Date.now(), cwd: '/somewhere-else' } },
+    });
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('unknown', '/work', logsConfig));
+    assert.equal(result, false);
+  });
+
+  it('does not let "unknown" claim a pending arm, and leaves it intact', () => {
+    const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: {},
+      pending_arm: { at: Date.now(), cwd: '/work' },
+    });
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('unknown', '/work', logsConfig));
+    assert.equal(result, false);
+
+    // The guard returns before touching the store at all, so the file
+    // must be untouched — still exactly the pending_arm we wrote.
+    const raw = JSON.parse(
+      readFileSync(join(home, 'monitored-sessions.json'), 'utf-8'),
+    ) as { sessions: Record<string, unknown>; pending_arm?: { at: number; cwd: string } };
+    assert.equal('unknown' in raw.sessions, false);
+    assert.ok(raw.pending_arm);
+    assert.equal(raw.pending_arm?.cwd, '/work');
+  });
 });

@@ -7,9 +7,13 @@ export {};
  * Monitor check — the one place that turns the pure gate decision into
  * a filesystem-backed answer.
  *
- * All four platform entry points call this before creating any OTEL
- * provider. Keeping it in a single module means the load → decide →
- * persist sequence cannot drift between platforms.
+ * Claude Code (`collector-hook.ts`, `guard-hook.ts`) and Codex CLI (same
+ * two files, `--platform codex`) call this before creating any OTEL
+ * provider. Hermes (`hook-cli.ts`) and OpenClaw (`openclaw-plugin.ts`)
+ * do not wire into this yet — that's tracked as follow-up work. Keeping
+ * the check in a single module means the load → decide → persist
+ * sequence cannot drift between the platforms that do call it, and the
+ * remaining two will get the same guarantee for free once wired.
  *
  * Fails closed: any error answers "not monitored". Telemetry must never
  * escape because a state file was unreadable, and a hook must never die
@@ -54,6 +58,16 @@ export function isSessionMonitored(
   cwd: string | null,
   logsConfig?: CollectorLogsConfig,
 ): boolean {
+  // A session id we cannot trust is never monitored, and never claims a
+  // pending arm. The `?? 'unknown'` fallback at the call sites is a
+  // placeholder for audit records, not an identity — treating it as one
+  // would make it a shared key that any id-less event from any directory
+  // could match, turning a single arm into blanket capture. This check
+  // must run before loadMonitorStore so such an event never gets a
+  // chance to claim a pending arm either.
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId === 'unknown') {
+    return false;
+  }
   try {
     const store = loadMonitorStore(logsConfig);
     const result = resolveMonitorGate({
