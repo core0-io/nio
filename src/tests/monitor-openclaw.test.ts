@@ -25,10 +25,10 @@ function wait(ms: number): Promise<void> {
 
 describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
   let sink: Server;
-  let hits: string[] = [];
+  let records: { url: string; body: Buffer }[] = [];
   let port = 0;
 
-  // Counting only `/v1/traces` requests, not raw `hits.length`, matters
+  // Counting only `/v1/traces` requests, not raw request count, matters
   // for reasons that go beyond style: `createMeterProvider` wires a
   // `PeriodicExportingMetricReader` with `exportIntervalMillis: 1000`
   // (metrics-collector.ts). The instant any armed-session call records a
@@ -43,10 +43,31 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
   // `/v1/traces` request only happens when something explicitly ends a
   // span — so counting only those makes the assertions immune to that
   // drift without weakening what they pin.
-  const traceHits = () => hits.filter((u) => u === '/v1/traces').length;
+  const traceRecords = () => records.filter((r) => r.url === '/v1/traces');
+  const traceHits = () => traceRecords().length;
+
+  // The OTLP HTTP trace exporter used here (@opentelemetry/exporter-
+  // trace-otlp-http via createTracerProvider) sends plain, uncompressed
+  // JSON bodies (verified empirically against this sink: Content-Type
+  // application/json, no Content-Encoding) — not protobuf. That makes a
+  // raw substring search over the request body a reliable way to assert
+  // on span *content*, not just request count, without pulling in a
+  // protobuf decoder.
+  const traceBodiesContain = (needle: string): boolean => {
+    const n = Buffer.from(needle, 'utf-8');
+    return traceRecords().some((r) => r.body.includes(n));
+  };
 
   beforeHook(async () => {
-    sink = createServer((req, res) => { hits.push(req.url ?? ''); res.writeHead(200); res.end('{}'); });
+    sink = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        records.push({ url: req.url ?? '', body: Buffer.concat(chunks) });
+        res.writeHead(200);
+        res.end('{}');
+      });
+    });
     await new Promise<void>((r) => sink.listen(0, '127.0.0.1', r));
     port = (sink.address() as { port: number }).port;
   });
@@ -200,7 +221,7 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
         sessions: { 'oc-block-armed': { armed_at: Date.now(), cwd: process.cwd() } },
       });
 
-      hits = [];
+      records = [];
       await driveBlockedToolCall(handlers, 'oc-block-armed');
       const armedHits = traceHits();
       assert.ok(armedHits > 0, 'armed session must reach the sink');
@@ -221,7 +242,7 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
         sessions: { 'oc-allow-armed': { armed_at: Date.now(), cwd: process.cwd() } },
       });
 
-      hits = [];
+      records = [];
       await driveAllowedToolCall(handlers, 'oc-allow-armed');
       const armedHits = traceHits();
       assert.ok(armedHits > 0, 'armed session must reach the sink');
@@ -248,7 +269,7 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
         sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
       });
 
-      hits = [];
+      records = [];
 
       // 2. Accumulate real state while armed: a captured user prompt
       // (turn_attributes) and an open tool-call span that's never
@@ -282,6 +303,77 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
       assert.equal(
         traceHits(), 0,
         'state accumulated before a disarm must not be exported after the session is re-armed',
+      );
+    });
+  });
+
+  it('does not merge a stale guard-decision left by a disarmed after_tool_call into a later export', async () => {
+    // Pins the (b) fix from the second review round: after_tool_call
+    // now reads-and-deletes its pendingGuardAttrs entry *before* the
+    // `if (!monitored) return;` check, not after. The bug this guards
+    // against is invisible to a hit-count assertion (pendingGuardAttrs
+    // is a passive side-channel Map — leaving a stale entry there
+    // doesn't itself cause an extra export), so this test inspects
+    // exported span *content* instead of just counting requests: it
+    // reuses the same span key across a disarm/re-arm boundary so a
+    // leaked entry would surface as an attribute on a later, legitimate
+    // export of that same span.
+    await withPlugin(async (handlers, logsConfig) => {
+      const sessionId = 'oc-guard-attr-leak';
+      const beforeToolCall = handlers.get('before_tool_call');
+      const afterToolCall = handlers.get('after_tool_call');
+      assert.ok(beforeToolCall && afterToolCall, 'before_tool_call/after_tool_call handlers must be registered');
+      const toolCallId = `call-${sessionId}`;
+
+      // 1. Arm, then open a span. The guard allows 'echo canary', so
+      // before_tool_call stashes real guard-decision attrs
+      // (nio.guard.decision=allow, etc.) into pendingGuardAttrs keyed
+      // by `${sessionId}:${toolCallId}` — see the "Allow / confirm_allowed"
+      // comment in before_tool_call.
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+      records = [];
+      await beforeToolCall(
+        { toolName: 'exec', params: { command: 'echo canary' }, toolCallId, runId: sessionId },
+        { sessionKey: sessionId },
+      );
+
+      // 2. Disarm.
+      saveMonitorStore(logsConfig, { sessions: {} });
+
+      // 3. "Normal" wind-down attempt for the same call, but the
+      // session is unarmed now. recordPostToolUse never runs either
+      // way (gated on `monitored`), so the span stays pending in
+      // sessionState regardless of this fix — only whether
+      // pendingGuardAttrs[fullKey] survives this call differs:
+      // pre-fix, the early return skipped the get+delete entirely;
+      // post-fix, they run unconditionally before the return.
+      await afterToolCall(
+        { toolName: 'exec', params: { command: 'echo canary' }, toolCallId, runId: sessionId, result: 'canary\n', durationMs: 3 },
+        { sessionKey: sessionId },
+      );
+
+      // 4. Re-arm the *same* session — no boundary event (session_end/
+      // agent_end/session_start) runs in between, so clearSessionState
+      // never gets a chance to sweep up whatever step 3 left behind.
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      // 5. Close the same still-pending span for real. This is the
+      // read site: `pendingGuardAttrs.get(fullKey) ?? {}` decides what
+      // merges into the exported span's attributes.
+      await afterToolCall(
+        { toolName: 'exec', params: { command: 'echo canary' }, toolCallId, runId: sessionId, result: 'canary\n', durationMs: 3 },
+        { sessionKey: sessionId },
+      );
+      await wait(400);
+
+      assert.equal(traceHits(), 1, 'exactly one span (from step 5) should have been exported');
+      assert.equal(
+        traceBodiesContain('nio.guard.decision'), false,
+        'a guard-decision attribute from the disarm-era evaluation must not appear on the later export',
       );
     });
   });
