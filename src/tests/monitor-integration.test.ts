@@ -8,7 +8,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
+import { isSessionMonitored, UNTRUSTED_SESSION_IDS } from '../scripts/lib/monitor-check.js';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 
@@ -155,5 +155,71 @@ describe('isSessionMonitored', () => {
     assert.equal('unknown' in raw.sessions, false);
     assert.ok(raw.pending_arm);
     assert.equal(raw.pending_arm?.cwd, '/work');
+  });
+});
+
+// ── Untrusted sentinel ids ────────────────────────────────────────────
+//
+// `openclaw-plugin.ts` falls back to the literal `'openclaw'` in nine
+// places when an OpenClaw ctx carries no sessionKey/sessionId/runId. It
+// is the same class of value as `'unknown'`: a label for an audit
+// record, not an identity. Left trusted, a single arm would key every
+// id-less event in a long-running daemon — from any session, any
+// directory — to one shared record for the full 7-day TTL.
+
+describe('isSessionMonitored — untrusted sentinel session ids', () => {
+  // Hardcoded, NOT derived from UNTRUSTED_SESSION_IDS: iterating the set
+  // under test would make a mutation that drops an entry delete its own
+  // test cases instead of failing them.
+  for (const sentinel of ['', 'unknown', 'openclaw']) {
+    const label = sentinel === '' ? '(empty string)' : `"${sentinel}"`;
+
+    it(`never reports ${label} as monitored, even with a matching armed record`, () => {
+      const { home, logsConfig } = freshHome();
+      saveMonitorStore(logsConfig, {
+        sessions: { [sentinel]: { armed_at: Date.now(), cwd: '/work' } },
+      });
+      const result = withNioHome(home, null, () =>
+        isSessionMonitored(sentinel, '/work', logsConfig));
+      assert.equal(result, false);
+    });
+
+    it(`never lets ${label} claim a pending arm`, () => {
+      const { home, logsConfig } = freshHome();
+      saveMonitorStore(logsConfig, {
+        sessions: {},
+        pending_arm: { at: Date.now(), cwd: '/work' },
+      });
+      const result = withNioHome(home, null, () =>
+        isSessionMonitored(sentinel, '/work', logsConfig));
+      assert.equal(result, false);
+
+      // The guard returns before touching the store, so the arm is still
+      // there for the real session to claim.
+      const raw = JSON.parse(
+        readFileSync(join(home, 'monitored-sessions.json'), 'utf-8'),
+      ) as { sessions: Record<string, unknown>; pending_arm?: { cwd: string } };
+      assert.equal(sentinel in raw.sessions, false);
+      assert.equal(raw.pending_arm?.cwd, '/work');
+    });
+  }
+
+  it('covers the literals the platform adapters actually fall back to', () => {
+    // Pins the *contents* of the set, not just that a set exists: a
+    // future adapter adding its own `|| 'somename'` fallback has to add
+    // it here too, and dropping one of these silently reopens the leak.
+    assert.deepEqual([...UNTRUSTED_SESSION_IDS].sort(), ['', 'openclaw', 'unknown']);
+  });
+
+  it('still monitors a real session id that merely contains a sentinel', () => {
+    // The rejection is exact-match, not substring — an OpenClaw session
+    // key like "openclaw-42" is a genuine identity.
+    const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: { 'openclaw-42': { armed_at: Date.now(), cwd: '/work' } },
+    });
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('openclaw-42', '/work', logsConfig));
+    assert.equal(result, true);
   });
 });

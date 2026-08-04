@@ -48,8 +48,14 @@ The CLI prints JSON.
 **`status`** returns:
 
 - `monitor_all_sessions` — the global config flag. When `true`, every session is captured regardless of per-session state.
-- `monitored` — whether the current session is being captured right now.
-- `armed_sessions` — how many sessions are armed in total.
+- `monitored` — whether the current session is being captured right now. This is the same verdict the hooks enforce, so it accounts for the 7-day expiry: a record older than that reads as `false`, because the hooks would reject it too.
+- `pending_arm` — an `on` is waiting to bind to a session. It binds on the next hook event from the directory `on` was run in, and expires 60s after it was made.
+- `armed_sessions` — how many live (unexpired) sessions are armed in total.
+- `session_id` — the session id resolved from the environment, or `null` when the platform does not expose one.
+
+**Reading a pending state.** On any platform where `on` returned `mode: pending` — which is every platform except Claude Code, Codex included — an immediately following `status` reports `monitored: false`, `pending_arm: true`, `armed_sessions: 0`. That is not a failure: capture has been requested and has not bound to a session yet. Tell the user monitoring starts with their next action. Once a hook event claims the arm, the same command reports `monitored: true` (when the platform exposes a session id) or simply `pending_arm: false` with `armed_sessions: 1`.
+
+`status` is read-only. Running it never claims a pending arm and never expires a record — it only reports.
 
 ## Scope of Capture
 

@@ -173,6 +173,13 @@ export function registerOpenClawPlugin(
   // before_tool_call below, the one handler where that distinction
   // matters).
   //
+  // Every handler derives its session id as
+  // `c.sessionKey || c.sessionId || c.runId || 'openclaw'`. That final
+  // `'openclaw'` is a label for the audit record, never an identity —
+  // it is one of monitor-check.ts's UNTRUSTED_SESSION_IDS, so the gate
+  // rejects it outright rather than letting every id-less event in the
+  // daemon share one store key.
+  //
   // `writeAuditLog`'s local-JSONL leg must never be gated (Constraint 2:
   // local audit keeps writing regardless of monitor state) — only its
   // OTEL LogRecord leg, which fires exclusively when a loggerProvider is

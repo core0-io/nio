@@ -142,12 +142,20 @@ function describeMonitorResult(result: MonitorResult): string {
       ? 'Telemetry capture OFF for this session.'
       : 'Telemetry capture was not on for this session; any pending arm has been cleared.';
   }
-  const headline = result.monitor_all_sessions
-    ? 'Telemetry capture is ON for every session (collector.monitor_all_sessions is true).'
-    : result.monitored
-      ? 'Telemetry capture is ON for this session.'
-      : 'Telemetry capture is OFF for this session.';
-  return `${headline} ${result.armed_sessions} session(s) armed in total.`;
+  const lines = [
+    result.monitor_all_sessions
+      ? 'Telemetry capture is ON for every session (collector.monitor_all_sessions is true).'
+      : result.monitored
+        ? 'Telemetry capture is ON for this session.'
+        : 'Telemetry capture is OFF for this session.',
+  ];
+  if (result.pending_arm && !result.monitored) {
+    lines.push(
+      'An arm request is pending: it binds on the next Nio hook event from the directory it was made in.',
+    );
+  }
+  lines.push(`${result.armed_sessions} session(s) armed in total.`);
+  return lines.join(' ');
 }
 
 // ── config ───────────────────────────────────────────────────────────────────
