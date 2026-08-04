@@ -826,10 +826,18 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const CLI = join(process.cwd(), 'dist', 'scripts', 'monitor-cli.js');
+// Scripts are bundled by bun (not tsc) into
+// plugins/claude-code/skills/nio/scripts/, not dist/scripts/ —
+// tsconfig.lib.json excludes src/scripts entirely. Same pattern as
+// hook-cli.test.ts and config-cli.test.ts.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI = join(
+  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'monitor-cli.js',
+);
 
 interface RunResult { [key: string]: unknown }
 
@@ -1433,10 +1441,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const CLI = join(process.cwd(), 'dist', 'scripts', 'hook-cli.js');
+// Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
+// dist/scripts/ — see hook-cli.test.ts for the same resolution.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const CLI = join(
+  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
+);
 
 function freshHome(): string {
   return mkdtempSync(join(tmpdir(), 'nio-monitor-hermes-'));
@@ -1982,11 +1996,16 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 
-const COLLECTOR = join(process.cwd(), 'dist', 'scripts', 'collector-hook.js');
-const MONITOR = join(process.cwd(), 'dist', 'scripts', 'monitor-cli.js');
+// Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
+// dist/scripts/ — see hook-cli.test.ts for the same resolution.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCRIPTS = join(HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts');
+const COLLECTOR = join(SCRIPTS, 'collector-hook.js');
+const MONITOR = join(SCRIPTS, 'monitor-cli.js');
 
 function freshHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-'));
