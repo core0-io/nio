@@ -54,9 +54,12 @@ async function reportConfigError(_configDir: string, configPath: string, err: un
   });
 }
 
+function nioDir(): string {
+  return process.env['NIO_HOME'] ?? join(homedir(), '.nio');
+}
+
 function readRawConfig(): Record<string, unknown> {
-  const configDir = process.env['NIO_HOME']
-    ?? join(homedir(), '.nio');
+  const configDir = nioDir();
   const configPath = join(configDir, 'config.yaml');
 
   if (!existsSync(configPath)) return {};
@@ -134,11 +137,20 @@ export function loadLogsConfig(): LogsConfig {
 
   const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
   const logs = (collector['logs'] ?? {}) as Record<string, unknown>;
+  const rawPath = logs['path'] as string | undefined;
 
   return {
     enabled: (logs['enabled'] as boolean) ?? true,
     local: (logs['local'] as boolean) ?? true,
-    path: expandHome((logs['path'] as string) ?? '~/.nio/audit.jsonl'),
+    // An explicit collector.logs.path is expanded relative to the real
+    // homedir (that's what `~/` means in a value the user typed). The
+    // *default* (no config, or no logs.path set) must instead resolve
+    // under NIO_HOME so anything derived from it — the audit log itself,
+    // plus every store that piggybacks on this path via dirname()
+    // (traces-state-store.json, monitored-sessions.json) — stays inside
+    // an overridden NIO_HOME during tests instead of silently falling
+    // through to the developer's real ~/.nio.
+    path: rawPath ? expandHome(rawPath) : join(nioDir(), 'audit.jsonl'),
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
   };
 }
