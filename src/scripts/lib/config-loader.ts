@@ -142,3 +142,20 @@ export function loadLogsConfig(): LogsConfig {
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
   };
 }
+
+/**
+ * Read `collector.monitor_all_sessions`.
+ *
+ * Defaults to `false` — nio's default posture is silence. Telemetry
+ * leaves the machine only for sessions the user explicitly armed via
+ * `/nio-monitor`, unless an operator opts the whole install in.
+ *
+ * Strict boolean check: any non-boolean value (string "yes", number 1)
+ * reads as false. A typo in the config must not silently turn on
+ * blanket capture.
+ */
+export function loadMonitorAllSessions(): boolean {
+  const raw = readRawConfig();
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  return collector['monitor_all_sessions'] === true;
+}
