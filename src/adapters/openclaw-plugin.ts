@@ -26,6 +26,7 @@ import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
 import {
   createTracerProvider,
   ensureTurn,
@@ -141,7 +142,28 @@ export function registerOpenClawPlugin(
   const loggerProvider = (logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, 'openclaw', resourceAgentName)
     : null;
-  const auditOpts: WriteAuditLogOptions = { loggerProvider, logsConfig };
+  // Per-session monitor gate. OpenClaw is a long-running daemon — unlike
+  // Claude Code / Codex / Hermes, which spawn a fresh process per hook
+  // event and can decide "monitored or not" once, before any provider
+  // exists, the providers here are created once at plugin registration
+  // and shared by every session for the process's lifetime. So the gate
+  // has to be re-checked inside each handler, keyed by that event's
+  // session id, and only the OTEL-writing part of the handler skipped
+  // when unmonitored — never the guard evaluation itself (see
+  // before_tool_call below, the one handler where that distinction
+  // matters).
+  //
+  // `writeAuditLog`'s local-JSONL leg must never be gated (Constraint 2:
+  // local audit keeps writing regardless of monitor state) — only its
+  // OTEL LogRecord leg, which fires exclusively when a loggerProvider is
+  // passed in. `auditOptsFor` gives each call site a per-event opts
+  // object that suppresses just that leg by omitting the provider,
+  // mirroring how hook-cli.ts nulls out a freshly-constructed
+  // loggerProvider for an unmonitored session — here the provider is
+  // long-lived, so the suppression has to happen per-call instead.
+  function auditOptsFor(monitored: boolean): WriteAuditLogOptions {
+    return { loggerProvider: monitored ? loggerProvider : null, logsConfig };
+  }
 
   const logger = (msg: string) => console.log(msg);
 
@@ -188,11 +210,15 @@ export function registerOpenClawPlugin(
       const spanKey = toolEvent.toolCallId || toolName;
       const cwd = process.cwd();
       const fullKey = `${sessionId}:${spanKey}`;
+      const monitored = isSessionMonitored(sessionId, cwd, logsConfig);
 
       // Record pre-tool span data into per-session state. Span is not
       // emitted yet — the post side (after_tool_call OR the block path
-      // below) reconstructs it via recordPostToolUse.
-      if (tracerProvider) {
+      // below) reconstructs it via recordPostToolUse. Gated: an
+      // unmonitored session must not accumulate pending-span state in
+      // this long-lived process either — nothing downstream would ever
+      // drain it.
+      if (monitored && tracerProvider) {
         let state = sessionState.get(sessionId) ?? null;
         state = ensureTurn(state, sessionId);
         const params = (toolEvent.params ?? {}) as Record<string, unknown>;
@@ -203,19 +229,24 @@ export function registerOpenClawPlugin(
         state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
         sessionState.set(sessionId, state);
       }
-      if (meterProvider) {
+      if (monitored && meterProvider) {
         recordToolUse(meterProvider, toolName, 'PreToolUse').catch(() => {});
       }
 
+      // Guard evaluation and the block decision below run unconditionally
+      // — the monitor gate only controls telemetry, never enforcement.
+      // Only the OTEL LogRecord leg of any audit entries evaluateHook
+      // writes is suppressed when unmonitored (auditOptsFor); the local
+      // JSONL leg always fires.
       const evalStartMs = Date.now();
       const result = await evaluateHook(adapter, event, {
         config,
         nio: getNio(),
-      }, auditOpts);
+      }, auditOptsFor(monitored));
       const evalMs = Date.now() - evalStartMs;
 
       // Record guard decision metrics
-      if (meterProvider) {
+      if (monitored && meterProvider) {
         recordGuardDecision(
           meterProvider,
           result.decision,
@@ -249,14 +280,14 @@ export function registerOpenClawPlugin(
         ),
         'nio.guard.eval_ms': evalMs,
       };
-      pendingGuardAttrs.set(fullKey, guardAttrs);
+      if (monitored) pendingGuardAttrs.set(fullKey, guardAttrs);
 
       // Block path: after_tool_call won't fire because the tool didn't
       // run. Flush the orphan post-span here with guard-error status.
       if (isBlock) {
         const reason =
           result.reason || (decisionTag === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-        if (tracerProvider) {
+        if (monitored && tracerProvider) {
           const state = sessionState.get(sessionId);
           if (state) {
             const r = await recordPostToolUse(
@@ -299,6 +330,7 @@ export function registerOpenClawPlugin(
       const spanKey = toolEvent.toolCallId || toolName;
       const cwd = process.cwd();
       const fullKey = `${sessionId}:${spanKey}`;
+      if (!isSessionMonitored(sessionId, cwd, logsConfig)) return;
 
       if (tracerProvider) {
         const state = sessionState.get(sessionId);
@@ -334,24 +366,25 @@ export function registerOpenClawPlugin(
     try {
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
+      const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
       const lifecycleEntry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),
         platform: 'openclaw',
-        session_id: c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw',
+        session_id: sessionId,
         lifecycle_type: 'subagent_spawning',
         details: { subagent_id: e.subagentId, run_id: e.runId },
       };
-      writeAuditLog(lifecycleEntry, auditOpts);
+      writeAuditLog(lifecycleEntry, auditOptsFor(monitored));
       const taskId = e.subagentId || e.runId || 'unknown';
-      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
-      if (tracerProvider) {
+      if (monitored && tracerProvider) {
         let state = sessionState.get(sessionId) ?? null;
         state = ensureTurn(state, sessionId);
         state = recordPreTaskToolUse(state, taskId, '');
         sessionState.set(sessionId, state);
       }
-      if (meterProvider) {
+      if (monitored && meterProvider) {
         await recordToolUse(meterProvider, 'Task', 'TaskCreated');
       }
     } catch {
@@ -364,26 +397,27 @@ export function registerOpenClawPlugin(
     try {
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
+      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
+      const cwd = process.cwd();
+      const monitored = isSessionMonitored(sessionId, cwd, logsConfig);
       const endEntry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),
         platform: 'openclaw',
-        session_id: c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw',
+        session_id: sessionId,
         lifecycle_type: 'subagent_ended',
         details: { subagent_id: e.subagentId, run_id: e.runId },
       };
-      writeAuditLog(endEntry, auditOpts);
+      writeAuditLog(endEntry, auditOptsFor(monitored));
       const taskId = e.subagentId || e.runId || 'unknown';
-      const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
-      const cwd = process.cwd();
-      if (tracerProvider) {
+      if (monitored && tracerProvider) {
         const state = sessionState.get(sessionId);
         if (state) {
           const r = await recordPostTaskToolUse(tracerProvider, state, taskId, cwd);
           sessionState.set(sessionId, r.state);
         }
       }
-      if (meterProvider) {
+      if (monitored && meterProvider) {
         await recordToolUse(meterProvider, 'Task', 'TaskCompleted');
       }
     } catch {
@@ -398,6 +432,7 @@ export function registerOpenClawPlugin(
       const e = event as { cleanedBody?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      if (!isSessionMonitored(sessionId, process.cwd(), logsConfig)) return;
       if (tracerProvider && e.cleanedBody) {
         let state = sessionState.get(sessionId) ?? null;
         state = ensureTurn(state, sessionId);
@@ -413,6 +448,7 @@ export function registerOpenClawPlugin(
       const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      if (!isSessionMonitored(sessionId, process.cwd(), logsConfig)) return;
 
       let state = sessionState.get(sessionId) ?? null;
       state = ensureTurn(state, sessionId);
@@ -440,8 +476,8 @@ export function registerOpenClawPlugin(
   // Flush an active session: compute cache_hit_rate, defensively close
   // any leftover pending tool/task spans, emit the turn root span, and
   // drop the per-session state. Idempotent: no-op if no state exists.
-  async function flushSessionTurn(sessionId: string): Promise<void> {
-    if (!tracerProvider) return;
+  async function flushSessionTurn(sessionId: string, monitored: boolean): Promise<void> {
+    if (!monitored || !tracerProvider) return;
     let state = sessionState.get(sessionId);
     if (!state) return;
 
@@ -466,6 +502,9 @@ export function registerOpenClawPlugin(
     try {
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
+      // Cheap in-memory housekeeping, not an OTEL write — safe to run
+      // unconditionally regardless of monitor state.
       sessionState.delete(sessionId);
       const entry: AuditLifecycleEntry = {
         event: 'lifecycle',
@@ -474,7 +513,7 @@ export function registerOpenClawPlugin(
         session_id: sessionId,
         lifecycle_type: 'session_start',
       };
-      writeAuditLog(entry, auditOpts);
+      writeAuditLog(entry, auditOptsFor(monitored));
     } catch {
       // Non-critical
     }
@@ -487,6 +526,7 @@ export function registerOpenClawPlugin(
     try {
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
       const entry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),
@@ -494,8 +534,8 @@ export function registerOpenClawPlugin(
         session_id: sessionId,
         lifecycle_type: 'session_end',
       };
-      writeAuditLog(entry, auditOpts);
-      await flushSessionTurn(sessionId);
+      writeAuditLog(entry, auditOptsFor(monitored));
+      await flushSessionTurn(sessionId, monitored);
     } catch {
       // Non-critical
     }
@@ -505,6 +545,7 @@ export function registerOpenClawPlugin(
     try {
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
+      const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
       const agentEndEntry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),
@@ -512,12 +553,12 @@ export function registerOpenClawPlugin(
         session_id: sessionId,
         lifecycle_type: 'agent_end',
       };
-      writeAuditLog(agentEndEntry, auditOpts);
-      await flushSessionTurn(sessionId);
-      if (meterProvider) {
+      writeAuditLog(agentEndEntry, auditOptsFor(monitored));
+      await flushSessionTurn(sessionId, monitored);
+      if (monitored && meterProvider) {
         await recordTurn(meterProvider);
       }
-      if (loggerProvider) {
+      if (monitored && loggerProvider) {
         await loggerProvider.forceFlush();
       }
     } catch {

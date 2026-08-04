@@ -9,11 +9,17 @@ export {};
  *
  * Claude Code (`collector-hook.ts`, `guard-hook.ts`) and Codex CLI (same
  * two files, `--platform codex`) call this before creating any OTEL
- * provider. Hermes (`hook-cli.ts`) and OpenClaw (`openclaw-plugin.ts`)
- * do not wire into this yet — that's tracked as follow-up work. Keeping
- * the check in a single module means the load → decide → persist
- * sequence cannot drift between the platforms that do call it, and the
- * remaining two will get the same guarantee for free once wired.
+ * provider — each hook event is a fresh process, so the gate can be
+ * decided once, up front. Hermes (`hook-cli.ts`) does the same: also a
+ * fresh process per event. OpenClaw (`openclaw-plugin.ts`) is a
+ * long-running daemon whose providers are created once at plugin
+ * registration and shared across every session for the process's
+ * lifetime, so it calls this inside each event handler instead, keyed
+ * by that event's session id, and skips only the OTEL-writing part of
+ * the handler when unmonitored. All four platforms are wired in.
+ * Keeping the check in a single module means the load → decide →
+ * persist sequence cannot drift between platforms regardless of which
+ * of the two call patterns they use.
  *
  * Fails closed: any error answers "not monitored". Telemetry must never
  * escape because a state file was unreadable, and a hook must never die
