@@ -37,11 +37,19 @@ const CLI = join(
 
 function freshHomeWithUnreachableEndpoint(): string {
   const home = mkdtempSync(join(tmpdir(), 'nio-hermes-exit-'));
+  // monitor_all_sessions: true keeps this test exercising real provider
+  // creation (and therefore the real forceFlush()-against-an-unreachable-
+  // endpoint path this file pins) after hook-cli.ts's Hermes paths were
+  // gated on isSessionMonitored() — none of these fixture session ids
+  // are ever armed, so without this the gate would make meter/tracer/
+  // logger providers null and the test would pass without ever touching
+  // the network, silently stopping being a regression test for the hang.
   writeFileSync(join(home, 'config.yaml'), `guard:
   protection_level: balanced
   confirm_action: allow
 collector:
   endpoint: "http://127.0.0.1:19999"
+  monitor_all_sessions: true
 `, 'utf-8');
   return home;
 }

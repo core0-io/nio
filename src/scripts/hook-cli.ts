@@ -49,6 +49,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -195,15 +196,28 @@ async function runHermesCollector(
   const resourceAgentName = config.agent_name && config.agent_name.length > 0
     ? config.agent_name
     : undefined;
-  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+
+  // Computed once, up front, so the monitor-gate lookup and the
+  // dispatch below share the same parsed input instead of parsing the
+  // raw Hermes envelope twice.
+  const collectorInput = hermesToCollectorInput(rawPayload, canonicalEvent);
+  const monitored = isSessionMonitored(
+    collectorInput.session_id ?? 'unknown',
+    collectorInput.cwd ?? null,
+    logsConfig,
+  );
+
+  const meterProvider = (monitored && collectorConfig.enabled)
+    ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const tracerProvider = (monitored && collectorConfig.enabled)
+    ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
   await dispatchCollectorEvent({
     event: canonicalEvent,
-    input: hermesToCollectorInput(rawPayload, canonicalEvent),
+    input: collectorInput,
     platform: 'hermes',
     config: collectorConfig,
     meterProvider,
@@ -342,16 +356,27 @@ async function main(): Promise<void> {
     const resourceAgentName = config.agent_name && config.agent_name.length > 0
       ? config.agent_name
       : undefined;
-    const meterProvider = collectorConfig.enabled
+    const logsConfig = config.collector?.logs;
+
+    // Gate before creating any provider — an unmonitored session must
+    // not get OTLP exporters, even though evaluateHook() and the
+    // guard decision below still run unconditionally.
+    const monitorInput = hermesToCollectorInput(payload, 'PreToolUse');
+    const monitored = isSessionMonitored(
+      monitorInput.session_id ?? 'unknown',
+      monitorInput.cwd ?? null,
+      logsConfig,
+    );
+
+    const meterProvider = (monitored && collectorConfig.enabled)
       ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-    const tracerProvider = collectorConfig.enabled
+    const tracerProvider = (monitored && collectorConfig.enabled)
       ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
     // LoggerProvider sends guard decisions to OTLP /v1/logs — matches
     // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
     // "Logs" view stays empty for Hermes guard activity even though
     // metrics and traces flow correctly.
-    const logsConfig = config.collector?.logs;
-    const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+    const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
       ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
 
     const evalStartMs = Date.now();
