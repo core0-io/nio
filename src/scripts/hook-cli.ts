@@ -293,6 +293,18 @@ function formatHermesGuardOutput(
   };
 }
 
+// How long writeAndExit() waits for the stdout write callback before
+// giving up and exiting anyway. Exists only to cover a closed/broken
+// pipe (the callback would otherwise never fire, reintroducing the
+// exact hang this function was added to prevent). The trade-off this
+// buys: a payload larger than the OS pipe buffer (64KB on macOS) paired
+// with a slow consumer on the other end could still be truncated if the
+// write hasn't drained by the time this backstop fires. In practice
+// Hermes payloads (a JSON decision + reason string) never approach that
+// size, so this is a theoretical risk kept short (not removed) — the
+// alternative, no backstop at all, is the worse failure mode.
+const WRITE_CALLBACK_BACKSTOP_MS = 2000;
+
 /**
  * Write the Hermes response and exit.
  *
@@ -307,7 +319,7 @@ function writeAndExit(payload: string): void {
   process.stdout.write(payload, () => process.exit(0));
   // Backstop: if the callback never fires (closed pipe), don't inherit
   // the very hang this function exists to prevent.
-  setTimeout(() => process.exit(0), 2000).unref();
+  setTimeout(() => process.exit(0), WRITE_CALLBACK_BACKSTOP_MS).unref();
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
