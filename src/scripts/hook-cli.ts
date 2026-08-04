@@ -279,6 +279,23 @@ function formatHermesGuardOutput(
   };
 }
 
+/**
+ * Write the Hermes response and exit.
+ *
+ * An explicit exit is required: when the OTLP endpoint is configured but
+ * unreachable, the meter provider's PeriodicExportingMetricReader keeps
+ * its retry timer alive past forceFlush(), so the event loop never drains
+ * and the process hangs forever. Exiting from the write callback (rather
+ * than immediately after write()) guarantees the response reaches Hermes
+ * first — stdout is a pipe here, so write() is not synchronous.
+ */
+function writeAndExit(payload: string): void {
+  process.stdout.write(payload, () => process.exit(0));
+  // Backstop: if the callback never fires (closed pipe), don't inherit
+  // the very hang this function exists to prevent.
+  setTimeout(() => process.exit(0), 2000).unref();
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -426,14 +443,14 @@ async function main(): Promise<void> {
 
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
-    process.stdout.write(stdout + '\n');
+    writeAndExit(stdout + '\n');
     return;
   }
 
   // Collector path: post_*, on_session_*, subagent_stop, *_llm_call.
   if (platform === 'hermes' && hookEventName) {
     await runHermesCollector(payload, hookEventName);
-    process.stdout.write('{}\n');
+    writeAndExit('{}\n');
     return;
   }
 
@@ -444,12 +461,12 @@ async function main(): Promise<void> {
     const nio = createNio();
     const adapter = selectAdapter(platform!, config);
     const result = await evaluateHook(adapter, payload, { config, nio });
-    process.stdout.write(JSON.stringify(result) + '\n');
+    writeAndExit(JSON.stringify(result) + '\n');
     return;
   }
 
   // Hermes envelope without hook_event_name — silent no-op.
-  process.stdout.write('{}\n');
+  writeAndExit('{}\n');
 }
 
 main().catch((err: Error) => {
