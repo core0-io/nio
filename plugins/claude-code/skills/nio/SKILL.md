@@ -72,6 +72,7 @@ This skill is also triggered passively (without an explicit subcommand) when the
 | "is it safe to run `<command>`", "should I allow this action" | **`action`** |
 | "show recent activity / audit log / what got blocked" | **`report`** |
 | "validate my config", "is my setup working", "test my OAuth/LLM connectivity" | **`doctor`** |
+| "start/stop monitoring this session", "enable/disable telemetry capture", "begin collecting traces for this session", "is Nio capturing/monitoring right now" | **`monitor`** |
 
 **Disambiguation:** "risk score" / "Nio score" without a code target means *query the live external scoring endpoints* → **`external-score`**, NOT `scan`. Only route to `scan` when the user points at code/files/a path to inspect.
 
@@ -532,4 +533,6 @@ Turn telemetry capture on or off for the current session. See the focused `nio-m
 | `monitor`, `monitor on` | Run `node scripts/monitor-cli.js on` and report the returned `mode` |
 | `monitor off` | Run `node scripts/monitor-cli.js off` |
 | `monitor status` | Run `node scripts/monitor-cli.js status` |
+
+On OpenClaw and Hermes there is no `monitor-cli.js` to invoke and no focused `nio-monitor` skill — `/nio monitor on|off|status` is dispatched straight to the in-process router, which runs the same code and prints a one-line summary plus the same JSON. `/nio monitor` is the only way to arm a session on those two platforms.
 

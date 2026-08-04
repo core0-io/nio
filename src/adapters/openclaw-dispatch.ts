@@ -14,6 +14,11 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { dump as yamlDump } from 'js-yaml';
 import { loadConfig, resetConfig } from './common.js';
+import {
+  normaliseMonitorSubcommand,
+  runMonitorCommand,
+  type MonitorResult,
+} from '../scripts/lib/monitor-commands.js';
 import type { NioConfig } from './config-schema.js';
 import type { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { SkillScanner } from '../scanner/index.js';
@@ -62,6 +67,8 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
     case 'external-score':
     case 'external':
       return handleExternalScore();
+    case 'monitor':
+      return handleMonitor(restStr);
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -85,7 +92,62 @@ function usageText(): string {
     '  /nio report                               — recent audit events + diagnostics summary',
     '  /nio doctor                               — dry-run validate config + test OAuth/LLM connectivity',
     '  /nio external-score                       — query all enabled external scoring endpoints and list their current scores',
+    '  /nio monitor [on|off|status]              — turn telemetry capture on/off for this session (off by default)',
   ].join('\n');
+}
+
+// ── monitor ──────────────────────────────────────────────────────────────────
+
+/**
+ * Telemetry capture switch.
+ *
+ * On OpenClaw and Hermes this is the **only** way to arm a session:
+ * neither platform installs the focused `nio-*` skills, so there is no
+ * `/nio-monitor` and no `monitor-cli.js` invocation path — everything
+ * routes through this dispatcher (Hermes via `nio-cli.js`). Without this
+ * case, upgrading to the session-gated collector would leave both
+ * platforms permanently silent with no in-product way back.
+ *
+ * The bodies are `lib/monitor-commands.ts`'s, the same ones
+ * `monitor-cli.js` runs, so Claude Code / Codex and OpenClaw / Hermes
+ * cannot answer differently.
+ */
+function handleMonitor(rest: string): string {
+  const sub = normaliseMonitorSubcommand(rest);
+  if (sub === null) {
+    return `Unknown monitor subcommand: ${rest.trim()}\n\n${usageText()}`;
+  }
+
+  let result;
+  try {
+    result = runMonitorCommand(sub);
+  } catch (err) {
+    return `monitor ${sub} failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  const json = JSON.stringify(result, null, 2);
+  return `${describeMonitorResult(result)}\n\n${json}`;
+}
+
+/** One-line human summary above the machine-readable JSON. */
+function describeMonitorResult(result: MonitorResult): string {
+  if (result.action === 'on') {
+    return result.mode === 'direct'
+      ? `Telemetry capture ON for session ${result.session_id}. It starts with the next tool call.`
+      : 'Telemetry capture ON — pending. The next Nio hook event from ' +
+        `${result.cwd} claims it; the request expires in 60s if nothing happens.`;
+  }
+  if (result.action === 'off') {
+    return result.removed
+      ? 'Telemetry capture OFF for this session.'
+      : 'Telemetry capture was not on for this session; any pending arm has been cleared.';
+  }
+  const headline = result.monitor_all_sessions
+    ? 'Telemetry capture is ON for every session (collector.monitor_all_sessions is true).'
+    : result.monitored
+      ? 'Telemetry capture is ON for this session.'
+      : 'Telemetry capture is OFF for this session.';
+  return `${headline} ${result.armed_sessions} session(s) armed in total.`;
 }
 
 // ── config ───────────────────────────────────────────────────────────────────
