@@ -1671,34 +1671,78 @@ OpenClaw 是长驻进程，provider 在插件注册时就创建了，不像其�
 
 - [ ] **Step 1: 写失败的测试**
 
-创建 `src/tests/monitor-openclaw.test.ts`：
+创建 `src/tests/monitor-openclaw.test.ts`。
+
+**测试必须真正钉住接线，而不是复测 `isSessionMonitored`**（那个 Task 5 已覆盖）。Task 6 的教训：只断言"接线前后都成立"的性质，等于没测——把接线代码整段删掉测试仍全绿。
+
+`registerOpenClawPlugin(api)` 的 `api` 接口极小（只有 `on(hookName, handler)`），可以直接 mock 并捕获 handler，然后手工触发事件。判据用本地 OTLP sink 的请求计数——armed session 有请求、unarmed session 零请求。
+
+骨架如下，事件载荷的具体字段按 `openclaw-plugin.ts` 里各 handler 实际读取的形状填：
 
 ```typescript
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
+import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 
-describe('openclaw monitor gating helper', () => {
-  it('gates per session id, not per process', () => {
+/** Minimal OpenClaw register API stand-in — captures handlers by name. */
+function makeFakeApi() {
+  const handlers = new Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>();
+  return {
+    api: { on(name: string, h: (e: unknown, c?: unknown) => Promise<unknown> | unknown) { handlers.set(name, h); } },
+    handlers,
+  };
+}
+
+describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
+  let sink: Server;
+  let hits: string[] = [];
+  let port = 0;
+
+  before(async () => {
+    sink = createServer((req, res) => { hits.push(req.url ?? ''); res.writeHead(200); res.end('{}'); });
+    await new Promise<void>((r) => sink.listen(0, '127.0.0.1', r));
+    port = (sink.address() as { port: number }).port;
+  });
+
+  after(async () => { await new Promise<void>((r) => sink.close(() => r())); });
+
+  it('exports for an armed session and stays silent for an unarmed one', async () => {
     const home = mkdtempSync(join(tmpdir(), 'nio-monitor-oc-'));
+    writeFileSync(
+      join(home, 'config.yaml'),
+      `collector:\n  endpoint: "http://127.0.0.1:${port}"\n`,
+      'utf-8',
+    );
     const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
     saveMonitorStore(logsConfig, {
-      sessions: { 'oc-armed': { armed_at: Date.now(), cwd: home } },
+      sessions: { 'oc-armed': { armed_at: Date.now(), cwd: process.cwd() } },
     });
 
     const prev = process.env['NIO_HOME'];
     process.env['NIO_HOME'] = home;
     try {
-      assert.equal(isSessionMonitored('oc-armed', home, logsConfig), true);
-      assert.equal(isSessionMonitored('oc-other', home, logsConfig), false);
+      const { registerOpenClawPlugin } = await import('../adapters/openclaw-plugin.js');
+      const { api, handlers } = makeFakeApi();
+      registerOpenClawPlugin(api);
+
+      // Drive one full tool-call cycle per session. Use whichever handler
+      // pair actually reaches an OTLP export (before_tool_call opens the
+      // pending span, after_tool_call closes and flushes it).
+      hits = [];
+      await driveToolCall(handlers, 'oc-armed');
+      const armedHits = hits.length;
+      assert.ok(armedHits > 0, 'armed session must reach the sink');
+
+      await driveToolCall(handlers, 'oc-unarmed');
+      assert.equal(hits.length, armedHits, 'unarmed session must add zero requests');
     } finally {
       if (prev === undefined) delete process.env['NIO_HOME'];
       else process.env['NIO_HOME'] = prev;
@@ -1707,13 +1751,17 @@ describe('openclaw monitor gating helper', () => {
 });
 ```
 
-- [ ] **Step 2: 跑测试确认通过**
+`driveToolCall(handlers, sessionId)` 由实现者补齐：依次调用 `before_tool_call` 与 `after_tool_call` 两个 handler，`ctx` 传 `{ sessionKey: sessionId }`，`event` 按 handler 实际读取的字段构造（工具名、参数、结果）。若这两个事件不足以触发导出，可改用任何能真正走到 `forceFlush` 的事件组合——**唯一的硬要求是变异测试必须通过**。
+
+- [ ] **Step 2: 跑测试确认失败，并做变异验证**
 
 ```bash
 pnpm run build && node --import ./dist/tests/helpers/isolate-nio-home.js --test dist/tests/monitor-openclaw.test.js
 ```
 
-预期：PASS（`isSessionMonitored` 已在 Task 5 实现）
+接线尚未完成时，unarmed 分支也会导出，断言 `hits.length === armedHits` 应当失败。
+
+Step 3 完成后回到这里再验证一次：**临时删掉某个 handler 里的 `isSessionMonitored` 判定，确认本测试转红；还原后转绿。** 把两次结果都写进报告——这是证明测试非空转的唯一方法。
 
 - [ ] **Step 3: 接线**
 
