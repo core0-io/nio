@@ -1221,6 +1221,38 @@ describe('isSessionMonitored', () => {
     assert.equal(result, true);
   });
 
+  it('never monitors an untrusted session id', () => {
+    const { home, logsConfig } = freshHome();
+    // All three armed under real ids — none of them may be reachable
+    // through a placeholder id.
+    saveMonitorStore(logsConfig, {
+      sessions: { 'sess-real': { armed_at: Date.now(), cwd: '/work' } },
+    });
+    for (const bogus of ['unknown', '']) {
+      const result = withNioHome(home, null, () =>
+        isSessionMonitored(bogus, '/work', logsConfig));
+      assert.equal(result, false, `id ${JSON.stringify(bogus)} must not be monitored`);
+    }
+  });
+
+  it('does not let an untrusted session id claim a pending arm', () => {
+    const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: {},
+      pending_arm: { at: Date.now(), cwd: '/work' },
+    });
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('unknown', '/work', logsConfig));
+    assert.equal(result, false);
+
+    // The arm must still be there for the real session to claim.
+    const raw = JSON.parse(
+      readFileSync(join(home, 'monitored-sessions.json'), 'utf-8'),
+    ) as { sessions: Record<string, unknown>; pending_arm?: unknown };
+    assert.notEqual(raw.pending_arm, undefined);
+    assert.equal('unknown' in raw.sessions, false);
+  });
+
   it('never throws when the store file is corrupt', () => {
     const { home, logsConfig } = freshHome();
     writeFileSync(join(home, 'monitored-sessions.json'), 'garbage', 'utf-8');
@@ -1306,6 +1338,15 @@ export function isSessionMonitored(
   cwd: string | null,
   logsConfig?: CollectorLogsConfig,
 ): boolean {
+  // A session id we cannot trust is never monitored, and never claims a
+  // pending arm. The `?? 'unknown'` fallback at the call sites is a
+  // placeholder for audit records, not an identity — treating it as one
+  // would make it a shared key that any id-less event from any directory
+  // could match, turning a single arm into blanket capture.
+  if (typeof sessionId !== 'string' || sessionId.length === 0 || sessionId === 'unknown') {
+    return false;
+  }
+
   try {
     const store = loadMonitorStore(logsConfig);
     const result = resolveMonitorGate({
