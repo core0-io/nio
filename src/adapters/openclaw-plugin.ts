@@ -63,6 +63,26 @@ import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 const sessionState = new Map<string, CollectorState>();
 const pendingGuardAttrs = new Map<string, Record<string, unknown>>();   // key: `${sessionId}:${spanKey}`
 
+/**
+ * Drop all in-memory state associated with a session — its turn/pending-
+ * span state and any (session, span) guard-attr scratch entries.
+ *
+ * Must run regardless of monitor state, and must never be skipped just
+ * because a session is currently unmonitored: a session that accumulated
+ * real state (user prompts, assistant replies, pending spans) while
+ * armed, and was then disarmed before a lifecycle boundary fired, must
+ * not have that state survive to be exported later if the session is
+ * re-armed. Only *exporting* what's here is conditional on monitor
+ * state (see flushSessionTurn) — clearing it is not.
+ */
+function clearSessionState(sessionId: string): void {
+  sessionState.delete(sessionId);
+  const prefix = `${sessionId}:`;
+  for (const k of pendingGuardAttrs.keys()) {
+    if (k.startsWith(prefix)) pendingGuardAttrs.delete(k);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
 // ---------------------------------------------------------------------------
@@ -311,7 +331,9 @@ export function registerOpenClawPlugin(
     }
   });
 
-  // after_tool_call → audit log + collector (fire-and-forget)
+  // after_tool_call → collector span close (fire-and-forget; no local
+  // audit entry is written from this handler — the audit trail for a
+  // tool call lives entirely in before_tool_call's evaluateHook call).
   api.on('after_tool_call', async (event: unknown, ctx: unknown) => {
     try {
       const toolEvent = event as {
@@ -330,13 +352,22 @@ export function registerOpenClawPlugin(
       const spanKey = toolEvent.toolCallId || toolName;
       const cwd = process.cwd();
       const fullKey = `${sessionId}:${spanKey}`;
-      if (!isSessionMonitored(sessionId, cwd, logsConfig)) return;
+      const monitored = isSessionMonitored(sessionId, cwd, logsConfig);
+
+      // pendingGuardAttrs is a (session, span) scratch entry written by
+      // before_tool_call — clear it here regardless of monitor state so
+      // a value written while armed doesn't outlive this tool call. Must
+      // happen before the early return below, not after: an early
+      // return that skips this would leave the entry in the module-level
+      // map for the rest of the process's lifetime if the session never
+      // reaches another cleanup point.
+      const guardAttrs = pendingGuardAttrs.get(fullKey) ?? {};
+      pendingGuardAttrs.delete(fullKey);
+      if (!monitored) return;
 
       if (tracerProvider) {
         const state = sessionState.get(sessionId);
         if (state) {
-          const guardAttrs = pendingGuardAttrs.get(fullKey) ?? {};
-          pendingGuardAttrs.delete(fullKey);
           const postAttrs: Record<string, unknown> = {
             ...guardAttrs,
             ...genAiToolCallOutputAttributes({
@@ -476,10 +507,24 @@ export function registerOpenClawPlugin(
   // Flush an active session: compute cache_hit_rate, defensively close
   // any leftover pending tool/task spans, emit the turn root span, and
   // drop the per-session state. Idempotent: no-op if no state exists.
+  //
+  // Cleanup (clearSessionState) and export (recordPostToolUse / endTurn /
+  // forceFlush) are deliberately separate concerns here: an unmonitored
+  // session must still have its state cleared — otherwise state
+  // accumulated while briefly armed (then disarmed before this boundary
+  // fired) would sit in `sessionState` for the rest of the daemon's
+  // process lifetime, and worse, get exported later if the session is
+  // re-armed and a subsequent boundary event finds that same leftover
+  // state still there. Only the export side is conditional on
+  // `monitored`.
   async function flushSessionTurn(sessionId: string, monitored: boolean): Promise<void> {
-    if (!monitored || !tracerProvider) return;
     let state = sessionState.get(sessionId);
     if (!state) return;
+
+    if (!monitored || !tracerProvider) {
+      clearSessionState(sessionId);
+      return;
+    }
 
     state = recordCacheHitRate(state);
 
@@ -493,8 +538,7 @@ export function registerOpenClawPlugin(
     }
 
     await endTurn(tracerProvider, state, process.cwd());
-    sessionState.delete(sessionId);
-    pendingGuardAttrs.forEach((_, k) => { if (k.startsWith(`${sessionId}:`)) pendingGuardAttrs.delete(k); });
+    clearSessionState(sessionId);
     await tracerProvider.forceFlush();
   }
 
@@ -503,9 +547,12 @@ export function registerOpenClawPlugin(
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
-      // Cheap in-memory housekeeping, not an OTEL write — safe to run
-      // unconditionally regardless of monitor state.
-      sessionState.delete(sessionId);
+      // In-memory housekeeping, not an OTEL write — must run
+      // unconditionally regardless of monitor state (see
+      // clearSessionState: a fresh session id must not inherit stale
+      // state left over from a same-id session that was armed,
+      // accumulated state, and disarmed before it ended).
+      clearSessionState(sessionId);
       const entry: AuditLifecycleEntry = {
         event: 'lifecycle',
         timestamp: new Date().toISOString(),

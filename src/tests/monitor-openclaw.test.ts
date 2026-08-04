@@ -1,7 +1,7 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before as beforeHook, after as afterHook } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,64 +19,8 @@ function makeFakeApi() {
   };
 }
 
-/**
- * Drive one `before_tool_call` invocation for `sessionId` and give any
- * telemetry it kicks off a chance to reach the sink.
- *
- * Uses `rm -rf /` — a literal Phase-2 DANGEROUS_COMMAND hit under every
- * protection level (see integration.test.ts's "should DENY rm -rf /") —
- * so the guard reliably takes the deny/block branch inside
- * `before_tool_call`. That branch is deliberately chosen over the
- * before_tool_call + after_tool_call allow-path pair: OpenClaw gates
- * pending-span *creation* (in before_tool_call) and pending-span
- * *export* (in after_tool_call) independently, each re-deriving
- * `isSessionMonitored` itself. For a session that is constantly
- * unmonitored (never armed, not just "checked stale"), after_tool_call's
- * own gate would correctly no-op even if before_tool_call's gate were
- * deleted — because before_tool_call's gate, still intact, would have
- * left no pending span for after_tool_call to find regardless. Two
- * independently-correct gates on the same allow-path data flow mask
- * each other's removal, so a single-handler mutation on that path can
- * never turn this test red — the two checks would need to be deleted
- * together, which isn't what Step 2 asks for.
- *
- * The block path doesn't have that problem: both the pending-span
- * creation and its immediate export (recordPreToolUse then the
- * block-path recordPostToolUse) live inside the same before_tool_call
- * invocation, gated by the exact same `monitored` value computed once
- * at the top of the handler. Deleting that one check flips both
- * halves together, which is exactly the single point of failure Step 2
- * needs to demonstrate.
- */
-async function driveToolCall(
-  handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>,
-  sessionId: string,
-): Promise<void> {
-  const before = handlers.get('before_tool_call');
-  assert.ok(before, 'before_tool_call handler must be registered');
-
-  await before(
-    {
-      toolName: 'exec',
-      params: { command: 'rm -rf /' },
-      toolCallId: `call-${sessionId}`,
-      runId: sessionId,
-    },
-    { sessionKey: sessionId },
-  );
-
-  // The block path's recordPostToolUse ends a span through a
-  // SimpleSpanProcessor, which kicks off the OTLP HTTP export as a
-  // fire-and-forget background promise (see SimpleSpanProcessor.onEnd
-  // in @opentelemetry/sdk-trace-base) — nothing before_tool_call awaits
-  // settles it. OpenClaw's own forceFlush() call (in flushSessionTurn,
-  // reached from agent_end/session_end) is itself gated on the same
-  // per-session monitor check, so calling it here wouldn't
-  // deterministically wait for a *leaked* export during the Step 2
-  // mutation check (that gate stays intact and correctly declines to
-  // flush a session it still sees as unarmed). A short settle window on
-  // a loopback HTTP request is simpler and catches the leak either way.
-  await new Promise((resolve) => setTimeout(resolve, 400));
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
@@ -84,15 +28,43 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
   let hits: string[] = [];
   let port = 0;
 
-  before(async () => {
+  // Counting only `/v1/traces` requests, not raw `hits.length`, matters
+  // for reasons that go beyond style: `createMeterProvider` wires a
+  // `PeriodicExportingMetricReader` with `exportIntervalMillis: 1000`
+  // (metrics-collector.ts). The instant any armed-session call records a
+  // counter, that reader starts firing `/v1/metrics` once a second in
+  // the background — unconditionally, independent of session or
+  // monitor state — for as long as this test file's process lives.
+  // These tests' own armed-then-unarmed sequences run close enough to
+  // that 1s boundary (guard evaluation + settle waits land in the
+  // 900-1050ms range) that a slow CI tick can push a periodic export
+  // into the unarmed observation window and fail a *correct*
+  // implementation. Traces have no such background timer — a
+  // `/v1/traces` request only happens when something explicitly ends a
+  // span — so counting only those makes the assertions immune to that
+  // drift without weakening what they pin.
+  const traceHits = () => hits.filter((u) => u === '/v1/traces').length;
+
+  beforeHook(async () => {
     sink = createServer((req, res) => { hits.push(req.url ?? ''); res.writeHead(200); res.end('{}'); });
     await new Promise<void>((r) => sink.listen(0, '127.0.0.1', r));
     port = (sink.address() as { port: number }).port;
   });
 
-  after(async () => { await new Promise<void>((r) => sink.close(() => r())); });
+  afterHook(async () => { await new Promise<void>((r) => sink.close(() => r())); });
 
-  it('exports for an armed session and stays silent for an unarmed one', async () => {
+  /**
+   * Register a fresh plugin instance against a fresh NIO_HOME pointed at
+   * the shared sink, running `body` with NIO_HOME set and always
+   * restoring it afterward. Each test gets its own home (and therefore
+   * its own monitor store + its own tracer/meter/logger providers) —
+   * only the module-level `sessionState` / `pendingGuardAttrs` maps in
+   * openclaw-plugin.ts are process-global, so callers must use session
+   * ids unique to their own test.
+   */
+  async function withPlugin(
+    body: (handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>, logsConfig: CollectorLogsConfig) => Promise<void>,
+  ): Promise<void> {
     const home = mkdtempSync(join(tmpdir(), 'nio-monitor-oc-'));
     writeFileSync(
       join(home, 'config.yaml'),
@@ -100,9 +72,6 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
       'utf-8',
     );
     const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
-    saveMonitorStore(logsConfig, {
-      sessions: { 'oc-armed': { armed_at: Date.now(), cwd: process.cwd() } },
-    });
 
     const prev = process.env['NIO_HOME'];
     process.env['NIO_HOME'] = home;
@@ -110,17 +79,210 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
       const { registerOpenClawPlugin } = await import('../adapters/openclaw-plugin.js');
       const { api, handlers } = makeFakeApi();
       registerOpenClawPlugin(api);
-
-      hits = [];
-      await driveToolCall(handlers, 'oc-armed');
-      const armedHits = hits.length;
-      assert.ok(armedHits > 0, 'armed session must reach the sink');
-
-      await driveToolCall(handlers, 'oc-unarmed');
-      assert.equal(hits.length, armedHits, 'unarmed session must add zero requests');
+      await body(handlers, logsConfig);
     } finally {
       if (prev === undefined) delete process.env['NIO_HOME'];
       else process.env['NIO_HOME'] = prev;
     }
+  }
+
+  /**
+   * Drive one `before_tool_call` invocation for `sessionId`, using
+   * `rm -rf /` — a literal Phase-2 DANGEROUS_COMMAND hit under every
+   * protection level (see integration.test.ts's "should DENY rm -rf /")
+   * — so the guard reliably takes the deny/block branch.
+   *
+   * Deliberately chosen over an allow-path before_tool_call +
+   * after_tool_call pair: before_tool_call gates pending-span *creation*
+   * and after_tool_call independently gates pending-span *export*, each
+   * re-deriving `isSessionMonitored` itself. For a session that is
+   * constantly unmonitored (never armed, not "checked stale"), deleting
+   * *either* gate alone — with the other correctly left in place — is
+   * unobservable on the trace signal: whichever gate stays intact
+   * blocks the leak regardless of the other's mutation. That is
+   * *correct*, defense-in-depth behaviour, but it also means neither
+   * single-handler deletion is provably load-bearing via that pairing
+   * on the trace signal alone (see task-7-report.md for the empirical
+   * mutation results on driveAllowedToolCall below).
+   *
+   * The block path doesn't have that problem: both the pending-span
+   * creation and its immediate export (recordPreToolUse then the
+   * block-path recordPostToolUse) live inside the same before_tool_call
+   * invocation, gated by the exact same `monitored` value computed once
+   * at the top of the handler. Deleting that one check flips both
+   * halves together — a genuine single point of failure.
+   */
+  async function driveBlockedToolCall(
+    handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>,
+    sessionId: string,
+  ): Promise<void> {
+    const before = handlers.get('before_tool_call');
+    assert.ok(before, 'before_tool_call handler must be registered');
+
+    await before(
+      {
+        toolName: 'exec',
+        params: { command: 'rm -rf /' },
+        toolCallId: `call-block-${sessionId}`,
+        runId: sessionId,
+      },
+      { sessionKey: sessionId },
+    );
+
+    // recordPostToolUse ends the span through a SimpleSpanProcessor,
+    // whose onEnd() kicks off the OTLP HTTP export as a fire-and-forget
+    // background promise (see SimpleSpanProcessor.onEnd in
+    // @opentelemetry/sdk-trace-base) — nothing before_tool_call awaits
+    // settles it, and forceFlush() (reached via agent_end/session_end)
+    // is itself gated on the same per-session check, so it can't be
+    // used to deterministically await a *leaked* export during a
+    // mutation check. A short settle window on a loopback HTTP request
+    // is simpler and catches the leak either way.
+    await wait(400);
+  }
+
+  /**
+   * Drive one full before_tool_call + after_tool_call cycle (the allow
+   * path) for `sessionId`, using a benign command the guard allows.
+   * Mirrors the original task-7-brief.md skeleton.
+   *
+   * IMPORTANT — what this test does and does not pin: empirically (see
+   * task-7-report.md), deleting *either* before_tool_call's or
+   * after_tool_call's `isSessionMonitored` check alone, with the other
+   * left intact, does NOT turn this test red. That's not a bug in the
+   * test's wiring — it's the same defense-in-depth masking described on
+   * driveBlockedToolCall above, empirically confirmed for this exact
+   * pairing: before_tool_call's own gate blocking pending-span creation
+   * means after_tool_call's `if (state)` check finds nothing regardless
+   * of its own gate's presence, and vice versa. This test still has
+   * value as an end-to-end regression check of the allow path (armed
+   * exports, unarmed doesn't, across two real handler calls) — it just
+   * doesn't independently prove either gate necessary the way
+   * driveBlockedToolCall's single-handler design does. Counting
+   * `/v1/metrics` in addition to `/v1/traces` here would restore
+   * mutation-detection for both gates (before_tool_call's own metrics
+   * calls are unconditional-once-mutated, independent of `state`), but
+   * was rejected: metrics have a live `PeriodicExportingMetricReader`
+   * background timer per MeterProvider (metrics-collector.ts,
+   * `exportIntervalMillis: 1000`) that starts as soon as any test in
+   * this file records a counter, and keeps ticking for the rest of the
+   * process — so counting metrics here would make this test's pass/fail
+   * depend on unrelated background noise from whichever other tests
+   * happened to run earlier in the same file. Traces have no such timer.
+   */
+  async function driveAllowedToolCall(
+    handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>,
+    sessionId: string,
+  ): Promise<void> {
+    const before = handlers.get('before_tool_call');
+    const after = handlers.get('after_tool_call');
+    assert.ok(before && after, 'before_tool_call/after_tool_call handlers must be registered');
+
+    const toolCallId = `call-allow-${sessionId}`;
+    await before(
+      { toolName: 'exec', params: { command: 'echo hello' }, toolCallId, runId: sessionId },
+      { sessionKey: sessionId },
+    );
+    await after(
+      {
+        toolName: 'exec', params: { command: 'echo hello' }, toolCallId, runId: sessionId,
+        result: 'hello\n', durationMs: 5,
+      },
+      { sessionKey: sessionId },
+    );
+
+    await wait(400);
+  }
+
+  it('block path: exports for an armed session and stays silent for an unarmed one', async () => {
+    await withPlugin(async (handlers, logsConfig) => {
+      saveMonitorStore(logsConfig, {
+        sessions: { 'oc-block-armed': { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      hits = [];
+      await driveBlockedToolCall(handlers, 'oc-block-armed');
+      const armedHits = traceHits();
+      assert.ok(armedHits > 0, 'armed session must reach the sink');
+
+      await driveBlockedToolCall(handlers, 'oc-block-unarmed');
+      assert.equal(traceHits(), armedHits, 'unarmed session must add zero trace requests');
+    });
+  });
+
+  // End-to-end regression check for the allow path (see the caveat in
+  // driveAllowedToolCall's docblock: unlike the block-path test, this
+  // one does not independently pin either individual gate under
+  // mutation — both before_tool_call's and after_tool_call's checks
+  // mask each other's removal on the trace signal).
+  it('allow path: exports for an armed session and stays silent for an unarmed one', async () => {
+    await withPlugin(async (handlers, logsConfig) => {
+      saveMonitorStore(logsConfig, {
+        sessions: { 'oc-allow-armed': { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      hits = [];
+      await driveAllowedToolCall(handlers, 'oc-allow-armed');
+      const armedHits = traceHits();
+      assert.ok(armedHits > 0, 'armed session must reach the sink');
+
+      await driveAllowedToolCall(handlers, 'oc-allow-unarmed');
+      assert.equal(traceHits(), armedHits, 'unarmed session must add zero trace requests');
+    });
+  });
+
+  it('does not re-export state accumulated before a disarm once the session is re-armed', async () => {
+    await withPlugin(async (handlers, logsConfig) => {
+      const sessionId = 'oc-leak-session';
+      const beforeAgentReply = handlers.get('before_agent_reply');
+      const beforeToolCall = handlers.get('before_tool_call');
+      const sessionEnd = handlers.get('session_end');
+      const agentEnd = handlers.get('agent_end');
+      assert.ok(
+        beforeAgentReply && beforeToolCall && sessionEnd && agentEnd,
+        'before_agent_reply/before_tool_call/session_end/agent_end handlers must be registered',
+      );
+
+      // 1. Arm.
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      hits = [];
+
+      // 2. Accumulate real state while armed: a captured user prompt
+      // (turn_attributes) and an open tool-call span that's never
+      // closed by after_tool_call — representing a mid-flight call at
+      // the moment of disarm.
+      await beforeAgentReply({ cleanedBody: 'nio leak canary prompt' }, { sessionKey: sessionId });
+      await beforeToolCall(
+        { toolName: 'exec', params: { command: 'echo canary' }, toolCallId: `call-${sessionId}`, runId: sessionId },
+        { sessionKey: sessionId },
+      );
+
+      // 3. Disarm — remove the session from the store entirely.
+      saveMonitorStore(logsConfig, { sessions: {} });
+
+      // 4. A lifecycle boundary fires while unarmed. Pre-fix, this left
+      // sessionState/pendingGuardAttrs untouched (the whole handler,
+      // including cleanup, lived behind the `!monitored` early return);
+      // post-fix, cleanup must still happen even though nothing exports.
+      await sessionEnd({}, { sessionKey: sessionId });
+
+      // 5. Re-arm.
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      // 6. A fresh boundary event. If step 4 didn't clear the old
+      // state, this exports the disarm-era canary data now.
+      await agentEnd({}, { sessionKey: sessionId });
+      await wait(400);
+
+      assert.equal(
+        traceHits(), 0,
+        'state accumulated before a disarm must not be exported after the session is re-armed',
+      );
+    });
   });
 });
