@@ -52,6 +52,22 @@ function defaultStoreDir(): string {
   return process.env['NIO_HOME'] || join(homedir(), '.nio');
 }
 
+function isPlainObject(value: unknown): boolean {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isValidSession(entry: unknown): entry is MonitoredSession {
+  if (!isPlainObject(entry)) return false;
+  const e = entry as Record<string, unknown>;
+  return typeof e.armed_at === 'number' && typeof e.cwd === 'string';
+}
+
+function isValidPendingArm(entry: unknown): entry is PendingArm {
+  if (!isPlainObject(entry)) return false;
+  const e = entry as Record<string, unknown>;
+  return typeof e.at === 'number' && typeof e.cwd === 'string';
+}
+
 /** Resolve the store location — next to the audit log. */
 export function monitorStorePath(logsConfig?: CollectorLogsConfig): string {
   const auditPath = logsConfig?.path ? expandHome(logsConfig.path) : null;
@@ -68,8 +84,25 @@ export function loadMonitorStore(logsConfig?: CollectorLogsConfig): MonitorStore
   try {
     const raw = readFileSync(monitorStorePath(logsConfig), 'utf-8');
     const parsed = JSON.parse(raw) as Partial<MonitorStore>;
-    const store: MonitorStore = { sessions: parsed.sessions ?? {} };
-    if (parsed.pending_arm) store.pending_arm = parsed.pending_arm;
+
+    // Normalize sessions: must be a plain object with valid entries only
+    let sessions: Record<string, MonitoredSession> = {};
+    if (isPlainObject(parsed.sessions)) {
+      const s = parsed.sessions as Record<string, unknown>;
+      for (const [key, entry] of Object.entries(s)) {
+        if (isValidSession(entry)) {
+          sessions[key] = entry;
+        }
+      }
+    }
+
+    const store: MonitorStore = { sessions };
+
+    // Normalize pending_arm: must be valid or omitted entirely
+    if (isValidPendingArm(parsed.pending_arm)) {
+      store.pending_arm = parsed.pending_arm;
+    }
+
     return store;
   } catch {
     return { sessions: {} };

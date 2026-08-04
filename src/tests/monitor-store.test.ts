@@ -89,3 +89,199 @@ describe('saveMonitorStore', () => {
     assert.equal('pending_arm' in loaded, false);
   });
 });
+
+describe('loadMonitorStore — sessions field validation', () => {
+  it('degrades to empty when sessions is a string', () => {
+    const dir = freshDir();
+    writeFileSync(join(dir, 'monitored-sessions.json'), '{"sessions": "not an object"}', 'utf-8');
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('degrades to empty when sessions is an array', () => {
+    const dir = freshDir();
+    writeFileSync(join(dir, 'monitored-sessions.json'), '{"sessions": [1, 2, 3]}', 'utf-8');
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('degrades to empty when sessions is a number', () => {
+    const dir = freshDir();
+    writeFileSync(join(dir, 'monitored-sessions.json'), '{"sessions": 42}', 'utf-8');
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('filters out session entries with invalid armed_at type', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {"sess-1": {"armed_at": "not a number", "cwd": "/work"}}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('filters out session entries with invalid cwd type', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {"sess-1": {"armed_at": 1754300000000, "cwd": 123}}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('filters out session entries with missing armed_at', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {"sess-1": {"cwd": "/work"}}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('filters out session entries with missing cwd', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {"sess-1": {"armed_at": 1754300000000}}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+  });
+
+  it('keeps valid entries and filters invalid ones in mixed array', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      JSON.stringify({
+        sessions: {
+          'sess-1': { armed_at: 1754300000000, cwd: '/work/valid' },
+          'sess-2': { armed_at: 'invalid', cwd: '/work' },
+          'sess-3': { armed_at: 1754300001000, cwd: '/work/also-valid' },
+        },
+      }),
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), {
+      sessions: {
+        'sess-1': { armed_at: 1754300000000, cwd: '/work/valid' },
+        'sess-3': { armed_at: 1754300001000, cwd: '/work/also-valid' },
+      },
+    });
+  });
+});
+
+describe('loadMonitorStore — pending_arm field validation', () => {
+  it('omits pending_arm when it is a string', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": "not an object"}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm when it is an array', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": [1, 2]}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm when it is a number', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": 42}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm with invalid at type', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": {"at": "not a number", "cwd": "/work"}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm with invalid cwd type', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": {"at": 1754300000000, "cwd": 123}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm with missing at field', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": {"cwd": "/work"}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('omits pending_arm with missing cwd field', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": {}, "pending_arm": {"at": 1754300000000}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    const loaded = loadMonitorStore(logsConfig);
+    assert.deepEqual(loaded, { sessions: {} });
+    assert.equal('pending_arm' in loaded, false);
+  });
+
+  it('keeps valid pending_arm with corrupt sessions', () => {
+    const dir = freshDir();
+    writeFileSync(
+      join(dir, 'monitored-sessions.json'),
+      '{"sessions": "invalid", "pending_arm": {"at": 1754300000000, "cwd": "/work"}}',
+      'utf-8'
+    );
+    const logsConfig = { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig;
+    assert.deepEqual(loadMonitorStore(logsConfig), {
+      sessions: {},
+      pending_arm: { at: 1754300000000, cwd: '/work' },
+    });
+  });
+});
