@@ -1087,9 +1087,11 @@ ls plugins/claude-code/skills/nio/scripts/monitor-cli.js
 - [ ] **Step 6: 提交**
 
 ```bash
-git add src/scripts/monitor-cli.ts src/tests/monitor-cli.test.ts scripts/build.js plugins/claude-code/skills/nio/scripts/monitor-cli.js
+git add src/scripts/monitor-cli.ts src/tests/monitor-cli.test.ts scripts/build.js
 git commit -m "feat(collector): add monitor-cli for /nio-monitor on|off|status"
 ```
+
+**不要** `git add` bundle 产物：`.gitignore:21` 忽略 `plugins/claude-code/skills/nio/scripts/*.js`，显式 add 会直接报错。产物由 `pnpm run build` 在打包时生成，不进版本库。
 
 ---
 
