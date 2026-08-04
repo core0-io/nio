@@ -74,5 +74,5 @@ When it is not armed, none of the three leave the machine.
 
 - Capture takes effect from the **next** hook event; the currently executing tool call is not retroactively captured.
 - There is no backfill. Anything that happened before `on` is not captured.
-- Records expire after 7 days as a backstop; `SessionEnd` normally clears them sooner.
+- Records expire after 7 days as a backstop. Claude Code, Hermes, and OpenClaw clear the record as soon as the session ends, so the backstop rarely matters there. Codex has no session-end hook to key off, so an armed Codex session relies on the 7-day expiry or a manual `off` — worth knowing if you reuse the same session id across `codex resume` calls.
 - To capture every session without arming each one, set `collector.monitor_all_sessions: true` in `~/.nio/config.yaml`.

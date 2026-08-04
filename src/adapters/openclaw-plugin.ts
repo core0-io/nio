@@ -26,7 +26,7 @@ import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
-import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
+import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
 import {
   createTracerProvider,
   ensureTurn,
@@ -583,6 +583,11 @@ export function registerOpenClawPlugin(
       };
       writeAuditLog(entry, auditOptsFor(monitored));
       await flushSessionTurn(sessionId, monitored);
+      // Drop the session's arm record now instead of leaving it for the
+      // 7-day TTL backstop — OpenClaw is a long-running daemon, so a
+      // session that ends here won't get another chance to be reaped
+      // until the daemon itself restarts or the backstop fires.
+      forgetSession(sessionId, logsConfig);
     } catch {
       // Non-critical
     }

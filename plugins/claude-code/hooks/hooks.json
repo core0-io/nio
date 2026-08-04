@@ -111,6 +111,18 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/skills/nio/scripts/collector-hook.js\"",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
     ]
   }
 }
