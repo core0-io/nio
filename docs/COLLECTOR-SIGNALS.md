@@ -56,12 +56,19 @@ Claude Code and Hermes have to bridge span lifecycle across short-lived hook pro
 ## Capture gating
 
 Nio exports nothing by default. Each of the three signals is created only
-for sessions the user explicitly armed with `/nio-monitor`, or for every
-session when `collector.monitor_all_sessions: true` is set.
+for sessions the user explicitly armed, or for every session when
+`collector.monitor_all_sessions: true` is set.
+
+Arming is `/nio-monitor on` on Claude Code and Codex, and `/nio monitor on`
+on OpenClaw and Hermes — those two platforms do not install the focused
+`nio-*` skills, so the unified `/nio` is their entry point. Both run the
+same code.
 
 The gate sits **before OTEL provider creation** — an unmonitored session
 does not initialise exporters at all, so the cost is one small file read
-per hook event.
+per hook event. This includes the SessionStart skill scanner, whose
+`session_scan` records would otherwise carry the user's installed-skill
+inventory and its risk levels off the machine before anything was armed.
 
 Two things are outside the gate:
 
@@ -69,6 +76,16 @@ Two things are outside the gate:
   regardless. The switch controls reporting, not enforcement.
 - **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
   it never leaves the machine and backs `/nio report`.
+
+**One limitation, on OpenClaw only.** OpenClaw runs Nio inside a
+long-lived daemon and OTEL counters there are cumulative for the life of
+that process. A daemon in which no session has ever been armed creates no
+providers and exports nothing. But once any session has been armed and
+recorded a counter, the metrics exporter keeps re-sending its accumulated
+totals about once a second until the daemon restarts — disarming,
+`session_end` and the arm-record deletion all stop *new* data being
+collected, but none of them can stop that timer. The other three
+platforms run one process per hook event, so nothing outlives it.
 
 State lives in `${NIO_HOME}/monitored-sessions.json`, separate from
 `traces-state-store.json` — session-scoped durable state versus
