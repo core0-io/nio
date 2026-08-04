@@ -67,6 +67,17 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 
 When it is not armed, none of the three leave the machine.
 
+## Known Limitation on OpenClaw
+
+OpenClaw runs Nio inside a long-lived daemon rather than a fresh process per event, and OTEL metric counters there are cumulative for the life of that process. The practical consequence:
+
+- A daemon where **no** session has ever been armed exports nothing at all — no exporter is even created.
+- Once **any** session in that daemon has been armed and recorded a counter, the metrics exporter starts a periodic export and **keeps re-sending its accumulated counter totals roughly once a second until the daemon restarts** — including after `off`, after the session ends, and after the arm record is deleted.
+
+What `off` does guarantee on OpenClaw is that **no new session data is collected**: no new spans, no new audit records, and no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the OpenClaw daemon clears it.
+
+Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.
+
 ## What This Does Not Control
 
 | Behaviour | Affected by this switch? |

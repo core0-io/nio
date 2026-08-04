@@ -148,7 +148,6 @@ export function registerOpenClawPlugin(
   const adapter = new OpenClawAdapter({ nativeToolMapping: guard?.native_tool_mapping?.openclaw });
   const confirmAction = guard?.confirm_action ?? 'allow';
 
-  const collectorConfig = loadCollectorConfig();
   // Resource-level agent name is only set when the operator actually
   // configured one — empty / unset means "no gen_ai.agent.name on the
   // resource". Span-level fallback (used by endTurn below) keeps its
@@ -156,22 +155,85 @@ export function registerOpenClawPlugin(
   const resourceAgentName = config.agent_name && config.agent_name.length > 0
     ? config.agent_name
     : undefined;
-  const tracerProvider = createTracerProvider(collectorConfig, 'openclaw', resourceAgentName);
-  const meterProvider = createMeterProvider(collectorConfig, 'openclaw', resourceAgentName);
   const logsConfig = config.collector?.logs;
-  const loggerProvider = (logsConfig?.enabled !== false)
-    ? createLoggerProvider(collectorConfig, 'openclaw', resourceAgentName)
-    : null;
+
+  // ── Lazily-created OTEL providers ──────────────────────────────────
+  //
+  // Created on first *monitored* use, never at registration. This is not
+  // just tidiness: `createMeterProvider` installs a
+  // PeriodicExportingMetricReader with exportIntervalMillis: 1000, whose
+  // background timer lives as long as the process. Building it eagerly
+  // meant every OpenClaw daemon that loaded this plugin — including one
+  // whose user never ran `/nio monitor on` in their life — stood up the
+  // full OTLP exporter stack and its timer. Deferring means an
+  // never-armed daemon creates nothing at all.
+  //
+  // KNOWN RESIDUAL LIMITATION, documented in nio-monitor's SKILL.md:
+  // this fixes the never-armed case only. Once *any* session in the
+  // daemon has been armed and recorded a counter, OTel's cumulative
+  // metric semantics mean that reader keeps exporting the accumulated
+  // totals every second until the process exits — disarming, session_end
+  // and forgetSession all stop *new* data being recorded, but none of
+  // them can stop that timer. Restarting the daemon does.
+  //
+  // `loadCollectorConfig()` is deferred along with them, for the same
+  // reason (nothing collector-related should happen before a monitored
+  // event) and with the side benefit that an endpoint edited after
+  // daemon startup is picked up rather than frozen at registration.
+  let _collectorConfig: ReturnType<typeof loadCollectorConfig> | undefined;
+  function getCollectorConfig(): ReturnType<typeof loadCollectorConfig> {
+    if (_collectorConfig === undefined) _collectorConfig = loadCollectorConfig();
+    return _collectorConfig;
+  }
+
+  let _tracerProvider: ReturnType<typeof createTracerProvider> | undefined;
+  function getTracerProvider(): ReturnType<typeof createTracerProvider> {
+    if (_tracerProvider === undefined) {
+      try {
+        _tracerProvider = createTracerProvider(getCollectorConfig(), 'openclaw', resourceAgentName);
+      } catch {
+        _tracerProvider = null;
+      }
+    }
+    return _tracerProvider;
+  }
+
+  let _meterProvider: ReturnType<typeof createMeterProvider> | undefined;
+  function getMeterProvider(): ReturnType<typeof createMeterProvider> {
+    if (_meterProvider === undefined) {
+      try {
+        _meterProvider = createMeterProvider(getCollectorConfig(), 'openclaw', resourceAgentName);
+      } catch {
+        _meterProvider = null;
+      }
+    }
+    return _meterProvider;
+  }
+
+  let _loggerProvider: ReturnType<typeof createLoggerProvider> | undefined;
+  function getLoggerProvider(): ReturnType<typeof createLoggerProvider> {
+    if (logsConfig?.enabled === false) return null;
+    if (_loggerProvider === undefined) {
+      try {
+        _loggerProvider = createLoggerProvider(getCollectorConfig(), 'openclaw', resourceAgentName);
+      } catch {
+        _loggerProvider = null;
+      }
+    }
+    return _loggerProvider;
+  }
+
   // Per-session monitor gate. OpenClaw is a long-running daemon — unlike
   // Claude Code / Codex / Hermes, which spawn a fresh process per hook
   // event and can decide "monitored or not" once, before any provider
-  // exists, the providers here are created once at plugin registration
-  // and shared by every session for the process's lifetime. So the gate
-  // has to be re-checked inside each handler, keyed by that event's
-  // session id, and only the OTEL-writing part of the handler skipped
-  // when unmonitored — never the guard evaluation itself (see
-  // before_tool_call below, the one handler where that distinction
-  // matters).
+  // exists, the providers here are shared by every session for the
+  // process's lifetime once created. So the gate has to be re-checked
+  // inside each handler, keyed by that event's session id, and only the
+  // OTEL-writing part of the handler skipped when unmonitored — never
+  // the guard evaluation itself (see before_tool_call below, the one
+  // handler where that distinction matters). Every `get*Provider()` call
+  // below therefore sits behind a `monitored` check: reaching one is
+  // what creates the provider.
   //
   // Every handler derives its session id as
   // `c.sessionKey || c.sessionId || c.runId || 'openclaw'`. That final
@@ -189,7 +251,7 @@ export function registerOpenClawPlugin(
   // loggerProvider for an unmonitored session — here the provider is
   // long-lived, so the suppression has to happen per-call instead.
   function auditOptsFor(monitored: boolean): WriteAuditLogOptions {
-    return { loggerProvider: monitored ? loggerProvider : null, logsConfig };
+    return { loggerProvider: monitored ? getLoggerProvider() : null, logsConfig };
   }
 
   const logger = (msg: string) => console.log(msg);
@@ -238,6 +300,11 @@ export function registerOpenClawPlugin(
       const cwd = process.cwd();
       const fullKey = `${sessionId}:${spanKey}`;
       const monitored = isSessionMonitored(sessionId, cwd, logsConfig);
+      // Resolving these is what constructs the providers, so both stay
+      // behind `monitored` — an unarmed session leaves them null and
+      // nothing is ever built for it.
+      const tracerProvider = monitored ? getTracerProvider() : null;
+      const meterProvider = monitored ? getMeterProvider() : null;
 
       // Record pre-tool span data into per-session state. Span is not
       // emitted yet — the post side (after_tool_call OR the block path
@@ -372,6 +439,8 @@ export function registerOpenClawPlugin(
       pendingGuardAttrs.delete(fullKey);
       if (!monitored) return;
 
+      const tracerProvider = getTracerProvider();
+      const meterProvider = getMeterProvider();
       if (tracerProvider) {
         const state = sessionState.get(sessionId);
         if (state) {
@@ -415,6 +484,8 @@ export function registerOpenClawPlugin(
         details: { subagent_id: e.subagentId, run_id: e.runId },
       };
       writeAuditLog(lifecycleEntry, auditOptsFor(monitored));
+      const tracerProvider = monitored ? getTracerProvider() : null;
+      const meterProvider = monitored ? getMeterProvider() : null;
       const taskId = e.subagentId || e.runId || 'unknown';
       if (monitored && tracerProvider) {
         let state = sessionState.get(sessionId) ?? null;
@@ -447,6 +518,8 @@ export function registerOpenClawPlugin(
         details: { subagent_id: e.subagentId, run_id: e.runId },
       };
       writeAuditLog(endEntry, auditOptsFor(monitored));
+      const tracerProvider = monitored ? getTracerProvider() : null;
+      const meterProvider = monitored ? getMeterProvider() : null;
       const taskId = e.subagentId || e.runId || 'unknown';
       if (monitored && tracerProvider) {
         const state = sessionState.get(sessionId);
@@ -471,6 +544,7 @@ export function registerOpenClawPlugin(
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       if (!isSessionMonitored(sessionId, process.cwd(), logsConfig)) return;
+      const tracerProvider = getTracerProvider();
       if (tracerProvider && e.cleanedBody) {
         let state = sessionState.get(sessionId) ?? null;
         state = ensureTurn(state, sessionId);
@@ -487,6 +561,7 @@ export function registerOpenClawPlugin(
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       if (!isSessionMonitored(sessionId, process.cwd(), logsConfig)) return;
+      const tracerProvider = getTracerProvider();
 
       let state = sessionState.get(sessionId) ?? null;
       state = ensureTurn(state, sessionId);
@@ -528,7 +603,8 @@ export function registerOpenClawPlugin(
     let state = sessionState.get(sessionId);
     if (!state) return;
 
-    if (!monitored || !tracerProvider) {
+    const tracerProvider = monitored ? getTracerProvider() : null;
+    if (!tracerProvider) {
       clearSessionState(sessionId);
       return;
     }
@@ -614,11 +690,11 @@ export function registerOpenClawPlugin(
       };
       writeAuditLog(agentEndEntry, auditOptsFor(monitored));
       await flushSessionTurn(sessionId, monitored);
-      if (monitored && meterProvider) {
-        await recordTurn(meterProvider);
-      }
-      if (monitored && loggerProvider) {
-        await loggerProvider.forceFlush();
+      if (monitored) {
+        const meterProvider = getMeterProvider();
+        if (meterProvider) await recordTurn(meterProvider);
+        const loggerProvider = getLoggerProvider();
+        if (loggerProvider) await loggerProvider.forceFlush();
       }
     } catch {
       // Non-critical
