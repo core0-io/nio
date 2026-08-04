@@ -1127,7 +1127,9 @@ git commit -m "feat(collector): add monitor-cli for /nio-monitor on|off|status"
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import {
+  mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
@@ -1193,6 +1195,26 @@ describe('isSessionMonitored', () => {
     assert.equal(raw.pending_arm, undefined);
   });
 
+  it('claims a pending arm when hook cwd and stored cwd differ by a symlink', () => {
+    // monitor-cli stamps pending_arm.cwd from process.cwd(), which POSIX
+    // reports resolved. A host may hand the hook the unresolved form.
+    // Without canonicalisation the arm would be permanently unclaimable.
+    const { home, logsConfig } = freshHome();
+    const realDir = join(home, 'real');
+    const linkDir = join(home, 'link');
+    mkdirSync(realDir);
+    symlinkSync(realDir, linkDir);
+
+    saveMonitorStore(logsConfig, {
+      sessions: {},
+      pending_arm: { at: Date.now(), cwd: realDir },
+    });
+
+    const result = withNioHome(home, null, () =>
+      isSessionMonitored('sess-symlink', linkDir, logsConfig));
+    assert.equal(result, true);
+  });
+
   it('never throws when the store file is corrupt', () => {
     const { home, logsConfig } = freshHome();
     writeFileSync(join(home, 'monitored-sessions.json'), 'garbage', 'utf-8');
@@ -1240,10 +1262,34 @@ export {};
  * because of the gate.
  */
 
+import { realpathSync } from 'node:fs';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import { loadMonitorStore, saveMonitorStore } from './monitor-store.js';
 import { resolveMonitorGate } from './monitor-gate.js';
 import { loadMonitorAllSessions } from './config-loader.js';
+
+/**
+ * Resolve a path to its canonical form so cwd comparisons survive
+ * symlinks.
+ *
+ * `monitor-cli` stamps `pending_arm.cwd` from `process.cwd()`, which
+ * POSIX always reports resolved (`/private/var/...` on macOS, where
+ * `/var` is a symlink). Hook payloads carry whatever form the host
+ * chose, which may be the unresolved one (`/var/...`). Comparing the
+ * two raw would make the arm unclaimable on any machine where the
+ * working directory sits under a symlink — on macOS that includes
+ * anything under `/tmp`.
+ *
+ * Falls back to the input when the path cannot be resolved (it may not
+ * exist yet); a best-effort canonical form still beats no comparison.
+ */
+function canonicalisePath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 /**
  * Decide whether this session's telemetry may be exported, persisting
@@ -1259,7 +1305,7 @@ export function isSessionMonitored(
     const result = resolveMonitorGate({
       store,
       sessionId,
-      cwd,
+      cwd: cwd === null ? null : canonicalisePath(cwd),
       monitorAllSessions: loadMonitorAllSessions(),
       nowMs: Date.now(),
     });
