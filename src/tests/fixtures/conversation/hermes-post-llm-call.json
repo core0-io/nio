@@ -4,7 +4,7 @@
   "cwd": "/placeholder/workdir",
   "extra": {
     "user_message": "placeholder user question about a placeholder task",
-    "assistant_response": "placeholder final assistant answer after checking the placeholder file",
+    "assistant_response": "placeholder final assistant answer after checking the placeholder file -- plus a trailing clause only present in the streaming completion, not yet synced into conversation_history",
     "model": "gpt-5.5",
     "platform": "cli",
     "conversation_history": [

@@ -56,15 +56,41 @@ describe('hermes source', () => {
     assert.equal(tu!.toolUse!.name, 'exec_command');
   });
 
-  it('attaches assistant_response to the last call without duplicating identical content', () => {
+  it('attaches assistant_response to the last call when it carries content beyond the last history entry', () => {
+    // Fixture's extra.assistant_response has a trailing clause the last
+    // history entry's content doesn't — the real-world shape when a
+    // streaming completion finishes but conversation_history hasn't
+    // synced yet. A test where the two strings are byte-identical (see
+    // the dedup test below) cannot observe this code path at all: the
+    // dedup check would swallow the attach either way, so passing there
+    // proves nothing about whether attach actually runs.
     const calls = createHermesSource(loadFixture()).callsSince(0);
     const last = calls[calls.length - 1];
     const texts = last.blocks.filter((b) => b.type === 'text');
-    // Fixture's last history entry content is byte-identical to
-    // extra.assistant_response — must collapse to exactly one text
-    // block, not two.
-    assert.equal(texts.length, 1);
+    assert.equal(texts.length, 2, 'history content and assistant_response must both surface as text blocks');
     assert.equal(texts[0].content, 'placeholder final assistant answer after checking the placeholder file');
+    assert.equal(
+      texts[1].content,
+      'placeholder final assistant answer after checking the placeholder file -- plus a trailing clause only present in the streaming completion, not yet synced into conversation_history',
+    );
+  });
+
+  it('does not duplicate assistant_response when it is byte-identical to the last history entry', () => {
+    const payload = {
+      extra: {
+        model: 'gpt-5.5',
+        assistant_response: 'identical placeholder content',
+        conversation_history: [
+          { role: 'user', content: 'placeholder question' },
+          { role: 'assistant', content: 'identical placeholder content', finish_reason: 'stop' },
+        ],
+      },
+    };
+    const calls = createHermesSource(payload).callsSince(0);
+    const last = calls[calls.length - 1];
+    const texts = last.blocks.filter((b) => b.type === 'text');
+    assert.equal(texts.length, 1, 'byte-identical assistant_response must collapse into the existing text block');
+    assert.equal(texts[0].content, 'identical placeholder content');
   });
 
   it('marks timing as synthetic (all calls share one Date.now() snapshot)', () => {
