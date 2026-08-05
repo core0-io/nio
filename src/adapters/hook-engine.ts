@@ -109,8 +109,15 @@ export interface ParsedMcpToolName {
  * - Claude Code and Codex expose MCP tools as `mcp__<server>__<tool>`.
  * - OpenClaw exposes MCP tools as `<safeServerName>__<tool>` (native tools
  *   never contain `__`, so the separator is a reliable marker).
+ * - opencode flattens MCP tools as `<sanitize(server)>_<sanitize(tool)>`
+ *   with no fixed delimiter; `knownServers` (registry server names) is
+ *   used for longest-prefix attribution, falling back to the full name.
  */
-export function parseMcpToolName(toolName: string, platform: string): ParsedMcpToolName {
+export function parseMcpToolName(
+  toolName: string,
+  platform: string,
+  knownServers?: readonly string[],
+): ParsedMcpToolName {
   const name = toolName ?? '';
 
   if ((platform === 'claude-code' || platform === 'codex') && name.startsWith('mcp__')) {
@@ -140,6 +147,31 @@ export function parseMcpToolName(toolName: string, platform: string): ParsedMcpT
       return { isMcp: true, local: name };
     }
     return { isMcp: false };
+  }
+
+  // opencode flattens MCP tools as `<sanitize(server)>_<sanitize(tool)>`
+  // (packages/opencode/src/mcp/catalog.ts:119), where
+  // sanitize = s.replace(/[^a-zA-Z0-9_-]/g, "_"). There is no fixed
+  // delimiter, so a bare split is impossible. Two tiers:
+  //   1. Attribution — longest matching server prefix from the registry.
+  //   2. Fallback — keep the FULL tool name as `local` with `server`
+  //      unset, exactly like the Hermes single-underscore branch, so
+  //      users can allow/deny by the name they actually see.
+  // With no servers configured, nothing is MCP and native tools are
+  // untouched.
+  if (platform === 'opencode') {
+    if (!knownServers || knownServers.length === 0) return { isMcp: false };
+    if (!name.includes('_')) return { isMcp: false };
+
+    const matches = knownServers
+      .filter(s => name.startsWith(`${s}_`) && name.length > s.length + 1)
+      .sort((a, b) => b.length - a.length);
+
+    if (matches.length > 0) {
+      const server = matches[0]!;
+      return { isMcp: true, server, local: name.slice(server.length + 1) };
+    }
+    return { isMcp: true, local: name };
   }
 
   return { isMcp: false };
@@ -245,14 +277,16 @@ function checkToolGate(
   const blockedMcp = config.guard?.blocked_tools?.['mcp'] ?? [];
   const permittedMcp = config.guard?.permitted_tools?.['mcp'] ?? [];
 
-  const parsed = parseMcpToolName(toolName, platform);
+  const registry = injectedRegistry ?? loadMCPRegistry();
+  const knownServers = registry.entries.map(e => e.serverName);
+
+  const parsed = parseMcpToolName(toolName, platform, knownServers);
   const nameMcpCandidates = parsed.isMcp && parsed.local
     ? (parsed.server
         ? [parsed.local, `${parsed.server}__${parsed.local}`]
         : [parsed.local])
     : [];
 
-  const registry = injectedRegistry ?? loadMCPRegistry();
   const allShellHits = detectMcpCalls(extractCommandString(toolInput), registry);
   // Audit-only hits (D12 self-launch, D15 compile-and-run, D16 obfuscation
   // fallback) inform the audit pipeline but must not gate execution.
@@ -384,7 +418,10 @@ export async function evaluateHook(
   // lifts MCP calls from "silent allow" to first-class actions evaluated
   // by all rules + analysers.
   if (!envelope && input.toolName) {
-    const parsed = parseMcpToolName(input.toolName, adapter.name);
+    const registry = options.mcpRegistry ?? loadMCPRegistry();
+    const parsed = parseMcpToolName(
+      input.toolName, adapter.name, registry.entries.map(e => e.serverName),
+    );
     if (parsed.isMcp && parsed.local) {
       envelope = buildMcpEnvelope(input, parsed, initiatingSkill, adapter.name);
     }
