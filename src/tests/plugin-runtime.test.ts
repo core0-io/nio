@@ -704,3 +704,260 @@ describe('registerPiExtension — block path and confirm dialog', () => {
     }
   });
 });
+
+describe('createNioPlugin (opencode)', () => {
+  const pluginInput = {
+    client: {}, project: {}, directory: '/tmp', worktree: '/tmp',
+    $: (() => {}) as never, serverUrl: new URL('http://127.0.0.1:1'),
+  };
+
+  it('exposes every hook Nio needs', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin()(pluginInput as never);
+    for (const name of [
+      'tool.execute.before', 'tool.execute.after', 'chat.message',
+      'permission.ask', 'event', 'dispose',
+    ]) {
+      assert.ok(name in hooks, `missing hook: ${name}`);
+    }
+    assert.ok(hooks.tool && 'nio_command' in hooks.tool);
+  });
+
+  it('tool.execute.before swallows internal errors instead of leaking a defect', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin()(pluginInput as never);
+    // A malformed output object would throw inside the handler; the
+    // handler must absorb it so opencode never sees a defect.
+    await hooks['tool.execute.before']!(
+      { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+      null as never,
+    );
+  });
+
+  it('NioBlockedError carries the denial reason', async () => {
+    const { NioBlockedError } = await import('../adapters/opencode-plugin.js');
+    const err = new NioBlockedError('nope');
+    assert.equal(err.message, 'nope');
+    assert.equal(err.name, 'NioBlockedError');
+    assert.ok(err instanceof Error);
+  });
+
+  it('the nio_command tool returns dispatcher text', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin()(pluginInput as never);
+    const out = await hooks.tool!['nio_command']!.execute(
+      { command: '' } as never, {} as never,
+    );
+    assert.equal(typeof out, 'string');
+  });
+});
+
+// The four tests above only prove the hooks exist and don't throw — none
+// of them drive a real deny verdict through, force an internal exception
+// in a non-block handler, or exercise the opencode-specific span wiring
+// (toolCallId forwarding, session.idle reclaiming a leaked span,
+// sub-agent detection via parentID). Those are exactly the regressions
+// the brief calls out by name, so pin them with controlled verdicts and
+// an in-memory tracer.
+describe('createNioPlugin (opencode) — block path and span wiring', () => {
+  const pluginInput = {
+    client: {}, project: {}, directory: '/tmp', worktree: '/tmp',
+    $: (() => {}) as never, serverUrl: new URL('http://127.0.0.1:1'),
+  };
+
+  function stubNioVerdict(verdict: 'allow' | 'deny') {
+    return () => ({
+      orchestrator: {
+        async evaluate() {
+          return {
+            decision: verdict,
+            risk_level: verdict === 'allow' ? 'low' : 'high',
+            scores: { final: verdict === 'allow' ? 0 : 0.9 },
+            findings: verdict === 'allow' ? [] : [{ rule_id: 'TEST_RULE' }],
+            explanation: 'test verdict',
+            phase_stopped: 2,
+            diagnostics: [],
+          };
+        },
+      },
+    }) as never;
+  }
+
+  it('tool.execute.before rejects with NioBlockedError for a deny verdict', async () => {
+    // The one deliberate exception in this file MUST actually escape —
+    // opencode has no `{ block: true }` return value, so a swallowed
+    // throw here means the tool call silently runs.
+    const { createNioPlugin, NioBlockedError } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin({ nioFactory: stubNioVerdict('deny') })(pluginInput as never);
+    await assert.rejects(
+      () => hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        { args: { command: 'rm -rf /' } } as never,
+      ),
+      NioBlockedError,
+    );
+  });
+
+  it('tool.execute.after swallows a null hookInput instead of leaking a defect', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin()(pluginInput as never);
+    // `hookInput.callID` on a null hookInput throws synchronously inside
+    // the handler; it must resolve rather than reject.
+    await hooks['tool.execute.after']!(null as never, { output: 'ok' } as never);
+  });
+
+  it('chat.message swallows a non-array `parts` instead of leaking a defect', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin()(pluginInput as never);
+    // `parts` truthy but not an array — `.filter` is not a function on a
+    // string, so this throws internally unless caught.
+    await hooks['chat.message']!(
+      {} as never,
+      { message: { sessionID: 's1' }, parts: 'oops' } as never,
+    );
+  });
+
+  it('permission.ask swallows a null output when hardening a deny to deny', async () => {
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin({ nioFactory: stubNioVerdict('deny') })(pluginInput as never);
+
+    // Drive a real block through to populate verdictByCall with 'deny'
+    // for callID 'c1'. The block itself is expected to throw.
+    await assert.rejects(() =>
+      hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        { args: {} } as never,
+      ),
+    );
+
+    // Now permission.ask sees a parked 'deny' verdict for 'c1' and tries
+    // to write `hookOutput.status = 'deny'` — on a null hookOutput that
+    // throws a TypeError. It must be swallowed, not leaked.
+    await hooks['permission.ask']!(
+      { id: 'p1', type: 'bash', sessionID: 's1', callID: 'c1' } as never,
+      null as never,
+    );
+  });
+
+  it('event swallows an internal throw from a broken meter provider (session.idle path)', async () => {
+    const explodingMeterProvider = {
+      getMeter() { throw new Error('boom'); },
+    };
+    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin({
+      tracerProvider: null,
+      meterProvider: explodingMeterProvider as never,
+    })(pluginInput as never);
+    await hooks.event!(
+      { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+    );
+  });
+
+  it('forwards the real callID as opts.toolCallId onto the span', async () => {
+    // genAiToolCallInputAttributes only sets `gen_ai.tool.call.id` when a
+    // toolCallId is actually passed through opts — pin that it is, and
+    // that it is the real opencode callID rather than a fallback.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'call-77' } as never,
+        { args: { command: 'ls' } } as never,
+      );
+      await hooks['tool.execute.after']!(
+        { tool: 'bash', sessionID: 's1', callID: 'call-77', args: { command: 'ls' } } as never,
+        { title: 'ls', output: 'ok', metadata: {} } as never,
+      );
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], 'call-77');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('session.idle reclaims a pending span for a tool that threw and skipped tool.execute.after', async () => {
+    // opencode-specific: when the tool itself throws, `tool.execute.after`
+    // never fires (Effect.gen short-circuits), so the pending span from
+    // tool.execute.before would leak forever without this safety net.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        { args: { command: 'rm -rf /tmp/x' } } as never,
+      );
+      assert.equal(tracer.finished().length, 0, 'nothing emitted while the tool is (hypothetically) running');
+
+      // tool.execute.after deliberately not called — simulates the tool
+      // throwing and opencode skipping the after-hook.
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+      );
+
+      // session.idle's onTurnEnd always emits a second "turn root" span
+      // (`invoke_agent ...`) alongside whatever pending spans it reclaims,
+      // so 2 total — the assertion that actually matters is that one of
+      // them is the reclaimed tool span (proving it didn't leak forever),
+      // not the exact count. Note: the shared runtime's defensive flush
+      // path (flushSessionTurn) does not drain pending_guard_attrs the
+      // way onPostTool's normal close does, so nio.guard.decision is not
+      // expected on a span reclaimed this way — that's a pre-existing
+      // characteristic of InProcessPluginRuntime, not something this
+      // binding controls.
+      const spans = tracer.finished();
+      assert.equal(spans.length, 2, 'the leaked pending span plus the turn root span');
+      const toolSpan = spans.find(s => s.name.startsWith('execute_tool'));
+      assert.ok(toolSpan, 'the leaked pending span must be reclaimed by session.idle');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('detects a sub-agent session via Session.parentID and parks its task span under the parent', async () => {
+    // If the binding used the sub-agent's own id instead of parentID,
+    // flushing the PARENT session below would find nothing pending.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks.event!({
+        event: { type: 'session.created', properties: { info: { id: 'sub-1', parentID: 'parent-1' } } },
+      } as never);
+      assert.equal(tracer.finished().length, 0, 'only a pending task span parked, nothing emitted yet');
+
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 'parent-1' } } } as never,
+      );
+
+      // Same shape as the reclaim test above: the turn root span always
+      // accompanies whatever gets flushed, so 2 total — the task span
+      // itself is the proof that onSubagentStart landed on parentID.
+      const spans = tracer.finished();
+      assert.equal(spans.length, 2, 'the sub-agent task span plus the turn root span');
+      assert.ok(
+        spans.some(s => s.name === 'task:execute'),
+        'task span for the sub-agent flushed under the parent session',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});

@@ -220,6 +220,18 @@ export class InProcessPluginRuntime {
     if (this.meterProvider) await recordTurn(this.meterProvider);
   }
 
+  /**
+   * Flush every session still holding state. Used by platforms whose
+   * shutdown signal is process-wide rather than per-session (opencode's
+   * `dispose` hook).
+   */
+  async disposeAllSessions(): Promise<void> {
+    for (const sessionId of [...this.sessionState.keys()]) {
+      await this.onSessionEnd(sessionId);
+    }
+    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+  }
+
   protected writeLifecycle(
     sessionId: string,
     lifecycleType: AuditLifecycleEntry['lifecycle_type'],
