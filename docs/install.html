@@ -3,8 +3,8 @@
 <meta charset="utf-8">
 <title>Install — Nio</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Nio (also known as nio-agent-guard) — execution-assurance and observability for autonomous AI agents. One curl-piped-shell command installs Nio on every supported agent CLI: Claude Code, Codex CLI, OpenClaw, and Hermes.">
-<meta name="keywords" content="nio, nio-agent-guard, agent-guard, ai agent security, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, codex cli, openclaw, hermes, hermes-agent, otel">
+<meta name="description" content="Nio (also known as nio-agent-guard) — execution-assurance and observability for autonomous AI agents. One curl-piped-shell command installs Nio on every supported agent CLI: Claude Code, Codex CLI, OpenClaw, Hermes, Pi, and opencode.">
+<meta name="keywords" content="nio, nio-agent-guard, agent-guard, ai agent security, llm agent safety, execution assurance, prompt injection defense, mcp security, runtime protection, agent observability, claude code, codex cli, openclaw, hermes, hermes-agent, pi, opencode, otel">
 <link rel="stylesheet" href="../assets/shared.css">
 <style>
   .code-block { position: relative; margin: 8px 0 16px; }
@@ -134,15 +134,23 @@
               <img src="../assets/logos/hermes.svg" width="14" height="14" alt="">
               Hermes
             </button>
+            <button type="button" class="tab-button" role="tab" data-tab="pi" aria-selected="false">
+              <img src="../assets/logos/pi.svg" width="14" height="14" alt="">
+              Pi
+            </button>
+            <button type="button" class="tab-button" role="tab" data-tab="opencode" aria-selected="false">
+              <img src="../assets/logos/opencode.svg" width="14" height="14" alt="">
+              opencode
+            </button>
           </div>
 
           <section class="tab-panel active" role="tabpanel" data-tab-panel="auto">
             <h3>Auto-detect (recommended)</h3>
             <ul class="prereq">
               <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
-              <li>At least one supported agent CLI installed (Claude Code, Codex, OpenClaw, or Hermes)</li>
+              <li>At least one supported agent CLI installed (Claude Code, Codex, OpenClaw, Hermes, Pi, or opencode)</li>
             </ul>
-            <p>The default mode. The installer scans <code>$HOME</code> for the four agent CLI directories — <code>.claude</code>, <code>.codex</code>, <code>.openclaw</code>, <code>.hermes</code> — and runs the matching per-platform setup for every one it finds.</p>
+            <p>The default mode. The installer scans <code>$HOME</code> for the six agent CLI directories — <code>.claude</code>, <code>.codex</code>, <code>.openclaw</code>, <code>.hermes</code>, <code>.pi/agent</code>, <code>.config/opencode</code> — and runs the matching per-platform setup for every one it finds. A directory only counts when the matching CLI (<code>claude</code>, <code>codex</code>, <code>openclaw</code>, <code>hermes</code>, <code>pi</code>, <code>opencode</code>) is also on <code>PATH</code>; anything skipped for that reason is named in the output.</p>
             <div class="code-block">
               <pre><code id="cmd-auto">curl -fsSL https://core0-io.github.io/nio/install.sh | bash</code></pre>
               <button class="copy-btn" type="button" data-target="cmd-auto" aria-label="Copy command">Copy</button>
@@ -262,6 +270,68 @@
               <p>Hermes refuses to fire unknown shell hooks until you consent. The interactive prompt at the end of <code>setup.sh</code> handles this — it reads from <code>/dev/tty</code>, so the prompt still fires under <code>curl &hellip; | bash</code>. For non-TTY runs (CI, Docker <code>-d</code>, systemd, <code>nohup</code> with <code>&lt;/dev/null</code>), pass <code>--accept-hooks</code> through the one-liner, or set <code>HERMES_ACCEPT_HOOKS=1</code> before running. The allowlist is keyed on the exact command string, so any path change (move, upgrade, new machine) requires re-approval.</p>
             </div>
           </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="pi">
+            <h3>Pi</h3>
+            <ul class="prereq">
+              <li>Pi coding agent installed; <code>pi</code> on <code>PATH</code> for the preferred install route</li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-pi">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform pi</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-pi" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>The release zip <em>is</em> a valid pi package, so <code>setup.sh</code> prefers <code>pi install &lt;dir&gt;</code> and lets Pi manage it with <code>pi update</code> / <code>pi remove</code>. With no <code>pi</code> on <code>PATH</code> it falls back to copying the bundle into <code>~/.pi/agent/extensions/nio/</code> and appending that path to the <code>extensions</code> array in <code>~/.pi/agent/settings.json</code>, plus the skills directory to <code>skills</code>. Moving from the fallback to the CLI route later strips only the entries Nio itself wrote. It exports <code>PI_CODING_AGENT_DIR</code> before shelling out, so <code>--pi-home</code> is honoured by the <code>pi</code> CLI too, and writes <code>~/.nio/config.yaml</code> from defaults.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li>Start a fresh <code>pi</code> session — extensions load at startup.</li>
+              <li><code>/nio config show</code> — the current protection level prints, with no LLM in the loop (<code>pi.registerCommand</code> hooks straight into slash dispatch).</li>
+              <li><code>/nio scan .</code>, then <code>/nio report</code>.</li>
+            </ol>
+            <p style="margin-top:.6rem">Each capability is also a <strong>focused skill</strong> — <code>nio-scan</code>, <code>nio-config</code>, <code>nio-external-score</code>, … — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
+            <div class="callout ok">
+              <div class="title">Interactive confirm works here</div>
+              <p>Pi is the only platform where a <strong>confirm</strong> verdict opens a real dialog (<code>ctx.ui.confirm</code>) instead of folding to <code>guard.confirm_action</code>. Answer the prompt and the span records the resolved decision (<code>confirm_allowed</code> / <code>confirm_denied</code>).</p>
+            </div>
+            <div class="callout warn">
+              <div class="title">Caveat — MCP and subagent spans</div>
+              <p>Pi core ships no MCP; the third-party <code>pi-mcp-adapter</code> package adds it and Nio gates those calls — run <code>/nio doctor</code> for the naming shapes and the one caveat (<code>toolPrefix: "none"</code> emits bare tool names Nio cannot identify as MCP). Pi also has no subagent concept, so it emits no <code>task:execute</code> spans; an empty task-span set is correct, not a dropped signal.</p>
+            </div>
+          </section>
+
+          <section class="tab-panel" role="tabpanel" data-tab-panel="opencode">
+            <h3>opencode</h3>
+            <ul class="prereq">
+              <li>opencode installed and <code>opencode</code> on <code>PATH</code></li>
+              <li>Node.js ≥ 18, <code>curl</code>, and <code>unzip</code> <em>or</em> <code>python3</code></li>
+            </ul>
+            <div class="code-block">
+              <pre><code id="cmd-ocode">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform opencode</code></pre>
+              <button class="copy-btn" type="button" data-target="cmd-ocode" aria-label="Copy command">Copy</button>
+            </div>
+            <h4>What setup.sh does</h4>
+            <p>Copies the bundled plugin to <code>~/.config/opencode/plugins/nio.js</code> (opencode globs that directory at startup), drops the <code>/nio</code> command definition at <code>~/.config/opencode/commands/nio.md</code>, mirrors the skills, and writes <code>~/.nio/config.yaml</code> from defaults. The config dir follows <code>$XDG_CONFIG_HOME/opencode</code> when set; override it with <code>--opencode-home</code>.</p>
+            <h4>Verify</h4>
+            <ol>
+              <li>Open a fresh opencode session so the plugin loads.</li>
+              <li><code>/nio config show</code> — the current protection level prints.</li>
+              <li><code>/nio scan .</code>, then <code>/nio report</code>.</li>
+            </ol>
+            <p style="margin-top:.6rem">Each capability is also a <strong>focused skill</strong> — <code>nio-scan</code>, <code>nio-config</code>, <code>nio-external-score</code>, … — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
+            <div class="callout warn">
+              <div class="title">Behaviour change — writes under the opencode config dir are denied</div>
+              <p>Any agent write under <code>~/.config/opencode/</code> is a <code>SENSITIVE_PATH</code> finding and is <strong>denied at <code>balanced</code></strong>, the default level — including benign-looking files like <code>AGENTS.md</code> and <code>agent/*.md</code>. The whole tree is covered because <code>plugins/</code> is an auto-load directory opencode executes at startup, so a write there is arbitrary code execution on the next launch. Same treatment as <code>.pi/</code> and <code>.openclaw/</code>. If you want the agent editing its own instruction files, move them out of the config dir or drop to <code>permissive</code>.</p>
+            </div>
+            <div class="callout warn">
+              <div class="title">Caveat — shared <code>plugins/</code> directory</div>
+              <p>Because that directory can hold other people's plugins, the installer writes the <code>{"type": "module"}</code> ESM sentinel <strong>only</strong> when no sibling plugin and no <code>package.json</code> already exist, and records a <code>.nio-esm-sentinel</code> marker so <code>--uninstall</code> removes only a sentinel Nio itself wrote. With siblings present the install warns and leaves the directory's module format untouched — declare ESM yourself if opencode then fails to load <code>nio.js</code>.</p>
+            </div>
+            <div class="callout warn">
+              <div class="title">Caveat — spans for tools that throw</div>
+              <p>opencode does not fire <code>tool.execute.after</code> when a tool throws, so that tool's span is <em>reclaimed</em> at <code>session.idle</code> instead of closed precisely. It carries the full <code>nio.guard.*</code> attribution and is tagged <code>nio.span.reclaimed=true</code>, but its end timestamp is the turn flush and it has no <code>gen_ai.tool.call.result</code>. Don't read span status as a tool success rate on opencode — filter on <code>nio.span.reclaimed</code> instead. Full detail in <a href="https://github.com/core0-io/nio/blob/main/docs/COLLECTOR-SIGNALS.md">COLLECTOR-SIGNALS.md</a>.</p>
+            </div>
+          </section>
         </div>
 
         <h2>After install</h2>
@@ -306,15 +376,19 @@
         <p>Removes Nio from every detected agent CLI. Add <code>--platform NAME</code> to limit scope.</p>
 
         <h2>Custom install paths</h2>
-        <p>If you've moved an agent CLI's home directory (via <code>CLAUDE_CONFIG_DIR</code>, <code>CODEX_HOME</code>, <code>OPENCLAW_STATE_DIR</code>, or manually), thread the override past the installer's <code>bash -s --</code> boundary — everything after <code>--</code> forwards to the matching <code>setup.sh</code>:</p>
+        <p>If you've moved an agent CLI's home directory (via <code>CLAUDE_CONFIG_DIR</code>, <code>CODEX_HOME</code>, <code>OPENCLAW_STATE_DIR</code>, <code>PI_CODING_AGENT_DIR</code>, <code>XDG_CONFIG_HOME</code>, or manually), thread the override past the installer's <code>bash -s --</code> boundary — everything after <code>--</code> forwards to the matching <code>setup.sh</code>:</p>
         <div class="code-block">
           <pre><code id="cmd-cust">curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --platform claude-code --cc-home /path/to/.claude</code></pre>
           <button class="copy-btn" type="button" data-target="cmd-cust" aria-label="Copy command">Copy</button>
         </div>
-        <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>, <code>--config &lt;path&gt;</code>, <code>--reset-to-defaults</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>). See <a href="#shared-config">Onboarding with a shared config</a> above for what <code>--config</code> does.</p>
+        <p>Available flags: <code>--cc-home</code>, <code>--codex-home</code>, <code>--openclaw-home</code>, <code>--hermes-home</code>, <code>--pi-home</code>, <code>--opencode-home</code>, <code>--config &lt;path&gt;</code>, <code>--reset-to-defaults</code>. Resolution order in each platform's <code>setup.sh</code>: flag &gt; env var &gt; default (<code>$HOME/.&lt;plat&gt;</code>). See <a href="#shared-config">Onboarding with a shared config</a> above for what <code>--config</code> does.</p>
 
         <h2>Manual install or from source</h2>
         <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, extract it (<code>unzip</code>, or <code>python3 -m zipfile -e</code> if <code>unzip</code> isn't installed), then <code>cd</code> into the directory and run <code>./setup.sh</code> — or <code>./setup.sh --config /path/to/nio.yaml</code> to apply an operator-provided config in the same step (doctor-gated). To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#development">Development</a> section in the README.</p>
+        <div class="callout">
+          <div class="title"><code>./setup.sh</code> auto-detects more loosely than <code>install.sh</code></div>
+          <p>The two use deliberately different rules. The curl one-liner (<code>install.sh</code>) needs <em>both</em> the config directory and the CLI on <code>PATH</code>; a dir-only match is skipped with a notice, and you force it with <code>--platform NAME</code>. The top-level <code>./setup.sh</code> in a checkout or unzipped release needs only the <em>config directory</em> — it installs even when the CLI isn't on <code>PATH</code> (it just prints the same notice), and any explicit <code>--&lt;platform&gt;-home</code> flag always wins. The reasoning: <code>install.sh</code> runs unattended against a machine it knows nothing about, so it errs toward doing nothing; <code>./setup.sh</code> is run deliberately, and the stricter rule would refuse to install for people whose CLI lives behind an alias, a wrapper, or a not-yet-sourced <code>~/.profile</code>. Neither script ever creates a config directory speculatively, so an unrelated binary on <code>PATH</code> can't trigger an install on its own.</p>
+        </div>
 
       </div>
 
@@ -341,7 +415,7 @@
 <script src="../assets/shared.js"></script>
 <script>
 (() => {
-  const VALID = new Set(['auto', 'claude-code', 'codex', 'openclaw', 'hermes']);
+  const VALID = new Set(['auto', 'claude-code', 'codex', 'openclaw', 'hermes', 'pi', 'opencode']);
 
   function activate(id) {
     if (!VALID.has(id)) id = 'auto';

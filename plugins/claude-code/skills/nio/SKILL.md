@@ -45,9 +45,9 @@ Parse `$ARGUMENTS` to determine the subcommand:
 
 If no subcommand is given, or the first argument is a path, default to **scan**.
 
-### Focused skills (Claude Code & Codex)
+### Focused skills (Claude Code, Codex, Pi & opencode)
 
-On Claude Code and Codex, each capability is **also** exposed as a focused standalone skill for sharper natural-language discovery and direct invocation. Prefer these when the user's intent is unambiguous; this unified `/nio` remains the umbrella entry point and full reference.
+On Claude Code, Codex, Pi, and opencode, each capability is **also** exposed as a focused standalone skill for sharper natural-language discovery and direct invocation. Prefer these when the user's intent is unambiguous; this unified `/nio` remains the umbrella entry point and full reference.
 
 | Focused skill | Capability | Equivalent here |
 |---------------|------------|-----------------|
@@ -59,7 +59,7 @@ On Claude Code and Codex, each capability is **also** exposed as a focused stand
 | `nio-external-score` | Snapshot external scoring-endpoint scores | `external-score` |
 | `nio-monitor` | Turn telemetry capture on/off for this session | `monitor` |
 
-(These focused skills exist only on Claude Code and Codex. On OpenClaw and Hermes there is no `nio-*` skill — use the `/nio <subcommand>` form documented below.)
+(These focused skills exist only on Claude Code, Codex, Pi, and opencode. On OpenClaw and Hermes there is no `nio-*` skill — use the `/nio <subcommand>` form documented below.)
 
 ### Natural-language routing
 
@@ -246,7 +246,10 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
     "mcp_servers": {},
     "native_tool_mapping": {
       "claude_code": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" },
-      "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" }
+      "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" },
+      "codex": { "Bash": "exec_command" },
+      "pi": { "bash": "exec_command", "write": "write_file", "edit": "write_file", "read": "read_file" },
+      "opencode": { "bash": "exec_command", "write": "write_file", "edit": "write_file", "apply_patch": "write_file", "read": "read_file", "webfetch": "network_request", "websearch": "network_request" }
     },
     "scoring_weights": {}
   },
@@ -299,7 +302,7 @@ Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry
 Anything else (wrong field name, nested score, score as a string, JSON array, non-JSON body) is rejected with an `external_analyser / response_invalid` diagnostic that includes a preview of what was actually returned. nio does **not** support custom field names or nested paths — wrap non-conformant services with a thin adapter on your side. Run `/nio doctor` to verify your endpoint conforms before triggering a hook.
 
 | `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
-| `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
+| `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `codex`, `openclaw`, `hermes`, `pi`, `opencode`) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
 | `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |
 | `guard.mcp_servers` | object | `{}` | Manual MCP server registry. Keyed by server name; each value lists the URLs / sockets / binaries / CLI packages that identify the server, so indirect-invocation detectors can route a shell command back to a server name and re-apply `permitted_tools.mcp` / `blocked_tools.mcp`. Auto-discovered servers from `~/.claude.json` etc. don't need to be declared here. |
 | `guard.native_tool_mapping` | object | *(see above)* | Native tool → action type mapping, per platform. Classification table (NOT a third allow/deny list) that decides which Phase 1-6 rule set runs for each platform-native tool. Tools absent from the map skip Phase 1-6 (auto-allow, log only). MCP tools are dynamic and not categorised here. |
@@ -336,7 +339,9 @@ direct MCP tool calls *and* indirect ones routed through Bash content
 (mcporter, curl/wget/httpie, language-runtime one-liners, stdio pipes,
 package runners, …) by mapping each channel back to a registered server
 via the MCP endpoint registry (auto-discovered from Claude Code, Claude
-Desktop, Hermes, OpenClaw configs). The full capture model — 16 unwrap
+Desktop, Hermes, OpenClaw, opencode, and Pi configs — for Pi, the
+`pi-mcp-adapter` server map at `$PI_CODING_AGENT_DIR/mcp.json`, else
+`~/.pi/agent/mcp.json`). The full capture model — 16 unwrap
 stages + 16 detectors + the registry — is documented at
 [Phase 0 — Tool Gate · MCP Tool Routing](../../../../docs/phases/phase-0-tool-gate.html#mcp-routing).
 
@@ -384,10 +389,16 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 {"event":"session_scan","timestamp":"...","platform":"claude-code","skill_name":"some-skill","risk_level":"high","risk_tags":["SHELL_EXEC"],"finding_count":3}
 ```
 
-**Lifecycle entry** (`event: "lifecycle"`) — subagent/agent lifecycle (OpenClaw only):
+**Lifecycle entry** (`event: "lifecycle"`) — subagent / agent / session lifecycle (the in-process platforms: OpenClaw, Pi, opencode):
 
 ```json
 {"event":"lifecycle","timestamp":"...","platform":"openclaw","session_id":"...","lifecycle_type":"subagent_spawning"}
+```
+
+`lifecycle_type` is one of `subagent_spawning` / `subagent_ended` / `agent_end` / `session_start` / `session_end` / `user_bash`. **Pi emits no subagent lifecycle entries** (Pi has no subagent concept), but it is the only platform that emits `user_bash` — an audit-only record of a shell command the *human* typed, which is never guarded and never blocked:
+
+```json
+{"event":"lifecycle","timestamp":"...","platform":"pi","session_id":"...","lifecycle_type":"user_bash","details":{"command":"ls -la","cwd":"/tmp","actor":"user"}}
 ```
 
 **Diagnostic entry** (`event: "diagnostic"`) — config / OAuth / LLM / external / collector / scanner failure:

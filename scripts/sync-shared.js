@@ -26,6 +26,8 @@ const SKILL_PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'claude-code'),
   join(ROOT, 'plugins', 'openclaw'),
   join(ROOT, 'plugins', 'codex'),
+  join(ROOT, 'plugins', 'pi'),
+  join(ROOT, 'plugins', 'opencode'),
 ];
 
 // Plugins that don't install as a skill (hermes — runs via shell-hook
@@ -66,15 +68,15 @@ for (const dir of SKILL_PLUGIN_DIRS) {
 
 // Focused per-capability skills (nio-scan, nio-action, nio-report, nio-config,
 // nio-doctor, nio-external-score) live under plugins/shared/skills/<name>/ and
-// are already self-contained (nio-scan ships its SCAN-RULES.md, nio-action its
-// ACTION-POLICIES.md). They are LLM-driven and only meaningful on the platforms
-// whose /nio is dispatched by the model reading SKILL.md + running bundled
-// scripts: Claude Code and Codex. OpenClaw (tool-dispatch via the single
-// nio_command tool) and Hermes (nio-cli.js) keep using the unified /nio, so we
-// deliberately do NOT sync the focused skills there.
+// are synced to every platform that implements the Agent Skills standard with
+// natural-language discovery: Claude Code, Codex, Pi, and opencode. OpenClaw
+// (tool-dispatch via the single nio_command tool) and Hermes (nio-cli.js) keep
+// using the unified /nio, so we deliberately do NOT sync the focused skills there.
 const FOCUSED_SKILL_PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'claude-code'),
   join(ROOT, 'plugins', 'codex'),
+  join(ROOT, 'plugins', 'pi'),
+  join(ROOT, 'plugins', 'opencode'),
 ];
 
 for (const dir of FOCUSED_SKILL_PLUGIN_DIRS) {

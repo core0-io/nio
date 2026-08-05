@@ -1,0 +1,271 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Nio — Pi extension.
+ *
+ * Pi loads extensions through jiti from ~/.pi/agent/extensions/ or from
+ * an installed pi package. The default export is the factory Pi calls
+ * with its ExtensionAPI.
+ *
+ * Pi's types are declared structurally below rather than imported from
+ * @earendil-works/pi-coding-agent, so the shipped bundle has zero
+ * external runtime dependencies and keeps working across minor Pi
+ * releases. Pi's runtime helpers (isToolCallEventType,
+ * createLocalBashOperations) are deliberately not used for the same
+ * reason — plain string comparison is enough.
+ */
+
+import { existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { loadConfig } from './common.js';
+import { PiAdapter } from './pi.js';
+import { InProcessPluginRuntime } from './plugin-runtime.js';
+import type { NioInstance } from './types.js';
+import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
+import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+
+// ---------------------------------------------------------------------------
+// Structural subset of Pi's extension API
+// ---------------------------------------------------------------------------
+
+interface PiUi {
+  confirm(title: string, message: string, opts?: { timeout?: number }): Promise<boolean>;
+  notify(message: string, level?: 'info' | 'warning' | 'error'): void;
+}
+
+interface PiContext {
+  hasUI: boolean;
+  cwd: string;
+  ui: PiUi;
+  sessionManager: { getSessionId(): string };
+}
+
+export interface PiExtensionApi {
+  on(event: string, handler: (event: unknown, ctx: unknown) => Promise<unknown> | unknown): void;
+  registerCommand(
+    name: string,
+    options: {
+      description: string;
+      handler: (args: string, ctx: unknown) => Promise<void> | void;
+    },
+  ): void;
+}
+
+export interface PiPluginOptions {
+  level?: string;
+  /**
+   * Override `guard.confirm_action` for this registration. Lets a test
+   * reach the `decision === 'ask'` branch without writing a scratch
+   * config.yaml.
+   */
+  confirmAction?: 'allow' | 'deny' | 'ask';
+  nioFactory?: () => NioInstance;
+  /**
+   * Test seam: inject pre-built OTEL providers instead of deriving them
+   * from collector config. `undefined` builds from config (production);
+   * `null` disables. Mirrors PluginRuntimeOptions / OpenClawPluginOptions
+   * so the traced paths (pending-span park/drain, orphan-span emission on
+   * the block path, confirm-dialog span resolution) can actually run in
+   * a test instead of being skipped because `collector.endpoint` is
+   * unset under the test harness.
+   *
+   * Not part of the original task brief's PiPluginOptions shape — added
+   * because this binding constructs its own InProcessPluginRuntime, so
+   * without threading these through there would be no way for a test to
+   * inject `makeInMemoryTracer()`.
+   */
+  tracerProvider?: ReturnType<typeof createTracerProvider>;
+  meterProvider?: ReturnType<typeof createMeterProvider>;
+}
+
+/** How long an interactive confirm dialog waits before auto-cancelling. */
+const CONFIRM_TIMEOUT_MS = 60_000;
+
+export function registerPiExtension(
+  pi: PiExtensionApi,
+  options: PiPluginOptions = {},
+): void {
+  const config = loadConfig();
+  const adapter = new PiAdapter({
+    nativeToolMapping: config.guard?.native_tool_mapping?.pi,
+  });
+  const rt = new InProcessPluginRuntime({
+    platform: 'pi',
+    adapter,
+    level: options.level,
+    confirmAction: options.confirmAction,
+    nioFactory: options.nioFactory,
+    tracerProvider: options.tracerProvider,
+    meterProvider: options.meterProvider,
+  });
+
+  const sid = (ctx: unknown): string =>
+    (ctx as PiContext).sessionManager.getSessionId();
+
+  // ---- Guard: tool_call can block -----------------------------------------
+  pi.on('tool_call', async (event: unknown, ctx: unknown) => {
+    // Set the moment we learn the action must not run — either the guard
+    // denied it, or the human declined the confirmation dialog. Declared
+    // OUTSIDE the try on purpose: failing open is right for a Nio internal
+    // error, but it must never turn a refusal we already hold into a green
+    // light. Telemetry work happens after the answer is known, so without
+    // this a throw in resolveConfirm would run a tool the user just refused.
+    let denial: { block: true; reason?: string } | null = null;
+    try {
+      const e = event as {
+        toolName?: string; toolCallId?: string; input?: Record<string, unknown>;
+      };
+      const c = ctx as PiContext;
+      const toolName = e.toolName || 'unknown';
+      const spanKey = e.toolCallId || toolName;
+      const sessionId = sid(ctx);
+      const params = e.input ?? {};
+
+      const r = await rt.onPreTool(sessionId, spanKey, toolName, params, {
+        ...e, sessionId, cwd: c.cwd,
+      }, { toolCallId: e.toolCallId });
+
+      if (r.block) {
+        denial = { block: true, reason: r.reason };
+        return denial;
+      }
+
+      // Provisional 'ask' means guard.confirm_action === 'ask'. Pi is the
+      // only platform with a real user channel, so actually ask.
+      if (r.decision === 'ask') {
+        if (!c.hasUI) {
+          // Print / json mode: no channel to ask through. Resolve the
+          // provisional attrs to confirm_allowed and let it run, matching
+          // the two-state fold every other platform uses. resolveConfirm
+          // with `true` cannot block, so there is nothing to branch on.
+          await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, true);
+          return undefined;
+        }
+        const ok = await c.ui.confirm(
+          'Nio: confirm this action?',
+          r.reason || 'This action was flagged as risky.',
+          { timeout: CONFIRM_TIMEOUT_MS },
+        );
+        // Pi's confirm() returns false on timeout (documented in
+        // extensions.md), so an absent human reads as a refusal instead of
+        // hanging the agent forever.
+        if (!ok) {
+          denial = { block: true, reason: r.reason || 'Denied by user (Nio)' };
+        }
+        const resolved = await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, ok);
+        if (resolved.block) return { block: true, reason: resolved.reason };
+        if (denial) return denial;
+      }
+
+      return undefined;
+    } catch {
+      // Fail open on a Nio failure — but honour a refusal already given.
+      return denial ?? undefined;
+    }
+  });
+
+  // ---- Collector ----------------------------------------------------------
+  pi.on('tool_result', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as {
+        toolName?: string; toolCallId?: string; content?: unknown; isError?: boolean;
+      };
+      const toolName = e.toolName || 'unknown';
+      await rt.onPostTool(sid(ctx), e.toolCallId || toolName, toolName, {
+        result: e.content,
+        error: e.isError ? 'tool reported an error' : null,
+      });
+    } catch { /* non-critical */ }
+  });
+
+  pi.on('input', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as { text?: string };
+      if (e.text) rt.onUserPrompt(sid(ctx), e.text);
+    } catch { /* non-critical */ }
+    return { action: 'continue' };
+  });
+
+  pi.on('message_end', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as {
+        message?: {
+          role?: string;
+          content?: unknown;
+          usage?: {
+            input?: number; output?: number;
+            cacheRead?: number; cacheWrite?: number;
+          };
+        };
+      };
+      if (e.message?.role !== 'assistant') return;
+      const sessionId = sid(ctx);
+      if (e.message.usage) rt.onLlmUsage(sessionId, e.message.usage);
+      if (typeof e.message.content === 'string') {
+        rt.onAssistantReply(sessionId, e.message.content);
+      }
+    } catch { /* non-critical */ }
+  });
+
+  pi.on('session_start', async (_event: unknown, ctx: unknown) => {
+    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+  });
+
+  pi.on('session_shutdown', async (_event: unknown, ctx: unknown) => {
+    try { await rt.onSessionEnd(sid(ctx)); } catch { /* non-critical */ }
+  });
+
+  pi.on('agent_end', async (_event: unknown, ctx: unknown) => {
+    try {
+      const sessionId = sid(ctx);
+      await rt.onTurnEnd(sessionId);
+      await rt.recordTurnMetric();
+    } catch { /* non-critical */ }
+  });
+
+  // Audit-only. Nio guards agent actions, not human keystrokes, so a
+  // command the user typed themselves is never blocked. Returning
+  // undefined leaves Pi's built-in bash backend in charge.
+  pi.on('user_bash', async (event: unknown, ctx: unknown) => {
+    try {
+      const e = event as { command?: string; cwd?: string };
+      rt.onUserBash(sid(ctx), e.command || '', e.cwd || '');
+    } catch { /* non-critical */ }
+    return undefined;
+  });
+
+  // Contribute our skill directory so the skills load regardless of how the
+  // extension was installed. `pi install` registers them through the package
+  // manifest and the CLI-less fallback registers them in settings.json, but
+  // this makes the extension self-sufficient either way. Resolved relative to
+  // the extension file, so it follows the bundle wherever it lands.
+  pi.on('resources_discover', async () => {
+    try {
+      const here = dirname(fileURLToPath(import.meta.url));
+      // Bundle sits at <root>/extensions/nio/index.js; skills at <root>/skills.
+      const skills = join(here, '..', '..', 'skills');
+      return existsSync(skills) ? { skillPaths: [skills] } : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // ---- /nio slash command (bypasses the LLM entirely) ---------------------
+  pi.registerCommand('nio', {
+    description: 'Nio — scan code, evaluate an action, read the audit report, manage config',
+    handler: async (args: string, ctx: unknown) => {
+      const text = await rt.dispatchCommand(args ?? '');
+      try {
+        (ctx as PiContext).ui.notify(text, 'info');
+      } catch {
+        console.log(text);
+      }
+    },
+  });
+}
+
+export default function (pi: PiExtensionApi): void {
+  registerPiExtension(pi);
+}

@@ -267,6 +267,8 @@ guard:
     openclaw: []
     hermes: []
     codex: []
+    pi: []
+    opencode: []
     mcp: []
   # Listed tools are unconditionally blocked.
   blocked_tools:
@@ -274,6 +276,8 @@ guard:
     openclaw: []
     hermes: []
     codex: []
+    pi: []
+    opencode: []
     mcp: []
 
   # Manual additions to the MCP server registry, for SaaS or otherwise
@@ -337,6 +341,28 @@ guard:
       # exec_command. Plugin- and MCP-provided tools (Write, Edit, etc.)
       # are dynamic and handled separately.
       Bash: exec_command
+    pi:
+      # Pi core ships bash/read/write/edit/ls/find/grep and has no
+      # network tool; network access flows through bash and is caught
+      # by the Phase 1-6 command analysis. ls/find/grep are deliberately
+      # unmapped (directory metadata reads, not file content reads).
+      bash: exec_command
+      write: write_file
+      edit: write_file
+      read: read_file
+    opencode:
+      # opencode ships read/write/edit/apply_patch/glob/grep/list/bash/
+      # task/todowrite/todoread/webfetch/websearch/lsp/skill/question.
+      # glob/grep/list/todo*/lsp/skill/question are deliberately unmapped
+      # (navigation and bookkeeping, not effects on the world); task is a
+      # sub-agent concern, not an action.
+      bash: exec_command
+      write: write_file
+      edit: write_file
+      apply_patch: write_file
+      read: read_file
+      webfetch: network_request
+      websearch: network_request
 
   # Phase scoring weights for weighted score aggregation.
   #   final_score = Σ(wi × si) / Σ(wi)  (only phases that ran)

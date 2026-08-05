@@ -109,7 +109,8 @@ export interface AuditLifecycleEntry {
     | 'subagent_ended'
     | 'agent_end'
     | 'session_start'
-    | 'session_end';
+    | 'session_end'
+    | 'user_bash';
   details?: Record<string, unknown>;
 }
 

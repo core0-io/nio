@@ -23,7 +23,8 @@ import { load as yamlLoad } from 'js-yaml';
 import { loadConfig } from './common.js';
 import type { NioConfig } from './config-schema.js';
 
-export type MCPSource = 'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'manual';
+export type MCPSource =
+  'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'opencode' | 'pi' | 'manual';
 
 export interface MCPServerEntry {
   serverName: string;
@@ -102,7 +103,70 @@ function discoverSources(home: string): SourceDescriptor[] {
     parse: (data) => extractFromMcpServers(data, ['mcp', 'servers']),
   });
 
+  // Known coverage gap, symmetric with the Pi note below: opencode also
+  // reads a PROJECT-level `opencode.json` (and `.opencode/opencode.json`)
+  // from the working directory upward, which `discoverSources` cannot see
+  // because it is home-scoped. Servers declared only there yield zero
+  // entries here. Unlike Pi, opencode's anonymous tier does not rescue
+  // them: `parseMcpToolName`'s opencode branch bails on
+  // `knownServers.length === 0`, so those flattened `<server>_<tool>`
+  // names stay UNCATEGORIZED_TOOL and `permitted_tools.mcp` allowlist
+  // mode never applies to them. Not fixed here because making the
+  // registry cwd-aware would change its cache key and its contract for
+  // every platform.
+  const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
+  sources.push({
+    path: join(ocRoot, 'opencode', 'opencode.json'),
+    source: 'opencode',
+    format: 'json',
+    parse: (data) => extractFromMcpServers(data, ['mcp']),
+  });
+
+  // Pi core has no MCP. The third-party `pi-mcp-adapter` package adds it
+  // and reads its server map from `$PI_CODING_AGENT_DIR/mcp.json`, else
+  // `~/.pi/agent/mcp.json` (pi-mcp-adapter config.ts:159-161,382-390;
+  // agent-dir.ts:4-16). Key is `mcpServers` with a `mcp-servers` fallback
+  // (config.ts:606).
+  //
+  // Deliberately NOT registered here: the adapter also probes
+  // `~/.config/mcp/mcp.json` and `~/.agents/mcp{,/mcp}.json`, which are
+  // cross-agent conventions rather than Pi-owned files — claiming them as
+  // `source: 'pi'` would put false provenance into diagnostics. Its two
+  // project-relative probes (`<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`) are
+  // out of reach because `discoverSources` is home-scoped. Servers
+  // declared only in those five files are a known coverage gap: their
+  // tools reach the anonymous fallback tier and are gateable by full name.
+  //
+  // Also a known gap: this source is parsed with strict `JSON.parse`
+  // (below, via loadFromSource / desc.format: 'json'), same as every
+  // other source in this file, while pi-mcp-adapter's own loader tolerates
+  // comments and trailing commas (JSONC). A `~/.pi/agent/mcp.json` using
+  // either therefore yields zero `pi` registry entries here — its direct-
+  // tool names (`<server>_<tool>`) then have no server to attribute
+  // against and regress to `UNCATEGORIZED_TOOL` rather than being gated.
+  // Not fixed: adding a JSONC parser for one source only would be
+  // inconsistent with the rest of this file, and a strict-parse failure
+  // already fails open (zero entries, no throw) rather than blocking.
+  const piAgentDir = process.env.PI_CODING_AGENT_DIR
+    ? expandHome(process.env.PI_CODING_AGENT_DIR, home)
+    : join(home, '.pi', 'agent');
+  sources.push({
+    path: join(piAgentDir, 'mcp.json'),
+    source: 'pi',
+    format: 'json',
+    parse: (data) =>
+      extractFromMcpServers(data, ['mcpServers'])
+      ?? extractFromMcpServers(data, ['mcp-servers']),
+  });
+
   return sources;
+}
+
+/** Expand a leading `~` the way pi-mcp-adapter's agent-dir.ts does. */
+function expandHome(p: string, home: string): string {
+  if (p === '~') return home;
+  if (p.startsWith('~/')) return join(home, p.slice(2));
+  return p;
 }
 
 function extractFromMcpServers(data: unknown, path: string[]): Record<string, unknown> | null {
@@ -125,17 +189,25 @@ const PACKAGE_RUNNERS = new Set([
 
 /**
  * Parse one server config block (Claude / Claude Desktop / Hermes / OpenClaw
- * all share the same shape: a record under their respective key).
+ * / opencode all share roughly the same shape: a record under their
+ * respective key).
  *
  * Supported fields:
  *  - `url` / `endpoint` → urls (with `unix:/path` rerouted to sockets)
  *  - `socket` → sockets
  *  - `command` → binaries (basename) or, when it's a package runner,
  *    `args[0]` becomes a cliPackage and the runner itself is recorded as a
- *    binary
+ *    binary. opencode passes the whole argv as an array (`command`); every
+ *    other source passes a command string plus a separate `args` array —
+ *    both forms are normalised to (command, args).
  *  - `args` → for package runners, scan for the package name
+ *  - `enabled: false` (opencode) → server contributes no entry (`null`)
  */
-function parseServerBlock(serverName: string, block: unknown, source: MCPSource): MCPServerEntry {
+function parseServerBlock(
+  serverName: string,
+  block: unknown,
+  source: MCPSource,
+): MCPServerEntry | null {
   const entry: MCPServerEntry = {
     serverName,
     urls: [],
@@ -147,6 +219,10 @@ function parseServerBlock(serverName: string, block: unknown, source: MCPSource)
 
   if (!block || typeof block !== 'object') return entry;
   const b = block as Record<string, unknown>;
+
+  // opencode marks servers it should not start with `enabled: false`.
+  // A disabled server contributes no reachable handles.
+  if (b['enabled'] === false) return null;
 
   // url / endpoint → urls or sockets (unix: prefix)
   for (const key of ['url', 'endpoint']) {
@@ -168,9 +244,13 @@ function parseServerBlock(serverName: string, block: unknown, source: MCPSource)
     for (const s of socks) if (typeof s === 'string') entry.sockets.push(s);
   }
 
-  // command → binaries / cliPackages depending on whether it's a runner
-  const cmd = b['command'];
-  const args = b['args'];
+  // command → binaries / cliPackages depending on whether it's a runner.
+  // opencode passes the whole argv as an array; every other source passes
+  // a command string plus a separate `args` array. Normalise both to
+  // (command, args).
+  const rawCmd = b['command'];
+  const cmd = Array.isArray(rawCmd) ? rawCmd[0] : rawCmd;
+  const args = Array.isArray(rawCmd) ? rawCmd.slice(1) : b['args'];
   if (typeof cmd === 'string' && cmd.length > 0) {
     const cmdBase = basename(cmd);
     entry.binaries.push(cmdBase);
@@ -249,7 +329,8 @@ function loadFromSource(desc: SourceDescriptor): MCPServerEntry[] {
   const entries: MCPServerEntry[] = [];
   for (const [name, block] of Object.entries(servers)) {
     if (!name) continue;
-    entries.push(parseServerBlock(name, block, desc.source));
+    const entry = parseServerBlock(name, block, desc.source);
+    if (entry) entries.push(entry);
   }
   sourceCache.set(desc.path, { mtimeMs, entries });
   return entries;

@@ -202,6 +202,36 @@ export function nioGuardAttributes(
   };
 }
 
+/**
+ * Marker attrs for a *reclaimed* tool span — one closed by the turn
+ * flush because the host never delivered a post-side event for it.
+ *
+ * The canonical case is opencode: `tool.execute.after` does not fire
+ * when a tool throws, so `session.idle` → `flushSessionTurn` is what
+ * closes the span. At that moment the tool's real outcome is unknown:
+ * marking the span ERROR would be as much of a lie as leaving it
+ * indistinguishable from a success.
+ *
+ * The OTel status field cannot carry this. `UNSET` is already the status
+ * a *successfully* closed Nio tool span gets (nothing ever calls
+ * `setStatus(OK)`), and the SDK drops the `message` on a non-ERROR
+ * status — verified against @opentelemetry/sdk-trace-node in this repo:
+ * `setStatus({ code: UNSET, message: 'x' })` exports as `{ code: 0 }`.
+ * So "outcome unknown" is expressed as explicit `nio.*` attributes,
+ * which is also why this does not collide with any `gen_ai.*` key.
+ *
+ * A reclaimed span is still degraded in two ways that no attribute can
+ * repair: its end timestamp is the turn flush rather than the tool's
+ * real finish, and it carries no `gen_ai.tool.call.result`. The absence
+ * of that result attribute is itself a second signal of the same fact.
+ */
+export function nioReclaimedSpanAttributes(): Record<string, unknown> {
+  return {
+    'nio.span.reclaimed': true,
+    'nio.span.reclaim_reason': 'no_post_tool_event',
+  };
+}
+
 /** Token usage attrs (turn span). Absolute values; missing fields default to 0. */
 export function genAiUsageAttributes(usage: {
   input?: number;

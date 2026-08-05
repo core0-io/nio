@@ -14,6 +14,8 @@ import {
 } from './mcp-route-detect/index.js';
 import { loadMCPRegistry } from './mcp-registry.js';
 import { isNioSelfInvocation } from './self-invocation.js';
+import { OPENCODE_BUILTIN_TOOLS } from './opencode.js';
+import { PI_BUILTIN_TOOLS } from './pi.js';
 
 function policyHookReason(
   explanation: string,
@@ -109,8 +111,19 @@ export interface ParsedMcpToolName {
  * - Claude Code and Codex expose MCP tools as `mcp__<server>__<tool>`.
  * - OpenClaw exposes MCP tools as `<safeServerName>__<tool>` (native tools
  *   never contain `__`, so the separator is a reliable marker).
+ * - opencode flattens MCP tools as `<sanitize(server)>_<sanitize(tool)>`
+ *   with no fixed delimiter; `knownServers` (registry server names) is
+ *   used for longest-prefix attribution, falling back to the full name.
+ * - Pi core has no MCP; the third-party `pi-mcp-adapter` package supplies
+ *   it via a proxy tool `mcp` (target read from `toolInput`) or, opt-in,
+ *   direct tools named `<server>_<tool>` / `mcp__<server>_<tool>`.
  */
-export function parseMcpToolName(toolName: string, platform: string): ParsedMcpToolName {
+export function parseMcpToolName(
+  toolName: string,
+  platform: string,
+  knownServers?: readonly string[],
+  toolInput?: Record<string, unknown>,
+): ParsedMcpToolName {
   const name = toolName ?? '';
 
   if ((platform === 'claude-code' || platform === 'codex') && name.startsWith('mcp__')) {
@@ -140,6 +153,108 @@ export function parseMcpToolName(toolName: string, platform: string): ParsedMcpT
       return { isMcp: true, local: name };
     }
     return { isMcp: false };
+  }
+
+  // Pi core has no MCP; the third-party `pi-mcp-adapter` package supplies
+  // it, in two shapes (verified against pi-mcp-adapter@2.20.1):
+  //
+  //   1. DEFAULT — one proxy tool literally named `mcp`, carrying the
+  //      target in `tool` and optionally the server in `server`
+  //      (index.ts:669-695). The tool NAME alone says nothing, so this is
+  //      the one branch that has to read `toolInput`.
+  //   2. OPT-IN `directTools: true` — one Pi tool per MCP tool, named
+  //      `<server>_<tool>` (default `toolPrefix: "server"`, also `"short"`)
+  //      or `mcp__<server>_<tool>` (`toolPrefix: "mcp"`), types.ts:626-651.
+  //
+  // `toolPrefix: "none"` emits the bare tool name, which is byte-identical
+  // to a native tool call. It is NOT detectable and we do not guess —
+  // those calls stay uncategorised, and the doctor note says so.
+  if (platform === 'pi') {
+    if (name === 'mcp') {
+      const target = typeof toolInput?.tool === 'string' ? toolInput.tool.trim() : '';
+      const server = typeof toolInput?.server === 'string' ? toolInput.server.trim() : '';
+      if (target) return { isMcp: true, server: server || undefined, local: target };
+      // `connect` / `describe` / `search` / `action` modes carry no target.
+      // Still MCP surface, but there is no tool to attribute, so follow the
+      // Hermes anonymous convention: gate it by the name the user sees.
+      return { isMcp: true, local: name };
+    }
+
+    if (PI_BUILTIN_TOOLS.has(name)) return { isMcp: false };
+
+    // toolPrefix: "mcp" → `mcp__<server>_<tool>`.
+    const body = name.startsWith('mcp__') ? name.slice(5) : name;
+    if (!body.includes('_')) return { isMcp: false };
+
+    // An absent/empty registry is NOT an early return: it only means
+    // nothing can be *attributed*, so attribution is skipped and the
+    // anonymous tier below still gets its chance.
+    const matches = (knownServers ?? [])
+      .filter(s => body.startsWith(`${s}_`) && body.length > s.length + 1)
+      .sort((a, b) => b.length - a.length);
+
+    if (matches.length > 0) {
+      const server = matches[0]!;
+      return { isMcp: true, server, local: body.slice(server.length + 1) };
+    }
+    // Only the explicitly-prefixed form is safe to claim anonymously: a
+    // bare `<something>_<something>` we cannot attribute is far more
+    // likely to be an unmapped native tool than an MCP call.
+    //
+    // This check must stay reachable with an EMPTY registry — it used to
+    // sit behind a `knownServers.length === 0` early return, which made
+    // it dead code for exactly the users who need it most.
+    // pi-mcp-adapter reads its server map from five probe paths that
+    // mcp-registry.ts deliberately does not register as `source: 'pi'`
+    // (`~/.config/mcp/mcp.json`, `~/.agents/**`, project-relative ones).
+    // A user on one of those has an EMPTY registry, and that file's own
+    // comment promises such servers' "tools reach the anonymous fallback
+    // tier and are gateable by full name" — which only holds if
+    // `mcp__<server>_<tool>` is claimed before we give up for lack of a
+    // registry.
+    if (name.startsWith('mcp__')) return { isMcp: true, local: name };
+
+    // Unprefixed `<server>_<tool>` needs the registry to attribute, and
+    // without one there is nothing to distinguish it from a native tool.
+    return { isMcp: false };
+  }
+
+  // Note the asymmetry with the opencode branch below, and keep it:
+  // opencode's unattributed tier claims ANY underscored name as anonymous
+  // MCP, because opencode really does flatten every MCP tool that way. On
+  // Pi, the unprefixed `<server>_<tool>` form is opt-in and coexists with
+  // arbitrary native tools from other extensions, so claiming every
+  // underscored name would mis-gate them. Attribute what the registry can
+  // prove; otherwise only trust the unambiguous `mcp__` marker.
+
+  // opencode flattens MCP tools as `<sanitize(server)>_<sanitize(tool)>`
+  // (packages/opencode/src/mcp/catalog.ts:119), where
+  // sanitize = s.replace(/[^a-zA-Z0-9_-]/g, "_"). There is no fixed
+  // delimiter, so a bare split is impossible. Two tiers:
+  //   1. Attribution — longest matching server prefix from the registry.
+  //   2. Fallback — keep the FULL tool name as `local` with `server`
+  //      unset, exactly like the Hermes single-underscore branch, so
+  //      users can allow/deny by the name they actually see.
+  // With no servers configured, nothing is MCP and native tools are
+  // untouched.
+  if (platform === 'opencode') {
+    if (!knownServers || knownServers.length === 0) return { isMcp: false };
+    if (!name.includes('_')) return { isMcp: false };
+    // A built-in is never an MCP call, however it is spelled. Without
+    // this, `apply_patch` — the one underscored built-in — reaches the
+    // anonymous-MCP fallback below as soon as any server is configured,
+    // and a permitted_tools.mcp allowlist would then deny core file edits.
+    if (OPENCODE_BUILTIN_TOOLS.has(name)) return { isMcp: false };
+
+    const matches = knownServers
+      .filter(s => name.startsWith(`${s}_`) && name.length > s.length + 1)
+      .sort((a, b) => b.length - a.length);
+
+    if (matches.length > 0) {
+      const server = matches[0]!;
+      return { isMcp: true, server, local: name.slice(server.length + 1) };
+    }
+    return { isMcp: true, local: name };
   }
 
   return { isMcp: false };
@@ -245,14 +360,16 @@ function checkToolGate(
   const blockedMcp = config.guard?.blocked_tools?.['mcp'] ?? [];
   const permittedMcp = config.guard?.permitted_tools?.['mcp'] ?? [];
 
-  const parsed = parseMcpToolName(toolName, platform);
+  const registry = injectedRegistry ?? loadMCPRegistry();
+  const knownServers = registry.entries.map(e => e.serverName);
+
+  const parsed = parseMcpToolName(toolName, platform, knownServers, toolInput);
   const nameMcpCandidates = parsed.isMcp && parsed.local
     ? (parsed.server
         ? [parsed.local, `${parsed.server}__${parsed.local}`]
         : [parsed.local])
     : [];
 
-  const registry = injectedRegistry ?? loadMCPRegistry();
   const allShellHits = detectMcpCalls(extractCommandString(toolInput), registry);
   // Audit-only hits (D12 self-launch, D15 compile-and-run, D16 obfuscation
   // fallback) inform the audit pipeline but must not gate execution.
@@ -384,7 +501,10 @@ export async function evaluateHook(
   // lifts MCP calls from "silent allow" to first-class actions evaluated
   // by all rules + analysers.
   if (!envelope && input.toolName) {
-    const parsed = parseMcpToolName(input.toolName, adapter.name);
+    const registry = options.mcpRegistry ?? loadMCPRegistry();
+    const parsed = parseMcpToolName(
+      input.toolName, adapter.name, registry.entries.map(e => e.serverName), input.toolInput,
+    );
     if (parsed.isMcp && parsed.local) {
       envelope = buildMcpEnvelope(input, parsed, initiatingSkill, adapter.name);
     }

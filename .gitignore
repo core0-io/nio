@@ -24,7 +24,13 @@ plugins/openclaw/skills/nio/scripts/*.js
 plugins/openclaw/skills/nio/scripts/*.js.map
 plugins/codex/skills/nio/scripts/*.js
 plugins/codex/skills/nio/scripts/*.js.map
+plugins/pi/skills/nio/scripts/*.js
+plugins/pi/skills/nio/scripts/*.js.map
+plugins/opencode/skills/nio/scripts/*.js
+plugins/opencode/skills/nio/scripts/*.js.map
 plugins/openclaw/plugin/plugin.js
+plugins/pi/extensions/nio/index.js
+plugins/opencode/plugins/nio.js
 plugins/hermes/scripts/*.js
 plugins/hermes/scripts/*.js.map
 # Synced shared files (build output, source of truth is plugins/shared/)
@@ -40,8 +46,16 @@ plugins/codex/README.md
 plugins/hermes/config.default.yaml
 plugins/hermes/config.schema.json
 plugins/hermes/README.md
+plugins/pi/config.default.yaml
+plugins/pi/config.schema.json
+plugins/pi/README.md
+plugins/opencode/config.default.yaml
+plugins/opencode/config.schema.json
+plugins/opencode/README.md
 releases/
 
-# superpowers process artifacts (specs, plans, ledgers) — the git history is the record
-docs/superpowers/
+# Subagent-driven-development scratch workspace
 .superpowers/
+
+# Superpowers plans and design specs — working documents, not shipped docs
+docs/superpowers/

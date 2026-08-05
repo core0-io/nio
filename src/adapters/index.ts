@@ -6,11 +6,31 @@ export { ClaudeCodeAdapter } from './claude-code.js';
 export { CodexAdapter, type CodexAdapterOptions } from './codex.js';
 export { OpenClawAdapter } from './openclaw.js';
 export { HermesAdapter, type HermesAdapterOptions } from './hermes.js';
+export { PiAdapter, type PiAdapterOptions } from './pi.js';
+export { OpenCodeAdapter, type OpenCodeAdapterOptions } from './opencode.js';
 export { evaluateHook } from './hook-engine.js';
 export {
   registerOpenClawPlugin,
   type OpenClawPluginOptions,
 } from './openclaw-plugin.js';
+export {
+  registerPiExtension,
+  type PiPluginOptions,
+  type PiExtensionApi,
+} from './pi-plugin.js';
+export {
+  createNioPlugin,
+  NioPlugin,
+  NioBlockedError,
+  type OpenCodePlugin,
+  type OpenCodePluginOptions,
+} from './opencode-plugin.js';
+export {
+  InProcessPluginRuntime,
+  type PluginRuntimeOptions,
+  type PreToolResult,
+  type GuardDecisionTag,
+} from './plugin-runtime.js';
 export {
   loadConfig,
   resetConfig,

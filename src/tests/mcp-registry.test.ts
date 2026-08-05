@@ -1,3 +1,6 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -11,16 +14,35 @@ import type { NioConfig } from '../adapters/config-schema.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
 
 let HOME: string;
+let originalXdgConfigHome: string | undefined;
+let originalPiCodingAgentDir: string | undefined;
 
 const emptyConfig = (): NioConfig => ({});
 
+// `discoverSources` reads XDG_CONFIG_HOME (opencode source) and
+// PI_CODING_AGENT_DIR (pi source) unconditionally, on every `describe`
+// block in this file, not just the ones that exercise those sources.
+// Clearing them only inside the blocks that test them would still leave
+// every OTHER block reading the developer's real environment (and, via
+// PI_CODING_AGENT_DIR, a real user path) whenever those vars happen to be
+// set — a flake source and a violation of test isolation. Clear both here
+// file-wide and restore per-test; restore an originally-unset var by
+// deleting it, never by assigning the literal string "undefined".
 beforeEach(() => {
   HOME = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-mcp-registry-')));
+  originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+  originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   clearMCPRegistryCache();
 });
 
 afterEach(() => {
   rmSync(HOME, { recursive: true, force: true });
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
   clearMCPRegistryCache();
 });
 
@@ -281,6 +303,120 @@ describe('loadMCPRegistry: caching & invalidation', () => {
     assert.equal(loadMCPRegistry({ home: HOME, configLoader: emptyConfig }).entries.length, 1);
     rmSync(path);
     assert.equal(loadMCPRegistry({ home: HOME, configLoader: emptyConfig }).entries.length, 0);
+  });
+});
+
+describe('loadMCPRegistry: ~/.config/opencode/opencode.json', () => {
+  // XDG_CONFIG_HOME is cleared/restored by the file-level beforeEach/afterEach.
+
+  it('parses local and remote opencode MCP servers and skips disabled ones', () => {
+    mkdirSync(join(HOME, '.config', 'opencode'), { recursive: true });
+    writeJson(join(HOME, '.config', 'opencode', 'opencode.json'), {
+      mcp: {
+        github: { type: 'remote', url: 'https://mcp.github.test/sse', enabled: true },
+        fs: { type: 'local', command: ['npx', '-y', 'mcp-fs'], enabled: true },
+        off: { type: 'local', command: ['npx', 'nope'], enabled: false },
+      },
+    });
+
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    const byName = (n: string) => reg.entries.find(e => e.serverName === n);
+
+    assert.equal(byName('github')?.urls[0], 'https://mcp.github.test/sse');
+    assert.equal(byName('github')?.source, 'opencode');
+    // Array-form command: argv[0] is the binary, the rest are args, and
+    // npx is a package runner so the package name lands in cliPackages.
+    assert.deepEqual(byName('fs')?.binaries, ['npx']);
+    assert.deepEqual(byName('fs')?.cliPackages, ['mcp-fs']);
+    assert.equal(byName('off'), undefined);
+  });
+});
+
+describe('loadMCPRegistry: enabled:false applies to every source, not just opencode', () => {
+  it('skips a disabled server declared in ~/.claude.json', () => {
+    writeJson(join(HOME, '.claude.json'), {
+      mcpServers: {
+        hass: { url: 'http://homeassistant.local:8123/api/mcp', enabled: false },
+        active: { url: 'http://active.local/mcp' },
+      },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.find(e => e.serverName === 'hass'), undefined);
+    assert.equal(reg.entries.find(e => e.serverName === 'active')?.serverName, 'active');
+  });
+});
+
+describe('loadMCPRegistry: ~/.pi/agent/mcp.json (pi-mcp-adapter)', () => {
+  // PI_CODING_AGENT_DIR is cleared/restored by the file-level beforeEach/afterEach.
+
+  it('parses a mcpServers map with source "pi"', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+      mcpServers: { xcodebuild: { command: 'npx', args: ['-y', 'xcodebuild-mcp'] } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'xcodebuild');
+    assert.equal(reg.entries[0].source, 'pi');
+    assert.deepEqual(reg.entries[0].cliPackages, ['xcodebuild-mcp']);
+  });
+
+  it('falls back to the "mcp-servers" key', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+      'mcp-servers': { hass: { url: 'http://homeassistant.local:8123/api/mcp' } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'hass');
+    assert.equal(reg.entries[0].source, 'pi');
+  });
+
+  it('honours PI_CODING_AGENT_DIR — reads that dir\'s mcp.json, not ~/.pi/agent/mcp.json', () => {
+    const altDir = mkdtempSync(join(tmpdir(), 'nio-pi-agent-dir-'));
+    try {
+      process.env.PI_CODING_AGENT_DIR = altDir;
+      writeJson(join(altDir, 'mcp.json'), {
+        mcpServers: { alt: { url: 'http://alt.local/mcp' } },
+      });
+      // A decoy at the default location must NOT be read.
+      mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+      writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+        mcpServers: { decoy: { url: 'http://decoy.local/mcp' } },
+      });
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 1);
+      assert.equal(reg.entries[0].serverName, 'alt');
+    } finally {
+      rmSync(altDir, { recursive: true, force: true });
+    }
+  });
+
+  it('expands a leading ~ in PI_CODING_AGENT_DIR against home, not literally', () => {
+    process.env.PI_CODING_AGENT_DIR = '~/custom-pi-dir';
+    mkdirSync(join(HOME, 'custom-pi-dir'), { recursive: true });
+    writeJson(join(HOME, 'custom-pi-dir', 'mcp.json'), {
+      mcpServers: { tilde: { url: 'http://tilde.local/mcp' } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'tilde');
+  });
+
+  it('absent mcp.json contributes no entries and does not throw', () => {
+    assert.doesNotThrow(() => {
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 0);
+    });
+  });
+
+  it('malformed mcp.json contributes no entries and does not throw', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeFileSync(join(HOME, '.pi', 'agent', 'mcp.json'), '{not valid json');
+    assert.doesNotThrow(() => {
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 0);
+    });
   });
 });
 

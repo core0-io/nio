@@ -1,0 +1,7 @@
+{
+  "toolName": "bash",
+  "toolCallId": "call_01H8XKQ",
+  "input": { "command": "ls /etc | head -5" },
+  "content": [{ "type": "text", "text": "afpovertcp.cfg\naliases\n" }],
+  "isError": false
+}

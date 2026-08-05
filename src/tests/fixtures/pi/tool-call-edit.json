@@ -1,0 +1,5 @@
+{
+  "toolName": "edit",
+  "toolCallId": "call_01H8XKS",
+  "input": { "path": "/tmp/demo.txt", "oldText": "hello", "newText": "goodbye" }
+}

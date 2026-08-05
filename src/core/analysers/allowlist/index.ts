@@ -11,7 +11,7 @@
  */
 
 import type { ActionEnvelope } from '../../../types/action.js';
-import { SENSITIVE_FILE_PATHS } from '../../shared/detection-data.js';
+import { matchesSensitiveFilePath } from '../../shared/detection-data.js';
 
 // ── Safe Command Prefixes ───────────────────────────────────────────────
 
@@ -75,9 +75,7 @@ function isSensitivePath(filePath: string): boolean {
   if (normalized.startsWith('~/')) {
     normalized = '/HOME' + normalized.slice(1);
   }
-  return SENSITIVE_FILE_PATHS.some(
-    (p) => normalized.includes(`/${p}`) || normalized.endsWith(p),
-  );
+  return matchesSensitiveFilePath(normalized);
 }
 
 // ── Allowlist Result ────────────────────────────────────────────────────

@@ -48,9 +48,47 @@ if (!openclaw.success) {
   process.exit(1);
 }
 
+// Pi extension bundle. Single non-split bundle so a Pi-only release zip
+// is a self-contained pi package with no shared-chunk dependencies.
+// NOTE: no writeEsmSentinel() for plugins/pi/ — that dir has a real
+// package.json (the pi package manifest, which already declares
+// "type": "module") that sync-versions.js maintains.
+const PI_EXT_DIR = join(ROOT, 'plugins/pi/extensions/nio');
+const pi = await Bun.build({
+  ...shared,
+  entrypoints: [join(ROOT, 'dist/adapters/pi-plugin.js')],
+  outdir: PI_EXT_DIR,
+  naming: { entry: 'index.js' },
+  splitting: false,
+});
+
+if (!pi.success) {
+  console.error(pi.logs);
+  process.exit(1);
+}
+
+// opencode plugin bundle. Single non-split bundle so an opencode-only
+// release zip is self-contained.
+const OC_PLUGIN_DIR = join(ROOT, 'plugins/opencode/plugins');
+const opencode = await Bun.build({
+  ...shared,
+  entrypoints: [join(ROOT, 'dist/adapters/opencode-plugin.js')],
+  outdir: OC_PLUGIN_DIR,
+  naming: { entry: 'nio.js' },
+  splitting: false,
+});
+
+if (!opencode.success) {
+  console.error(opencode.logs);
+  process.exit(1);
+}
+writeEsmSentinel(OC_PLUGIN_DIR);
+
 const CC_SKILL_SCRIPTS = join(ROOT, 'plugins/claude-code/skills/nio/scripts');
 const OPENCLAW_SKILL_SCRIPTS = join(ROOT, 'plugins/openclaw/skills/nio/scripts');
 const CODEX_SKILL_SCRIPTS = join(ROOT, 'plugins/codex/skills/nio/scripts');
+const PI_SKILL_SCRIPTS = join(ROOT, 'plugins/pi/skills/nio/scripts');
+const OC_SKILL_SCRIPTS = join(ROOT, 'plugins/opencode/skills/nio/scripts');
 
 const cc = await Bun.build({
   ...shared,
@@ -84,10 +122,13 @@ if (!cc.success) {
 }
 writeEsmSentinel(CC_SKILL_SCRIPTS);
 
-// Mirror the compiled CC skill scripts to OpenClaw + Codex skill dirs
-// so all three plugins ship byte-identical scripts. cpSync copies the
-// package.json sentinel along with the bundled JS.
-for (const dst of [OPENCLAW_SKILL_SCRIPTS, CODEX_SKILL_SCRIPTS]) {
+// Mirror the compiled CC skill scripts to OpenClaw + Codex + Pi + opencode
+// skill dirs so all plugins ship byte-identical scripts. cpSync copies the
+// package.json sentinel along with the bundled JS. opencode needs this too:
+// its synced skills/nio/SKILL.md and the focused nio-* skills both reference
+// `scripts/<cli>.js` / `../nio/scripts/<cli>.js` as a natural-language-driven
+// fallback alongside the direct nio_command tool path.
+for (const dst of [OPENCLAW_SKILL_SCRIPTS, CODEX_SKILL_SCRIPTS, PI_SKILL_SCRIPTS, OC_SKILL_SCRIPTS]) {
   purgeDir(dst, { recursive: true, force: true });
   cpSync(CC_SKILL_SCRIPTS, dst, { recursive: true });
 }
@@ -119,5 +160,5 @@ for (const entry of ['hook-cli', 'nio-cli']) {
 writeEsmSentinel(HERMES_SCRIPTS);
 
 console.log(
-  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw + Codex skill), ${hermesOutputs} Hermes output(s)`,
+  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw + Codex + Pi + opencode skill), ${hermesOutputs} Hermes output(s), ${pi.outputs.length} Pi output(s), ${opencode.outputs.length} opencode output(s)`,
 );

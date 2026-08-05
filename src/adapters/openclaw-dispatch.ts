@@ -687,6 +687,68 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   // `x-event-pipeline-id`, bearer auth) that a bare reachability probe
   // would not include, producing misleading 403/401 reports.
 
+  // ─── Platform Integrations ──────────────────────────────────────────
+  out.push('', '### Platform Integrations');
+
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+
+  // Pi — installed either as a pi package (settings.json `extensions`
+  // entry) or by the CLI-less fallback (a bundle under extensions/nio/).
+  const piAgent = join(home, '.pi', 'agent');
+  const piBundle = join(piAgent, 'extensions', 'nio', 'index.js');
+  let piRegistered = existsSync(piBundle);
+  let piMcpAdapter = false;
+  const piSettingsPath = join(piAgent, 'settings.json');
+  if (existsSync(piSettingsPath)) {
+    try {
+      const s = JSON.parse(readFileSync(piSettingsPath, 'utf-8')) as {
+        extensions?: unknown[]; packages?: unknown[];
+      };
+      const mentionsSubstring = (arr: unknown[] | undefined, needle: string): boolean =>
+        (arr ?? []).some((e) => {
+          const v = typeof e === 'string' ? e : (e as { source?: string })?.source;
+          return typeof v === 'string' && v.includes(needle);
+        });
+      const mentionsNio = (arr: unknown[] | undefined): boolean => mentionsSubstring(arr, 'nio');
+      // `piRegistered` may already be true from the bundle-path check above;
+      // settings.json registration is an independent OR, not a replacement,
+      // so a bundle install doesn't mask a settings.json entry or vice versa.
+      piRegistered = piRegistered || mentionsNio(s.extensions) || mentionsNio(s.packages);
+      piMcpAdapter = mentionsSubstring(s.extensions, 'pi-mcp-adapter')
+        || mentionsSubstring(s.packages, 'pi-mcp-adapter');
+    } catch { /* unreadable settings — treat as not registered */ }
+  }
+  out.push(piRegistered
+    ? '- ✓ pi: extension registered'
+    : '- · pi: not installed (run plugins/pi/setup.sh to enable)');
+  // Nio neither installs nor requires an MCP adapter for Pi. The naming and
+  // config details are only actionable once one is actually present, so they
+  // stay inside the detected branch — printing them unconditionally reads as
+  // a recommendation to install something.
+  if (piMcpAdapter) {
+    out.push('    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.');
+    out.push('    MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.');
+    out.push('    Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).');
+    out.push('    Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.');
+  } else {
+    out.push('    note: Pi core has no MCP, and Nio does not need one. If you add a third-party MCP');
+    out.push('          adapter, Nio detects it and gates those calls via permitted_tools.mcp /');
+    out.push('          blocked_tools.mcp — re-run /nio doctor then for the naming details.');
+  }
+
+  // opencode — plugin + slash command are copied into the config dir.
+  const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
+  const ocPlugin = existsSync(join(ocRoot, 'opencode', 'plugins', 'nio.js'));
+  const ocCommand = existsSync(join(ocRoot, 'opencode', 'commands', 'nio.md'));
+  if (ocPlugin && ocCommand) {
+    out.push('- ✓ opencode: plugin + /nio command installed');
+  } else if (ocPlugin || ocCommand) {
+    out.push(`- ~ opencode: partial install (plugin: ${ocPlugin ? 'yes' : 'no'}, command: ${ocCommand ? 'yes' : 'no'})`);
+    out.push('    hint: re-run plugins/opencode/setup.sh to repair.');
+  } else {
+    out.push('- · opencode: not installed (run plugins/opencode/setup.sh to enable)');
+  }
+
   return { ok, report: out.join('\n') };
 }
 

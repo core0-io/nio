@@ -76,6 +76,25 @@ export const SENSITIVE_FILE_PATHS = [
   '.hermes/plugins/',
   '.openclaw/openclaw.json',
   '.openclaw/',
+  // Pi core has no MCP; the third-party pi-mcp-adapter package supplies
+  // it and stores its server map (mcp.json) under this same directory.
+  // settings.json itself is sensitive because it controls which
+  // extensions load and which skills are trusted.
+  '.pi/settings.json',
+  '.pi/agent/settings.json',
+  '.pi/',
+  '.opencode/opencode.json',
+  '.config/opencode/opencode.json',
+  // Both opencode roots are covered as broadly as `.pi/`, `.openclaw/`
+  // and `.hermes/plugins/`: the project-local `.opencode/` AND the
+  // user-level `~/.config/opencode/`. The latter is the auto-load
+  // directory opencode globs at startup (plugins/opencode/setup.sh
+  // installs Nio into `~/.config/opencode/plugins/` for exactly that
+  // reason), so a write there is arbitrary code execution on the next
+  // opencode launch — a code-execution persistence channel, not just a
+  // config file.
+  '.opencode/',
+  '.config/opencode/',
 
   // ── Persistence channels (next-launch / scheduled triggers) ────────
   'Library/LaunchAgents/',
@@ -86,6 +105,90 @@ export const SENSITIVE_FILE_PATHS = [
   'etc/systemd/system/',
   '.bashrc', '.zshrc', '.profile', '.bash_profile', '.zprofile', '.zshenv',
 ] as const;
+
+// ── XDG relocation of the `.config/…` entries ───────────────────────────
+
+/**
+ * `SENSITIVE_FILE_PATHS` is a list of static path *fragments*, matched as
+ * substrings (`normalized.includes('/' + p) || normalized.endsWith(p)`),
+ * not as resolved absolute paths. That works fine for `~`-relative
+ * entries, but the `.config/…` entries are XDG-relative: a user who sets
+ * `XDG_CONFIG_HOME=/data/cfg` has their opencode config — including
+ * `plugins/`, which opencode globs and executes at startup — at
+ * `/data/cfg/opencode/`, which no static fragment can match. They would
+ * get zero protection on the very directory our own installer writes to.
+ *
+ * `mcp-registry.ts` and both `setup.sh` scripts already honour
+ * `XDG_CONFIG_HOME`; this closes the same gap for path detection by
+ * deriving an extra fragment for every `.config/…` entry, rooted at the
+ * configured XDG dir. Derived at match time (not module load) so a
+ * process that sets the variable later — and any test — sees it.
+ *
+ * The returned fragments have no leading slash, so they slot straight
+ * into the existing substring matcher without changing its shape.
+ *
+ * Reads `process.env` directly and memoises on the raw string. It takes
+ * no env argument on purpose: nothing ever passed one, and a memo keyed
+ * on the string alone would silently serve one env object's answer to
+ * another's. Tests drive it the way the runtime does — by setting
+ * `process.env.XDG_CONFIG_HOME`.
+ */
+const XDG_PREFIX = '.config/';
+
+let xdgCacheKey: string | undefined;
+let xdgCacheValue: string[] = [];
+
+export function xdgRelocatedSensitivePaths(): string[] {
+  const raw = process.env.XDG_CONFIG_HOME ?? '';
+  if (xdgCacheKey === raw) return xdgCacheValue;
+
+  let derived: string[] = [];
+  if (raw) {
+    let root = raw.replace(/\\/g, '/');
+    // Same `~` expansion the matchers apply to the candidate path.
+    if (root.startsWith('~/')) root = '/HOME' + root.slice(1);
+    // Only an ABSOLUTE root can yield a meaningful fragment. The XDG
+    // spec requires one, so a relative value is a misconfiguration —
+    // and honouring it would be actively harmful: `XDG_CONFIG_HOME=cfg`
+    // derives the fragment `cfg/opencode/`, which the substring matcher
+    // then hits on any unrelated `/some/project/cfg/opencode/...`.
+    // Derive nothing; the static list still applies.
+    const absolute = root.startsWith('/') || /^[A-Za-z]:\//.test(root);
+    if (absolute) {
+      root = root.replace(/\/+$/, '').replace(/^\/+/, '');
+      if (root) {
+        derived = SENSITIVE_FILE_PATHS
+          .filter((p) => p.startsWith(XDG_PREFIX))
+          .map((p) => `${root}/${p.slice(XDG_PREFIX.length)}`);
+      }
+    }
+  }
+
+  xdgCacheKey = raw;
+  xdgCacheValue = derived;
+  return derived;
+}
+
+/**
+ * The single sensitive-path predicate. Checks the static list, the
+ * XDG-relocated `.config/…` twins, and any operator-supplied extra
+ * fragments, all with the same substring semantics.
+ *
+ * `filePath` must already be normalised by the caller (backslashes
+ * folded to `/`, a leading `~/` rewritten to `/HOME/`) — every call site
+ * does that before it has a fragment list to test against.
+ */
+export function matchesSensitiveFilePath(
+  normalizedPath: string,
+  extraPaths?: readonly string[],
+): boolean {
+  const hit = (p: string) =>
+    normalizedPath.includes(`/${p}`) || normalizedPath.endsWith(p);
+  if (SENSITIVE_FILE_PATHS.some(hit)) return true;
+  if (xdgRelocatedSensitivePaths().some(hit)) return true;
+  if (extraPaths?.some(hit)) return true;
+  return false;
+}
 
 // ── Secret Pattern Regexes ──────────────────────────────────────────────
 

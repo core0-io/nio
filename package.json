@@ -20,6 +20,8 @@
     "release:codex": "node scripts/release.js codex",
     "release:openclaw": "node scripts/release.js openclaw",
     "release:hermes": "node scripts/release.js hermes",
+    "release:pi": "node scripts/release.js pi",
+    "release:opencode": "node scripts/release.js opencode",
     "release:publish": "node scripts/release.js all && gh release create v$npm_package_version releases/*.zip --title \"v$npm_package_version\" --generate-notes --verify-tag",
     "version-select": "changeset",
     "version-update": "changeset version && node scripts/sync-versions.js && node scripts/sync-site-version.js",

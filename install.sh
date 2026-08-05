@@ -19,7 +19,8 @@ usage() {
 Nio installer — see ${DOCS_URL}
 
 Args:
-  --platform NAME       claude-code | codex | openclaw | hermes (repeatable)
+  --platform NAME       claude-code | codex | openclaw | hermes | pi | opencode
+                        (repeatable)
   --uninstall           uninstall instead of install
   --reset-to-defaults   reset ~/.nio/config.yaml to bundled defaults
   --config PATH         apply an operator ~/.nio/config.yaml (runs /nio doctor;
@@ -31,6 +32,8 @@ Args:
   --codex-home PATH     passed through to codex setup.sh
   --openclaw-home PATH  passed through to openclaw setup.sh
   --hermes-home PATH    passed through to hermes setup.sh
+  --pi-home PATH        passed through to pi setup.sh
+  --opencode-home PATH  passed through to opencode setup.sh
   -h, --help            this message
 
 Env:
@@ -63,10 +66,10 @@ while [ $# -gt 0 ]; do
       CONFIG_FILE_ARG="$2"; shift 2 ;;
     --config=*)
       CONFIG_FILE_ARG="${1#*=}"; shift ;;
-    --cc-home|--codex-home|--openclaw-home|--hermes-home)
+    --cc-home|--codex-home|--openclaw-home|--hermes-home|--pi-home|--opencode-home)
       [ $# -ge 2 ] || die "$1 requires a path"
       PASS_THROUGH+=("$1" "$2"); shift 2 ;;
-    --cc-home=*|--codex-home=*|--openclaw-home=*|--hermes-home=*)
+    --cc-home=*|--codex-home=*|--openclaw-home=*|--hermes-home=*|--pi-home=*|--opencode-home=*)
       PASS_THROUGH+=("$1"); shift ;;
     -h|--help)
       usage; exit 0 ;;
@@ -142,6 +145,8 @@ else
   detect_platform codex       "$HOME/.codex"    codex
   detect_platform openclaw    "$HOME/.openclaw" openclaw
   detect_platform hermes      "$HOME/.hermes"   hermes
+  detect_platform pi          "$HOME/.pi/agent" pi
+  detect_platform opencode    "$HOME/.config/opencode" opencode
 
   if [ ${#SKIPPED_DIR_ONLY[@]} -gt 0 ]; then
     echo "  Auto-detect: skipped these (config dir exists but CLI not on PATH):" >&2
@@ -156,10 +161,12 @@ else
   if [ ${#PLATFORMS[@]} -eq 0 ]; then
     cat >&2 <<EOM
 ERROR: no agent CLI detected. Looked for (dir AND binary):
-  ~/.claude   + 'claude'   (Claude Code)
-  ~/.codex    + 'codex'    (Codex CLI)
-  ~/.openclaw + 'openclaw' (OpenClaw)
-  ~/.hermes   + 'hermes'   (Hermes)
+  ~/.claude          + 'claude'   (Claude Code)
+  ~/.codex           + 'codex'    (Codex CLI)
+  ~/.openclaw        + 'openclaw' (OpenClaw)
+  ~/.hermes          + 'hermes'   (Hermes)
+  ~/.pi/agent        + 'pi'       (Pi)
+  ~/.config/opencode + 'opencode' (opencode)
 
 Install one of those first (and make sure its binary is on PATH —
 'pip install --user' targets need ~/.local/bin in PATH; re-open shell
@@ -172,10 +179,10 @@ fi
 
 for p in "${PLATFORMS[@]}"; do
   case "$p" in
-    claude-code|codex|openclaw|hermes) ;;
+    claude-code|codex|openclaw|hermes|pi|opencode) ;;
     *)
       echo "ERROR: unknown platform '$p'" >&2
-      echo "Valid: claude-code, codex, openclaw, hermes" >&2
+      echo "Valid: claude-code, codex, openclaw, hermes, pi, opencode" >&2
       exit 1 ;;
   esac
 done
