@@ -110,6 +110,63 @@ runs. Platforms differ in whether historical session data exists at all
 (Claude Code and Codex keep session files; Hermes and OpenClaw do not),
 so retroactive capture is not offered anywhere, keeping behaviour uniform.
 
+## Debug: raw payload capture (`NIO_DUMP_PAYLOAD`)
+
+Everything above describes the *processed* schema Nio extracts from each
+platform's hook payload. `NIO_DUMP_PAYLOAD` is a separate, debug-only
+switch for capturing the **raw, unprocessed** payload each hook receives
+— useful when investigating what a platform's payload actually contains
+(e.g. LLM thinking/reasoning content, full conversation history,
+transcript paths) that the schema above doesn't yet extract.
+
+**Enable it:**
+
+```bash
+export NIO_DUMP_PAYLOAD=/path/to/an/existing/writable/directory
+```
+
+Unset (the default): zero effect. No extra I/O, no extra branching cost
+on the hook's hot path — this is a debug tool, not a product feature.
+
+**What gets written:** one file per hook invocation,
+`<dir>/<timestamp>-<platform>-<event>-<random>.json`, containing the
+payload **exactly as received** — no redaction, no truncation, no
+schema mapping. The trailing random suffix exists because some platforms
+fire more than one process for the same logical event in the same
+millisecond (e.g. Claude Code's `PreToolUse` spawns both `guard-hook.ts`
+and `collector-hook.ts`).
+
+**How to trigger a sample per platform:**
+
+| Platform | What to run |
+| --- | --- |
+| Claude Code / Codex | Run any prompt that triggers a tool call, a session start, etc., with `NIO_DUMP_PAYLOAD` set in the environment the CLI launches hooks from. `collector-hook.ts`, `guard-hook.ts`, and `scanner-hook.ts` each dump the raw stdin JSON they receive. |
+| Hermes | Same idea — set the variable in the environment Hermes spawns `hook-cli.js` from. Dumps the full JSON envelope for both the guard branch (`pre_tool_call`) and the collector branch (`post_tool_call`, `pre_llm_call`, …). |
+| OpenClaw | Set the variable in the daemon's environment before it loads the plugin. Each registered handler (`before_tool_call`, `after_tool_call`, `llm_output`, `session_start`, …) dumps a single file containing both the raw `event` and `ctx` objects it received: `{"event": …, "ctx": …}`. |
+
+**Design notes:**
+
+- **Not gated by the monitor state above.** Everything in "Capture
+  gating" governs whether processed telemetry leaves the machine over
+  OTLP. `NIO_DUMP_PAYLOAD` writes to a local directory the user
+  themselves pointed at and never touches the network — setting the
+  variable *is* the explicit, one-time opt-in, so it is deliberately
+  independent of `/nio-monitor` / `/nio monitor on`. This is intentional,
+  not an oversight — see the doc comment on `dumpPayload()` in
+  `src/scripts/lib/payload-dump.ts`.
+- **Fails silently.** A missing or unwritable directory, a full disk, or
+  a payload that can't be JSON-serialised is swallowed without throwing,
+  blocking, or slowing down the hook — and without polluting
+  `~/.nio/audit.jsonl` (dump failures never go through
+  `reportDiagnostic()`).
+
+**⚠️ Handle dump files as sensitive data.** Because nothing is redacted
+or truncated, dump files can contain API keys, full conversation text,
+file contents, and anything else present in the raw hook payload. Treat
+the output directory as you would a credentials file: don't commit it,
+don't upload it as-is, and sanitize/redact before sharing a sample with
+anyone (including when filing a bug report).
+
 ## Naming conventions
 
 - `gen_ai.*` — keys that follow the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.

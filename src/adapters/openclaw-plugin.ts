@@ -27,6 +27,7 @@ import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
 import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
+import { dumpPayload } from '../scripts/lib/payload-dump.js';
 import {
   createTracerProvider,
   ensureTurn,
@@ -286,6 +287,9 @@ export function registerOpenClawPlugin(
   // before_tool_call → evaluate and optionally block
   api.on('before_tool_call', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'before_tool_call', { event, ctx });
       const toolEvent = event as {
         toolName?: string;
         params?: Record<string, unknown>;
@@ -410,6 +414,9 @@ export function registerOpenClawPlugin(
   // tool call lives entirely in before_tool_call's evaluateHook call).
   api.on('after_tool_call', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'after_tool_call', { event, ctx });
       const toolEvent = event as {
         toolName?: string;
         params?: Record<string, unknown>;
@@ -471,6 +478,9 @@ export function registerOpenClawPlugin(
   // subagent_spawning → collector pre-task span
   api.on('subagent_spawning', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'subagent_spawning', { event, ctx });
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
@@ -504,6 +514,9 @@ export function registerOpenClawPlugin(
   // subagent_ended → collector post-task span
   api.on('subagent_ended', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'subagent_ended', { event, ctx });
       const e = event as { subagentId?: string; runId?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || e.runId || 'openclaw';
@@ -540,6 +553,9 @@ export function registerOpenClawPlugin(
   // to the turn span at endTurn time).
   api.on('before_agent_reply', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'before_agent_reply', { event, ctx });
       const e = event as { cleanedBody?: string };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
@@ -557,6 +573,11 @@ export function registerOpenClawPlugin(
   // llm_output → accumulate token usage + capture assistant reply
   api.on('llm_output', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc. This is the handler most
+      // likely to carry thinking/reasoning content, so it's the one this
+      // switch was added to inspect in the first place.
+      dumpPayload('openclaw', 'llm_output', { event, ctx });
       const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
@@ -627,6 +648,9 @@ export function registerOpenClawPlugin(
 
   api.on('session_start', async (_event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'session_start', { event: _event, ctx });
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
@@ -654,6 +678,9 @@ export function registerOpenClawPlugin(
   // session_end is the last-resort flush before a session is torn down.
   api.on('session_end', async (_event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'session_end', { event: _event, ctx });
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);
@@ -678,6 +705,9 @@ export function registerOpenClawPlugin(
 
   api.on('agent_end', async (_event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      dumpPayload('openclaw', 'agent_end', { event: _event, ctx });
       const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
       const sessionId = c.sessionKey || c.sessionId || c.runId || 'openclaw';
       const monitored = isSessionMonitored(sessionId, process.cwd(), logsConfig);

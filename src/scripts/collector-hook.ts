@@ -25,6 +25,7 @@ import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
@@ -71,6 +72,10 @@ function readStdin(): Promise<HookStdinPayload | null> {
 async function main(): Promise<void> {
   const input = await readStdin();
   if (!input) process.exit(0);
+
+  // Debug-only sampling switch — see lib/payload-dump.ts module doc for
+  // why this is deliberately NOT behind the monitor gate below.
+  dumpPayload(PLATFORM, input.hook_event_name ?? 'unknown', input);
 
   // Gate before creating any provider — an unmonitored session must not
   // even initialise the OTLP exporters. The local audit log is written

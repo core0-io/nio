@@ -50,6 +50,7 @@ import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -350,6 +351,12 @@ async function main(): Promise<void> {
 
   const hookEventName = ((payload ?? {}) as Record<string, unknown>)
     .hook_event_name as string | undefined;
+
+  // Debug-only sampling switch — dumps the full envelope once, ahead of
+  // the guard-path / collector-path branch below, so both are covered by
+  // this single call site. See lib/payload-dump.ts module doc for why
+  // this is deliberately NOT behind the monitor gate either branch uses.
+  dumpPayload(platform!, hookEventName ?? 'unknown', payload);
 
   // Guard path: only pre_tool_call runs through Phase 0–6.
   //

@@ -36,6 +36,7 @@ import { loadCollectorConfig, loadAgentName, loadLogsConfig } from './lib/config
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import { createNio, ScanCache } from '../index.js';
 import { loadConfig, writeAuditLog } from '../adapters/index.js';
 
@@ -238,6 +239,13 @@ async function main(): Promise<void> {
   // MONITORED at its fail-closed default.
   try {
     const payload = await readSessionStartPayload();
+    // Debug-only sampling switch — dumps the raw SessionStart payload
+    // (a different shape from the other hooks' PreToolUse/PostToolUse
+    // events). Deliberately NOT behind the MONITORED gate below: see
+    // lib/payload-dump.ts module doc for why. Runtime object may carry
+    // fields beyond the narrow SessionStartPayload type — those are
+    // preserved as-is since the cast above doesn't strip them.
+    if (payload) dumpPayload(PLATFORM, 'SessionStart', payload);
     MONITORED = isSessionMonitored(
       payload?.session_id ?? 'unknown',
       payload?.cwd ?? null,

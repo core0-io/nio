@@ -37,6 +37,7 @@ import {
 } from './lib/traces-collector.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import { spanKey, toolSummary, type HookStdinPayload } from './lib/collector-core.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
@@ -124,6 +125,11 @@ async function main(): Promise<void> {
   if (!input) {
     process.exit(0);
   }
+
+  // Debug-only sampling switch — see lib/payload-dump.ts module doc for
+  // why this is deliberately NOT behind the monitor gate below.
+  const dumpEventName = (input as Record<string, unknown>).hook_event_name as string | undefined;
+  dumpPayload(PLATFORM, dumpEventName ?? 'unknown', input);
 
   const config = loadConfig();
   const nativeToolMapping = config.guard?.native_tool_mapping?.[PLATFORM_KEY];
