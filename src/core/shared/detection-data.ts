@@ -126,16 +126,20 @@ export const SENSITIVE_FILE_PATHS = [
  *
  * The returned fragments have no leading slash, so they slot straight
  * into the existing substring matcher without changing its shape.
+ *
+ * Reads `process.env` directly and memoises on the raw string. It takes
+ * no env argument on purpose: nothing ever passed one, and a memo keyed
+ * on the string alone would silently serve one env object's answer to
+ * another's. Tests drive it the way the runtime does — by setting
+ * `process.env.XDG_CONFIG_HOME`.
  */
 const XDG_PREFIX = '.config/';
 
 let xdgCacheKey: string | undefined;
 let xdgCacheValue: string[] = [];
 
-export function xdgRelocatedSensitivePaths(
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const raw = env.XDG_CONFIG_HOME ?? '';
+export function xdgRelocatedSensitivePaths(): string[] {
+  const raw = process.env.XDG_CONFIG_HOME ?? '';
   if (xdgCacheKey === raw) return xdgCacheValue;
 
   let derived: string[] = [];
@@ -143,11 +147,20 @@ export function xdgRelocatedSensitivePaths(
     let root = raw.replace(/\\/g, '/');
     // Same `~` expansion the matchers apply to the candidate path.
     if (root.startsWith('~/')) root = '/HOME' + root.slice(1);
-    root = root.replace(/\/+$/, '').replace(/^\/+/, '');
-    if (root) {
-      derived = SENSITIVE_FILE_PATHS
-        .filter((p) => p.startsWith(XDG_PREFIX))
-        .map((p) => `${root}/${p.slice(XDG_PREFIX.length)}`);
+    // Only an ABSOLUTE root can yield a meaningful fragment. The XDG
+    // spec requires one, so a relative value is a misconfiguration —
+    // and honouring it would be actively harmful: `XDG_CONFIG_HOME=cfg`
+    // derives the fragment `cfg/opencode/`, which the substring matcher
+    // then hits on any unrelated `/some/project/cfg/opencode/...`.
+    // Derive nothing; the static list still applies.
+    const absolute = root.startsWith('/') || /^[A-Za-z]:\//.test(root);
+    if (absolute) {
+      root = root.replace(/\/+$/, '').replace(/^\/+/, '');
+      if (root) {
+        derived = SENSITIVE_FILE_PATHS
+          .filter((p) => p.startsWith(XDG_PREFIX))
+          .map((p) => `${root}/${p.slice(XDG_PREFIX.length)}`);
+      }
     }
   }
 

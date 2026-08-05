@@ -1694,6 +1694,28 @@ describe('Integration: sensitive-path detection honours XDG_CONFIG_HOME (D1)', (
     assert.notEqual(result.decision, 'deny');
   });
 
+  it('a RELATIVE XDG_CONFIG_HOME derives no fragments at all', async () => {
+    // `XDG_CONFIG_HOME=cfg` used to derive the bare fragment
+    // `cfg/opencode/`, which the substring matcher hits on any unrelated
+    // `/some/project/cfg/opencode/...`. XDG requires an absolute path,
+    // so a relative one is a misconfiguration and must derive nothing.
+    const { xdgRelocatedSensitivePaths } = await import('../core/shared/detection-data.js');
+    await withXdgConfigHome('cfg', async () => {
+      assert.deepEqual(xdgRelocatedSensitivePaths(), []);
+      const result = await write('/some/project/cfg/opencode/plugins/build.js');
+      assert.notEqual(result.decision, 'deny');
+    });
+    // ...and an absolute root still works, so the guard rejects only the
+    // degenerate case.
+    const xdg = mkdtempSync(join(tmpdir(), 'nio-xdg-'));
+    await withXdgConfigHome(xdg, async () => {
+      assert.ok(xdgRelocatedSensitivePaths().length > 0);
+      const result = await write(join(xdg, 'opencode', 'plugins', 'evil.js'));
+      assert.equal(result.decision, 'deny');
+      assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+    });
+  });
+
   it('with XDG_CONFIG_HOME unset, only the static list applies', async () => {
     const had = Object.hasOwn(process.env, 'XDG_CONFIG_HOME');
     const prev = process.env.XDG_CONFIG_HOME;

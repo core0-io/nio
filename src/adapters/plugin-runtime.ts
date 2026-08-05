@@ -207,11 +207,30 @@ export class InProcessPluginRuntime {
     await this.flushSessionTurn(sessionId);
   }
 
+  /**
+   * Emit a session's accumulated turn state WITHOUT claiming a user turn
+   * ended. The public, audit-silent half of `onTurnEnd`.
+   *
+   * Exists for sub-agent child sessions: a child accumulates its own
+   * CollectorState (tools running inside the sub-agent arrive keyed on
+   * the child id) and that state must be flushed at the child's own idle
+   * so its spans land under a turn root emitted at the right time. But
+   * the child's idle is not a user turn end — the sub-agent's lifecycle
+   * is already recorded on the parent as `subagent_spawning` /
+   * `subagent_ended`, and writing `agent_end` for the child would put a
+   * row in the audit log that reads, to anyone querying it directly, as
+   * a turn the user ended. `flushSessionTurn` itself is `protected`, so
+   * without this the only reachable entry point was `onTurnEnd`.
+   */
+  async flushTurnSpans(sessionId: string): Promise<void> {
+    await this.flushSessionTurn(sessionId);
+    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+  }
+
   /** Per-turn flush. Idempotent: no-op when no state exists. */
   async onTurnEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'agent_end');
-    await this.flushSessionTurn(sessionId);
-    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+    await this.flushTurnSpans(sessionId);
   }
 
   /** Increment the per-turn counter. Separate from onTurnEnd so
