@@ -20,15 +20,20 @@ import { fileURLToPath } from 'node:url';
 /**
  * The bundled hook-cli, as Hermes actually invokes it.
  *
- * Bundled by bun into `plugins/claude-code/skills/nio/scripts/`, NOT
- * `dist/scripts/` — same resolution as hook-cli.test.ts. Tests must run
- * against the bundle: `bun` rewrites `require` and resolves
- * `@opentelemetry/*` differently from `tsc`, and that difference has
- * already hidden one real bug (see common.ts's `createRequire` fix).
+ * `plugins/hermes/scripts/hook-cli.js`, NOT `dist/scripts/` and NOT the
+ * copy under `plugins/claude-code/skills/nio/scripts/`. Tests must run
+ * against a bundle rather than tsc output — `bun` rewrites `require` and
+ * resolves `@opentelemetry/*` differently from `tsc`, and that difference
+ * has already hidden one real bug (see common.ts's `createRequire` fix) —
+ * and the two bundles are built differently: the Hermes one is a 4.2MB
+ * single file (`splitting: false`, so a Hermes-only release zip has no
+ * dependency on the Claude Code plugin), the Claude Code one is chunked.
+ * Only the Hermes one is ever executed by Hermes, so only the Hermes one
+ * is worth pinning here (review finding M3).
  */
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const HERMES_HOOK_CLI = join(
-  HERE, '..', '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
+  HERE, '..', '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js',
 );
 
 /**

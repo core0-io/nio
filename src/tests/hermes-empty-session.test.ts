@@ -55,7 +55,7 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 // dist/scripts/ — same resolution as monitor-hermes.test.ts.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
-  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
+  HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js',
 );
 
 const HOOK_TIMEOUT_MS = 45000;

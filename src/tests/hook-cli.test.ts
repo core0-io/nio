@@ -23,20 +23,17 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { trackTempDir } from './helpers/tmp-dirs.js';
 
-// Resolve path to the built hook-cli.js. Test file lives in
-// dist/tests/ at runtime. Scripts are bundled by bun (not tsc) into
-// plugins/claude-code/skills/nio/scripts/, not dist/scripts/.
+// Resolve path to the built hook-cli.js. Test file lives in dist/tests/
+// at runtime; scripts are bundled by bun (not tsc), so dist/scripts/ is
+// the wrong target. Of the two bundles, this drives the one Hermes
+// actually executes — plugins/hermes/scripts/hook-cli.js, a single file
+// built with `splitting: false` — rather than the chunked copy that lands
+// in the Claude Code plugin as a side effect of bundling src/scripts/*
+// (review finding M3). The two bundlers resolve `@opentelemetry/*`
+// differently, and that difference has already hidden one real bug.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const HOOK_CLI = join(
-  HERE,
-  '..',
-  '..',
-  'plugins',
-  'claude-code',
-  'skills',
-  'nio',
-  'scripts',
-  'hook-cli.js',
+  HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js',
 );
 
 // Isolated NIO_HOME so tests don't touch the developer's ~/.nio.

@@ -30,7 +30,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = join(HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts');
 const COLLECTOR_HOOK = join(SCRIPTS_DIR, 'collector-hook.js');
 const GUARD_HOOK = join(SCRIPTS_DIR, 'guard-hook.js');
-const HOOK_CLI = join(SCRIPTS_DIR, 'hook-cli.js');
+// hook-cli is only ever run by Hermes, and Hermes runs its own
+// single-file bundle — not the chunked copy that lands in the Claude
+// Code scripts dir as a by-product of bundling src/scripts/*.
+const HOOK_CLI = join(HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js');
 const SCANNER_HOOK = join(SCRIPTS_DIR, 'scanner-hook.js');
 
 const cleanupDirs: string[] = [];

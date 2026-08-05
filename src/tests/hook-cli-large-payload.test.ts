@@ -42,7 +42,7 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
-  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
+  HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js',
 );
 
 // Comfortably larger than a pipe buffer (64KB) and than the 128KB the

@@ -44,7 +44,7 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
-  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
+  HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'hook-cli.js',
 );
 
 // Padding for the analyser endpoint. The `response_invalid` / request
