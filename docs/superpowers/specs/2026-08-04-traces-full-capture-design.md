@@ -244,12 +244,22 @@ ContentBlock {
 }
 ```
 
-**`fidelity` 是必需的，不是可选装饰。** thinking 块在不同平台上是两种性质截然不同的数据：
+**`fidelity` 是必需的，不是可选装饰。** thinking 块存在两种性质截然不同的数据：
 
-- `full` —— 模型的完整推理原文（Claude Code；Hermes / OpenClaw 配 Anthropic 模型时）
-- `summary` —— 模型对自身推理的步骤级摘要（Codex，约占实际推理的 3%，只述"做了哪几步"，不含"为什么"）
+- `full` —— 模型的完整推理原文
+- `summary` —— 模型对自身推理的步骤级摘要（实测约占实际推理的 3%，只述"做了哪几步"，不含"为什么"）
 
-缺了这个标记，后端里一行 40 字符的 Codex 步骤标题与一段千字的完整推理链会呈现为同类数据。任何基于 thinking 的分析（行为审计、异常检测、推理质量评估）都会因此得出错误结论——把"摘要里没提到风险"误读成"模型没考虑风险"。
+缺了这个标记，后端里一行 40 字符的步骤标题与一段千字的完整推理链会呈现为同类数据。任何基于 thinking 的分析（行为审计、异常检测、推理质量评估）都会因此得出错误结论——把"摘要里没提到风险"误读成"模型没考虑风险"。
+
+**必须运行时判定，不得按平台硬编码。** 同一平台换个模型 fidelity 就变（见平台矩阵一节）。判定依据是数据形态本身：
+
+| 观察到的形态 | fidelity | 出处 |
+|---|---|---|
+| Anthropic `thinking` 内容块 | `full` | Claude Code transcript；Hermes/OpenClaw 配 Anthropic 模型时 |
+| `summary[].text` 型条目（伴随 `encrypted_content`） | `summary` | Codex rollout 的 `reasoning` 条目；Hermes 的 `codex_reasoning_items[]` |
+| 仅有 `encrypted_content`、`summary` 为空 | 不产出 thinking 块 | Codex `effort=medium` 及以下 |
+
+判定应在各 `ConversationSource` 实现内完成——它是唯一能看到原始形态的一层。上层 `chat-span-emitter` 只消费已标记好的 `ChatCall`。
 
 对应地，内容日志的 `nio.content.type` 保持 `thinking` 不变，另以属性 `nio.content.fidelity` 承载该标记，便于后端在查询层直接过滤。
 
@@ -345,16 +355,21 @@ span 上保留短摘要（沿用现有 `nio.tool_summary`，前 200 字符），
 
 | 平台 | prompt | response | thinking | LLM 级 span | 依据 |
 |---|---|---|---|---|---|
-| Claude Code | 是 | 是 | **完整原文** | 是 | 已实机验证 |
-| Codex | 是 | 是 | **仅步骤标题摘要，且需 `effort=high`** | 是 | 已实机验证 |
-| Hermes | 是 | 是（`assistant_response`） | 预期完整原文（`conversation_history[].reasoning`） | 是（事件对） | 官方文档，**未实机验证** |
-| OpenClaw | 是 | 是 | 预期完整原文（reasoning 独立消息） | 是 | 官方文档，**未实机验证** |
+| Claude Code | 是 | 是 | 取决于模型（Claude → 完整原文） | 是 | 已实机验证 |
+| Codex | 是 | 是 | 取决于模型（GPT-5 → 步骤摘要，需 `effort=high`） | 是 | 已实机验证 |
+| Hermes | 是 | 是（`assistant_response`） | 取决于模型（实测 gpt-5.5 → 步骤摘要） | 是（事件对） | 已实机验证 |
+| OpenClaw | 是 | 是 | 取决于模型 | 是 | 官方文档，**未实机验证** |
 
-### thinking 不是二元的，是量级差异
+### thinking 的形态由模型提供商决定，不是平台属性
 
-这是本矩阵最容易被误读的一栏。四个平台里没有"没有 thinking"的，但拿到的东西性质完全不同：
+这是本矩阵最关键的一条，也是最容易搞错抽象层级的地方。**四个平台没有一个"不支持 thinking"——能拿到什么完全取决于底层配了哪家模型。**
 
-**决定因素是模型提供商，不是 agent 平台。** Anthropic 模型返回完整 thinking 块；OpenAI reasoning 系列（o 系列 / GPT-5）在 API 层面就不暴露 raw chain-of-thought，这是产品策略。因此 Hermes / OpenClaw 这类多 provider 平台，能拿到什么取决于用户配了哪家模型。
+- **Anthropic 模型** → 返回完整 thinking 块，原文可得
+- **OpenAI reasoning 系列**（o 系列 / GPT-5）→ API 层面不暴露 raw chain-of-thought，最多给步骤级摘要，这是产品策略非技术限制
+
+Hermes / OpenClaw 这类多 provider 平台本质是**转发层**：底层给什么就存什么。实测佐证——Hermes 配 gpt-5.5 时，assistant 消息里出现的字段名是 `codex_reasoning_items`，条目内 `_issuer_kind: "codex_backend"`，即 Hermes 按 provider 分别存放原始 item 并以 provider 名作前缀。同一个 Hermes 部署换成 Anthropic 模型，拿到的就会是完整 thinking 块。
+
+**因此 `fidelity` 必须运行时判定，不能按平台硬编码**（判定规则见下文 ContentBlock 一节）。按平台写死是错误的抽象层级——这个错误在本 spec 前两版中犯过两次，先后把 Codex 和 Hermes 的模型限制误记为平台限制。
 
 **Codex 实测数据**（gpt-5.5，同一 prompt 两次会话对照）：
 
@@ -404,16 +419,47 @@ reasoning → function_call → reasoning → function_call → … → message(
 
 这正好印证 `ConversationSource` 双模抽象的必要性——两个平台的解析逻辑无法共用。
 
+### Hermes 已实机确认的结构
+
+用 `NIO_DUMP_PAYLOAD` 采样 `post_llm_call`（模型 gpt-5.5，走 codex_backend）：
+
+```
+extra.user_message          str
+extra.assistant_response    str（3615 字符）
+extra.conversation_history  list（30 条：user 1 / assistant 13 / tool 16）
+extra.model                 "gpt-5.5"
+extra.platform              "cli"
+```
+
+**`assistant_response` 与 `conversation_history` 均确实存在。** 而当前 `hermesToCollectorInput` 只提取 6 个字段，`Stop` 分支无任何内容提取逻辑——这两个字段一直在 payload 里未被取用，属既有缺陷（Phase 4 修复）。
+
+assistant 消息出现的全部键：
+
+```
+role · content · finish_reason · tool_calls
+reasoning              13 条 —— 摘要文本
+reasoning_content       7 条 —— 与 reasoning 内容重复
+codex_reasoning_items   8 条 —— 原始 API item
+```
+
+三者是同一份数据的三种形态：`codex_reasoning_items[]` 是原始响应（含 `encrypted_content` 1060–2296 字符 + `summary[]`），`reasoning` / `reasoning_content` 是从其 `summary[].text` 拼接而来的摘要文本，两者内容一致。
+
+**无 transcript 路径字段**——因此 `docs/COLLECTOR-SIGNALS.md` 与 `docs/ARCHITECTURE.md` 中"当 `post_llm_call` 提供 transcript path 时走 Claude Code 同款路径"的描述应删除而非修正：该字段不存在，条件永不成立（Phase 6）。
+
 ### 未实机验证项
 
-Hermes 与 OpenClaw 按官方文档设计实现，**不做实机验证**（时间约束下的显式决定）。相应风险记录如下：
+**OpenClaw** 未能实机验证——采样时发现该机器上 OpenClaw 安装已损坏（`MODULE_NOT_FOUND`，pnpm 全局目录下 `openclaw/dist/index.js` 缺失，gateway 无法启动）。此为环境问题，与本设计无关。
 
-| 平台 | 文档依据 | 风险 |
+按官方文档实现，风险记录：
+
+| 项 | 文档依据 | 风险 |
 |---|---|---|
-| Hermes | `post_llm_call` 签名含 `assistant_response` / `conversation_history`；assistant 消息结构含 `role` / `content` / `tool_calls` / `reasoning` | `reasoning` 键位于 `conversation_history` 元素上属推断，文档未直接写明 hook 能否读到 |
-| OpenClaw | reasoning 作为独立消息发送（带 `Thinking` 前缀），Anthropic 模型走 native thinking blocks | 官方 `llm_output` 字段表**不含**内容字段（仅 `runId`/`callId`/`provider`/`model`/`outcome`/`durationMs`/`contextTokenBudget` 等元数据）；现有代码读的 `assistantTexts` / `usage` 不在文档列表内，可能依赖未文档化行为，上游改版有静默断裂风险。thinking 很可能需从消息流事件（`before_agent_reply` / `before_message_write` / `message_sending`）获取而非 `llm_output` |
+| `llm_output` 内容字段 | 官方字段表仅 `runId`/`callId`/`provider`/`model`/`outcome`/`durationMs`/`upstreamRequestIdHash`/`contextTokenBudget` 等**元数据** | 现有代码读的 `assistantTexts` / `usage` **不在文档列表内**，可能依赖未文档化行为，上游改版有静默断裂风险 |
+| thinking 通道 | reasoning 作为独立消息发送（带 `Thinking` 前缀），受 `/reasoning on\|off\|stream` 控制 | 很可能需从消息流事件（`before_agent_reply` / `before_message_write` / `message_sending`）获取而非 `llm_output`；且用户关闭 reasoning 显示时无数据 |
 
-实现时按文档编码，并在解析层对缺失字段做 fail-safe 降级（字段不存在即视为该平台不提供该项，不抛异常、不告警）。`NIO_DUMP_PAYLOAD` 调试开关已就位，后续任何时候都可低成本补验。
+实现时按文档编码，解析层对缺失字段 fail-safe 降级（字段不存在即视为不提供该项，不抛异常、不告警）。`NIO_DUMP_PAYLOAD` 已就位，环境修复后可随时低成本补验。
+
+**注意**：OpenClaw 的 thinking「支不支持」不需要单独验证——它与 Hermes 同为转发层，走完全相同的运行时 fidelity 判定逻辑。真正未覆盖的是「Anthropic 模型 → 完整 thinking」这条路径在 Hermes/OpenClaw 上的表现，但该路径的数据形态已由 Claude Code 的实机验证覆盖。
 
 **降级原则**：平台确实不提供的数据，在 `docs/COLLECTOR-SIGNALS.md` 中如实标注覆盖边界，不做虚假承诺。
 
@@ -425,9 +471,9 @@ Phase 1  采集总闸
          必须最先完成 —— 否则后续开发调试期间测试数据持续外发
 
 Phase 2  平台能力验证 —— 已收敛，不再阻塞后续
-         Claude Code / Codex 已实机验证（结论见"平台覆盖矩阵"）
-         Hermes / OpenClaw 按官方文档实现，不做实机验证（时间约束下的显式决定），
-         风险已在矩阵中登记；NIO_DUMP_PAYLOAD 开关已就位，可随时低成本补验
+         Claude Code / Codex / Hermes 已实机验证（结论见"平台覆盖矩阵"）
+         OpenClaw 因该机器安装损坏未能验证，按官方文档实现，风险已登记
+         NIO_DUMP_PAYLOAD 调试开关已就位，环境修复后可随时低成本补验
 
 Phase 3  trace 骨架 v2
          chat span + tool 嵌套 + 延迟发送 + 崩溃补发 + session trace/link
@@ -457,7 +503,9 @@ Phase 6  文档修正
 
 Codex 侧的真实结构已在 Phase 2 摸清（含 `reasoning` / `function_call` / `function_call_output` / `token_count` / `task_complete`），但采到的样本含完整 developer prompt 与真实对话，**不可直接入库**。应按真实结构生成合成 fixture：条目类型、字段名、嵌套形态与真实文件一致，内容全部替换为无意义占位。
 
-Hermes / OpenClaw 无实机样本，其解析器测试以按文档构造的合成 fixture 驱动，并在 fixture 文件头注明"基于官方文档构造，未经实机校验"。
+Hermes 已有实机样本（`post_llm_call` 完整 envelope，含 30 条 `conversation_history`），同样含真实对话，须合成后入库。
+
+OpenClaw 无实机样本，其解析器测试以按文档构造的合成 fixture 驱动，并在 fixture 文件头注明"基于官方文档构造，未经实机校验"。
 
 ### 沙箱约束
 
