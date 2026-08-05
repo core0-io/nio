@@ -18,7 +18,7 @@ import { findingId } from '../../models.js';
 import {
   WEBHOOK_EXFIL_DOMAINS,
   HIGH_RISK_TLDS,
-  SENSITIVE_FILE_PATHS,
+  matchesSensitiveFilePath,
   SECRET_PATTERNS,
   SECRET_PRIORITY,
 } from '../../shared/detection-data.js';
@@ -100,13 +100,7 @@ function isSensitivePath(
   if (normalized.startsWith('~/')) {
     normalized = '/HOME' + normalized.slice(1);
   }
-  const paths = extraPaths
-    ? [...SENSITIVE_FILE_PATHS, ...extraPaths]
-    : SENSITIVE_FILE_PATHS as unknown as string[];
-  const stringMatch = paths.some(
-    (p) => normalized.includes(`/${p}`) || normalized.endsWith(p),
-  );
-  if (stringMatch) return true;
+  if (matchesSensitiveFilePath(normalized, extraPaths)) return true;
 
   if (extraPatterns) {
     for (const source of extraPatterns) {
