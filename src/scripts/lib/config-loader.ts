@@ -55,19 +55,45 @@ async function reportConfigError(_configDir: string, configPath: string, err: un
 }
 
 function nioDir(): string {
-  return process.env['NIO_HOME'] ?? join(homedir(), '.nio');
+  // `||` not `??`: an empty NIO_HOME means "unset", matching
+  // adapters/common.ts. With `??` an empty string would resolve the
+  // config to `/config.yaml`, and the two modules would disagree about
+  // the same environment variable.
+  return process.env['NIO_HOME'] || join(homedir(), '.nio');
 }
+
+// Cache keyed by resolved config path. A hook process reads config 4+
+// times (collector / logs / agent name / monitor gate); OpenClaw's
+// long-lived daemon does so twice per tool call. Keying by path rather
+// than caching globally keeps tests that switch NIO_HOME honest.
+//
+// The cache lives for the process lifetime. Per-event platforms (Claude
+// Code, Codex, Hermes) spawn a fresh process per hook, so this is
+// invisible to them. OpenClaw's daemon is long-lived, so editing
+// config.yaml there requires a daemon restart to take effect — but that
+// already matches how the OpenClaw provider reads config once at
+// registration, so this doesn't introduce a new inconsistency.
+const rawConfigCache = new Map<string, Record<string, unknown>>();
 
 function readRawConfig(): Record<string, unknown> {
   const configDir = nioDir();
   const configPath = join(configDir, 'config.yaml');
 
-  if (!existsSync(configPath)) return {};
+  const cached = rawConfigCache.get(configPath);
+  if (cached) return cached;
+
+  if (!existsSync(configPath)) {
+    rawConfigCache.set(configPath, {});
+    return {};
+  }
 
   try {
-    return (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
+    const parsed = (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
+    rawConfigCache.set(configPath, parsed);
+    return parsed;
   } catch (err) {
     reportConfigError(configDir, configPath, err);
+    rawConfigCache.set(configPath, {});
     return {};
   }
 }
