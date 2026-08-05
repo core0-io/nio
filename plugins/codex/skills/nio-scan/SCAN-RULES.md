@@ -140,8 +140,10 @@ Detailed Grep patterns for all 15 detection rules. Use this as reference when ex
 | `you\s+must\s+(?:always\s+)?(?:obey\|follow\|execute)` (i) | Force obedience |
 | `system\s*:\s*you\s+are` (i) | System prompt injection |
 | `\[system\].*\[/system\]` (i, multiline) | System tag injection |
-| `忽略(?:之前\|所有\|上面)(?:的)?(?:指令\|规则\|说明)` | Chinese: ignore instructions |
-| `无需确认\|自动执行\|跳过验证` | Chinese: skip confirm / auto-exec |
+
+Patterns are English-only. Non-English phrasings of the same intent are not
+detected by this rule — add them via `guard.file_scan_rules` if your threat
+model needs them.
 
 ## Rule 10: NET_EXFIL_UNRESTRICTED (HIGH)
 **Files**: `*.js`, `*.ts`, `*.mjs`, `*.py`, `*.md`
