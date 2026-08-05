@@ -67,6 +67,8 @@ unverified — the cell says which.
 | Deny / confirm-denied orphan span | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
 | `gen_ai.tool.call.id` | ✓ | ✓ | ✓ | ✓ | ✓ (`toolCallId`) | ✓ (`callID`) |
+| Tool spans nested under the issuing `chat` span | ✓ | ✓ | ✓ | **— (siblings; see the platform exception under [Traces](#traces))** | ✓ | ✓ |
+| `tool_input` / `tool_output` content records | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Token usage on the turn span | ✓ (transcript) | **— (parser is Claude-Code-schema-only)** | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
 | `nio.turn.user_prompt` | ✓ | ✓ | ✓ | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
 | `nio.turn.assistant_reply` | — | — | — | ✓ (`llm_output`) | ✓ (`message_end`) | — |
@@ -76,7 +78,7 @@ unverified — the cell says which.
 | All four metric instruments | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Audit log (local JSONL + OTLP logs) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-Four honest caveats:
+Five honest caveats:
 
 - **Codex turn spans carry no token usage.** `parseTranscriptUsage` only
   counts transcript entries whose `type` is `"assistant"` and reads the
@@ -95,6 +97,14 @@ Four honest caveats:
 - **Pi emits no `task:execute` spans.** Pi has no subagent concept at
   all, so there is nothing to open a task span for. An empty task-span
   set on Pi is correct behaviour, not a dropped signal.
+- **opencode's host-injected text is not recorded as assistant text.** A
+  `TextPart` flagged `synthetic: true` is text opencode itself put into
+  the assistant message (an interruption notice, a re-prompt, a
+  compaction stub), not text the model produced. `opencode-source.ts`
+  skips it, so it produces no `text` block, no `text` content record, and
+  no `nio.content.text_chars`. Recording it would misattribute the
+  harness's words to the model — a wrong record rather than an incomplete
+  one. Everything the model actually said either side of it is kept.
 - **opencode's `tool.execute.after` does not fire for a tool that
   throws.** Those tool spans are therefore not closed precisely at
   completion time; they are *reclaimed* by the `session.idle` flush,
@@ -415,8 +425,33 @@ session file, a platform whose conversation data never reached the
 collector) the chat layer is skipped entirely and every tool span hangs
 off the turn — the pre-chat-layer shape, degraded but never broken. The
 tool's arguments and result still reach the backend either way: both go
-out as content records at `PostToolUse`, which needs no source (see
-[Content records](#content-records)).
+out as content records associated with the tool span, which needs no
+source (see [Content records](#content-records)). The hook platforms emit
+them at `PostToolUse`; the in-process platforms emit the arguments when
+the tool span opens and the result when it closes.
+
+**Which platforms nest tool spans under their chat call**
+
+| Platform | Tool span parent | Why |
+| --- | --- | --- |
+| Claude Code | the `chat` span that issued it | `tool_use` ids from the transcript |
+| Codex | the `chat` span that issued it | `call_id` from the rollout file |
+| Hermes | the `chat` span that issued it | `tool_calls[].id` from the `post_llm_call` payload |
+| Pi | the `chat` span that issued it | `toolCall.id` from the session JSONL, plus `inferred` timing |
+| opencode | the `chat` span that issued it | `callID` from the tool part, plus `exact` timing |
+| **OpenClaw** | **the turn root — sibling of `chat`** | neither channel exists; see below |
+
+Pi and opencode are pinned by
+`src/tests/pi-opencode-span-hierarchy.test.ts`, which drives each real
+binding end to end and asserts the tool span's `parentSpanId` is the chat
+span's id. Each case is arranged so only ONE of the two channels can
+claim the span, so neither can silently cover for the other: Pi's
+transcript entry is stamped after the tool span opens (time window out of
+play, id channel decisive), and one of opencode's two tool calls has no
+accumulated message part (id channel out of play, time window decisive).
+Dropping `tool_use` from `pi-source.ts` turns the Pi case red; pinning
+`opencode-source.ts` to `timing: 'synthetic'` turns the opencode case
+red.
 
 **Platform exception · on OpenClaw, `chat` and `execute_tool` are
 siblings.** Every other platform nests a tool span under the chat span
@@ -436,11 +471,15 @@ So every OpenClaw tool span is an orphan and lands on the turn root
 **regardless of when it is emitted** — verified by running the plugin
 with its `after_tool_call` deferred like every other platform's: the
 parent stayed the turn root. That is why the plugin keeps its eager
-per-tool export: deferring would trade crash-resilience (OpenClaw holds
-its state in memory, so there is nothing on disk for the recovery path to
-replay) and prompt visibility for no structural gain. Closing the
-exception requires teaching `openclaw-source.ts` to reconstruct
-`tool_use` first.
+per-tool export (`PluginRuntimeOptions.eagerToolSpans`, set only by the
+OpenClaw binding): deferring would trade crash-resilience (the whole
+in-process family holds its turn state in memory, with no
+`traces-state-store-<session>.json` for the recovery path to replay, so a
+parked span is simply lost if the host dies before turn close) and prompt
+visibility for no structural gain. Pi and opencode pay exactly that
+crash-resilience price and get the nesting for it, which is why the
+default is to park. Closing the exception requires teaching
+`openclaw-source.ts` to reconstruct `tool_use` first.
 
 Both halves of the exception — the eager export AND the sibling
 parentage — are pinned by
@@ -497,10 +536,24 @@ or plain `chat` when the source does not report a model.
 | `nio.chat.is_sidechain` | True when the call belongs to a subagent rather than the main thread | turn close | all |
 | `nio.chat.timing` | `exact` / `inferred` / `synthetic` — how much `endMs - startMs` can be trusted | turn close | all |
 
-> `nio.chat.timing` is not decoration. Only one platform reports both ends
-> of an LLM call; the others infer the end from the next call's start, or
-> synthesise both. A consumer that cannot tell them apart reads a
-> synthetic zero-duration span as "the model answered instantly".
+> `nio.chat.timing` is not decoration — how much of it is measured varies
+> by platform:
+>
+> | Value | Where it comes from | Meaning |
+> | --- | --- | --- |
+> | `exact` | Codex (`task_complete`'s `started_at` / `completed_at`); opencode (`time.created` + `time.completed` on the assistant message) | both ends are platform-reported |
+> | `inferred` | Claude Code and Pi, for every call that has a successor | start is real, end is borrowed from the next call's start |
+> | `synthetic` | OpenClaw (no event carries a timestamp); Hermes (one `Date.now()` for a whole replayed payload); Claude Code's last call in a batch, which has no successor to borrow from | the duration is fabricated |
+>
+> `exact` used to be Codex's alone; opencode is the second platform to
+> reach it (and drops to `inferred` for a message still streaming, which
+> has a `created` but no `completed`).
+>
+> A consumer that cannot tell them apart reads a synthetic zero-duration
+> span as "the model answered instantly". `buildSpanTree` reads it too:
+> its time-window attribution channel is enabled only for a call whose
+> timing is not `synthetic`, which is what lets opencode nest a tool span
+> whose `callID` never showed up in a message part.
 
 **Known limitation · Hermes replays its history.** Every `post_llm_call`
 payload carries the *entire* `conversation_history`, and each one closes a
@@ -814,7 +867,7 @@ so there is nothing to emit through).
 | Attribute | Description |
 | --- | --- |
 | `nio.content.type` | `thinking` / `text` / `tool_input` / `tool_output` |
-| `nio.content.index` | Position of the source block within its LLM call; `0` for the `PostToolUse`-emitted `tool_input` / `tool_output` records, which have no block sequence |
+| `nio.content.index` | Position of the source block within its LLM call; `0` for the out-of-band `tool_input` / `tool_output` records, which have no block sequence |
 | `nio.content.fidelity` | `full` / `summary` — only on `thinking`. Follows the model provider, not the platform: Anthropic models return complete reasoning, OpenAI's reasoning series returns step summaries. Do not treat the two as interchangeable |
 | `nio.content.truncated` | `true` only when the body was cut |
 | `nio.content.original_bytes` | Pre-truncation UTF-8 byte length; only present when truncated |
@@ -839,26 +892,35 @@ become available at different moments:
 | --- | --- | --- |
 | `thinking` · `text` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
 | `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — requires a `ConversationSource` |
-| `tool_input` (from the hook payload) | the `execute_tool` span | **`PostToolUse`**, immediately — the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
-| `tool_output` | the `execute_tool` span | **`PostToolUse`**, immediately — same pre-allocated id |
+| `tool_input` (out of band) | the `execute_tool` span | Claude Code / Codex / Hermes: **`PostToolUse`**. OpenClaw / Pi / opencode: **when the tool span opens** — the runtime has the params on the pre-side and an outcome, not params, on the post-side. Either way the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
+| `tool_output` | the `execute_tool` span | **when the tool call finishes** (`PostToolUse` on the hook platforms, `onPostTool` on the in-process ones) — same pre-allocated id |
 
-So a `PostToolUse`-emitted record reaches the backend *before* the span it
-names, by up to the remaining length of the turn (longer if the turn had
-to be recovered after a crash). The ids match either way; only "log
-references a span I haven't seen" alerting needs to allow for it.
+So an out-of-band record reaches the backend *before* the span it names,
+by up to the remaining length of the turn (longer if the turn had to be
+recovered after a crash). The ids match either way; only "log references
+a span I haven't seen" alerting needs to allow for it.
+
+Emitting the in-process family's `tool_input` on the **pre** side is what
+puts a guard-denied call's arguments on the wire there: the call never
+runs, so no post-side event fires, and on a streaming platform there may
+be no assistant message announcing it either. Pinned by
+`content-wiring.test.ts`'s "emits tool_input on a call the guard DENIED"
+case.
 
 **`tool_input` has two producers, on purpose.** Neither subsumes the
 other, so they are not deduplicated:
 
 - The **chat-call `tool_use` block** exists only when a
-  `ConversationSource` could be built (a readable transcript, or Hermes's
-  `post_llm_call` envelope). It is the only producer that covers calls
-  which never reach `PostToolUse` — anything the guard denied, and
-  interrupted calls.
-- The **`PostToolUse` record** needs no source at all, so it is the only
+  `ConversationSource` could be built (a readable transcript, Hermes's
+  `post_llm_call` envelope, opencode's accumulated parts). On the hook
+  platforms it is also the only producer that covers calls which never
+  reach `PostToolUse` — anything the guard denied, and interrupted calls.
+  It never carries a tool *result*: no `ContentBlock` has a field for one.
+- The **out-of-band record** needs no source at all, so it is the only
   producer in a degraded session (no `transcript_path`, unreadable
-  session file). Without it, losing the chat layer would silently cost
-  the arguments too, leaving only `nio.tool_summary`'s 300-char prefix.
+  session file, a streaming platform whose events never arrived). Without
+  it, losing the chat layer would silently cost the arguments too,
+  leaving only `nio.tool_summary`'s 300-char prefix.
 
 Tell them apart — or collapse them — by `nio.span_id`: chat span vs. tool
 span, with the same `nio.content.type` and the same

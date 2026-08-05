@@ -143,7 +143,10 @@ export function createOpenCodeSource(events: unknown[]): ConversationSource {
               type: 'thinking', index: blocks.length, content: p.text,
               fidelity: fidelityForProvider(info.providerID),
             });
-          } else if (p.type === 'text' && typeof p.text === 'string' && p.text.length > 0) {
+          } else if (
+            p.type === 'text' && typeof p.text === 'string' && p.text.length > 0
+            && p.synthetic !== true
+          ) {
             blocks.push({ type: 'text', index: blocks.length, content: p.text });
           } else if (p.type === 'tool' && typeof p.callID === 'string') {
             const state = (p.state && typeof p.state === 'object'
@@ -159,7 +162,16 @@ export function createOpenCodeSource(events: unknown[]): ConversationSource {
           }
           // step-start / step-finish / snapshot / patch / agent / retry /
           // compaction / subtask parts describe orchestration, not model
-          // output, and are deliberately skipped.
+          // output, and are deliberately skipped. So is a TextPart with
+          // `synthetic: true`, which is opencode's own marker for text
+          // the HOST injected into the message (an interruption notice, a
+          // re-prompt, a compaction stub) rather than text the model
+          // produced. A ChatCall's blocks are the model's output; a
+          // synthetic part recorded as a `text` block is not a lossy
+          // record, it is a wrong one — the transcript would quote the
+          // harness as the assistant, and `nio.content.text_chars` would
+          // count words nobody generated. Same category as the
+          // orchestration parts above, so it gets the same treatment.
         }
         if (blocks.length === 0) continue;
 

@@ -1,0 +1,324 @@
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
+/**
+ * Pi and opencode nest a tool span under the chat call that issued it.
+ *
+ * OpenClaw's tool spans are eager SIBLINGS of chat (pinned by
+ * `openclaw-span-hierarchy.test.ts`): `createOpenClawSource` emits no
+ * `tool_use` block and all its calls are `timing: 'synthetic'`, so
+ * neither of `buildSpanTree`'s attribution channels exists there and a
+ * parked span would land on the turn root anyway.
+ *
+ * Pi and opencode have BOTH channels — Pi's `toolCall` blocks carry an
+ * id and its calls are `inferred`; opencode's tool parts carry `callID`
+ * and its calls are `exact` — so neither qualifies for that exception.
+ * These two cases pin that their tool spans really do end up beneath
+ * their chat span rather than beside it.
+ *
+ * ── Why these cases are not vacuous ──────────────────────────────────
+ *
+ * `buildSpanTree` tries the id channel first and the time window
+ * second, so an input where BOTH channels would succeed proves nothing
+ * about either: delete one and the other silently covers for it. Each
+ * case below is therefore arranged so exactly ONE channel can claim the
+ * span, and says which:
+ *
+ *  - Pi: the transcript entry is stamped AFTER the tool span starts, so
+ *    `findCallByTime` skips it (`startMs < call.startMs`). Only the
+ *    `tool_use` id can attribute the span. Mutation-checked: making
+ *    `pi-source.ts` stop emitting `tool_use` blocks turns this case red
+ *    (the span becomes an orphan on the turn root).
+ *  - opencode: the second tool call's `message.part.updated` never
+ *    arrives, so there is no `tool_use` block carrying its `callID` and
+ *    the id channel comes up empty. That is a real opencode state, not a
+ *    contrivance — tool parts are published asynchronously and a turn
+ *    can close before the snapshot for one of them does. Only the time
+ *    window can attribute it, and the window is only consulted for a
+ *    call whose `timing` is not `'synthetic'`. Mutation-checked: pinning
+ *    `opencode-source.ts` to `timing: 'synthetic'` turns this case red.
+ *
+ * The first opencode tool call keeps its part, so the id channel is
+ * covered on that platform too.
+ *
+ * Both cases drive the real bindings (`registerPiExtension` /
+ * `createNioPlugin`) rather than calling `buildSpanTree` directly: the
+ * parenting depends on the runtime PARKING the finished tool span for
+ * end-of-turn attribution (`PluginRuntimeOptions.eagerToolSpans` false),
+ * which a direct `buildSpanTree` call would not exercise at all.
+ */
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
+import { makeInMemoryTracer } from './helpers/tracer.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
+import { writeCaptureOnConfig } from './helpers/capture-on.js';
+
+/**
+ * Run `fn` with NIO_HOME pointed at a fresh tmpdir that has blanket
+ * capture on. Same helper shape as content-wiring.test.ts's — the gate
+ * itself is pinned elsewhere; without capture on every assertion here
+ * would reduce to "nothing was emitted".
+ */
+async function withCaptureOnHome<T>(prefix: string, fn: (home: string) => Promise<T>): Promise<T> {
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), prefix)));
+  writeCaptureOnConfig(home);
+  const previousHome = process.env['NIO_HOME'];
+  process.env['NIO_HOME'] = home;
+  try {
+    return await fn(home);
+  } finally {
+    if (previousHome === undefined) delete process.env['NIO_HOME'];
+    else process.env['NIO_HOME'] = previousHome;
+  }
+}
+
+/** Guard verdict stub — these tests never run real Phase 0–6. */
+function stubNioAllow(): never {
+  return (() => ({
+    orchestrator: {
+      async evaluate() {
+        return {
+          decision: 'allow', risk_level: 'low', scores: { final: 0 },
+          findings: [], explanation: 'test verdict', phase_stopped: 1, diagnostics: [],
+        };
+      },
+    },
+  })) as never;
+}
+
+const parentOf = (span: ReadableSpan): string | undefined =>
+  (span as unknown as { parentSpanContext?: { spanId?: string } }).parentSpanContext?.spanId
+  ?? (span as unknown as { parentSpanId?: string }).parentSpanId;
+
+const named = (spans: readonly ReadableSpan[], prefix: string): ReadableSpan[] =>
+  spans.filter((s) => s.name.startsWith(prefix));
+
+describe('pi + opencode span hierarchy: tool spans nest under their chat call', () => {
+  it('pi nests the tool span under the chat call carrying the matching tool_use id', async () => {
+    await withCaptureOnHome('nio-pi-hierarchy-', async (home) => {
+      const tracer = makeInMemoryTracer();
+      try {
+        const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+        const handlers = new Map<string, (e: unknown, c: unknown) => Promise<unknown> | unknown>();
+        registerPiExtension(
+          {
+            on(name: string, fn: (e: unknown, c: unknown) => Promise<unknown> | unknown) {
+              handlers.set(name, fn);
+            },
+            registerCommand() { /* unused */ },
+          } as never,
+          {
+            nioFactory: stubNioAllow(),
+            tracerProvider: tracer.provider,
+            // Explicitly null, not omitted: `undefined` has the runtime
+            // build a real MeterProvider whose 1s export timer outlives
+            // the test process.
+            meterProvider: null,
+            loggerProvider: null,
+          },
+        );
+
+        const sessionFile = join(home, 'session.jsonl');
+        const ctx = {
+          hasUI: false,
+          cwd: '/tmp',
+          ui: { async confirm() { return true; }, notify() { /* no-op */ } },
+          sessionManager: {
+            getSessionId: () => 'pi-hierarchy-1',
+            getSessionFile: () => sessionFile,
+          },
+        };
+
+        await handlers.get('session_start')!({}, ctx);
+        await handlers.get('input')!({ text: 'list the files' }, ctx);
+
+        // The tool span opens HERE, so its start_ms is fixed now. The
+        // transcript entry below is stamped later on purpose — see the
+        // module doc: it takes the time window out of play so the
+        // `tool_use` id is the only thing that can attribute this span.
+        await handlers.get('tool_call')!(
+          { toolName: 'bash', toolCallId: 'call_hier_1', input: { command: 'ls' } }, ctx,
+        );
+        await handlers.get('tool_result')!(
+          { toolName: 'bash', toolCallId: 'call_hier_1', content: 'a.txt', isError: false }, ctx,
+        );
+
+        // Written after the prompt, as callsSince(turn_start_ms) requires,
+        // and after the tool call, as the discriminating-power argument
+        // requires. `call_hier_1` is the join key: same id on the
+        // toolCall block and on the tool event above.
+        writeFileSync(
+          sessionFile,
+          JSON.stringify({
+            type: 'message',
+            id: 'm2',
+            parentId: null,
+            timestamp: new Date(Date.now() + 5_000).toISOString(),
+            message: {
+              role: 'assistant',
+              content: [
+                { type: 'thinking', thinking: 'placeholder reasoning: I should list them' },
+                { type: 'text', text: 'placeholder reply: listing the files' },
+                { type: 'toolCall', id: 'call_hier_1', name: 'bash', arguments: { command: 'ls' } },
+              ],
+              provider: 'anthropic',
+              model: 'pi-hierarchy-model',
+              stopReason: 'toolUse',
+              timestamp: Date.now() + 5_000,
+            },
+          }) + '\n',
+          'utf-8',
+        );
+
+        await handlers.get('agent_end')!({}, ctx);
+
+        const spans = tracer.finished();
+        const chats = named(spans, 'chat');
+        const tools = named(spans, 'execute_tool');
+        const turns = named(spans, 'invoke_agent');
+        assert.equal(chats.length, 1, 'the transcript entry must have produced exactly one chat span');
+        assert.equal(chats[0]!.name, 'chat pi-hierarchy-model');
+        assert.equal(tools.length, 1, 'the tool call must have produced exactly one tool span');
+        assert.equal(turns.length, 1, 'the turn root must have been exported');
+
+        assert.equal(
+          parentOf(tools[0]!),
+          chats[0]!.spanContext().spanId,
+          'Pi has both of buildSpanTree\'s attribution channels, so its tool span must nest under ' +
+            'the chat call whose tool_use id it matches — not sit beside it on the turn root the ' +
+            'way OpenClaw\'s does (openclaw-span-hierarchy.test.ts)',
+        );
+        assert.notEqual(
+          parentOf(tools[0]!),
+          turns[0]!.spanContext().spanId,
+          'stated as an inequality too: a tool span on the turn root means attribution failed and ' +
+            'the tree quietly flattened',
+        );
+        assert.equal(
+          parentOf(chats[0]!),
+          turns[0]!.spanContext().spanId,
+          'and the chat span itself still hangs off the turn root',
+        );
+      } finally {
+        await tracer.shutdown();
+      }
+    });
+  });
+
+  it('opencode nests the tool span under its chat call, by id and by time window', async () => {
+    await withCaptureOnHome('nio-oc-hierarchy-', async () => {
+      const tracer = makeInMemoryTracer();
+      try {
+        const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          nioFactory: stubNioAllow(),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: null,
+        })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+        const sessionID = 'oc-hierarchy-1';
+        await hooks.event!({
+          event: { type: 'session.created', properties: { info: { id: sessionID } } },
+        } as never);
+        await hooks['chat.message']!(
+          {}, { message: { sessionID }, parts: [{ type: 'text', text: 'list the files' }] },
+        );
+
+        // The envelope has to be stamped at or after turn_start_ms
+        // (callsSince drops anything earlier) and at or before the tool
+        // spans open (or the time window below cannot claim the second
+        // one). `Date.now()` right here satisfies both.
+        const created = Date.now();
+        const info = {
+          id: 'msg_hier_1', sessionID, role: 'assistant',
+          modelID: 'oc-hierarchy-model', providerID: 'anthropic',
+          time: { created, completed: created + 10 },
+        };
+        await hooks.event!({
+          event: { type: 'message.updated', properties: { info } },
+        } as never);
+        await hooks.event!({
+          event: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'prt_1', type: 'text', sessionID, messageID: 'msg_hier_1',
+                text: 'placeholder reply: listing the files',
+              },
+            },
+          },
+        } as never);
+        // Only the FIRST tool call gets a part, so only it can be
+        // attributed by id — see the module doc.
+        await hooks.event!({
+          event: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'prt_2', type: 'tool', sessionID, messageID: 'msg_hier_1',
+                callID: 'call_with_part', tool: 'bash', state: { input: { command: 'ls' } },
+              },
+            },
+          },
+        } as never);
+
+        for (const callID of ['call_with_part', 'call_without_part']) {
+          await hooks['tool.execute.before']!(
+            { tool: 'bash', sessionID, callID } as never,
+            { args: { command: 'ls' } } as never,
+          );
+          await hooks['tool.execute.after']!(
+            { tool: 'bash', sessionID, callID, args: { command: 'ls' } } as never,
+            { title: 'ls', output: 'a.txt', metadata: {} } as never,
+          );
+        }
+
+        await hooks.event!(
+          { event: { type: 'session.idle', properties: { sessionID } } } as never,
+        );
+
+        const spans = tracer.finished();
+        const chats = named(spans, 'chat');
+        const tools = named(spans, 'execute_tool');
+        const turns = named(spans, 'invoke_agent');
+        assert.equal(chats.length, 1, 'the accumulated message parts must produce exactly one chat span');
+        assert.equal(chats[0]!.name, 'chat oc-hierarchy-model');
+        assert.equal(tools.length, 2, 'both tool calls must have produced a span');
+        assert.equal(turns.length, 1, 'the turn root must have been exported');
+
+        const chatSpanId = chats[0]!.spanContext().spanId;
+        const byId = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_with_part');
+        const byTime = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_without_part');
+        assert.ok(byId && byTime, 'both tool spans must carry their real opencode callID');
+
+        assert.equal(
+          parentOf(byId!),
+          chatSpanId,
+          'the tool call whose message part was accumulated is attributed by tool_use id and must ' +
+            'nest under the chat span',
+        );
+        assert.equal(
+          parentOf(byTime!),
+          chatSpanId,
+          'the tool call whose part never arrived has no tool_use id to match, so it can only be ' +
+            'attributed by the time window — which buildSpanTree consults ONLY because opencode ' +
+            'reports both ends of the call and therefore earns timing: \'exact\'. If this goes red, ' +
+            'opencode-source.ts stopped reporting real timing and the tree flattened',
+        );
+        assert.equal(
+          parentOf(chats[0]!),
+          turns[0]!.spanContext().spanId,
+          'and the chat span itself still hangs off the turn root',
+        );
+      } finally {
+        await tracer.shutdown();
+      }
+    });
+  });
+});

@@ -26,12 +26,17 @@ import { SkillScanner } from '../scanner/index.js';
 import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
 import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
 import type { ChatCall } from '../scripts/lib/conversation/types.js';
-import { createContentSink } from '../scripts/lib/content/sink.js';
+import {
+  createContentSink,
+  emitToolInputContent,
+  emitToolOutputContent,
+} from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
   recordCacheHitRate,
   recordPostToolUse,
+  deferPostToolUse,
   recordPostTaskToolUse,
   recordUserPrompt,
   recordAssistantReply,
@@ -96,6 +101,29 @@ export interface PluginRuntimeOptions {
    * logger so the content pipeline actually runs.
    */
   loggerProvider?: ReturnType<typeof createLoggerProvider>;
+  /**
+   * Export a finished tool span the moment the post-side event arrives,
+   * as a direct child of the turn root, instead of parking it for
+   * end-of-turn attribution under the chat call that issued it.
+   *
+   * Defaults to false (park + attribute), which is what every platform
+   * whose `ConversationSource` reconstructs `tool_use` blocks wants —
+   * Pi and opencode both do, and both carry non-synthetic timing, so
+   * `buildSpanTree` can name the issuing call.
+   *
+   * OpenClaw sets it to true. There, attribution is impossible in
+   * principle: `createOpenClawSource` emits no `tool_use` block and all
+   * its calls are `timing: 'synthetic'`, so both of `buildSpanTree`'s
+   * channels are unavailable and a parked span would land on the turn
+   * root anyway — the exact same tree, bought with a real loss. The
+   * in-process family keeps its turn state in memory only (no
+   * `traces-state-store-<session>.json`, so no recovery replay), so a
+   * span parked until turn close is simply gone if the host dies first.
+   * Paying that for no structural gain is the trade OpenClaw declines.
+   * See `openclaw-span-hierarchy.test.ts` and
+   * `pi-opencode-span-hierarchy.test.ts`.
+   */
+  eagerToolSpans?: boolean;
 }
 
 /**
@@ -670,6 +698,21 @@ export class InProcessPluginRuntime {
       };
       state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
       this.sessionState.set(sessionId, state);
+      // The tool span id exists from this moment, so the arguments can go
+      // out already associated with it. Emitted HERE rather than at the
+      // post side (where collector-core's hook path does it) because this
+      // is the only moment they are in hand: `onPostTool` receives an
+      // outcome, not the params. It also means a call the guard is about
+      // to DENY still contributes its arguments — the ones a reviewer
+      // most wants — even though its post-side event never fires.
+      this.emitToolContent(
+        'input',
+        monitored,
+        state.pending_spans[spanKey]?.span_id,
+        state.turn_trace_id,
+        params,
+        opts?.toolCallId,
+      );
     }
     if (meterProvider) {
       recordToolUse(meterProvider, toolName, 'PreToolUse').catch(() => {});
@@ -811,14 +854,37 @@ export class InProcessPluginRuntime {
             durationMs: outcome.durationMs,
           }),
         };
-        const r = await recordPostToolUse(
-          tracerProvider,
-          drained,
-          spanKey,
-          process.cwd(),
-          postAttrs,
-          outcome.error ?? null,
+        // Read the span id BEFORE the call below removes the pending
+        // entry, so the result record can name the span the backend is
+        // about to receive.
+        const pending = drained.pending_spans[spanKey];
+        this.emitToolContent(
+          'output',
+          monitored,
+          pending?.span_id,
+          drained.turn_trace_id,
+          outcome.result,
+          pending?.attributes?.['gen_ai.tool.call.id'] as string | undefined,
         );
+        // Park by default so `endTurn` can nest this span under the chat
+        // call that issued it — nothing at THIS moment knows which call
+        // that was. `eagerToolSpans` opts a platform out; see its doc.
+        const r = this.opts.eagerToolSpans
+          ? await recordPostToolUse(
+              tracerProvider,
+              drained,
+              spanKey,
+              process.cwd(),
+              postAttrs,
+              outcome.error ?? null,
+            )
+          : deferPostToolUse(
+              drained,
+              spanKey,
+              process.cwd(),
+              postAttrs,
+              outcome.error ?? null,
+            );
         this.sessionState.set(sessionId, r.state);
       }
     }
@@ -919,6 +985,60 @@ export class InProcessPluginRuntime {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
       return `[nio error] ${msg}`;
     }
+  }
+
+  /**
+   * Put one tool call's arguments or result on the logs signal, against
+   * the tool span id minted at PreToolUse.
+   *
+   * This is the in-process family's half of what `collector-core.ts`
+   * does on the hook path (`emitToolInputContent` /
+   * `emitToolOutputContent`). Without it, OpenClaw / Pi / opencode put
+   * tool arguments on the wire ONLY as the issuing chat call's
+   * `tool_use` block — which means not at all for a call the guard
+   * denied, or in a session with no usable `ConversationSource` (Pi's
+   * ephemeral sessions, an OpenClaw turn whose events never arrived) —
+   * and put tool RESULTS on the wire never, since no `ContentBlock`
+   * carries a tool result. See `buildToolInputRecord`'s doc for why the
+   * overlap with the `tool_use` block is intentional rather than
+   * deduplicated.
+   *
+   * Gated like every other export: `monitored` is computed by the caller
+   * for this event, and no provider is resolved (let alone built) for an
+   * unarmed session.
+   */
+  private emitToolContent(
+    kind: 'input' | 'output',
+    monitored: boolean,
+    spanId: string | undefined,
+    traceId: string | undefined,
+    payload: unknown,
+    toolCallId: string | undefined,
+  ): void {
+    if (!monitored || !spanId || !traceId) return;
+    const loggerProvider = this.getLoggerProvider();
+    if (!loggerProvider) return;
+    // Tool params and results come off live host objects on this family
+    // (not off JSON.parse), so a cycle or a BigInt is reachable and
+    // `JSON.stringify` throws on both. Losing one content record is
+    // acceptable; taking the tool call down with it is not.
+    let text: string;
+    try {
+      if (typeof payload === 'string') text = payload;
+      else if (payload === undefined || payload === null) text = '';
+      else {
+        const json = JSON.stringify(payload);
+        // `{}` carries no information and would just cost a record.
+        text = json === undefined || json === '{}' ? '' : json;
+      }
+    } catch {
+      return;
+    }
+    if (!text) return;
+    const limits = loadContentLimits();
+    const opts = { spanId, traceId, ...(toolCallId ? { toolCallId } : {}) };
+    if (kind === 'input') emitToolInputContent(loggerProvider, limits, { input: text, ...opts });
+    else emitToolOutputContent(loggerProvider, limits, { result: text, ...opts });
   }
 
   private stashGuardAttrs(

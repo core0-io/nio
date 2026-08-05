@@ -207,8 +207,19 @@ describe('InProcessPluginRuntime span wiring', () => {
       await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
       assert.equal(tracer.finished().length, 0, 'no span before the post side');
 
+      // An allowed tool's span is PARKED at the post side, not emitted:
+      // which chat call issued it is only knowable once the turn's
+      // conversation has been reconstructed. `eagerToolSpans` (OpenClaw)
+      // is the opt-out; the default runtime waits. Contrast the deny path
+      // below, which must not wait for a turn that may never end.
       await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
-      const spans = tracer.finished();
+      assert.equal(
+        tracer.finished().length, 0,
+        'the allow-path span is deferred for attribution, not exported at the post side',
+      );
+
+      await rt.onTurnEnd('s1');
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 1);
       assert.equal(spans[0]!.attributes['nio.guard.decision'], 'allow');
       assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
@@ -953,7 +964,12 @@ describe('registerPiExtension — block path and confirm dialog', () => {
         { toolName: 'bash', toolCallId: 'call-77', content: 'ok' }, ctx,
       );
 
-      const spans = tracer.finished();
+      // Pi parks its tool spans for end-of-turn attribution (see
+      // PluginRuntimeOptions.eagerToolSpans), so the turn has to close
+      // before anything reaches the exporter.
+      await pi.handlers.get('agent_end')!({}, ctx);
+
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 2);
       assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], undefined);
       assert.equal(spans[1]!.attributes['gen_ai.tool.call.id'], 'call-77');
@@ -983,8 +999,10 @@ describe('registerPiExtension — block path and confirm dialog', () => {
       await pi.handlers.get('tool_result')!(
         { toolName: 'bash', toolCallId: 'c1', content: 'unique-marker-123' }, ctx,
       );
+      // Deferred until turn close — see the toolCallId test above.
+      await pi.handlers.get('agent_end')!({}, ctx);
 
-      const spans = tracer.finished();
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 1);
       const args = spans[0]!.attributes['gen_ai.tool.call.arguments'];
       assert.equal(typeof args, 'string');
@@ -1241,8 +1259,14 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { tool: 'bash', sessionID: 's1', callID: 'call-77', args: { command: 'ls' } } as never,
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
+      // opencode parks its tool spans for end-of-turn attribution (see
+      // PluginRuntimeOptions.eagerToolSpans), so the session's idle has
+      // to fire before anything reaches the exporter.
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+      );
 
-      const spans = tracer.finished();
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 1);
       assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], 'call-77');
     } finally {
@@ -1428,9 +1452,11 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
 
-      // Before the child's idle, only the tool span has been emitted —
-      // the child's turn root is still open.
-      assert.equal(tracer.finished().length, 1);
+      // Before the child's idle nothing has been emitted at all: the
+      // child's turn root is still open, and its tool span is parked for
+      // end-of-turn attribution rather than exported at
+      // tool.execute.after (see PluginRuntimeOptions.eagerToolSpans).
+      assert.equal(tracer.finished().length, 0);
 
       await hooks.event!(
         { event: { type: 'session.idle', properties: { sessionID: 'sub-3' } } } as never,

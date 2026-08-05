@@ -289,6 +289,40 @@ describe('opencode-source', () => {
     assert.equal(calls[0].blocks[2].toolUse?.input, '{}');
   });
 
+  // `synthetic: true` is opencode's marker for text the HOST injected
+  // into the assistant message (interruption notices, re-prompts,
+  // compaction stubs). Recording it as a `text` block would quote the
+  // harness as the assistant — a wrong record, not merely an incomplete
+  // one — so it is skipped like the orchestration parts below. The real
+  // model text either side of it must survive, otherwise this would pass
+  // for an implementation that simply dropped every text part.
+  it('skips host-injected synthetic text parts, keeping the model\'s own', () => {
+    const injected = [
+      assistantMessage(),
+      { kind: 'part', part: { id: 'p1', type: 'text', messageID: 'msg_1', text: 'genuine model text' } },
+      { kind: 'part', part: { id: 'p2', type: 'text', messageID: 'msg_1', text: '[Request interrupted by user]', synthetic: true } },
+      { kind: 'part', part: { id: 'p3', type: 'text', messageID: 'msg_1', text: 'more model text' } },
+    ];
+    const [call] = createOpenCodeSource(injected).callsSince(0);
+    assert.deepEqual(
+      call.blocks.map((b) => b.content),
+      ['genuine model text', 'more model text'],
+      'a synthetic text part is not the model speaking and must not be recorded as such',
+    );
+    assert.ok(blockOrderIsSane(call), 'block indices must stay zero-based and contiguous after the skip');
+  });
+
+  // `synthetic: false` is the ordinary shape for a real text part, so the
+  // skip above must key on `=== true`, not on the property being present.
+  it('keeps a text part that explicitly marks itself non-synthetic', () => {
+    const explicit = [
+      assistantMessage(),
+      { kind: 'part', part: { id: 'p1', type: 'text', messageID: 'msg_1', text: 'model text', synthetic: false } },
+    ];
+    const [call] = createOpenCodeSource(explicit).callsSince(0);
+    assert.deepEqual(call.blocks.map((b) => b.content), ['model text']);
+  });
+
   // Orchestration parts describe the harness, not the model's output.
   it('skips orchestration parts and empty text', () => {
     const noisy = [

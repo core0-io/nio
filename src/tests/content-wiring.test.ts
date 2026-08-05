@@ -1225,15 +1225,28 @@ describe('platform wiring: every platform reaches a conversation source', () => 
           turn!.spanContext().spanId,
           'the tool span falls back to hanging off the turn',
         );
-        // NOT asserted here: a `tool_output` content record. The
-        // in-process runtime has no `emitToolOutputContent` call — that
-        // lives in collector-core's hook path only — so on Pi, opencode
-        // and OpenClaw tool arguments and results reach the wire ONLY as
-        // the issuing chat call's `tool_use` block. Which means on this
-        // degraded path they do not reach it at all. Real gap, wider than
-        // this task; recorded rather than papered over with an assertion
-        // that would pass for the wrong reason.
-        assert.equal(byContentType(logger.emitted(), 'tool_output').length, 0);
+        // This used to be the shape of the gap: the in-process runtime
+        // had no `emitToolInputContent` / `emitToolOutputContent` call at
+        // all — those lived in collector-core's hook path only — so on
+        // Pi, opencode and OpenClaw tool arguments reached the wire ONLY
+        // as the issuing chat call's `tool_use` block (i.e. not at all on
+        // this degraded path) and tool RESULTS reached it never, since no
+        // ContentBlock carries a result. The runtime emits both now, off
+        // the tool span id minted at PreToolUse, which is exactly why the
+        // degraded path is the right place to pin it: there is no chat
+        // call here for the content to hide behind.
+        const toolOutputs = byContentType(logger.emitted(), 'tool_output');
+        const toolInputs = byContentType(logger.emitted(), 'tool_input');
+        assert.equal(toolOutputs.length, 1, 'the tool result must reach the logs signal with no source in play');
+        assert.equal(toolInputs.length, 1, 'and so must the tool arguments');
+        assert.ok(String(toolOutputs[0]!.body).includes('a.txt'), 'the result body must be the real one');
+        assert.ok(String(toolInputs[0]!.body).includes('ls'), 'the argument body must be the real one');
+        assert.equal(
+          toolOutputs[0]!.spanContext!.spanId,
+          tool!.spanContext().spanId,
+          'both records must join to the TOOL span, not the turn root',
+        );
+        assert.equal(toolInputs[0]!.spanContext!.spanId, tool!.spanContext().spanId);
       } finally {
         await tracer.shutdown();
         await logger.shutdown();
@@ -1304,6 +1317,71 @@ describe('platform wiring: every platform reaches a conversation source', () => 
           'the assistant text must reach the logs signal',
         );
         assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
+      } finally {
+        await tracer.shutdown();
+        await logger.shutdown();
+      }
+    });
+  });
+
+  it('the in-process runtime emits tool_input on a call the guard DENIED, which has no post side', async () => {
+    // The other half of the tool-content wiring, and the case the
+    // `tool_use` block cannot cover on any platform: a denied call never
+    // runs, so there is no result, no `tool.execute.after`, and — on a
+    // streaming platform — no assistant message announcing it either.
+    // The arguments a reviewer most wants to see are exactly these, and
+    // before the runtime emitted them the only trace of them was
+    // `nio.tool_summary`'s 300 chars on the span.
+    await withCaptureOnHome('nio-content-oc-denied-', async () => {
+      const tracer = makeInMemoryTracer();
+      const logger = makeInMemoryLogger();
+      try {
+        const { createNioPlugin, NioBlockedError } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          nioFactory: (() => ({
+            orchestrator: {
+              async evaluate() {
+                return {
+                  decision: 'deny', risk_level: 'high', scores: { final: 0.9 },
+                  findings: [{ rule_id: 'TEST_RULE' }], explanation: 'test verdict',
+                  phase_stopped: 2, diagnostics: [],
+                };
+              },
+            },
+          })) as never,
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: logger.provider,
+        })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+        const sessionID = 'oc-denied-content';
+        await hooks.event!({ event: { type: 'session.created', properties: { info: { id: sessionID } } } });
+        await assert.rejects(
+          () => hooks['tool.execute.before']!(
+            { tool: 'bash', sessionID, callID: 'call_denied' } as never,
+            { args: { command: 'rm -rf /tmp/unique-denied-marker' } } as never,
+          ),
+          NioBlockedError,
+          'the deny must still stop the call — content capture changes nothing about enforcement',
+        );
+
+        const inputs = byContentType(logger.emitted(), 'tool_input');
+        assert.equal(inputs.length, 1, 'the denied call\'s arguments must reach the logs signal');
+        assert.ok(
+          String(inputs[0]!.body).includes('unique-denied-marker'),
+          `expected the real arguments, got: ${String(inputs[0]!.body)}`,
+        );
+        assert.equal(
+          byContentType(logger.emitted(), 'tool_output').length, 0,
+          'a call that never ran has no result to report',
+        );
+        const tool = tracer.finished().find((s) => s.name.startsWith('execute_tool'));
+        assert.ok(tool, 'the block path must still have emitted the orphan tool span');
+        assert.equal(
+          inputs[0]!.spanContext!.spanId,
+          tool!.spanContext().spanId,
+          'and the record must join to that span',
+        );
       } finally {
         await tracer.shutdown();
         await logger.shutdown();
