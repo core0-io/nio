@@ -19,12 +19,14 @@ export {};
 
 import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { SeverityNumber } from '@opentelemetry/api-logs';
+import { trace, ROOT_CONTEXT, TraceFlags, type Context } from '@opentelemetry/api';
 import { OTLPLogExporter as OTLPLogExporterHttp } from '@opentelemetry/exporter-logs-otlp-http';
 import { OTLPLogExporter as OTLPLogExporterGrpc } from '@opentelemetry/exporter-logs-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { nioGuardAttributes, buildNioResource } from './traces-collector.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
+import type { ContentRecord } from './content/emit.js';
 
 /** Minimal audit entry shape for OTEL log emission (avoids cross-rootDir import). */
 interface AuditEntry {
@@ -196,14 +198,84 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
 // Emit audit log as OTEL LogRecord
 // ---------------------------------------------------------------------------
 
-export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void {
+/**
+ * The (trace, span) pair a log record should be stamped with.
+ *
+ * Nio builds every span through `trace.setSpanContext(ROOT_CONTEXT, …)`
+ * rather than by entering an active context (hook processes are short-
+ * lived and the pre/post halves of a span live in different processes),
+ * so there is never an ambient context for the logs SDK to pick up. The
+ * association has to be passed in explicitly or the emitted record's
+ * built-in `trace_id` / `span_id` fields stay empty.
+ */
+export interface LogSpanContext {
+  traceId: string;
+  spanId: string;
+}
+
+/**
+ * Build the OTEL `Context` carrying `sc`, or undefined when either half
+ * is missing. Returned as-is to `logger.emit({ context })`; the SDK
+ * validates the ids and silently drops an invalid pair (all-zero or
+ * malformed hex), which is exactly the behaviour we want — a bad id
+ * must not become a fake association.
+ */
+function spanContextFor(sc?: LogSpanContext): Context | undefined {
+  if (!sc || !sc.traceId || !sc.spanId) return undefined;
+  return trace.setSpanContext(ROOT_CONTEXT, {
+    traceId: sc.traceId,
+    spanId: sc.spanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+}
+
+export function emitAuditLog(
+  provider: LoggerProvider,
+  entry: AuditEntry,
+  spanContext?: LogSpanContext,
+): void {
   const logger = provider.getLogger('nio-audit', '1.0.0');
   const severityLevel = ('risk_level' in entry ? entry.risk_level : 'low') as string;
+  const context = spanContextFor(spanContext);
 
   logger.emit({
     severityNumber: RISK_TO_SEVERITY[severityLevel] ?? SeverityNumber.INFO,
     severityText: severityLevel,
     body: JSON.stringify(entry),
     attributes: auditEntryAttributes(entry),
+    ...(context ? { context } : {}),
   });
+}
+
+// ---------------------------------------------------------------------------
+// Emit conversation content as OTEL LogRecords
+// ---------------------------------------------------------------------------
+
+/**
+ * Send the content records built by `content/emit.ts`.
+ *
+ * Each record carries its own (traceId, spanId): chat content is stamped
+ * with the chat span minted at end of turn, tool output with the tool
+ * span id pre-allocated at PreToolUse. Both are set as the LogRecord's
+ * built-in fields (via the explicit context) AND as plain string
+ * attributes by the builder — see content/emit.ts for why that
+ * redundancy is deliberate.
+ */
+export function emitContentRecords(
+  provider: LoggerProvider,
+  records: readonly ContentRecord[],
+): void {
+  if (records.length === 0) return;
+  const logger = provider.getLogger('nio-content', '1.0.0');
+  for (const record of records) {
+    const context = spanContextFor({ traceId: record.traceId, spanId: record.spanId });
+    logger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: 'low',
+      body: record.body,
+      attributes: record.attributes as unknown as Record<string, string | number | boolean>,
+      ...(context ? { context } : {}),
+    });
+  }
 }

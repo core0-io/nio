@@ -58,13 +58,16 @@ const BLOCK_TYPE_TO_KIND: Record<EmittableBlockType, ContentKind> = {
 };
 
 /**
- * `nio.content.type` values this module can produce. `user_prompt` and
- * `tool_output` are valid `ContentKind`s but are populated by other call
- * sites in the span layer (a user prompt isn't a `ChatCall` block; a tool
- * result arrives out-of-band from the tool-use block that requested it) —
- * `buildContentRecords` never emits either.
+ * `nio.content.type` values this module can produce.
+ *
+ * `buildContentRecords` only ever emits the first three — they are the
+ * block types a `ChatCall` carries. `tool_output` has no block to come
+ * from (a tool result arrives out-of-band, from the hook that observed
+ * the tool finish, not from the call that requested it) and is built by
+ * `buildToolOutputRecord` instead. `user_prompt` is still carried as a
+ * turn-span attribute and has no builder here yet.
  */
-type EmittedContentType = 'thinking' | 'text' | 'tool_input';
+type EmittedContentType = 'thinking' | 'text' | 'tool_input' | 'tool_output';
 
 const BLOCK_TYPE_TO_CONTENT_TYPE: Record<EmittableBlockType, EmittedContentType> = {
   thinking: 'thinking',
@@ -127,6 +130,56 @@ export function buildContentRecords(
   }
 
   return records;
+}
+
+/**
+ * Build the single record carrying a finished tool call's output.
+ *
+ * Unlike `buildContentRecords`, this is not driven by a `ChatCall`: the
+ * result text comes from the PostToolUse hook payload, and `spanId` is
+ * the TOOL span's id (pre-allocated at PreToolUse), not a chat span's.
+ * That is what lets this go out as the tool finishes rather than waiting
+ * for the turn to close — the tool span carrying the same id is emitted
+ * later, and the two join on the backend regardless of arrival order.
+ *
+ * Same pure-function contract, and the same redact-then-truncate order,
+ * as `buildContentRecords`; see the module docs for why that order is
+ * load-bearing.
+ */
+export function buildToolOutputRecord(
+  result: string,
+  spanId: string,
+  traceId: string,
+  limits: ContentLimits,
+  toolCallId?: string
+): ContentRecord {
+  const { text: redacted, hits } = redactSecrets(result);
+  const { text: body, truncated, originalBytes } = truncateContent(redacted, limits.tool_output);
+
+  const attributes: ContentRecordAttributes = {
+    'nio.content.type': 'tool_output',
+    // A tool call produces exactly one result; there is no block
+    // sequence to preserve, so the index is a constant 0 rather than a
+    // fabricated ordinal.
+    'nio.content.index': 0,
+    'nio.trace_id': traceId,
+    'nio.span_id': spanId,
+  };
+
+  if (truncated) {
+    attributes['nio.content.truncated'] = true;
+    attributes['nio.content.original_bytes'] = originalBytes;
+  }
+
+  if (hits > 0) {
+    attributes['nio.content.redactions'] = hits;
+  }
+
+  if (toolCallId) {
+    attributes['gen_ai.tool.call.id'] = toolCallId;
+  }
+
+  return { traceId, spanId, body, attributes };
 }
 
 function buildRecord(

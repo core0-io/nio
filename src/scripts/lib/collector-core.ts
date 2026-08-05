@@ -53,7 +53,7 @@ import {
   recordPostTaskToolUse,
   endTurn,
   recordUserPrompt,
-  genAiToolCallInputAttributes,
+  genAiToolCallIdAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
   startSessionTrace,
@@ -62,8 +62,10 @@ import {
   recoverDeferredTree,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
-import { createSourceForPlatform } from './conversation/factory.js';
+import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import type { ChatCall } from './conversation/types.js';
+import { createContentSink, emitToolOutputContent } from './content/sink.js';
+import { loadContentLimits } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -110,6 +112,17 @@ export interface DispatchOptions {
    * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
+  /**
+   * Extra conversation-source input the caller holds and this module
+   * cannot derive from `input`.
+   *
+   * The replay platforms (Claude Code, Codex) need nothing here — their
+   * source is built from `input.transcript_path`. The streaming ones do:
+   * Hermes's calls live in the raw `post_llm_call` envelope, which the
+   * canonical `HookStdinPayload` has no field for. Merged over the
+   * transcript path, so a caller can supply either or both.
+   */
+  conversationInput?: SourceInput;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -284,19 +297,20 @@ function resolveSpanKey(
  * caller then emits the pre-chat-layer `turn → tool` shape, which is a
  * degraded trace rather than a broken one.
  *
- * Only the replay platforms (Claude Code, Codex) can be served from
- * here: their calls come from a session file this process can open.
- * The streaming platforms hand their conversation data to a different
- * entry point (Hermes's `post_llm_call` payload, OpenClaw's event
- * array), neither of which reaches a Stop/SessionEnd hook payload.
+ * The replay platforms (Claude Code, Codex) are served straight from
+ * `transcript_path` — their calls come from a session file this process
+ * can open. Hermes's calls ride in the raw `post_llm_call` envelope,
+ * which the canonical payload has no field for, so `hook-cli.ts` passes
+ * it through `DispatchOptions.conversationInput`. OpenClaw never reaches
+ * this function: its daemon calls `endTurn` directly.
  */
 async function resolveTurnCalls(
   platform: string,
-  transcriptPath: string | null,
+  sourceInput: SourceInput,
   turnStartMs: number,
 ): Promise<ChatCall[] | undefined> {
   try {
-    const source = createSourceForPlatform(platform, { transcriptPath });
+    const source = createSourceForPlatform(platform, sourceInput);
     if (!source) return undefined;
     return source.callsSince(turnStartMs);
   } catch (err) {
@@ -350,7 +364,17 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   const cwd = input.cwd ?? null;
   const transcriptPath = input.transcript_path ?? null;
   const toolInput = input.tool_input ?? {};
-  const auditOpts = { loggerProvider, logsConfig };
+
+  /**
+   * Content limits are read from config lazily and at most once per
+   * dispatch: only the two branches that actually emit content need
+   * them, and most events are neither.
+   */
+  let cachedLimits: ReturnType<typeof loadContentLimits> | null = null;
+  const contentLimits = (): ReturnType<typeof loadContentLimits> => {
+    if (cachedLimits === null) cachedLimits = loadContentLimits();
+    return cachedLimits;
+  };
 
   // Shared base fields for every audit entry shape. Branches augment with
   // event-specific fields (task_id/task_summary, …) before writing. We
@@ -371,6 +395,22 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     ...(input.tool_use_id ? { tool_use_id: input.tool_use_id } : {}),
   };
 
+  // Assigned by the crash-recovery block below, which already has the
+  // state loaded — every audit entry written after it gets stamped with
+  // the turn it belongs to. Left undefined when there is no active turn
+  // for this session (SessionStart, a first event, a closed turn): an
+  // entry with no turn has no honest association to claim.
+  let auditSpanContext: { traceId: string; spanId: string } | undefined;
+  const auditOptsFor = (): {
+    loggerProvider: LoggerProvider | null;
+    logsConfig?: CollectorLogsConfig;
+    spanContext?: { traceId: string; spanId: string };
+  } => ({
+    loggerProvider,
+    logsConfig,
+    ...(auditSpanContext ? { spanContext: auditSpanContext } : {}),
+  });
+
   try {
     // Crash recovery (lazy, any event): deferring tool-span emission to
     // end-of-turn means a killed process can now lose the WHOLE tree
@@ -386,11 +426,18 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (hasOrphanedDeferredTree(stale, sessionId)) {
         const recovered = await recoverDeferredTree(tracerProvider, stale!);
         saveState(logsConfig, recovered);
+      } else if (stale?.turn_trace_id && stale.session_id === sessionId) {
+        // Same synthetic turn span id endTurn forces onto the root, so
+        // audit records land on the turn span itself, not a phantom.
+        auditSpanContext = {
+          traceId: stale.turn_trace_id,
+          spanId: stale.turn_trace_id.slice(0, 16),
+        };
       }
     }
 
     if (event === 'UserPromptSubmit') {
-      writeAuditLog({ event, ...baseFields }, auditOpts);
+      writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider && input.prompt) {
         const prev = loadState(logsConfig);
@@ -400,7 +447,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'PreToolUse') {
-      writeAuditLog({ event, ...baseFields }, auditOpts);
+      writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       const summary = toolSummary(toolName, toolInput);
 
@@ -408,9 +455,13 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
         const key = allocateSpanKey(state, input);
+        // Identity only — the tool's arguments are NOT parked in state.
+        // They ride out on the logs signal instead, as the `tool_use`
+        // block of the chat call that issued them; `nio.tool_summary`
+        // (set by deferPostToolUse) keeps the span scannable on its own.
         state = recordPreToolUse(
           state, key, toolName, summary,
-          genAiToolCallInputAttributes(toolInput, input.tool_use_id),
+          genAiToolCallIdAttributes(input.tool_use_id),
         );
         saveState(logsConfig, state);
       }
@@ -420,7 +471,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'PostToolUse') {
-      writeAuditLog({ event, ...baseFields }, auditOpts);
+      writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
@@ -444,19 +495,42 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const mcpAttrs = mcp
           ? { 'gen_ai.tool.type': 'mcp', 'nio.mcp.server': mcp.server, 'nio.mcp.tool': mcp.tool }
           : {};
+        // The tool span's id was minted at PreToolUse and survives the
+        // defer, so the result content can go out NOW, already
+        // associated with the span the backend receives later. Read
+        // before deferPostToolUse — that call removes the pending entry.
+        const toolSpanId = state.pending_spans[key]?.span_id ?? '';
         // Parked, not emitted: the span can only be nested under the
         // LLM call that issued it, and that is not knowable until the
         // turn ends. endTurn emits the whole tree.
+        //
+        // The result payload is deliberately NOT among the attrs parked
+        // here — see the tool-output emit below.
         const result = deferPostToolUse(
           state, key, cwd,
           {
             ...drained.attrs,
-            ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+            ...genAiToolCallOutputAttributes({ error: err ?? null }),
             ...mcpAttrs,
           },
           err ?? null,
         );
         saveState(logsConfig, result.state);
+
+        // A plain `output` string is the common shape and is emitted
+        // verbatim; anything else is serialised whole so structured
+        // responses aren't silently dropped. An absent/empty response
+        // produces '' and `emitToolOutputContent` skips it rather than
+        // shipping an empty record.
+        const resultText = typeof resp['output'] === 'string'
+          ? (resp['output'] as string)
+          : Object.keys(resp).length > 0 ? JSON.stringify(resp) : '';
+        emitToolOutputContent(loggerProvider, contentLimits(), {
+          result: resultText,
+          spanId: toolSpanId,
+          traceId: state.turn_trace_id,
+          ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
+        });
       }
 
       if (meterProvider) {
@@ -470,7 +544,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
       writeAuditLog(
         { event, ...baseFields, task_id: taskId, task_summary: summary },
-        auditOpts,
+        auditOptsFor(),
       );
 
       if (tracerProvider) {
@@ -489,7 +563,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
       writeAuditLog(
         { event, ...baseFields, task_id: taskId },
-        auditOpts,
+        auditOptsFor(),
       );
 
       if (tracerProvider) {
@@ -510,7 +584,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // SubagentStop already close the turn. SessionEnd is a defensive
       // turn-close so any in-flight span gets flushed on platforms that
       // fire it as the hard session boundary.
-      writeAuditLog({ event, ...baseFields }, auditOpts);
+      writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       // Do NOT call ensureTurn here: it mints a fresh turn when the
       // previous one was already closed (turn_trace_id === ''), which
@@ -524,8 +598,20 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const hasActiveTurn = Boolean(prev?.turn_trace_id);
 
       if (hasActiveTurn && tracerProvider) {
-        const calls = await resolveTurnCalls(platform, transcriptPath, prev!.turn_start_ms);
-        const next = await endTurn(tracerProvider, prev!, cwd, transcriptPath, calls);
+        const calls = await resolveTurnCalls(
+          platform,
+          { transcriptPath, ...(opts.conversationInput ?? {}) },
+          prev!.turn_start_ms,
+        );
+        // No provider (unmonitored session, logs disabled) → no sink →
+        // endTurn emits the tree and nothing else. This is where the
+        // /nio-monitor master switch gates conversation content.
+        const contentSink = loggerProvider
+          ? createContentSink(loggerProvider, contentLimits())
+          : undefined;
+        const next = await endTurn(
+          tracerProvider, prev!, cwd, transcriptPath, calls, contentSink,
+        );
         if (next) saveState(logsConfig, next);
       }
 
@@ -553,7 +639,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'SessionStart') {
-      writeAuditLog({ event, ...baseFields }, auditOpts);
+      writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
@@ -566,7 +652,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // yet — still write an audit entry so they're observable.
       writeAuditLog(
         { event: event as HookEventName, ...baseFields },
-        auditOpts,
+        auditOptsFor(),
       );
     }
     // Unknown event names: silently no-op (matches the legacy contract).

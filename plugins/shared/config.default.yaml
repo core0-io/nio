@@ -386,13 +386,34 @@ collector:
   traces:
     enabled: true
 
-  # Logs signal (audit log entries: guard, scan, lifecycle events).
+  # Logs signal. Carries two kinds of record: audit entries (guard, scan,
+  # lifecycle, hook events) which are dual-written to OTLP and the local
+  # JSONL, and conversation content records (reasoning, replies, tool
+  # arguments and results) which go to OTLP only — never to the local file.
   logs:
     # Enable OTEL Logs export to collector endpoint.
     enabled: true
-    # Enable local JSONL backup at the path below.
+    # Enable local JSONL backup at the path below (audit entries only).
     local: true
     # Path to local JSONL audit log. Supports ~/ prefix.
     path: "~/.nio/audit.jsonl"
     # Maximum local file size in MB before rotation (0 = no rotation).
     max_size_mb: 100
+
+  # Per-kind size caps for conversation content records, in UTF-8 BYTES.
+  # Cuts land on whole character boundaries and append "…[truncated]".
+  #
+  # These exist to contain pathological output (a `cat` of a huge file, a
+  # `find /` dump), not to clip normal conversation — typical reasoning
+  # and replies run 2–10 KB and never reach them. Unbounded content does
+  # break real limits downstream: OTLP gRPC's 4 MB per-message ceiling
+  # fails the WHOLE export, the hook blocks its host while serialising,
+  # and some log backends reject over-long lines.
+  #
+  # Set any kind to 0 to capture it uncapped, accepting the above.
+  content_limits:
+    thinking: 65536      # 64 KB
+    text: 65536          # 64 KB
+    user_prompt: 32768   # 32 KB — reserved; the prompt currently rides the turn span
+    tool_input: 16384    # 16 KB
+    tool_output: 32768   # 32 KB

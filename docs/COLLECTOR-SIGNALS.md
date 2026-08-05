@@ -59,6 +59,10 @@ Nio exports nothing by default. Each of the three signals is created only
 for sessions the user explicitly armed, or for every session when
 `collector.monitor_all_sessions: true` is set.
 
+Conversation content ([content records](#content-records)) rides the logs
+signal, so it is gated by exactly this switch: an unarmed session builds
+no logger provider, and nothing in the content path can emit without one.
+
 This gate covers only the three OTLP signals above. The guard pipeline's
 Phase 5 (`guard.llm_analyser`) and Phase 6 (`guard.external_analyser`) have
 their own, independent outbound paths — see "Two things are outside the
@@ -242,11 +246,33 @@ Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.en
 One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix.
 
 ```text
+Trace: session                        (its own trace; emitted at SessionEnd)
+   ↑ span link
 Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
-  ├─ Span: execute_tool <name>   (PreToolUse → PostToolUse)
-  ├─ Span: execute_tool <name>   (...)
+  ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
+  │    └─ Span: execute_tool <name>   (the tools THAT call issued)
+  ├─ Span: execute_tool <name>   (tools that could not be attributed — hung off the turn)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
 ```
+
+**Emission timing.** A tool span can only be nested under the LLM call
+that issued it, and that attribution is unknowable at `PostToolUse` time —
+it comes from the conversation source once the turn is over. So finished
+tool spans are parked in `traces-state-store.json` and the WHOLE tree
+(chat spans, their tools, the unattributed tools, the turn root) is
+exported together at `Stop` / `SubagentStop` / `SessionEnd`. Two
+exceptions keep their immediate export: the guard's deny / confirm-denied
+span (a security event must not wait for a turn to close) and OpenClaw's
+eager per-tool export.
+
+If the host process dies before the turn closes, the parked tree is
+flushed by the next event that finds it — or by the next `SessionStart` —
+under a root tagged `nio.turn.incomplete: true`.
+
+**Without a conversation source** (no transcript path, an unreadable
+session file, a platform whose conversation data never reached the
+collector) the chat layer is skipped entirely and every tool span hangs
+off the turn — the pre-chat-layer shape, degraded but never broken.
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
@@ -272,6 +298,55 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 
 **Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: no usage. The `post_llm_call` payload carries no transcript path (verified by live capture — `extra` holds only `user_message`, `assistant_response`, `conversation_history`, `model`, `platform`), so there is nothing for `parseTranscriptUsage` to read. Token usage on Hermes turn spans is a known gap, not a payload-dependent behaviour. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
 
+### Span: `chat <model>` (LLM call)
+
+One per LLM call within the turn, reconstructed from the platform's
+conversation data at turn close (Claude Code / Codex: the session file at
+`transcript_path`; Hermes: the raw `post_llm_call` envelope; OpenClaw: the
+`llm_output` events the daemon accumulated). Span name is `chat <model>`,
+or plain `chat` when the source does not report a model.
+
+| Attribute | Description | Captured at | Platforms |
+| --- | --- | --- | --- |
+| `gen_ai.operation.name` | Constant `chat` | turn close | all |
+| `gen_ai.request.model` | Model the call was issued against, when the source reports one | turn close | all |
+| `gen_ai.response.id` | Provider-side call id where available, otherwise a synthesised ordinal | turn close | all |
+| `gen_ai.usage.input_tokens` / `output_tokens` / `cache_read.input_tokens` / `cache_creation.input_tokens` | Per-call usage, when the source reports it | turn close | all |
+| `gen_ai.response.finish_reasons` | Stop reason for this call | turn close | all |
+| `nio.content.thinking_chars` | Character count of this call's thinking blocks (the content itself goes to logs) | turn close | all |
+| `nio.content.text_chars` | Character count of this call's text blocks | turn close | all |
+| `nio.content.blocks` | Number of content blocks in the call | turn close | all |
+| `nio.chat.is_sidechain` | True when the call belongs to a subagent rather than the main thread | turn close | all |
+| `nio.chat.timing` | `exact` / `inferred` / `synthetic` — how much `endMs - startMs` can be trusted | turn close | all |
+
+> `nio.chat.timing` is not decoration. Only one platform reports both ends
+> of an LLM call; the others infer the end from the next call's start, or
+> synthesise both. A consumer that cannot tell them apart reads a
+> synthetic zero-duration span as "the model answered instantly".
+
+**Known limitation · Hermes replays its history.** Every `post_llm_call`
+payload carries the *entire* `conversation_history`, and each one closes a
+turn — so a call that happened three turns ago is reconstructed again into
+each later turn's tree. Chat spans and their content records therefore
+repeat across a Hermes session. This is deliberate rather than
+deduplicated: the earlier calls are what a later turn's tool spans
+attribute to (a tool runs in the turn *after* the call that requested it),
+so dropping them would orphan the nesting this layer exists for. Dedupe
+on `gen_ai.response.id` at query time when counting calls.
+
+### Span: `session` (session root)
+
+One per host session, on its **own trace** — not a parent of the turns.
+Ids are minted at `SessionStart` and persisted, so each turn root can
+carry a span link to it without waiting for the session to end; the span
+itself is emitted at `SessionEnd`. Carries the same
+`gen_ai.conversation.id` / `session.id` as the turns, with
+`gen_ai.operation.name = session`.
+
+Turns are joined to it by **span link**, not parent/child: a session
+outlives any single trace, and nesting hours of turns under one root span
+makes every backend's trace view unusable.
+
 ### Span: `execute_tool <name>` (tool span)
 
 One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).
@@ -282,8 +357,8 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
 | `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw) | PreToolUse · PostToolUse | all |
-| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
-| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
+| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB. **Deferred platforms do not set this** — see the note below | PreToolUse | OpenClaw eager path + guard deny span |
+| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB. **Deferred platforms do not set this** — see the note below | PostToolUse | OpenClaw eager path |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
@@ -299,11 +374,23 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.guard.top_finding_rule` | `rule_id` of the highest-ranked finding (when any fired) | PreToolUse | all |
 | `nio.guard.eval_ms` | Wall-clock cost of the guard evaluation (ms) | PreToolUse | all |
 
+**Where tool payloads live on the deferred platforms.** Claude Code,
+Codex, and Hermes park finished tool spans in `traces-state-store.json`
+until the turn closes, and every hook event rewrites that file whole — so
+the tool's arguments and result are deliberately kept off the span there
+and carried by the logs signal instead: the arguments as the `tool_input`
+content record of the chat call that issued them, the result as a
+`tool_output` content record emitted at `PostToolUse` (see
+[Content records](#content-records)). Both records carry the same span id
+as the span itself, so the join works on the backend. `nio.tool_summary`
+stays on the span so a trace list is still readable without joining
+anything.
+
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
 **Deny / confirm-denied spans.** When the guard blocks a tool, `PostToolUse` never fires — so the span is emitted synchronously by the same process that ran the guard (the `guard-hook.ts` PreToolUse on Claude Code / Codex; the `hook-cli.ts` `pre_tool_call` branch on Hermes; the `before_tool_call` handler in the OpenClaw plugin). Span name is the same `execute_tool <tool>` as the allow path — the discrimination is on `nio.guard.decision` + ERROR status + the reason in the exception message. Wall-clock starts at the real `evalStartMs` so the span duration reflects the guard window, and `nio.guard.eval_ms` carries the same value as an explicit attribute for filtering.
 
-**Known limitation · concurrent tool-call timing on Hermes only.** When the same tool is invoked multiple times with identical arguments within a single turn, and the `PostToolUse` events complete in a different order than their `PreToolUse` events, the result and duration attributes may be swapped between the calls. Specifically, `nio.tool.duration_ms` and `gen_ai.tool.call.result` may report values from a different physical invocation than the one that produced the span's input (`gen_ai.tool.call.arguments`). Spans are never lost and the pending-span state always drains cleanly, so the audit log remains consistent and no tracing data is orphaned — the mismatch affects only the pairing of result/duration to input within a single span.
+**Known limitation · concurrent tool-call timing on Hermes only.** When the same tool is invoked multiple times with identical arguments within a single turn, and the `PostToolUse` events complete in a different order than their `PreToolUse` events, the result and duration attributes may be swapped between the calls. Specifically, `nio.tool.duration_ms` and the span's `tool_output` content record may report values from a different physical invocation than the one whose input opened the span. Spans are never lost and the pending-span state always drains cleanly, so the audit log remains consistent and no tracing data is orphaned — the mismatch affects only the pairing of result/duration to input within a single span.
 
 The root cause is Hermes-specific: Claude Code, Codex, and OpenClaw carry a unique `tool_use_id` in both `PreToolUse` and `PostToolUse` payloads, enabling unambiguous span pairing. Hermes provides `tool_use_id` only in the `post_tool_call` hook, not in `pre_tool_call`, forcing the collector to pair spans using a composite key derived from tool name and input digest. When two concurrent calls produce the same composite key and their `PostToolUse` events arrive out-of-order relative to `PreToolUse`, the span-pairing fallback may resolve both to the same pending entry, causing the mismatch. This is a platform limitation (Hermes does not expose the necessary cross-reference), not an Nio implementation defect.
 
@@ -335,6 +422,12 @@ Claude Code and Hermes spawn a fresh node process per hook event, so a `PreToolU
 ## Logs (audit log)
 
 Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing.
+
+The logs signal carries two different kinds of record: the **audit
+entries** documented below (metadata about what happened, dual-written),
+and the **[content records](#content-records)** at the end of this
+section (the conversation itself, OTLP only — never written to the local
+JSONL). Both are stamped with the trace and span they belong to.
 
 ### Entry types (discriminated by `event`)
 
@@ -454,6 +547,90 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 
 Local JSONL path: `collector.logs.path` (default `~/.nio/audit.jsonl`). Rotation kicks in at `collector.logs.max_size_mb` (default 100 MB) — the live file is renamed to `<path>.1`.
 
+Audit LogRecords also carry the **built-in `trace_id` / `span_id`** of the
+turn that was active when they were written (the turn root's ids), so an
+audit entry can be pulled up next to the trace it belongs to. Entries
+written while no turn is open (`SessionStart`, the first event of a
+session) carry none rather than claiming an association they don't have.
+
+### Content records
+
+The conversation itself — reasoning, replies, tool arguments, tool
+results — travels on the logs signal, not as span attributes. Trace
+backends cap attribute length aggressively and a 64 KB reasoning trace has
+no business inside a span; the logs signal has no such ceiling, and the
+records join back to their span by id.
+
+**These records are OTLP-only.** They are never written to the local
+`audit.jsonl`, and they are emitted **only for a session armed with
+`/nio-monitor`** (an unarmed session never constructs a logger provider,
+so there is nothing to emit through).
+
+- `body` = the content itself: redacted first, then truncated
+- `severityNumber` / `severityText` = INFO / `low` — content is not a verdict
+- built-in `trace_id` / `span_id` = the span this content belongs to
+
+| Attribute | Description |
+| --- | --- |
+| `nio.content.type` | `thinking` / `text` / `tool_input` / `tool_output` |
+| `nio.content.index` | Position of the source block within its LLM call; `0` for `tool_output` |
+| `nio.content.fidelity` | `full` / `summary` — only on `thinking`. Follows the model provider, not the platform: Anthropic models return complete reasoning, OpenAI's reasoning series returns step summaries. Do not treat the two as interchangeable |
+| `nio.content.truncated` | `true` only when the body was cut |
+| `nio.content.original_bytes` | Pre-truncation UTF-8 byte length; only present when truncated |
+| `nio.content.redactions` | Number of secrets replaced; only present when at least one was |
+| `nio.trace_id` | Redundant plain-string copy of the built-in field |
+| `nio.span_id` | Redundant plain-string copy of the built-in field |
+| `gen_ai.tool.call.id` | Only on `tool_input` / `tool_output` |
+
+> **Why `nio.trace_id` / `nio.span_id` duplicate the built-in fields.**
+> Backends disagree on how they surface OTLP's binary `trace_id` /
+> `span_id` after ingestion — some expose `span_id`, some `SpanId`, some
+> bury them in structured metadata that isn't queryable like a normal
+> attribute. A plain string attribute is the one join key that behaves
+> identically everywhere. Removing the copy silently costs some backends
+> the ability to join content back to its span.
+
+**When each kind is emitted** — the two differ, because a content record
+is worthless without the span id it must carry, and the two span ids
+become available at different moments:
+
+| Content | Associated span | Emitted at |
+| --- | --- | --- |
+| `thinking` · `text` · `tool_input` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
+| `tool_output` | the `execute_tool` span | **`PostToolUse`**, immediately — the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
+
+So a `tool_output` record reaches the backend *before* the span it names,
+by up to the remaining length of the turn (longer if the turn had to be
+recovered after a crash). The ids match either way; only "log references a
+span I haven't seen" alerting needs to allow for it.
+
+**Redaction runs before truncation, always.** The reverse order can slice
+a credential in half at the cut point, leaving one half of a live secret
+in the record with no contiguous match left for the redactor to find.
+
+**Truncation limits** are per content kind, in UTF-8 **bytes**, and cut
+only on whole character boundaries:
+
+```yaml
+collector:
+  content_limits:
+    thinking: 65536      # 64 KB
+    text: 65536          # 64 KB
+    user_prompt: 32768   # 32 KB
+    tool_input: 16384    # 16 KB
+    tool_output: 32768   # 32 KB
+```
+
+Any kind set to `0` is captured without a cap. The caps exist to contain
+pathological output (a `cat` of a huge file, a `find /` dump) — normal
+reasoning and replies run 2–10 KB and never approach them — because
+unbounded content breaks real things downstream: OTLP gRPC's 4 MB
+per-message ceiling fails the *entire* export, the hook blocks its host
+while it serialises, and backends like Loki reject over-long lines.
+
+`user_prompt` has a limit reserved but no content record yet: the prompt
+still rides the turn span as `nio.turn.user_prompt`.
+
 ---
 
 ## Configuration
@@ -472,10 +649,16 @@ collector:
   traces:
     enabled: true                   # OTLP traces export on/off
   logs:
-    enabled: true                   # OTLP logs export on/off
-    local: true                     # local JSONL backup on/off
+    enabled: true                   # OTLP logs export on/off (audit + content records)
+    local: true                     # local JSONL backup on/off (audit entries only)
     path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store.json
     max_size_mb: 100                # rotation threshold for the local file
+  content_limits:                   # per-kind UTF-8 byte caps for content records; 0 = uncapped
+    thinking: 65536
+    text: 65536
+    user_prompt: 32768
+    tool_input: 16384
+    tool_output: 32768
 ```
 
 Per-signal gating: when `collector.endpoint` is empty, the corresponding provider factory returns `null` and the platform code skips emit. The audit-log local JSONL still works (controlled by `collector.logs.local`) even without an endpoint — handy for offline / air-gapped use.

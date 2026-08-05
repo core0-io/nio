@@ -58,7 +58,7 @@ user prompt → tool call → thinking → tool call → thinking → … → re
 | D3 | 发送粒度 | 只发增量，不发全量 messages 数组 |
 | D4 | session 层级 | session 独立 trace，turn trace 用 span link 指向 |
 | D5 | tool span 归属 | 嵌套在发起它的 chat span 下 |
-| D6 | 发送时机 | span 结构延迟至 turn 结束统一发；内容实时发 |
+| D6 | 发送时机 | span 结构延迟至 turn 结束统一发；会话内容随之同批发出，工具结果在 `PostToolUse` 即时发 |
 | D7 | 采集总闸 | 默认静默，`/nio-monitor` 显式开启 |
 | D8 | 回溯 | 不提供。采集严格从 `/nio-monitor` 执行后开始 |
 | D9 | 本地 audit | 继续写（仅元数据），总闸只管外发 |
@@ -192,9 +192,18 @@ session span id 在 `SessionStart` 时预生成并持久化，使 turn 侧无需
 
 由 D5（tool 嵌套 chat）推导：chat 的归属关系需等 transcript 写入后方可确定，故**整个 turn 的 span 树在 `Stop` 时一次性发送**。
 
-内容日志不受此约束，实时发送。两者靠预生成的 `span_id` 关联——现有代码已在 `PreToolUse` 时预生成 span_id 存入 state，机制可直接复用。
+内容日志按其关联对象的 span_id **何时存在**分成两类——这与本节最初的设想（内容一律实时发）不同，如实记录实际实现：
 
-**后端将先收到内容日志，数十秒后才收到对应 span**，崩溃补发场景下间隔可能更长。由于 `span_id` 在两侧一致，关联不受顺序影响。但后端若有"日志引用了不存在的 span"类告警，需要相应放宽。
+| 内容 | `nio.content.type` | 关联的 span | 实际发送时机 |
+|---|---|---|---|
+| thinking / 文本回复 / 工具参数 | `thinking` / `text` / `tool_input` | chat span | **`Stop` 时，与 span 树同批** |
+| 工具结果 | `tool_output` | tool span | `PostToolUse` 即时 |
+
+原因是 span_id 的可得时间不同：tool span 的 id 在 `PreToolUse` 预生成并存入 state，工具一结束就能带着它发内容；而 chat span 的 id 由 `buildSpanTree` 在 `endTurn` 内现场分配（chat 的归属本身要等 transcript），在此之前不存在可关联的 id。一条无法 join 回 span 的内容记录没有价值，因此会话内容随树一起发。
+
+**工具结果日志会先于对应 span 到达后端**（相隔一个 turn 的剩余时间，崩溃补发场景下更长）。由于 `span_id` 在两侧一致，关联不受顺序影响。但后端若有"日志引用了不存在的 span"类告警，需要相应放宽。
+
+`emitAuditLog` / `emitContentRecords` 均显式传入 span context（`trace.setSpanContext(ROOT_CONTEXT, …)`），否则 LogRecord 内建的 trace_id / span_id 为空——nio 的 span 全部由 ROOT_CONTEXT 手工构造，进程内没有 active context 可供 SDK 自动拾取。
 
 ### 崩溃兜底
 
@@ -207,7 +216,9 @@ session span 使用同一套逻辑兜底。
 
 ### state 体积控制
 
-state 仅保存 span 元数据（span_id、时间戳、token 数、层级关系），内容已实时发出，不驻留。避免 turn 内工具调用累积导致状态文件膨胀、每事件读写退化。
+state 仅保存 span 元数据（span_id、时间戳、token 数、层级关系、`nio.tool_summary` 这类一行摘要），内容不驻留。避免 turn 内工具调用累积导致状态文件膨胀、每事件读写退化。
+
+具体到延迟路径（Claude Code / Codex / Hermes）：`DeferredSpan.attributes` **不含** `gen_ai.tool.call.arguments` 与 `gen_ai.tool.call.result`。参数由发起该调用的 chat call 的 `tool_use` 块承载，结果由 `tool_output` 内容记录承载。即时路径（OpenClaw 的逐工具导出、guard 的 deny span）仍在 span 上带完整参数/结果——它们当场发出，从不落盘。
 
 ### guard 拦截的实时性
 
@@ -284,7 +295,7 @@ ConversationSource (接口)
 ```
 LogRecord
   trace_id   = <turn trace id>          OTel 内建字段
-  span_id    = <所属 chat span id>       OTel 内建字段
+  span_id    = <所属 span id：chat span，tool_output 为 tool span>   OTel 内建字段
   attributes = {
     nio.content.type:  thinking | text | tool_input | tool_output | user_prompt
     nio.content.index: <块序号>
@@ -297,7 +308,9 @@ LogRecord
 
 **`trace_id` / `span_id` 冗余为普通 attribute 的理由**：OTLP 中二者为 LogRecord 内建二进制字段，各后端映射后的字段名不一致（`span_id` / `SpanId` / structured metadata）。冗余一份普通字符串字段保证任意后端均可 join。
 
-**实现要点**：当前 `logs-collector.ts` 的 `emitAuditLog` 未传 context，而 nio 使用 `ROOT_CONTEXT` 手工构造 span，无活跃 context，导致现有 log record 的 trace_id / span_id 为空。需在 emit 时显式传入 span context。
+**实现现状**：`logs-collector.ts` 的 `emitAuditLog` 与 `emitContentRecords` 均显式传入 span context（nio 使用 `ROOT_CONTEXT` 手工构造 span，进程内无活跃 context，不传则 log record 的 trace_id / span_id 为空）。
+
+`user_prompt` 目前仍以 `nio.turn.user_prompt` 落在 turn span 上，尚无内容记录构造器——上表保留该类型是为其预留 `content_limits` 配置位，不代表已发出。
 
 ### 截断上限
 

@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, sta
 import { dirname, join } from 'node:path';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
 import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
@@ -200,6 +201,71 @@ const DEFAULT_MAX_AUDIT_BYTES = 10 * 1024 * 1024; // 10 MB
 export interface WriteAuditLogOptions {
   loggerProvider?: LoggerProvider | null;
   logsConfig?: CollectorLogsConfig;
+  /**
+   * (trace, span) to stamp onto the exported LogRecord so the audit
+   * entry joins back to the turn it belongs to. Nio never has an active
+   * OTEL context (spans are built from ROOT_CONTEXT across process
+   * boundaries), so without this the record's built-in trace_id /
+   * span_id fields are empty. Omitted → unassociated record, same as
+   * before. Never touches the local JSONL leg.
+   */
+  spanContext?: { traceId: string; spanId: string };
+}
+
+type EmitAuditLogFn = (
+  p: LoggerProvider,
+  e: AuditEntry,
+  sc?: { traceId: string; spanId: string },
+) => void;
+
+/** Resolved once per process; `null` means "this environment can't reach it". */
+let cachedEmitAuditLog: EmitAuditLogFn | null | undefined;
+
+/**
+ * Get `emitAuditLog` without importing the logs SDK at module load.
+ *
+ * A plain static import would pull `@opentelemetry/sdk-logs` — and
+ * through it the OTLP exporters and `@grpc/grpc-js` — into every
+ * consumer of this module, including the guard path and the scanner,
+ * which have no use for it. So it stays lazy. But `writeAuditLog` is
+ * synchronous and `import()` is not, which leaves two lookups:
+ *
+ *  1. `require(...)` — what the bundled hook scripts run. Bun rewrites
+ *     the call into a direct reference to the bundled module, so this
+ *     is the fast path on every platform's shipped plugin.
+ *  2. `createRequire(import.meta.url)` — the unbundled `dist/` ESM
+ *     build (npm library export, and the test suite), where bare
+ *     `require` is not defined at all. Without this fallback the
+ *     ReferenceError lands in the caller's catch and the OTEL leg of
+ *     every audit entry silently does nothing — entries reach the local
+ *     JSONL and never the collector.
+ *
+ * Both failing leaves `null` and the caller writes JSONL only, which is
+ * the behaviour this function replaced.
+ */
+function resolveEmitAuditLog(): EmitAuditLogFn | null {
+  if (cachedEmitAuditLog !== undefined) return cachedEmitAuditLog;
+  cachedEmitAuditLog = null;
+  try {
+    // The specifier MUST stay a literal here: bun's bundler only rewrites
+    // `require('<literal>')` into a reference to the bundled module. Hoist
+    // it into a variable and the bundled scripts fall through to the
+    // filesystem-relative fallback below, which cannot resolve next to a
+    // bundle — i.e. no OTEL audit records on any shipped platform.
+    cachedEmitAuditLog = (
+      require('../scripts/lib/logs-collector.js') as { emitAuditLog: EmitAuditLogFn }
+    ).emitAuditLog;
+  } catch {
+    try {
+      const req = createRequire(import.meta.url);
+      cachedEmitAuditLog = (
+        req('../scripts/lib/logs-collector.js') as { emitAuditLog: EmitAuditLogFn }
+      ).emitAuditLog;
+    } catch {
+      cachedEmitAuditLog = null;
+    }
+  }
+  return cachedEmitAuditLog;
 }
 
 /**
@@ -217,12 +283,7 @@ export function writeAuditLog(
   // OTEL Logs export (fire-and-forget)
   if (logsConfig?.enabled !== false && opts?.loggerProvider) {
     try {
-      // Dynamic import avoided — emitAuditLog is called from hook scripts
-      // that construct the LoggerProvider themselves.
-      const { emitAuditLog } = require('../scripts/lib/logs-collector.js') as {
-        emitAuditLog: (p: LoggerProvider, e: AuditEntry) => void;
-      };
-      emitAuditLog(opts.loggerProvider, entry);
+      resolveEmitAuditLog()?.(opts.loggerProvider, entry, opts.spanContext);
     } catch {
       // Non-critical — OTEL export failure should not block
     }

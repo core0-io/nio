@@ -54,6 +54,18 @@ import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js'
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
 
+/**
+ * Callback invoked once per chat span, with the span id that span was
+ * just given, so the caller can emit that call's content through the
+ * logs signal already associated with its span.
+ *
+ * Declared here (not in `content/sink.ts`, which implements it) so this
+ * module can accept one without importing the logs SDK: traces stays
+ * free of any logs-side dependency, and the two signals only meet in the
+ * layer that owns both providers.
+ */
+export type ChatContentSink = (call: ChatCall, spanId: string, traceId: string) => void;
+
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
 // ---------------------------------------------------------------------------
@@ -126,7 +138,27 @@ export function genAiToolAttributes(
 // one place.
 // ---------------------------------------------------------------------------
 
-/** Tool-call input attrs (PreToolUse). Used by both deferred (CC/Hermes) and eager (OpenClaw) flows. */
+/**
+ * Tool-call identity only — no payload.
+ *
+ * The deferred flow (Claude Code / Codex / Hermes) parks finished tool
+ * spans in the on-disk state file until end of turn, and every hook
+ * event rewrites that whole file. Carrying the tool's arguments and
+ * result there made it grow with each call in a long turn, for data the
+ * logs signal now carries anyway (arguments via the issuing chat call's
+ * `tool_use` block, result via the `tool_output` content record emitted
+ * at PostToolUse). So the deferred path uses this; the eager paths
+ * (OpenClaw's per-tool export, the guard's deny span) keep using
+ * `genAiToolCallInputAttributes` below — they emit immediately and never
+ * persist the payload.
+ */
+export function genAiToolCallIdAttributes(
+  toolCallId?: string,
+): Record<string, unknown> {
+  return toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {};
+}
+
+/** Tool-call input attrs (PreToolUse). Eager flows only — see `genAiToolCallIdAttributes`. */
 export function genAiToolCallInputAttributes(
   toolInput: unknown,
   toolCallId?: string,
@@ -883,6 +915,13 @@ export function parseTranscriptUsage(
  * this turn. Omitted or empty (unrecognised platform, unreadable session
  * file, a streaming source with nothing gathered) degrades cleanly to
  * the pre-chat-layer shape: every deferred span hangs off the turn.
+ *
+ * `contentSink` receives every chat call together with the span id it
+ * was just given. This is the earliest moment a chat call HAS a span id
+ * — `buildSpanTree` mints it here — which is why conversation content
+ * goes out with the tree rather than "live" as the design originally
+ * assumed. A throwing sink is contained: content is telemetry and must
+ * never cost the span tree.
  */
 export async function endTurn(
   provider: NodeTracerProvider,
@@ -890,6 +929,7 @@ export async function endTurn(
   cwd: string | null,
   transcriptPath?: string | null,
   calls?: ChatCall[],
+  contentSink?: ChatContentSink,
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
@@ -929,6 +969,13 @@ export async function endTurn(
   const tree = buildSpanTree(calls ?? [], state.deferred_spans ?? []);
   for (const node of tree.chats) {
     emitChatSpan(provider, traceId, turnSpanId, node.span_id, node.call);
+    if (contentSink) {
+      try {
+        contentSink(node.call, node.span_id, traceId);
+      } catch {
+        // Content is telemetry; a failure here must not cost the tree.
+      }
+    }
     for (const tool of node.tools) {
       emitDeferredSpan(provider, traceId, node.span_id, tool);
     }

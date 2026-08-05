@@ -225,6 +225,14 @@ async function runHermesCollector(
     tracerProvider,
     loggerProvider,
     logsConfig,
+    // Hermes's conversation lives in the raw envelope, not in the
+    // canonical payload above: `extra.conversation_history` is the only
+    // place the LLM calls of this turn exist, and there is no transcript
+    // file to read them back from. Passed on every event rather than
+    // just `post_llm_call` — `createHermesSource` returns zero calls for
+    // an envelope without a history, so a session_end or tool event
+    // degrades to the same flat tree it produced before.
+    conversationInput: { payload: rawPayload },
   });
 
   // Every hook-cli invocation is a fresh subprocess that exits right

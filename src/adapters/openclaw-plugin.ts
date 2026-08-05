@@ -25,7 +25,7 @@ import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
-import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
 import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
 import { dumpPayload } from '../scripts/lib/payload-dump.js';
 import {
@@ -47,6 +47,9 @@ import {
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
+import { createSourceForPlatform } from '../scripts/lib/conversation/factory.js';
+import type { ChatCall } from '../scripts/lib/conversation/types.js';
+import { createContentSink } from '../scripts/lib/content/sink.js';
 import { createMeterProvider, recordToolUse, recordTurn, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
 import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
@@ -65,6 +68,35 @@ const sessionState = new Map<string, CollectorState>();
 const pendingGuardAttrs = new Map<string, Record<string, unknown>>();   // key: `${sessionId}:${spanKey}`
 
 /**
+ * Conversation events accumulated for the current turn, per session, in
+ * the `{ hook, event }` envelope `createOpenClawSource` expects.
+ *
+ * OpenClaw is the one platform with no session file and no
+ * whole-conversation payload: the only way to reconstruct "which LLM
+ * call issued this tool call" is to keep the events as they arrive. The
+ * array is cleared at every session boundary (see clearSessionState)
+ * and hard-capped below — this is a long-running daemon, and an
+ * unbounded per-session array is a memory leak with extra steps.
+ */
+const sessionEvents = new Map<string, unknown[]>();
+
+/**
+ * Oldest events are dropped past this many per session. A turn with more
+ * than this many LLM calls loses its earliest chat spans (the tool spans
+ * that named them fall back to hanging off the turn — the same degraded
+ * shape as having no source at all), which is a better failure than the
+ * daemon growing without bound.
+ */
+const MAX_SESSION_EVENTS = 200;
+
+function recordSessionEvent(sessionId: string, hook: string, event: unknown): void {
+  const events = sessionEvents.get(sessionId) ?? [];
+  events.push({ hook, event });
+  if (events.length > MAX_SESSION_EVENTS) events.splice(0, events.length - MAX_SESSION_EVENTS);
+  sessionEvents.set(sessionId, events);
+}
+
+/**
  * Drop all in-memory state associated with a session — its turn/pending-
  * span state and any (session, span) guard-attr scratch entries.
  *
@@ -78,6 +110,7 @@ const pendingGuardAttrs = new Map<string, Record<string, unknown>>();   // key: 
  */
 function clearSessionState(sessionId: string): void {
   sessionState.delete(sessionId);
+  sessionEvents.delete(sessionId);
   const prefix = `${sessionId}:`;
   for (const k of pendingGuardAttrs.keys()) {
     if (k.startsWith(prefix)) pendingGuardAttrs.delete(k);
@@ -584,6 +617,12 @@ export function registerOpenClawPlugin(
       if (!isSessionMonitored(sessionId, process.cwd(), logsConfig)) return;
       const tracerProvider = getTracerProvider();
 
+      // Kept for the end-of-turn chat-span reconstruction. Gated behind
+      // the monitor check above for the same reason pending-span state
+      // is: an unarmed session must accumulate nothing in this
+      // long-lived process, because nothing downstream will drain it.
+      recordSessionEvent(sessionId, 'llm_output', event);
+
       let state = sessionState.get(sessionId) ?? null;
       state = ensureTurn(state, sessionId);
 
@@ -641,9 +680,33 @@ export function registerOpenClawPlugin(
       state = r.state;
     }
 
-    await endTurn(tracerProvider, state, process.cwd());
+    // Reconstruct this turn's LLM calls from the events accumulated by
+    // the llm_output handler, so tool spans nest under the call that
+    // issued them. A source that yields nothing (no llm_output seen,
+    // malformed events) degrades to the flat `turn → tool` shape rather
+    // than failing the flush.
+    let calls: ChatCall[] | undefined;
+    try {
+      const source = createSourceForPlatform('openclaw', {
+        events: sessionEvents.get(sessionId) ?? [],
+      });
+      calls = source?.callsSince(state.turn_start_ms);
+    } catch {
+      calls = undefined;
+    }
+
+    // No provider (logs disabled) → no sink → structure only. The
+    // monitor gate is already applied: `monitored` guards every
+    // provider resolution in this function.
+    const loggerProvider = getLoggerProvider();
+    const contentSink = loggerProvider
+      ? createContentSink(loggerProvider, loadContentLimits())
+      : undefined;
+
+    await endTurn(tracerProvider, state, process.cwd(), null, calls, contentSink);
     clearSessionState(sessionId);
     await tracerProvider.forceFlush();
+    if (loggerProvider) await loggerProvider.forceFlush();
   }
 
   api.on('session_start', async (_event: unknown, ctx: unknown) => {
