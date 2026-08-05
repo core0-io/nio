@@ -54,6 +54,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
+import { SpanStatusCode } from '@opentelemetry/api';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
 import { writeCaptureOnConfig } from './helpers/capture-on.js';
@@ -315,6 +316,114 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
           parentOf(chats[0]!),
           turns[0]!.spanContext().spanId,
           'and the chat span itself still hangs off the turn root',
+        );
+      } finally {
+        await tracer.shutdown();
+      }
+    });
+  });
+
+  it('opencode nests a RECLAIMED tool span — the tool that threw — under its chat call', async () => {
+    // Reclaim is not the exceptional path on opencode, it is the normal
+    // path for every tool call that throws: `tool.execute.after` is
+    // simply not delivered, so `session.idle` finds the span still
+    // pending and force-closes it in `flushSessionTurnInner`'s reclaim
+    // loop. That loop used to emit eagerly onto the turn root, which
+    // meant the failing calls — the ones a reviewer most wants to see in
+    // context — were exactly the ones that lost it, even though the
+    // `tool_use` id needed to attribute them was already on the pending
+    // span.
+    //
+    // Not vacuous: the loop runs ABOVE `buildSpanTree` in the same
+    // function, so an eager emission cannot be attributed by either
+    // channel. Mutation-checked — putting `recordPostToolUse` back
+    // unconditionally turns this case red with the span on the turn root.
+    await withCaptureOnHome('nio-oc-reclaim-', async () => {
+      const tracer = makeInMemoryTracer();
+      try {
+        const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          nioFactory: stubNioAllow(),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: null,
+        })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+        const sessionID = 'oc-reclaim-1';
+        await hooks.event!({
+          event: { type: 'session.created', properties: { info: { id: sessionID } } },
+        } as never);
+        await hooks['chat.message']!(
+          {}, { message: { sessionID }, parts: [{ type: 'text', text: 'run the failing thing' }] },
+        );
+
+        const created = Date.now();
+        await hooks.event!({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'msg_reclaim_1', sessionID, role: 'assistant',
+                modelID: 'oc-reclaim-model', providerID: 'anthropic',
+                time: { created, completed: created + 10 },
+              },
+            },
+          },
+        } as never);
+        await hooks.event!({
+          event: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'prt_r1', type: 'tool', sessionID, messageID: 'msg_reclaim_1',
+                callID: 'call_that_threw', tool: 'bash', state: { input: { command: 'boom' } },
+              },
+            },
+          },
+        } as never);
+
+        // The pre-side only. opencode does not deliver
+        // `tool.execute.after` when the tool throws, so this span is
+        // still pending when the turn closes.
+        await hooks['tool.execute.before']!(
+          { tool: 'bash', sessionID, callID: 'call_that_threw' } as never,
+          { args: { command: 'boom' } } as never,
+        );
+
+        await hooks.event!(
+          { event: { type: 'session.idle', properties: { sessionID } } } as never,
+        );
+
+        const spans = tracer.finished();
+        const chats = named(spans, 'chat');
+        const tools = named(spans, 'execute_tool');
+        const turns = named(spans, 'invoke_agent');
+        assert.equal(chats.length, 1, 'the accumulated parts must produce exactly one chat span');
+        assert.equal(tools.length, 1, 'the pending span must have been reclaimed, not dropped');
+        assert.equal(turns.length, 1, 'the turn root must have been exported');
+
+        assert.equal(
+          tools[0]!.attributes['nio.span.reclaimed'], true,
+          'it must still be marked as a reclaim rather than passing for a clean close',
+        );
+        assert.equal(
+          tools[0]!.attributes['nio.span.reclaim_reason'], 'no_post_tool_event',
+          'and keep the reason — parking the span must not cost the reclaim marking',
+        );
+        assert.equal(
+          tools[0]!.status.code, SpanStatusCode.UNSET,
+          'the outcome is unknowable, so the reclaimed span must assert neither success nor error',
+        );
+        assert.equal(
+          parentOf(tools[0]!),
+          chats[0]!.spanContext().spanId,
+          'a reclaimed span carrying a tool_use id must be attributed like any other',
+        );
+        assert.notEqual(
+          parentOf(tools[0]!),
+          turns[0]!.spanContext().spanId,
+          'stated as an inequality too: on the turn root means the reclaim loop emitted eagerly ' +
+            'and skipped attribution entirely',
         );
       } finally {
         await tracer.shutdown();

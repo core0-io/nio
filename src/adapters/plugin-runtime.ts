@@ -655,16 +655,37 @@ export class InProcessPluginRuntime {
       //    claiming success), and the span is tagged with explicit
       //    reclaim attrs so a consumer can tell it apart from a span
       //    that was genuinely closed on a successful tool return.
+      // 3. Route it the same way `onPostTool` routes a normal close.
+      //    This loop used to call `recordPostToolUse` unconditionally,
+      //    which emits immediately under `traceId.slice(0,16)` — the
+      //    turn root — and it runs ABOVE the `buildSpanTree` call below,
+      //    so a reclaimed span could never nest even when its
+      //    `tool_use` id was sitting right there in `pending.attributes`.
+      //    Since reclaim is opencode's NORMAL path for a tool that threw
+      //    (point 1), that meant the calls a reviewer most wants in
+      //    context — the failing ones — were precisely the ones that
+      //    lost it. Parking instead hands them to the same attribution
+      //    pass as every other span; the reclaim marker and the
+      //    unknowable outcome above are unaffected.
       const { state: drained, attrs } = takePendingGuardAttrs(state, k);
       state = drained;
-      const r = await recordPostToolUse(
-        tracerProvider,
-        state,
-        k,
-        process.cwd(),
-        { ...attrs, ...nioReclaimedSpanAttributes() },
-        null,
-      );
+      const reclaimAttrs = { ...attrs, ...nioReclaimedSpanAttributes() };
+      const r = this.opts.eagerToolSpans
+        ? await recordPostToolUse(
+            tracerProvider,
+            state,
+            k,
+            process.cwd(),
+            reclaimAttrs,
+            null,
+          )
+        : deferPostToolUse(
+            state,
+            k,
+            process.cwd(),
+            reclaimAttrs,
+            null,
+          );
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {

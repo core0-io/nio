@@ -647,6 +647,73 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await tracer.shutdown();
     }
   });
+
+  /**
+   * A tracer provider that records spans normally but whose flush always
+   * rejects — i.e. a live OTLP exporter that has gone away.
+   *
+   * A plain delegating object rather than a subclass or a Proxy: the
+   * runtime and traces-collector only ever call `getTracer` and
+   * `forceFlush` on it, and wrapping the real NodeTracerProvider by
+   * inheritance risks tripping over its own internals rather than
+   * testing ours.
+   */
+  function brokenFlushProvider(
+    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
+  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
+    return {
+      getTracer: (...args: Parameters<typeof provider.getTracer>) => provider.getTracer(...args),
+      forceFlush: async () => { throw new Error('OTLP exporter down'); },
+      shutdown: () => provider.shutdown(),
+      register: () => provider.register(),
+    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
+  }
+
+  it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
+    // The third exit `flushSessionTurn`'s try/finally exists for, and the
+    // only one the two cases above cannot reach. It is not hypothetical:
+    // `endTurn`, `recordPostToolUse` and the trailing `forceFlush` all
+    // await an OTLP exporter, and every binding's outer catch swallows
+    // the rejection — so a broken exporter would leave the turn's events
+    // in the map to be replayed by the NEXT turn as its own chat spans,
+    // the exact bug the clearing exists to prevent, now with no error
+    // visible anywhere to explain it.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: brokenFlushProvider(tracer.provider),
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      rt.onUserPrompt('s-throw', 'turn one');
+      rt.recordConversationEvent('s-throw', llmOutput('t1-a'));
+      rt.recordConversationEvent('s-throw', llmOutput('t1-b'));
+      await assert.rejects(
+        () => rt.onTurnEnd('s-throw'),
+        /OTLP exporter down/,
+        'sanity: the flush really did throw out of the export path, so the finally is what runs',
+      );
+      assert.equal(
+        chatSpans(tracer).length, 2,
+        'sanity: turn 1 built both of its chat spans before the flush blew up',
+      );
+
+      rt.onUserPrompt('s-throw', 'turn two');
+      rt.recordConversationEvent('s-throw', llmOutput('t2-a'));
+      await assert.rejects(() => rt.onTurnEnd('s-throw'), /OTLP exporter down/);
+
+      assert.equal(
+        chatSpans(tracer).length, 3,
+        'turn 2 must contribute exactly ONE new chat span — five means turn 1\'s two events ' +
+          'survived its throwing exit and were replayed as turn 2\'s own calls',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
 });
 
 describe('registerPiExtension', () => {
