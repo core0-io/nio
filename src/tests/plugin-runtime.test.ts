@@ -246,6 +246,77 @@ describe('InProcessPluginRuntime span wiring', () => {
   });
 });
 
+// Fix round 1 (C1, Critical): a reviewer reproduced that a deny becomes
+// an allow when the span-close call fails. `onPreTool`'s block path
+// awaited `closeSpan` (→ provider.getTracer / recordPostToolUse /
+// forceFlush) unguarded; if any of it threw, `onPreTool` itself
+// rejected. Every binding's catch treats "not my deliberate block
+// error" as "fail open" — so the underlying deny was silently lost and
+// the tool ran. Fixed by adding `safeCloseSpan` (catches internally)
+// and using it on both already-decided paths: onPreTool's block branch
+// and resolveConfirm's "user said no" branch. This is shared-runtime
+// code, so it protects Pi and OpenClaw too, not just opencode.
+describe('InProcessPluginRuntime — a decided block survives a telemetry failure (C1)', () => {
+  function runtimeWithExplodingTracer(verdict: 'deny' | 'confirm', confirmAction?: 'allow' | 'deny' | 'ask') {
+    const explodingProvider = {
+      getTracer() { throw new Error('boom: getTracer throws'); },
+      async forceFlush() {},
+      async shutdown() {},
+    };
+    const rt = new InProcessPluginRuntime({
+      platform: 'test-platform',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: explodingProvider as never,
+      meterProvider: null,
+      ...(confirmAction ? { confirmAction } : {}),
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            return {
+              decision: verdict,
+              risk_level: 'high',
+              scores: { final: 0.9 },
+              findings: [{ rule_id: 'TEST_RULE' }],
+              explanation: 'test verdict',
+              phase_stopped: 2,
+              diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+    return rt;
+  }
+
+  it('onPreTool still returns { block: true } when closing the orphan span throws', async () => {
+    const rt = runtimeWithExplodingTracer('deny');
+    // BEFORE the fix this rejected instead of resolving — the reviewer's
+    // repro: "handler resolved [without a deny], opencode will run
+    // rm -rf /". Awaiting it directly here means a regression shows up
+    // as a rejected test, not a silently-swallowed pass.
+    const r = await rt.onPreTool(
+      's1', 'call-1', 'exec', { command: 'rm -rf /' },
+      { toolName: 'exec', params: { command: 'rm -rf /' } },
+    );
+    assert.equal(r.block, true);
+    assert.equal(r.decision, 'deny');
+  });
+
+  it('resolveConfirm still returns { block: true } for a "no" when closing the span throws', async () => {
+    const rt = runtimeWithExplodingTracer('confirm', 'ask');
+    const pre = await rt.onPreTool(
+      's1', 'call-1', 'exec', { command: 'curl x' },
+      { toolName: 'exec', params: { command: 'curl x' } },
+    );
+    assert.equal(pre.decision, 'ask');
+    assert.equal(pre.block, false);
+
+    const resolved = await rt.resolveConfirm('s1', 'call-1', 'ask', pre.reason, false);
+    assert.equal(resolved.block, true);
+    assert.equal(resolved.decision, 'confirm_denied');
+  });
+});
+
 describe('InProcessPluginRuntime auxiliary signals', () => {
   // Tracing explicitly OFF. Do not rely on the harness's empty NIO_HOME
   // producing a null provider — state that implicitly is how Task 2's
@@ -724,13 +795,22 @@ describe('createNioPlugin (opencode)', () => {
   });
 
   it('tool.execute.before swallows internal errors instead of leaking a defect', async () => {
+    // Fix round 1 (I3): the brief's original version of this test passed
+    // `null` as hookOutput, but `hookOutput?.args ?? {}` makes that
+    // harmless — the handler's body runs to completion whether or not
+    // the try/catch is even there, so the test was vacuous (it could
+    // never go red for a missing catch). This version forces a REAL
+    // throw inside the try — a getter on `args` that throws the moment
+    // it's accessed — so the assertion actually depends on the catch
+    // working.
     const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
     const hooks = await createNioPlugin()(pluginInput as never);
-    // A malformed output object would throw inside the handler; the
-    // handler must absorb it so opencode never sees a defect.
+    const throwingOutput = {
+      get args(): never { throw new Error('boom: args getter throws'); },
+    };
     await hooks['tool.execute.before']!(
       { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
-      null as never,
+      throwingOutput as never,
     );
   });
 
@@ -765,7 +845,7 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     $: (() => {}) as never, serverUrl: new URL('http://127.0.0.1:1'),
   };
 
-  function stubNioVerdict(verdict: 'allow' | 'deny') {
+  function stubNioVerdict(verdict: 'allow' | 'deny' | 'confirm') {
     return () => ({
       orchestrator: {
         async evaluate() {
@@ -781,6 +861,26 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         },
       },
     }) as never;
+  }
+
+  /** Isolate NIO_HOME to a fresh tmpdir for the duration of `fn`, then
+   *  restore whatever isolate-nio-home.js had already pinned it to.
+   *  Never touches the real `~/.nio`. Same pattern as the Pi plugin
+   *  tests below — needed here to reach `confirm_action: ask`, which
+   *  OpenCodePluginOptions has no override seam for. */
+  async function withIsolatedNioHome<T>(
+    fn: () => Promise<T>,
+    configYaml?: string,
+  ): Promise<T> {
+    const prev = process.env.NIO_HOME;
+    const nioHome = mkdtempSync(join(tmpdir(), 'nio-opencode-plugin-test-'));
+    process.env.NIO_HOME = nioHome;
+    if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+    try {
+      return await fn();
+    } finally {
+      process.env.NIO_HOME = prev;
+    }
   }
 
   it('tool.execute.before rejects with NioBlockedError for a deny verdict', async () => {
@@ -817,27 +917,70 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     );
   });
 
-  it('permission.ask swallows a null output when hardening a deny to deny', async () => {
-    const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
-    const hooks = await createNioPlugin({ nioFactory: stubNioVerdict('deny') })(pluginInput as never);
+  it('permission.ask swallows a null output when hardening a parked "ask" verdict', async () => {
+    // A 'deny' verdict already throws from tool.execute.before, so
+    // opencode never reaches permission.ask for it (see I2 below) — the
+    // only reachable verdict permission.ask can see is 'ask', which
+    // requires confirm_action: ask to be parked in the first place.
+    await withIsolatedNioHome(async () => {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({ nioFactory: stubNioVerdict('confirm') })(pluginInput as never);
 
-    // Drive a real block through to populate verdictByCall with 'deny'
-    // for callID 'c1'. The block itself is expected to throw.
-    await assert.rejects(() =>
-      hooks['tool.execute.before']!(
+      await hooks['tool.execute.before']!(
         { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
         { args: {} } as never,
-      ),
-    );
+      );
 
-    // Now permission.ask sees a parked 'deny' verdict for 'c1' and tries
-    // to write `hookOutput.status = 'deny'` — on a null hookOutput that
-    // throws a TypeError. It must be swallowed, not leaked.
-    await hooks['permission.ask']!(
-      { id: 'p1', type: 'bash', sessionID: 's1', callID: 'c1' } as never,
-      null as never,
-    );
+      // Now permission.ask sees a parked 'ask' verdict for 'c1' and
+      // tries to write `hookOutput.status` — on a null hookOutput that
+      // throws a TypeError. It must be swallowed, not leaked.
+      await hooks['permission.ask']!(
+        { id: 'p1', type: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        null as never,
+      );
+    }, 'guard:\n  confirm_action: ask\n');
   });
+
+  it('permission.ask forces an actual ask when Nio parked an "ask" verdict', async () => {
+    // I2: the original 'deny' check in permission.ask was unreachable
+    // dead code (a deny already threw from tool.execute.before, so
+    // opencode never gets here for it). The reachable case is 'ask':
+    // Nio wanted confirmation but provisionally let the call proceed
+    // toward opencode's own permission system — this must not silently
+    // resolve to whatever opencode's own heuristics picked for
+    // `status`; it must force a real ask.
+    await withIsolatedNioHome(async () => {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({ nioFactory: stubNioVerdict('confirm') })(pluginInput as never);
+
+      await hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        { args: { command: 'curl x' } } as never,
+      );
+
+      const output: { status: 'ask' | 'deny' | 'allow' } = { status: 'allow' };
+      await hooks['permission.ask']!(
+        { id: 'p1', type: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        output,
+      );
+      assert.equal(output.status, 'ask', 'a parked ask verdict must force an actual ask, not silently allow');
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  // NOTE: review round 1 (I2) specified an additional branch — verdict
+  // 'ask' AND confirm_action 'deny' → force deny. That literal condition
+  // is implemented in the source (see permission.ask below) but is not
+  // bite-checked here: under self-consistent confirmAction usage it is
+  // unreachable, because if confirm_action were 'deny' at the time
+  // tool.execute.before ran, onPreTool would have folded straight to a
+  // block and already thrown — verdictByCall could never hold 'ask' in
+  // that case. Writing a test for it would require manufacturing a
+  // divergence between the confirmAction rt used to fold the original
+  // decision and the confirmAction this check reads, which is not
+  // something the current public API allows without adding a seam whose
+  // only purpose would be to fake the test. See the Fix Round 1 report
+  // section for the full trace; flagged there for the reviewer to
+  // confirm or correct.
 
   it('event swallows an internal throw from a broken meter provider (session.idle path)', async () => {
     const explodingMeterProvider = {
@@ -956,6 +1099,146 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         spans.some(s => s.name === 'task:execute'),
         'task span for the sub-agent flushed under the parent session',
       );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('a deny still stops the tool when the tracer provider is broken (C1)', async () => {
+    // The highest-value missing test flagged in review round 1: the
+    // reviewer's repro showed `tool.execute.before` resolving instead of
+    // rejecting when span-close telemetry failed, silently letting a
+    // denied command run. This drives the exact same failure through the
+    // opencode binding end-to-end and asserts NioBlockedError still
+    // escapes.
+    const explodingProvider = {
+      getTracer() { throw new Error('boom: getTracer throws'); },
+      async forceFlush() {},
+      async shutdown() {},
+    };
+    const { createNioPlugin, NioBlockedError } = await import('../adapters/opencode-plugin.js');
+    const hooks = await createNioPlugin({
+      nioFactory: stubNioVerdict('deny'),
+      tracerProvider: explodingProvider as never,
+      meterProvider: null,
+    })(pluginInput as never);
+
+    await assert.rejects(
+      () => hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 's1', callID: 'c1' } as never,
+        { args: { command: 'rm -rf /' } } as never,
+      ),
+      NioBlockedError,
+    );
+  });
+
+  it('closes the sub-agent task span via onSubagentEnd on the CHILD\'s own session.idle (I4)', async () => {
+    // Before the fix, onSubagentEnd was never called at all — no
+    // subagent_ended audit row, Task/TaskCompleted metric permanently
+    // zero, span duration stretched to the parent's next idle. This
+    // fires session.idle for the CHILD session (not the parent, unlike
+    // the sub-agent detection test above) and asserts the task span
+    // closes right away, with no turn-root span for the child (since
+    // onSubagentEnd runs INSTEAD of onTurnEnd for that session id).
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks.event!({
+        event: { type: 'session.created', properties: { info: { id: 'sub-2', parentID: 'parent-2' } } },
+      } as never);
+      assert.equal(tracer.finished().length, 0);
+
+      // The CHILD's own session.idle — not the parent's.
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 'sub-2' } } } as never,
+      );
+
+      const spans = tracer.finished();
+      assert.equal(
+        spans.length, 1,
+        'exactly the task span — no turn-root span for the child, since onSubagentEnd runs instead of onTurnEnd',
+      );
+      assert.equal(spans[0]!.name, 'task:execute');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('message.updated snapshots do not compound — the turn span carries the final count, not the sum (I5)', async () => {
+    // opencode republishes message.updated on every change to the same
+    // assistant message, with cumulative (not incremental) totals.
+    // Feeding two growing snapshots straight into onLlmUsage (which
+    // accumulates) would double-count; this drives the same message id
+    // twice with growing totals and asserts the turn span carries only
+    // the final snapshot's value.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks.event!({
+        event: {
+          type: 'message.updated',
+          properties: { info: { id: 'msg-1', sessionID: 's1', role: 'assistant', tokens: { input: 10, output: 5 } } },
+        },
+      } as never);
+      await hooks.event!({
+        event: {
+          type: 'message.updated',
+          properties: { info: { id: 'msg-1', sessionID: 's1', role: 'assistant', tokens: { input: 25, output: 12 } } },
+        },
+      } as never);
+
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+      );
+
+      const spans = tracer.finished();
+      const turnSpan = spans.find(s => s.name === 'invoke_agent UserPromptSubmit');
+      assert.ok(turnSpan, 'turn root span must have been emitted');
+      assert.equal(turnSpan!.attributes['gen_ai.usage.input_tokens'], 25, 'final snapshot value, not 10 + 25');
+      assert.equal(turnSpan!.attributes['gen_ai.usage.output_tokens'], 12, 'final snapshot value, not 5 + 12');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('message.updated with no message id skips rather than risk double-counting a re-publish', async () => {
+    // With no id to key the delta on, the handler must not call
+    // onLlmUsage at all (skip, not "accumulate the raw snapshot" —
+    // that would reintroduce the exact I5 bug). Proven here by the
+    // absence of any session state: onLlmUsage is the only thing that
+    // would have created turn state for 's1', so if the handler skipped
+    // correctly, session.idle's flush finds nothing pending and emits
+    // no span whatsoever.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks.event!({
+        event: {
+          type: 'message.updated',
+          properties: { info: { sessionID: 's1', role: 'assistant', tokens: { input: 10, output: 5 } } },
+        },
+      } as never);
+
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+      );
+
+      assert.equal(tracer.finished().length, 0, 'no message id means no usage call, means no turn state, means no span');
     } finally {
       await tracer.shutdown();
     }
