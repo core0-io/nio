@@ -109,14 +109,30 @@ describe('isSessionMonitored', () => {
   });
 
   it('treats the "unknown" sentinel id as never monitored', () => {
+    // Against an empty store this is vacuous — an unarmed session
+    // already returns false with no sentinel guard involved at all, so
+    // this assertion would stay green even with the UNTRUSTED_SESSION_IDS
+    // check deleted outright (confirmed by hand: neutering the guard in
+    // monitor-check.ts left this test passing while 8 others in this
+    // file went red). Seeding an armed record under the literal
+    // 'unknown' key is what actually exercises the guard: without it,
+    // this would report monitored.
     const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: { unknown: { armed_at: Date.now(), cwd: '/work' } },
+    });
     const result = withNioHome(home, null, () =>
       isSessionMonitored('unknown', '/work', logsConfig));
     assert.equal(result, false);
   });
 
   it('treats an empty session id as never monitored', () => {
+    // Same vacuity as above, same fix: seed an armed record under the
+    // empty-string key so the assertion actually depends on the guard.
     const { home, logsConfig } = freshHome();
+    saveMonitorStore(logsConfig, {
+      sessions: { '': { armed_at: Date.now(), cwd: '/work' } },
+    });
     const result = withNioHome(home, null, () =>
       isSessionMonitored('', '/work', logsConfig));
     assert.equal(result, false);
