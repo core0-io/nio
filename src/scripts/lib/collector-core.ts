@@ -397,10 +397,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
    */
   const recoverShard = async (state: CollectorState): Promise<void> => {
     if (!tracerProvider) return;
+    // `detachedRoot`: the salvage leg leaves the shard's turn OPEN (see
+    // SHARD_STALE_MS), so the session may still emit a real turn root on
+    // this trace later. A random root span id keeps the two apart.
+    const opts_ = { detachedRoot: true } as const;
     const shardPlatform = state.platform ?? platform;
     const shardAgent = state.agent_name ?? agentName ?? '';
     if (shardPlatform === platform && shardAgent === (agentName ?? '')) {
-      await recoverDeferredTree(tracerProvider, state);
+      await recoverDeferredTree(tracerProvider, state, opts_);
       return;
     }
     // `DispatchOptions.config` is the narrower ResolvedMetricsConfig, but
@@ -419,11 +423,11 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // No endpoint / traces disabled: cannot happen while
       // `tracerProvider` is non-null, but losing the tree outright would
       // be worse than emitting it under the wrong label.
-      await recoverDeferredTree(tracerProvider, state);
+      await recoverDeferredTree(tracerProvider, state, opts_);
       return;
     }
     try {
-      await recoverDeferredTree(foreign, state);
+      await recoverDeferredTree(foreign, state, opts_);
     } finally {
       try { await foreign.shutdown(); } catch { /* best effort */ }
     }

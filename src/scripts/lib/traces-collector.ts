@@ -1211,15 +1211,37 @@ export function hasOrphanedDeferredTree(
  * Idempotent: returns `deferred_spans: []`, so calling this twice on the
  * (now-empty) result is a no-op on the second call.
  */
+export interface RecoverOptions {
+  /**
+   * Give the synthetic root a RANDOM span id instead of the usual
+   * `traceId.slice(0, 16)`.
+   *
+   * That derived id is the one `endTurn` forces onto a real turn root, so
+   * the two collide whenever the turn this tree came from is still open —
+   * which is exactly the case on the salvage path, where the shard is
+   * written back with its `turn_trace_id` intact so a session that was
+   * merely idle can carry on. Two spans sharing a (trace id, span id) are
+   * not a hard error but backends merge or duplicate them, and the salvage
+   * root is a different span from the real close: it ends early and is
+   * tagged `nio.turn.incomplete`.
+   *
+   * Detaching only changes the root's id. The trace id is unchanged, so
+   * the salvaged spans still sit in the same trace as the content log
+   * records already emitted for them and as the eventual real turn root.
+   */
+  detachedRoot?: boolean;
+}
+
 export async function recoverDeferredTree(
   provider: NodeTracerProvider,
   state: CollectorState,
+  options: RecoverOptions = {},
 ): Promise<CollectorState> {
   const deferred = state.deferred_spans ?? [];
   if (deferred.length === 0) return state;
 
   const traceId = state.turn_trace_id || freshTraceId();
-  const turnSpanId = traceId.slice(0, 16);
+  const turnSpanId = options.detachedRoot ? randomSpanId() : traceId.slice(0, 16);
 
   const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
     traceId,

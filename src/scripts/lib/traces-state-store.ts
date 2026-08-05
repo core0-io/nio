@@ -47,7 +47,7 @@ export {};
 
 import {
   readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync,
-  readdirSync, statSync,
+  readdirSync, statSync, utimesSync, type Stats,
 } from 'node:fs';
 import { randomBytes, createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
@@ -153,8 +153,7 @@ const STATE_FILE_PREFIX = 'traces-state-store-';
 const LEGACY_STATE_FILE_NAME = 'traces-state-store.json';
 
 /**
- * How long a shard must go untouched before it counts as ABANDONED — its
- * session's host died without ever reaching `SessionEnd`.
+ * How long a shard must go untouched before its parked tree is SALVAGED.
  *
  * Sharding trades one reused file for one file per session, so something
  * has to collect them. `discardState` covers the sessions that end
@@ -166,13 +165,53 @@ const LEGACY_STATE_FILE_NAME = 'traces-state-store.json';
  *
  * An hour, not seven days: the tree is only worth recovering while the
  * backend still cares, and every event a live session fires touches its
- * own shard, so an hour of total silence is a strong abandonment signal.
- * The cost of being wrong is bounded and honest — a session idle for over
- * an hour mid-turn gets its tree flushed early under its OWN trace id,
- * tagged `nio.turn.incomplete`, exactly as a real crash would. It is
- * never re-attributed to the recovering session.
+ * own shard.
+ *
+ * ── Why an hour of silence is NOT proof of death ──────────────────────
+ *
+ * There is no liveness signal here. mtime says when the last hook fired,
+ * not whether the host is still running: a single `Bash` call that takes
+ * two hours, or a window left open overnight, both look exactly like a
+ * crash. That is why the hour only ever triggers a SALVAGE and never a
+ * delete. The earlier version unlinked the shard as it read it, and the
+ * three consequences all landed on sessions that were merely idle:
+ *
+ *   1. the in-flight `pending_spans` entry (and its `pending_guard_attrs`)
+ *      vanished, so the long tool call's `PostToolUse` found no pending
+ *      entry, got `durationMs: null`, and emitted NOTHING;
+ *   2. `session_trace_id` vanished, so `SessionEnd` never emitted the
+ *      session root span at all;
+ *   3. the turn was split into two unlinked traces both claiming
+ *      `turn_number: 1`.
+ *
+ * Measured on the pre-fix implementation with a live session backdated
+ * two hours mid-tool-call: `spans at PostToolUse: []`,
+ * `session span emitted? false`, `turn_trace_id` replaced.
+ *
+ * So the salvage now takes ONLY `deferred_spans` and writes the shard
+ * back with everything else — turn id, turn number, pending spans,
+ * session trace — intact. Being wrong now costs the session an early,
+ * honestly-tagged `nio.turn.incomplete` root for the spans that had
+ * already finished, and nothing else: the turn continues, its remaining
+ * spans still come out at `Stop`, and `SessionEnd` still emits the
+ * session span.
  */
 const SHARD_STALE_MS = 60 * 60 * 1000;
+
+/**
+ * How long a shard must go untouched before it is DELETED.
+ *
+ * The GC leg, split off from the salvage leg above because the two answer
+ * different questions. "Is this tree still worth exporting?" has a short
+ * answer (an hour). "Is this session definitely never coming back?" does
+ * not — and a wrong answer there destroys live state, while the only cost
+ * of waiting is a couple of KB of JSON per session.
+ *
+ * A week is comfortably longer than any plausible idle window for a host
+ * process that is still alive, and short enough that the state directory
+ * cannot accumulate indefinitely.
+ */
+const SHARD_GC_MS = 7 * 24 * 60 * 60 * 1000;
 
 function expandHome(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;
@@ -294,16 +333,41 @@ export function discardState(
   try { unlinkSync(statePath(logsConfig, sessionId)); } catch { /* already gone */ }
 }
 
-/** A shard whose session is gone, handed to the caller to flush. */
+/** A shard whose parked tree has been claimed, handed back to flush. */
 export interface AbandonedShard {
   sessionId: string;
   state: CollectorState;
 }
 
 /**
- * Claim every shard except `currentSessionId`'s that has gone untouched
- * for {@link SHARD_STALE_MS}, remove it, and return the ones still
- * carrying a deferred-span tree so the caller can flush them.
+ * Has this file gone untouched since `seen`?
+ *
+ * The sweep's destructive steps are stat → read → write/unlink with no
+ * lock, so the owning process can rename a fresh shard into place in
+ * between and have the NEW file acted on (review finding M6). Re-checking
+ * immediately before the destructive step closes all but a microsecond of
+ * that window.
+ *
+ * `ino` is the load-bearing half: `saveState` writes to a temp file and
+ * renames over the target, so any write by the owner replaces the inode
+ * even when mtime granularity would hide it.
+ *
+ * Exported for `state-store-toctou.test.ts`, which cannot interleave a
+ * real writer into a synchronous sweep — node is single-threaded and this
+ * function takes no injectable seam.
+ */
+export function shardUnchangedSince(path: string, seen: Stats): boolean {
+  try {
+    const now = statSync(path);
+    return now.mtimeMs === seen.mtimeMs && now.ino === seen.ino && now.size === seen.size;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Salvage the parked trees of sessions that stopped firing events, and
+ * garbage-collect the shards of sessions that are long gone.
  *
  * This is the sharded replacement for what the single shared file did by
  * accident: a new session used to load a dead session's state and
@@ -318,11 +382,21 @@ export interface AbandonedShard {
  *  - and every event's own shard is still recovered lazily by
  *    `hasOrphanedDeferredTree`, which needs no directory scan.
  *
- * "Take" is literal: the file is removed as it is read. Leaving it would
- * make every later SessionStart re-emit the same tree, and the tree is
- * telemetry — one honest attempt beats an unbounded retry loop against a
- * backend that may not be there. Shards that are stale but carry nothing
- * to recover are removed too; that is the GC leg.
+ * Two independent legs, on two different clocks:
+ *
+ *  - **salvage** ({@link SHARD_STALE_MS}, 1h) — a shard carrying a
+ *    deferred tree has that tree taken and is written back with
+ *    `deferred_spans: []`. Nothing else in the state is touched, and its
+ *    mtime is restored so this housekeeping does not reset the
+ *    abandonment clock. Taking the tree (rather than leaving it) is what
+ *    stops every later SessionStart re-emitting it; telemetry gets one
+ *    honest attempt, not an unbounded retry loop against a backend that
+ *    may not be there.
+ *  - **GC** ({@link SHARD_GC_MS}, 7d) — a shard untouched for a week is
+ *    unlinked whatever it holds, corrupt ones included.
+ *
+ * A shard is never both salvaged and deleted in the same pass, and a
+ * shard younger than the salvage window is not even read.
  *
  * Never throws: a state directory this cannot read is not a reason to
  * fail a session start.
@@ -334,7 +408,8 @@ export function takeAbandonedShards(
 ): AbandonedShard[] {
   const dir = stateDir(logsConfig);
   const mine = statePath(logsConfig, currentSessionId);
-  const cutoff = nowMs - SHARD_STALE_MS;
+  const salvageCutoff = nowMs - SHARD_STALE_MS;
+  const gcCutoff = nowMs - SHARD_GC_MS;
   const claimed: AbandonedShard[] = [];
   let names: string[];
   try {
@@ -347,17 +422,40 @@ export function takeAbandonedShards(
     const full = join(dir, name);
     if (full === mine) continue;
     try {
-      if (statSync(full).mtimeMs >= cutoff) continue;   // still live
-      let state: CollectorState | null = null;
+      const seen = statSync(full);
+      if (seen.mtimeMs >= salvageCutoff) continue;   // recently active
+
+      if (seen.mtimeMs < gcCutoff) {
+        // Long gone: nothing here can belong to a session still running.
+        if (shardUnchangedSince(full, seen)) {
+          try { unlinkSync(full); } catch { /* raced; next sweep retries */ }
+        }
+        continue;
+      }
+
+      let state: CollectorState;
       try {
         state = JSON.parse(readFileSync(full, 'utf-8')) as CollectorState;
       } catch {
-        // Corrupt shard: nothing to recover, but it is still garbage.
+        // Corrupt, but not old enough to be certainly dead. Leave it for
+        // the GC leg rather than destroying a file a live session might
+        // be mid-write on.
+        continue;
       }
-      unlinkSync(full);
-      if (state && (state.deferred_spans?.length ?? 0) > 0) {
-        claimed.push({ sessionId: state.session_id, state });
-      }
+      if ((state.deferred_spans?.length ?? 0) === 0) continue;   // nothing to salvage
+      if (!shardUnchangedSince(full, seen)) continue;                 // owner woke up mid-read
+
+      // Take the tree, leave the session. `turn_trace_id`, `turn_number`,
+      // `pending_spans`, `pending_guard_attrs` and the session-trace ids
+      // all survive, so a session that was merely idle carries on with an
+      // unbroken turn — see SHARD_STALE_MS for what deleting cost.
+      writeStateAtomic(full, { ...state, deferred_spans: [] });
+      // Restore the owner's mtime: the abandonment clock must measure
+      // when the SESSION last did something, not when the sweeper last
+      // tidied up, or a dead shard could postpone its own GC forever.
+      try { utimesSync(full, seen.atime, seen.mtime); } catch { /* best effort */ }
+
+      claimed.push({ sessionId: state.session_id, state });
     } catch {
       // Raced with the owning process, or unreadable — skip it. The next
       // SessionStart tries again.
@@ -372,7 +470,16 @@ export function saveState(
   state: CollectorState,
   sessionId: string,
 ): void {
-  const path = statePath(logsConfig, sessionId);
+  writeStateAtomic(statePath(logsConfig, sessionId), state);
+}
+
+/**
+ * Atomic write to an exact path. Shared by `saveState` and by the sweep's
+ * salvage leg, which already holds the shard's path and must NOT re-derive
+ * it from `state.session_id` — a shard whose inner id disagreed with its
+ * filename would otherwise be written to a different file.
+ */
+function writeStateAtomic(path: string, state: CollectorState): void {
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });

@@ -232,7 +232,7 @@ describe('deferred-recovery: SessionStart sweeps another session\'s ABANDONED sh
     utimesSync(statePath(logsConfig, sessionId), when, when);
   }
 
-  it('flushes the crashed session\'s tree, on the crashed session\'s own trace id, and removes the shard', async () => {
+  it('flushes the crashed session\'s tree, on the crashed session\'s own trace id, and drains the shard', async () => {
     const { logsConfig } = freshFixture();
     const tracer = makeInMemoryTracer();
     crashedShard(logsConfig);
@@ -252,9 +252,16 @@ describe('deferred-recovery: SessionStart sweeps another session\'s ABANDONED sh
       'the recovered tree must go out on the CRASHED session\'s trace, never the recovering one\'s',
     );
 
+    // The shard survives — deleting it destroyed live state for sessions
+    // that were merely idle (see SHARD_STALE_MS). What must NOT survive is
+    // the tree, or every later SessionStart re-emits it.
     assert.ok(
-      !existsSync(statePath(logsConfig, CRASHED)),
-      'a claimed shard must be removed, or every later SessionStart re-emits the same tree',
+      existsSync(statePath(logsConfig, CRASHED)),
+      'the salvage leg takes the tree, it does not delete the session',
+    );
+    assert.deepEqual(
+      loadState(logsConfig, CRASHED)?.deferred_spans, [],
+      'a claimed tree must be drained from the shard, or every later SessionStart re-emits it',
     );
 
     const mine = loadState(logsConfig, 'sess-new-3');

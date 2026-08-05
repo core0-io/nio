@@ -341,25 +341,70 @@ describe('traces state store: shards are not left behind forever', () => {
     assert.equal(shardCount(logsConfig), 0, 'a cleanly-ended session must not leave a shard behind');
   });
 
-  it('takeAbandonedShards claims stale shards and leaves live ones alone', () => {
+  it('an hour of silence salvages nothing and DELETES nothing — that leg is the 7-day GC', () => {
     const logsConfig = freshLogsConfig();
-    saveState(logsConfig, blank('sess-dead'), 'sess-dead');
+    saveState(logsConfig, blank('sess-idle'), 'sess-idle');
     saveState(logsConfig, blank('sess-live'), 'sess-live');
     saveState(logsConfig, blank('sess-me'), 'sess-me');
 
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    utimesSync(statePath(logsConfig, 'sess-dead'), twoHoursAgo, twoHoursAgo);
+    utimesSync(statePath(logsConfig, 'sess-idle'), twoHoursAgo, twoHoursAgo);
     // 'sess-me' is stale too, to prove the current session is excluded by
     // identity rather than merely by being freshly written.
     utimesSync(statePath(logsConfig, 'sess-me'), twoHoursAgo, twoHoursAgo);
 
     const claimed = takeAbandonedShards(logsConfig, 'sess-me');
 
-    // Nothing is returned for recovery: these shards carry no deferred
-    // spans. They are still collected — that is the GC leg.
-    assert.deepEqual(claimed, []);
-    assert.ok(!existsSync(statePath(logsConfig, 'sess-dead')), 'a stale shard must be collected');
+    assert.deepEqual(claimed, [], 'these shards carry no deferred spans, so nothing is salvaged');
+    assert.ok(
+      existsSync(statePath(logsConfig, 'sess-idle')),
+      'an hour of silence is not proof of death — deleting here is what cost idle-but-alive ' +
+      'sessions their session_trace_id and their turn continuity',
+    );
     assert.ok(existsSync(statePath(logsConfig, 'sess-live')), 'a live shard must survive');
     assert.ok(existsSync(statePath(logsConfig, 'sess-me')), 'the caller\'s own shard is never claimed');
+  });
+
+  it('a shard untouched for a week is garbage-collected', () => {
+    const logsConfig = freshLogsConfig();
+    saveState(logsConfig, blank('sess-ancient'), 'sess-ancient');
+    saveState(logsConfig, blank('sess-recent'), 'sess-recent');
+
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(statePath(logsConfig, 'sess-ancient'), eightDaysAgo, eightDaysAgo);
+    const sixDaysAgo = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    utimesSync(statePath(logsConfig, 'sess-recent'), sixDaysAgo, sixDaysAgo);
+
+    takeAbandonedShards(logsConfig, 'sess-me');
+
+    assert.ok(
+      !existsSync(statePath(logsConfig, 'sess-ancient')),
+      'without a GC leg the state directory grows one file per session forever',
+    );
+    assert.ok(
+      existsSync(statePath(logsConfig, 'sess-recent')),
+      'six days is inside the GC window',
+    );
+  });
+
+  it('garbage-collects a corrupt shard once it is a week old, but not before', () => {
+    const logsConfig = freshLogsConfig();
+    saveState(logsConfig, blank('sess-corrupt-old'), 'sess-corrupt-old');
+    saveState(logsConfig, blank('sess-corrupt-new'), 'sess-corrupt-new');
+    writeFileSync(statePath(logsConfig, 'sess-corrupt-old'), '{ not json', 'utf-8');
+    writeFileSync(statePath(logsConfig, 'sess-corrupt-new'), '{ not json', 'utf-8');
+
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    utimesSync(statePath(logsConfig, 'sess-corrupt-old'), eightDaysAgo, eightDaysAgo);
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    utimesSync(statePath(logsConfig, 'sess-corrupt-new'), twoHoursAgo, twoHoursAgo);
+
+    takeAbandonedShards(logsConfig, 'sess-me');
+
+    assert.ok(!existsSync(statePath(logsConfig, 'sess-corrupt-old')));
+    assert.ok(
+      existsSync(statePath(logsConfig, 'sess-corrupt-new')),
+      'an unparseable shard an hour old may simply be a live session caught mid-write',
+    );
   });
 });
