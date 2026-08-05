@@ -239,9 +239,19 @@ ContentBlock {
   type     'thinking' | 'text' | 'tool_use'
   index    number      在本次调用内的序号，保序
   content  string
+  fidelity 'full' | 'summary'     仅 type='thinking'，见下
   toolUse  { id, name, input }?   仅 type='tool_use'
 }
 ```
+
+**`fidelity` 是必需的，不是可选装饰。** thinking 块在不同平台上是两种性质截然不同的数据：
+
+- `full` —— 模型的完整推理原文（Claude Code；Hermes / OpenClaw 配 Anthropic 模型时）
+- `summary` —— 模型对自身推理的步骤级摘要（Codex，约占实际推理的 3%，只述"做了哪几步"，不含"为什么"）
+
+缺了这个标记，后端里一行 40 字符的 Codex 步骤标题与一段千字的完整推理链会呈现为同类数据。任何基于 thinking 的分析（行为审计、异常检测、推理质量评估）都会因此得出错误结论——把"摘要里没提到风险"误读成"模型没考虑风险"。
+
+对应地，内容日志的 `nio.content.type` 保持 `thinking` 不变，另以属性 `nio.content.fidelity` 承载该标记，便于后端在查询层直接过滤。
 
 `blocks[]` 的顺序性是还原"想 → 说 → 想 → 调工具"流程的前提，不可合并或重排。
 
@@ -333,21 +343,77 @@ span 上保留短摘要（沿用现有 `nio.tool_summary`，前 200 字符），
 
 ## 四、平台覆盖矩阵
 
-| 平台 | prompt | response | thinking | LLM 级 span | 状态 |
+| 平台 | prompt | response | thinking | LLM 级 span | 依据 |
 |---|---|---|---|---|---|
-| Claude Code | 是 | 是 | 是 | 是 | 已实机验证 |
-| Codex | 是 | 是（`last_assistant_message`） | 待验证 | 待验证 | 部分验证 |
-| Hermes | 是 | 待验证 | 待验证 | 是（事件对） | 未验证 |
-| OpenClaw | 是 | 是（`assistantTexts`） | 待验证 | 是（`llm_output`） | 部分验证 |
+| Claude Code | 是 | 是 | **完整原文** | 是 | 已实机验证 |
+| Codex | 是 | 是 | **仅步骤标题摘要，且需 `effort=high`** | 是 | 已实机验证 |
+| Hermes | 是 | 是（`assistant_response`） | 预期完整原文（`conversation_history[].reasoning`） | 是（事件对） | 官方文档，**未实机验证** |
+| OpenClaw | 是 | 是 | 预期完整原文（reasoning 独立消息） | 是 | 官方文档，**未实机验证** |
 
-### 待验证项与验证方法
+### thinking 不是二元的，是量级差异
 
-| 项 | 验证方法 | 降级策略 |
+这是本矩阵最容易被误读的一栏。四个平台里没有"没有 thinking"的，但拿到的东西性质完全不同：
+
+**决定因素是模型提供商，不是 agent 平台。** Anthropic 模型返回完整 thinking 块；OpenAI reasoning 系列（o 系列 / GPT-5）在 API 层面就不暴露 raw chain-of-thought，这是产品策略。因此 Hermes / OpenClaw 这类多 provider 平台，能拿到什么取决于用户配了哪家模型。
+
+**Codex 实测数据**（gpt-5.5，同一 prompt 两次会话对照）：
+
+| `model_reasoning_effort` | reasoning 条目 | summary |
 |---|---|---|
-| Codex rollout JSONL 格式 | 实机跑一次 Codex 会话，采集 rollout 文件样本 | 若无 thinking，仅从 hook payload 取 response，thinking 标注为平台不支持 |
-| Hermes `post_llm_call` payload | 实机触发一次，dump 完整 envelope | 若无内容字段，Hermes 仅支持 prompt + tool IO |
-| OpenClaw `llm_output` reasoning 字段 | 查阅上游事件定义 + 实机 dump | 若无，OpenClaw thinking 标注为不支持 |
-| 各平台 session id 环境变量 | 实机 `env` 检查 | 回落 pending-arm 机制 |
+| `medium` | 17 个 | **全部为空** |
+| `high` | 2 个 | 全部有内容 |
+
+`model_reasoning_summary` 保持默认 `auto` 未变——唯一变量是 effort。`auto` 的语义是"模型自行决定是否生成"，medium 下它判定不必生成。
+
+拿到的内容形态：
+
+```json
+"summary": [
+  {"type": "summary_text", "text": "**Planning to create toy project in /tmp**"},
+  {"type": "summary_text", "text": "**Assessing apply_patch file creation constraints**"}
+]
+```
+
+每条 30–50 字符的加粗短语，描述"这一步在做什么"，**不含推理内容**——为什么选这个方案、排除了什么、如何权衡，全都不在里面。
+
+量化：`summary` 文本共 217 字符，同批 `encrypted_content` 共 7000 字符，**比值 3.1%**。其余 97% 的实际推理锁在 Fernet 加密串里（`gAAAAAB` 前缀），密钥在服务端，设计上只用于回传 API 保持多轮上下文，客户端无法解密。`content` 字段（原始轨迹）在响应中根本不存在。
+
+**对实现的约束**：`ChatCall` 的 thinking 块必须携带来源标记，区分"完整原文"与"步骤摘要"。否则同一后端里 Codex 的一行标题与 Claude Code 的完整推理链呈现为同类数据，消费者会误判其分析价值。
+
+**对采集的约束**：nio 无法控制用户的 effort 配置，因此 Codex 侧 thinking 是尽力而为——medium 及以下为空属正常，不是采集故障，不应触发诊断告警。
+
+### Codex 已实机确认的其余结构
+
+除 thinking 外，Codex 的 rollout JSONL 提供的信息比 Claude Code 更丰富：
+
+| 数据 | 位置 |
+|---|---|
+| user prompt | `response_item/message` role=`user` |
+| **developer/system prompt** | role=`developer` — Claude Code 无此项 |
+| assistant 回复 | role=`assistant`；亦见 `event_msg/agent_message` 与 `task_complete.last_agent_message` |
+| token usage | `event_msg/token_count.info`：`last_token_usage` / `total_token_usage` / `model_context_window` |
+| **首 token 延迟** | `task_complete.time_to_first_token_ms` — Claude Code 无此项 |
+| turn 耗时 | `task_complete`：`duration_ms` / `started_at` / `completed_at` |
+| 工具调用 | `function_call`（`name` / `arguments` / `call_id`）↔ `function_call_output`（`call_id` / `output`）靠 `call_id` 配对 |
+
+**per-call 边界的切分规则与 Claude Code 不同**。Claude Code 每条 assistant entry 即一次调用；Codex 是扁平的 `response_item` 流，`turn_id` 是 turn 级而非 call 级，需以 `reasoning` 条目（或收尾的 `message(assistant)`）作为新调用的起点标记：
+
+```
+reasoning → function_call → reasoning → function_call → … → message(assistant)
+```
+
+这正好印证 `ConversationSource` 双模抽象的必要性——两个平台的解析逻辑无法共用。
+
+### 未实机验证项
+
+Hermes 与 OpenClaw 按官方文档设计实现，**不做实机验证**（时间约束下的显式决定）。相应风险记录如下：
+
+| 平台 | 文档依据 | 风险 |
+|---|---|---|
+| Hermes | `post_llm_call` 签名含 `assistant_response` / `conversation_history`；assistant 消息结构含 `role` / `content` / `tool_calls` / `reasoning` | `reasoning` 键位于 `conversation_history` 元素上属推断，文档未直接写明 hook 能否读到 |
+| OpenClaw | reasoning 作为独立消息发送（带 `Thinking` 前缀），Anthropic 模型走 native thinking blocks | 官方 `llm_output` 字段表**不含**内容字段（仅 `runId`/`callId`/`provider`/`model`/`outcome`/`durationMs`/`contextTokenBudget` 等元数据）；现有代码读的 `assistantTexts` / `usage` 不在文档列表内，可能依赖未文档化行为，上游改版有静默断裂风险。thinking 很可能需从消息流事件（`before_agent_reply` / `before_message_write` / `message_sending`）获取而非 `llm_output` |
+
+实现时按文档编码，并在解析层对缺失字段做 fail-safe 降级（字段不存在即视为该平台不提供该项，不抛异常、不告警）。`NIO_DUMP_PAYLOAD` 调试开关已就位，后续任何时候都可低成本补验。
 
 **降级原则**：平台确实不提供的数据，在 `docs/COLLECTOR-SIGNALS.md` 中如实标注覆盖边界，不做虚假承诺。
 
@@ -358,9 +424,10 @@ Phase 1  采集总闸
          /nio-monitor skill + config + monitored-sessions.json + provider 判定点
          必须最先完成 —— 否则后续开发调试期间测试数据持续外发
 
-Phase 2  平台能力实机验证
-         三项待验证 + session id 环境变量，产出真实 payload / 会话文件样本
-         结论决定 Phase 3/4 的平台覆盖范围
+Phase 2  平台能力验证 —— 已收敛，不再阻塞后续
+         Claude Code / Codex 已实机验证（结论见"平台覆盖矩阵"）
+         Hermes / OpenClaw 按官方文档实现，不做实机验证（时间约束下的显式决定），
+         风险已在矩阵中登记；NIO_DUMP_PAYLOAD 开关已就位，可随时低成本补验
 
 Phase 3  trace 骨架 v2
          chat span + tool 嵌套 + 延迟发送 + 崩溃补发 + session trace/link
@@ -386,7 +453,11 @@ Phase 6  文档修正
 
 ### Fixture
 
-需要脱敏后的真实会话文件样本。当前 `src/tests/fixtures/codex/` 仅有 hook payload，无会话文件。Phase 2 验证时一并采集。
+需要脱敏后的真实会话文件样本。当前 `src/tests/fixtures/codex/` 仅有 hook payload，无会话文件。
+
+Codex 侧的真实结构已在 Phase 2 摸清（含 `reasoning` / `function_call` / `function_call_output` / `token_count` / `task_complete`），但采到的样本含完整 developer prompt 与真实对话，**不可直接入库**。应按真实结构生成合成 fixture：条目类型、字段名、嵌套形态与真实文件一致，内容全部替换为无意义占位。
+
+Hermes / OpenClaw 无实机样本，其解析器测试以按文档构造的合成 fixture 驱动，并在 fixture 文件头注明"基于官方文档构造，未经实机校验"。
 
 ### 沙箱约束
 
