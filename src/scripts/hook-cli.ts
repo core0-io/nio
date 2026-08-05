@@ -323,7 +323,7 @@ function formatHermesGuardOutput(
   };
 }
 
-// How long the stdout write may make NO progress before writeAndExit()
+// How long the stdio writes may make NO progress before writeAndExit()
 // gives up and exits anyway.
 //
 // The previous version of this was a flat 2s wall-clock deadline, and its
@@ -357,7 +357,8 @@ const WRITE_STALL_TIMEOUT_MS = 10_000;
 const WRITE_POLL_MS = 250;
 
 /**
- * Write the Hermes response and exit.
+ * Write the Hermes response and exit once BOTH stdio streams have
+ * drained.
  *
  * An explicit exit is required: when the OTLP endpoint is configured but
  * unreachable, the meter provider's PeriodicExportingMetricReader keeps
@@ -365,13 +366,39 @@ const WRITE_POLL_MS = 250;
  * and the process hangs forever. Exiting from the write callback (rather
  * than immediately after write()) guarantees the response reaches Hermes
  * first — stdout is a pipe here, so write() is not synchronous.
+ *
+ * stderr has to be waited on too, and it is not covered by stdout's
+ * callback: they are different file descriptors with no ordering between
+ * them, and both are async pipes under Hermes. Everything this process
+ * writes to stderr — the guard's diagnostics block, the
+ * confirm_action:'ask' fallback warning, every `[nio:collector:*]`
+ * export diagnostic — is written BEFORE this function is reached, so an
+ * exit driven by stdout alone truncates whatever of it is still
+ * buffered. Measured through the real CLI: one `external_analyser` entry
+ * with a long endpoint produces a 500248-byte stderr diagnostic, and
+ * exiting on the stdout callback delivered 65536 bytes of it — one pipe
+ * buffer — in 228ms. The diagnostics exist to tell the user their
+ * collector is misconfigured; silently cutting them at 64KB defeats that.
  */
 function writeAndExit(payload: string): void {
   let exited = false;
+  let stdoutHandedOff = false;
+
   const finish = (): void => {
     if (exited) return;
     exited = true;
     process.exit(0);
+  };
+
+  // Exit only when stdout's own callback has fired AND stderr has
+  // nothing left buffered. `writableLength === 0` is the same guarantee
+  // the write callback gives (every chunk handed to the OS), just
+  // observable without owning stderr's call sites — which matters
+  // because they are spread across main() and the diagnostics helpers.
+  const finishIfDrained = (): void => {
+    if (!stdoutHandedOff) return;
+    if (process.stderr.writableLength > 0) return;
+    finish();
   };
 
   // Closed/broken pipe (EPIPE). This is the case the old flat timer was
@@ -380,16 +407,22 @@ function writeAndExit(payload: string): void {
   // listener an EPIPE is an uncaught exception, which exits non-zero and
   // makes Hermes log a spurious hook failure.
   process.stdout.on('error', finish);
-  process.stdout.write(payload, finish);
+  process.stderr.on('error', finish);
+  process.stdout.write(payload, () => {
+    stdoutHandedOff = true;
+    finishIfDrained();
+  });
 
-  // Progress-aware backstop.
-  let lastPending = process.stdout.writableLength;
+  // Progress-aware backstop, and also the thing that re-checks stderr
+  // after stdout's callback has already fired.
+  let lastPending = process.stdout.writableLength + process.stderr.writableLength;
   let lastProgressMs = Date.now();
   setInterval(() => {
-    const pending = process.stdout.writableLength;
-    // Nothing buffered: everything is with the OS and the write callback
-    // owns the exit from here.
-    if (pending === 0) return;
+    const pending = process.stdout.writableLength + process.stderr.writableLength;
+    if (pending === 0) {
+      finishIfDrained();
+      return;
+    }
     if (pending !== lastPending) {
       lastPending = pending;
       lastProgressMs = Date.now();
