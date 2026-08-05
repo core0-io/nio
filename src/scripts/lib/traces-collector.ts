@@ -50,6 +50,7 @@ import type {
 } from './traces-state-store.js';
 import type { ChatCall } from './conversation/types.js';
 import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js';
+import { redactSecrets } from './content/redact.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
@@ -225,14 +226,24 @@ export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
 // Turn-state operation helpers (state-in / state-out)
 // ---------------------------------------------------------------------------
 
-/** Record user prompt onto turn state (UserPromptSubmit / before_agent_reply). */
+/**
+ * Record user prompt onto turn state (UserPromptSubmit / before_agent_reply).
+ *
+ * `redactAndTruncate` is a straight passthrough on strings — it only
+ * scans JSON *key names*, so a prompt like "here's my key, sk-live-..."
+ * would ride straight through untouched. Free-text prose is exactly what
+ * `redactSecrets` (content/redact.ts) scans for, and the user prompt is
+ * the single most likely place for a pasted credential to show up — so
+ * it runs first, same redact-then-truncate order the content pipeline
+ * uses everywhere else.
+ */
 export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
-  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(prompt) });
+  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(redactSecrets(prompt).text) });
 }
 
-/** Record assistant reply onto turn state (currently OpenClaw llm_output). */
+/** Record assistant reply onto turn state (currently OpenClaw llm_output). See recordUserPrompt for why redactSecrets runs first. */
 export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
-  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(reply) });
+  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(redactSecrets(reply).text) });
 }
 
 /** Add per-event LLM usage delta to state.turn_attributes. */
