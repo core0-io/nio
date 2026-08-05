@@ -76,7 +76,9 @@ export const SENSITIVE_FILE_PATHS = [
   '.hermes/plugins/',
   '.openclaw/openclaw.json',
   '.openclaw/',
-  // Pi has no MCP support. These paths are sensitive because they
+  // Pi core has no MCP; the third-party pi-mcp-adapter package supplies
+  // it and stores its server map under this same directory. These paths
+  // are sensitive because they
   // control which extensions load and which skills are trusted, not
   // because Pi has an MCP server registry.
   '.pi/settings.json',

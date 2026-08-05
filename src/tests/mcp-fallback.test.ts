@@ -9,6 +9,20 @@ import { join } from 'node:path';
 import { evaluateHook, buildMcpEnvelope } from '../adapters/hook-engine.js';
 import type { HookInput } from '../adapters/types.js';
 import { createTestContext } from './helpers/test-utils.js';
+import { PiAdapter } from '../adapters/pi.js';
+import type { MCPRegistry } from '../adapters/mcp-registry.js';
+
+/** Registry with no entries — proves the pi proxy-tool path never
+ * depends on the registry for the `permitted_tools.mcp` check below. */
+function emptyRegistry(): MCPRegistry {
+  return {
+    entries: [],
+    lookupByUrl: () => null,
+    lookupBySocket: () => null,
+    lookupByBinary: () => null,
+    lookupByCliPackage: () => null,
+  };
+}
 
 function freshDir(): string {
   return mkdtempSync(join(tmpdir(), 'nio-mcp-fallback-'));
@@ -321,6 +335,45 @@ describe('Phase 0 permitted_tools.mcp: hermes mcp_ single-underscore', () => {
     );
     assert.equal(result.decision, 'deny');
     assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+});
+
+// ── Phase 0 permitted_tools.mcp gate: pi proxy tool `mcp` ──────────────
+//
+// Regression guard for the `checkToolGate` call site: `toolInput` MUST be
+// threaded into `parseMcpToolName` there, not just in the MCP-fallback
+// envelope path below. Without it, every pi proxy call resolves to the
+// literal name `mcp` (the targetless branch) regardless of the real
+// target read from `toolInput.tool`, and this allow/deny pair would
+// invert.
+
+describe('Phase 0 permitted_tools.mcp: pi proxy tool `mcp` (toolInput threading)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  it('gates the pi proxy call by toolInput.tool, not the literal tool name "mcp"', async () => {
+    ctx = createTestContext({
+      level: 'balanced',
+      guard: {
+        permitted_tools: { mcp: ['list_sims'] },
+      },
+      mcpRegistry: emptyRegistry(),
+    });
+
+    const allowed = await evaluateHook(
+      new PiAdapter(),
+      { toolName: 'mcp', input: { tool: 'list_sims', server: 'xcodebuild' } },
+      ctx.options,
+    );
+    assert.equal(allowed.decision, 'allow');
+
+    const denied = await evaluateHook(
+      new PiAdapter(),
+      { toolName: 'mcp', input: { tool: 'delete_sims', server: 'xcodebuild' } },
+      ctx.options,
+    );
+    assert.equal(denied.decision, 'deny');
+    assert.ok(denied.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
   });
 });
 
