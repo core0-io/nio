@@ -62,7 +62,8 @@ export {};
  * against the other three sources.
  */
 
-import type { ChatCall, ContentBlock, ConversationSource, ThinkingFidelity } from './types.js';
+import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
+import { fidelityForProvider, toUsage } from './shared.js';
 
 interface RawLlmOutputEvent {
   runId?: string;
@@ -114,21 +115,6 @@ function extractMessageText(evt: Record<string, unknown>): string | undefined {
 
 function isThinkingText(text: string): boolean {
   return /^\s*Thinking\b/.test(text) || /<think>[\s\S]*<\/think>/.test(text);
-}
-
-function fidelityForProvider(provider: unknown): ThinkingFidelity {
-  return typeof provider === 'string' && provider.toLowerCase().includes('anthropic') ? 'full' : 'summary';
-}
-
-function toUsage(raw: unknown): NonNullable<ChatCall['usage']> | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const u = raw as Record<string, unknown>;
-  const out: NonNullable<ChatCall['usage']> = {};
-  if (typeof u.input === 'number') out.input = u.input;
-  if (typeof u.output === 'number') out.output = u.output;
-  if (typeof u.cacheRead === 'number') out.cacheRead = u.cacheRead;
-  if (typeof u.cacheWrite === 'number') out.cacheWrite = u.cacheWrite;
-  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function toAssistantTextBlock(raw: unknown): PartialBlock | undefined {
