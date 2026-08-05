@@ -38,7 +38,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import { dumpPayload } from './lib/payload-dump.js';
-import { spanKey, toolSummary, type HookStdinPayload } from './lib/collector-core.js';
+import { spanKey, toolSummary, parseMcpToolName, type HookStdinPayload } from './lib/collector-core.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
 import { formatDiagnosticsForUser, type Diagnostic } from '../adapters/diagnostics.js';
@@ -213,6 +213,14 @@ async function main(): Promise<void> {
   // PostToolUse invocations of this same script must NOT write — the
   // span is already closing in the collector by then.
   const hookEventName = (payload as Record<string, unknown>).hook_event_name as string | undefined;
+  // MCP tool calls (`mcp__<server>__<tool>`) get their own OTEL
+  // dimension. Blocked calls never reach collector-core's PostToolUse
+  // branch (the tool never ran), so this is the only place their span
+  // gets that dimension — must be folded into guardAttrs here.
+  const mcp = parseMcpToolName(toolName);
+  const mcpAttrs = mcp
+    ? { 'gen_ai.tool.type': 'mcp', 'nio.mcp.server': mcp.server, 'nio.mcp.tool': mcp.tool }
+    : {};
   const guardAttrs: Record<string, unknown> = {
     ...nioGuardAttributes(
       resolvedDecision,
@@ -223,6 +231,7 @@ async function main(): Promise<void> {
       result.topFindingRule,
     ),
     'nio.guard.eval_ms': evalMs,
+    ...mcpAttrs,
   };
   if (tracerProvider && hookEventName === 'PreToolUse') {
     const sessionId = (payload as Record<string, unknown>).session_id as string || 'unknown';

@@ -190,6 +190,30 @@ export function allocateSpanKey(
   }
 }
 
+/**
+ * Split an MCP tool name into its server and tool halves.
+ *
+ * MCP tools arrive as `mcp__<server>__<tool>`. Splitting them lets the
+ * span carry `nio.mcp.server` as its own dimension, so "how much of this
+ * agent's work goes through MCP" and "which server is slow" become
+ * answerable without string-matching tool names at query time.
+ *
+ * Returns null for anything that is not a well-formed MCP name — the
+ * caller then emits the span exactly as before.
+ */
+export function parseMcpToolName(
+  toolName: string,
+): { server: string; tool: string } | null {
+  if (!toolName.startsWith('mcp__')) return null;
+  const rest = toolName.slice(5);
+  const sep = rest.indexOf('__');
+  if (sep <= 0) return null;
+  const server = rest.slice(0, sep);
+  const tool = rest.slice(sep + 2);
+  if (!server || !tool) return null;
+  return { server, tool };
+}
+
 /** Resolve the actual key that has a pending entry — primary spanKey
  * first, composite-fallback second. Handles the Hermes asymmetry
  * where pre's tool_use_id is empty (composite key saved) but post
@@ -315,11 +339,19 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         state = drained.state;
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
+        // MCP tool calls (`mcp__<server>__<tool>`) get their own OTEL
+        // dimension so "how much traffic is MCP" and "which server is
+        // slow" are answerable without string-matching tool names.
+        const mcp = parseMcpToolName(toolName);
+        const mcpAttrs = mcp
+          ? { 'gen_ai.tool.type': 'mcp', 'nio.mcp.server': mcp.server, 'nio.mcp.tool': mcp.tool }
+          : {};
         const result = await recordPostToolUse(
           tracerProvider, state, key, cwd,
           {
             ...drained.attrs,
             ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+            ...mcpAttrs,
           },
           err ?? null,
         );
