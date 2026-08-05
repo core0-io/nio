@@ -107,6 +107,14 @@ export interface OpenClawPluginOptions {
   level?: string;
   /** Custom Nio instance factory */
   nioFactory?: () => NioInstance;
+  /**
+   * Test seam: inject pre-built OTEL providers instead of deriving them
+   * from collector config. `undefined` builds from config (production);
+   * `null` disables. Mirrors PluginRuntimeOptions so the characterization
+   * test keeps working across the refactor.
+   */
+  tracerProvider?: ReturnType<typeof createTracerProvider>;
+  meterProvider?: ReturnType<typeof createMeterProvider>;
 }
 
 // ---------------------------------------------------------------------------
@@ -135,8 +143,12 @@ export function registerOpenClawPlugin(
   const resourceAgentName = config.agent_name && config.agent_name.length > 0
     ? config.agent_name
     : undefined;
-  const tracerProvider = createTracerProvider(collectorConfig, 'openclaw', resourceAgentName);
-  const meterProvider = createMeterProvider(collectorConfig, 'openclaw', resourceAgentName);
+  const tracerProvider = options.tracerProvider !== undefined
+    ? options.tracerProvider
+    : createTracerProvider(collectorConfig, 'openclaw', resourceAgentName);
+  const meterProvider = options.meterProvider !== undefined
+    ? options.meterProvider
+    : createMeterProvider(collectorConfig, 'openclaw', resourceAgentName);
   const logsConfig = config.collector?.logs;
   const loggerProvider = (logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, 'openclaw', resourceAgentName)
