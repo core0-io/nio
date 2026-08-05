@@ -61,6 +61,21 @@ describe('claude-code source', () => {
     assert.ok(calls.some((c) => !c.isSidechain));
   });
 
+  it('infers endMs from the next call\'s startMs and marks it inferred, except the last call which stays synthetic', () => {
+    // Transcripts never record a call's actual completion time (see
+    // claude-code-source.ts's module doc); the best this layer can do is
+    // borrow the next call's startMs as an approximation. The fixture's
+    // first two assistant entries are 5000ms apart (10:00:05 → 10:00:10).
+    const calls = createClaudeCodeSource(FIXTURE).callsSince(0);
+    assert.ok(calls.length >= 2, 'fixture must contain at least two calls');
+    assert.equal(calls[0].endMs, calls[1].startMs, "first call's endMs must equal the second call's startMs");
+    assert.equal(calls[0].timing, 'inferred');
+
+    const last = calls[calls.length - 1];
+    assert.equal(last.endMs, last.startMs, 'the last call has no successor to borrow an end time from');
+    assert.equal(last.timing, 'synthetic');
+  });
+
   it('filters by sinceMs', () => {
     const all = createClaudeCodeSource(FIXTURE).callsSince(0);
     assert.ok(all.length >= 2);

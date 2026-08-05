@@ -95,6 +95,12 @@ describe('openclaw source', () => {
     assert.equal(texts[0].content, 'Placeholder final answer for call B.');
   });
 
+  it('marks timing as synthetic (startMs is Date.now() + array index)', () => {
+    const calls = createOpenClawSource(loadEvents()).callsSince(0);
+    assert.ok(calls.length > 0);
+    for (const c of calls) assert.equal(c.timing, 'synthetic');
+  });
+
   it('returns an empty array for non-array input', () => {
     assert.deepEqual(createOpenClawSource(undefined as unknown as unknown[]).callsSince(0), []);
     assert.deepEqual(createOpenClawSource(null as unknown as unknown[]).callsSince(0), []);

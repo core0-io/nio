@@ -67,6 +67,12 @@ describe('hermes source', () => {
     assert.equal(texts[0].content, 'placeholder final assistant answer after checking the placeholder file');
   });
 
+  it('marks timing as synthetic (all calls share one Date.now() snapshot)', () => {
+    const calls = createHermesSource(loadFixture()).callsSince(0);
+    assert.ok(calls.length > 0);
+    for (const c of calls) assert.equal(c.timing, 'synthetic');
+  });
+
   it('takes model from extra.model', () => {
     const calls = createHermesSource(loadFixture()).callsSince(0);
     assert.ok(calls.length > 0);

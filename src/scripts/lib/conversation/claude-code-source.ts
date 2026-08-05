@@ -122,14 +122,32 @@ function toCall(entry: RawEntry, ordinal: number): ChatCall | null {
     callId,
     model: typeof msg.model === 'string' ? msg.model : undefined,
     startMs: ms,
-    // Transcripts don't record a call's end time; the span layer
-    // corrects this using the next call's start (or turn end).
+    // Transcripts don't record a call's end time. `applyTiming` below
+    // corrects every call but the last using the next call's start;
+    // this default (equal to startMs, synthetic) only survives for the
+    // final call in the batch, which has no successor to borrow from.
     endMs: ms,
+    timing: 'synthetic',
     usage: toUsage(msg.usage),
     stopReason: typeof msg.stop_reason === 'string' ? msg.stop_reason : undefined,
     blocks: toBlocks(msg.content),
     isSidechain: entry.isSidechain === true,
   };
+}
+
+/**
+ * Derives an end time for every call but the last from its successor's
+ * start — the one piece of real information a per-line transcript can
+ * offer about how long a call ran, since Claude Code never records a
+ * call's actual completion time (see module doc). The last call in the
+ * batch has no successor to borrow from, so it keeps `endMs === startMs`
+ * and `timing: 'synthetic'` from `toCall`.
+ */
+function applyTiming(calls: ChatCall[]): void {
+  for (let i = 0; i < calls.length - 1; i++) {
+    calls[i].endMs = calls[i + 1].startMs;
+    calls[i].timing = 'inferred';
+  }
 }
 
 export function createClaudeCodeSource(transcriptPath: string): ConversationSource {
@@ -157,6 +175,12 @@ export function createClaudeCodeSource(transcriptPath: string): ConversationSour
         const call = toCall(entry, i);
         if (call) calls.push(call);
       });
+
+      // Must run over the full batch, in transcript order, before the
+      // sinceMs filter below — inference borrows each call's endMs from
+      // its successor's startMs, so trimming the array first would starve
+      // the last surviving call of a successor it actually has.
+      applyTiming(calls);
 
       return calls.filter((c) => c.startMs >= sinceMs);
     },

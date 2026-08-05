@@ -230,6 +230,11 @@ export function createHermesSource(payload: unknown): ConversationSource {
           model: typeof extra.model === 'string' ? extra.model : undefined,
           startMs: nowMs,
           endMs: nowMs,
+          // Every call in one post_llm_call payload shares the same
+          // Date.now() snapshot — there is no per-call timestamp anywhere
+          // in the envelope, so this carries no real duration information
+          // (see TimingFidelity in types.ts).
+          timing: 'synthetic',
           stopReason: typeof msg.finish_reason === 'string' ? msg.finish_reason : undefined,
           blocks: partials.map((b, index) => ({ ...b, index })),
           isSidechain: false,

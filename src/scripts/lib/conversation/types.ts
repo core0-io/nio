@@ -30,6 +30,22 @@ export {};
  */
 export type ThinkingFidelity = 'full' | 'summary';
 
+/**
+ * How much the start/end timestamps can be trusted.
+ *
+ * Only one of the four platforms reports both ends of an LLM call.
+ * The span layer needs to know which numbers are real before it draws
+ * a duration — a synthetic 0ms span and a measured 0ms span mean very
+ * different things.
+ */
+export type TimingFidelity =
+  /** Both ends come from the platform. */
+  | 'exact'
+  /** Start is real; end was derived from the next call's start. */
+  | 'inferred'
+  /** Timestamps were synthesised at parse time and carry no duration. */
+  | 'synthetic';
+
 export interface ContentBlock {
   type: 'thinking' | 'text' | 'tool_use';
   /** Position within this call, zero-based and contiguous. Order carries meaning. */
@@ -48,6 +64,8 @@ export interface ChatCall {
   model?: string;
   startMs: number;
   endMs: number;
+  /** How much `startMs`/`endMs` can be trusted; see `TimingFidelity`. */
+  timing: TimingFidelity;
   usage?: {
     input?: number;
     output?: number;

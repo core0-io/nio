@@ -81,6 +81,12 @@ describe('codex source', () => {
     );
   });
 
+  it('marks timing as exact (task_complete carries real start/end)', () => {
+    const calls = createCodexSource(FIXTURE).callsSince(0);
+    assert.ok(calls.length > 0);
+    for (const c of calls) assert.equal(c.timing, 'exact');
+  });
+
   it('takes model from turn_context', () => {
     const calls = createCodexSource(FIXTURE).callsSince(0);
     assert.ok(calls.length > 0);

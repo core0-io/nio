@@ -10,6 +10,7 @@ function call(overrides: Partial<ChatCall> = {}): ChatCall {
     callId: 'req_1',
     startMs: 1000,
     endMs: 2000,
+    timing: 'exact',
     blocks: [],
     isSidechain: false,
     ...overrides,

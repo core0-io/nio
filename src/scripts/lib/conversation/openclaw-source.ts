@@ -97,6 +97,12 @@ interface CallBuilder {
   isSidechain: boolean;
 }
 
+// startMs is synthesised from array position (see the `baseMs` comment
+// below), not a platform timestamp — even where durationMs is real,
+// startMs + durationMs inherits that synthetic origin. See
+// TimingFidelity in types.ts.
+const TIMING = 'synthetic' as const;
+
 /** message_sending / before_message_write don't document a body field name; check the plausible candidates. */
 function extractMessageText(evt: Record<string, unknown>): string | undefined {
   for (const key of ['body', 'text', 'content', 'message'] as const) {
@@ -208,6 +214,7 @@ export function createOpenClawSource(events: unknown[]): ConversationSource {
           model: b.model,
           startMs: b.startMs,
           endMs: b.endMs,
+          timing: TIMING,
           usage: b.usage,
           stopReason: b.stopReason,
           blocks: b.blocks.map((blk, i) => ({ ...blk, index: i })),
