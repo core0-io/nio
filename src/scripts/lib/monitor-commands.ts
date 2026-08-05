@@ -137,6 +137,11 @@ export function runMonitorCommand(
     if (sessionId) {
       const next: MonitorStore = {
         sessions: { ...store.sessions, [sessionId]: { armed_at: now, cwd } },
+        // Preserve any pending arm: it belongs to a different session
+        // (possibly on another platform sharing this NIO_HOME) that is
+        // still waiting for its first hook event to claim it. Dropping it
+        // here would silently un-arm that session.
+        ...(store.pending_arm ? { pending_arm: store.pending_arm } : {}),
       };
       saveMonitorStore(logsConfig, next);
       return { action: 'on', mode: 'direct', session_id: sessionId };
