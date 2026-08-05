@@ -534,5 +534,5 @@ Turn telemetry capture on or off for the current session. See the focused `nio-m
 | `monitor off` | Run `node scripts/monitor-cli.js off` |
 | `monitor status` | Run `node scripts/monitor-cli.js status` |
 
-On OpenClaw and Hermes there is no `monitor-cli.js` to invoke and no focused `nio-monitor` skill — `/nio monitor on|off|status` is dispatched straight to the in-process router, which runs the same code and prints a one-line summary plus the same JSON. `/nio monitor` is the only way to arm a session on those two platforms.
+On OpenClaw and Hermes, `/nio monitor on|off|status` does not go by way of `monitor-cli.js` and there is no focused `nio-monitor` skill — it's dispatched straight to the in-process router, which runs the same code and prints a one-line summary plus the same JSON. (OpenClaw's bundle does carry a mirrored `monitor-cli.js`, but `command-dispatch: tool` routes around it; Hermes has no standalone `monitor-cli.js` at all — its monitor logic is bundled directly into `nio-cli.js`.) `/nio monitor` is the only way to arm a session on those two platforms.
 

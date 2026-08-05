@@ -139,6 +139,15 @@ function readSessionStartPayload(): Promise<SessionStartPayload | null> {
 // collector.logs.enabled === false; the MONITORED check in front of it
 // is what keeps an unarmed session from ever constructing an exporter.
 let _loggerProvider: import('@opentelemetry/sdk-logs').LoggerProvider | null | undefined;
+
+// Upper bound on how long the exit path waits for forceFlush()+shutdown()
+// to drain the logs pipeline. `collector.timeout` is honored when it's
+// smaller (a caller who wants a tighter budget can set one), but this is
+// the hard ceiling — see the comment above the shutdown call in main()
+// for why an unroutable endpoint would otherwise block on the OS TCP
+// connect timeout (~75s+). Same backstop-timer pattern as
+// `WRITE_CALLBACK_BACKSTOP_MS` in hook-cli.ts.
+const SHUTDOWN_BACKSTOP_MS = 5000;
 function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider | null {
   if (!MONITORED) return null;
   if (_loggerProvider === undefined) {
@@ -318,13 +327,30 @@ async function main(): Promise<void> {
   // resource attributes — not the in-flight HTTP requests. So
   // `process.exit(0)` can tear the process down mid-POST. `shutdown()`
   // is the call that actually awaits the exporter's request queue
-  // (OTLPExportDelegate.shutdown → forceFlush → promiseQueue.awaitAll),
-  // bounded by the configured collector timeout. Only reachable when a
-  // provider was created at all, i.e. only for a monitored session.
+  // (OTLPExportDelegate.shutdown → forceFlush → promiseQueue.awaitAll).
+  // Only reachable when a provider was created at all, i.e. only for a
+  // monitored session.
+  //
+  // `shutdown()` is NOT bounded by `collector.timeout` — that config
+  // only governs the request-timeout once a socket is connected; it does
+  // nothing during TCP connect. Against an endpoint that silently drops
+  // packets (firewalled/unroutable IP, VPN torn down) connect() blocks
+  // until the OS-level TCP timeout, which is ~75s on macOS and can be
+  // over 100s on Linux — far past any caller's patience. So this needs
+  // its own external backstop, same pattern as `WRITE_CALLBACK_BACKSTOP_MS`
+  // in hook-cli.ts: race the drain against a timer and exit regardless of
+  // which one wins.
   if (_loggerProvider) {
-    const endpoint = loadCollectorConfig().endpoint;
-    await _loggerProvider.forceFlush().catch((e) => reportFlushFailure('logs', endpoint, e));
-    await _loggerProvider.shutdown().catch((e) => reportFlushFailure('logs', endpoint, e));
+    const collectorConfig = loadCollectorConfig();
+    const endpoint = collectorConfig.endpoint;
+    const budget = Math.min(collectorConfig.timeout ?? SHUTDOWN_BACKSTOP_MS, SHUTDOWN_BACKSTOP_MS);
+    await Promise.race([
+      (async () => {
+        await _loggerProvider!.forceFlush().catch((e) => reportFlushFailure('logs', endpoint, e));
+        await _loggerProvider!.shutdown().catch((e) => reportFlushFailure('logs', endpoint, e));
+      })(),
+      new Promise<void>((resolve) => setTimeout(resolve, budget).unref()),
+    ]);
   }
 
   process.exit(0);
