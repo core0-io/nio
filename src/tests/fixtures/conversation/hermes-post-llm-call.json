@@ -1,0 +1,56 @@
+{
+  "_fixture_note": "Structure mirrors a real post_llm_call envelope captured from a live Hermes deployment (gpt-5.5 backend). All string content below is synthetic placeholder text, not real conversation data.",
+  "session_id": "sess-placeholder-001",
+  "cwd": "/placeholder/workdir",
+  "extra": {
+    "user_message": "placeholder user question about a placeholder task",
+    "assistant_response": "placeholder final assistant answer after checking the placeholder file",
+    "model": "gpt-5.5",
+    "platform": "cli",
+    "conversation_history": [
+      {
+        "role": "user",
+        "content": "placeholder user question about a placeholder task"
+      },
+      {
+        "role": "assistant",
+        "content": "placeholder intermediate reply: let me check the placeholder file",
+        "finish_reason": "tool_calls",
+        "tool_calls": [
+          {
+            "id": "call_placeholder_1",
+            "type": "function",
+            "function": {
+              "name": "exec_command",
+              "arguments": "{\"cmd\":\"cat placeholder.txt\"}"
+            }
+          }
+        ],
+        "reasoning": "Step 1: placeholder plan.\nStep 2: placeholder verification step.",
+        "reasoning_content": "Step 1: placeholder plan.\nStep 2: placeholder verification step.",
+        "codex_reasoning_items": [
+          {
+            "type": "reasoning",
+            "id": "rs_placeholder_1",
+            "_issuer_kind": "codex_backend",
+            "encrypted_content": "placeholder-encrypted-blob==",
+            "summary": [
+              { "type": "summary_text", "text": "Step 1: placeholder plan." },
+              { "type": "summary_text", "text": "Step 2: placeholder verification step." }
+            ]
+          }
+        ]
+      },
+      {
+        "role": "tool",
+        "tool_call_id": "call_placeholder_1",
+        "content": "placeholder tool result: file contents were placeholder-ok"
+      },
+      {
+        "role": "assistant",
+        "content": "placeholder final assistant answer after checking the placeholder file",
+        "finish_reason": "stop"
+      }
+    ]
+  }
+}
