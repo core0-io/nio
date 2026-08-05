@@ -144,9 +144,30 @@ function hermesToCollectorInput(
 ): HookStdinPayload {
   const r = (raw ?? {}) as Record<string, unknown>;
   const extra = (r.extra ?? {}) as Record<string, unknown>;
+  // `||`, not `??`. Hermes never omits `session_id` — its
+  // `_serialize_payload` writes
+  // `kwargs.get("session_id") or kwargs.get("parent_session_id") or ""`,
+  // so a call site that had no session sends the *empty string*, not
+  // `undefined`. That is not hypothetical: `tools/code_execution_tool.py`
+  // dispatches `handle_function_call(tool_name, tool_args, task_id=...)`
+  // with no `session_id`, so every tool invoked from inside the
+  // code-execution sandbox fires `pre_tool_call` / `post_tool_call` with
+  // `session_id: ""` (verified against the installed Hermes agent).
+  //
+  // Under `??` the empty string is a "present" value, so the
+  // parent_session_id recovery below could never fire — it was dead code.
+  // Matching Hermes's own `or` semantics makes it reachable.
+  //
+  // When nothing is recoverable the id stays `''`, which
+  // `UNTRUSTED_SESSION_IDS` rejects: no OTLP export for that event. That
+  // fail-closed outcome is deliberate and identical on all four
+  // platforms (Claude Code / Codex `?? 'unknown'`, OpenClaw
+  // `|| 'openclaw'`) — a placeholder id shared by every id-less event
+  // would arm every such event globally the moment one user armed one
+  // session. The local audit entry is still written either way.
   const sessionId =
-    (r.session_id as string | undefined) ??
-    (extra.parent_session_id as string | undefined) ??
+    (r.session_id as string | undefined) ||
+    (extra.parent_session_id as string | undefined) ||
     '';
 
   const input: HookStdinPayload = {
