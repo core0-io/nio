@@ -96,6 +96,33 @@ export interface ConversationSource {
   /**
    * Calls that started at or after `sinceMs`. Returns an empty array
    * when nothing is available — never throws, never partially fails.
+   *
+   * `sinceMs` is a REAL filter only on the replay family (Claude Code,
+   * Codex): those sources read a session file with genuine per-line
+   * timestamps, so `callsSince` actually excludes calls that happened
+   * before `sinceMs`.
+   *
+   * On the streaming family (Hermes, OpenClaw) it filters nothing in
+   * practice, because `startMs` on those sources is synthetic (see
+   * `TimingFidelity`) — Hermes stamps every call in a payload with the
+   * same `Date.now()`, OpenClaw derives it from `Date.now()` plus array
+   * position. Passing a real `sinceMs` to either will not trim history
+   * the way it does for the replay family: expect the full visible set
+   * back, every time.
+   *
+   * Concretely: Hermes's `post_llm_call` replays the *entire*
+   * `conversation_history` on every call — not just what changed since
+   * the last invocation (a live capture showed 13 ChatCalls per payload,
+   * 12 of them repeats of history already seen). This layer is
+   * stateless and cannot deduplicate across invocations; `callsSince`
+   * cannot fix that either, since the timestamps it would filter on
+   * aren't real. Callers on a streaming source MUST deduplicate on
+   * `callId` themselves. For Hermes specifically, that only works if
+   * `callId` stays stable across replays even as `conversation_history`
+   * gets trimmed or compacted — see `stableCallId` in
+   * `hermes-source.ts`, which prefers a provider-issued id
+   * (`codex_reasoning_items[0].id`, a tool call id) over the
+   * index-based fallback for exactly this reason.
    */
   callsSince(sinceMs: number): ChatCall[];
 }
