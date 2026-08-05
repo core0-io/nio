@@ -64,7 +64,7 @@ import {
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import type { ChatCall } from './conversation/types.js';
-import { createContentSink, emitToolOutputContent } from './content/sink.js';
+import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
 import { loadContentLimits } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
@@ -527,6 +527,24 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           : Object.keys(resp).length > 0 ? JSON.stringify(resp) : '';
         emitToolOutputContent(loggerProvider, contentLimits(), {
           result: resultText,
+          spanId: toolSpanId,
+          traceId: state.turn_trace_id,
+          ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
+        });
+
+        // Arguments go out here too, against the same pre-minted tool
+        // span id. This is the ONLY tool-argument record a session
+        // without a ConversationSource (no transcript_path, unreadable
+        // session file) ever gets: PreToolUse now parks identity only,
+        // and the chat call's `tool_use` block requires a source that
+        // such a session does not have. Without this, degrading the
+        // STRUCTURE (turn → tool instead of turn → chat → tool) would
+        // also silently degrade the CONTENT down to `nio.tool_summary`'s
+        // 300 chars. See buildToolInputRecord for why the overlap with
+        // the chat-call block is intentional rather than deduplicated.
+        const inputText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
+        emitToolInputContent(loggerProvider, contentLimits(), {
+          input: inputText,
           spanId: toolSpanId,
           traceId: state.turn_trace_id,
           ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),

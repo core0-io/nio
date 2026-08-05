@@ -196,12 +196,16 @@ session span id 在 `SessionStart` 时预生成并持久化，使 turn 侧无需
 
 | 内容 | `nio.content.type` | 关联的 span | 实际发送时机 |
 |---|---|---|---|
-| thinking / 文本回复 / 工具参数 | `thinking` / `text` / `tool_input` | chat span | **`Stop` 时，与 span 树同批** |
+| thinking / 文本回复 | `thinking` / `text` | chat span | **`Stop` 时，与 span 树同批** |
+| 工具参数（来自 call 的 `tool_use` 块） | `tool_input` | chat span | **`Stop` 时，与 span 树同批**（需要 `ConversationSource`） |
+| 工具参数（来自 hook payload） | `tool_input` | tool span | `PostToolUse` 即时 |
 | 工具结果 | `tool_output` | tool span | `PostToolUse` 即时 |
 
 原因是 span_id 的可得时间不同：tool span 的 id 在 `PreToolUse` 预生成并存入 state，工具一结束就能带着它发内容；而 chat span 的 id 由 `buildSpanTree` 在 `endTurn` 内现场分配（chat 的归属本身要等 transcript），在此之前不存在可关联的 id。一条无法 join 回 span 的内容记录没有价值，因此会话内容随树一起发。
 
-**工具结果日志会先于对应 span 到达后端**（相隔一个 turn 的剩余时间，崩溃补发场景下更长）。由于 `span_id` 在两侧一致，关联不受顺序影响。但后端若有"日志引用了不存在的 span"类告警，需要相应放宽。
+**`tool_input` 有两个生产者，且刻意不去重**——两者互不覆盖：chat call 的 `tool_use` 块需要 `ConversationSource`，但它是唯一能覆盖「从未走到 `PostToolUse`」的调用（guard 拒绝、被中断）的来源；`PostToolUse` 那条不依赖任何 source，因而是降级会话（无 `transcript_path`、session 文件不可读）里唯一的来源——没有它，结构降级会连带把内容降级成 `nio.tool_summary` 的 300 字符。两者以 `nio.span_id` 区分（chat span vs tool span），`nio.content.type` 与 `gen_ai.tool.call.id` 相同。重叠是工具参数上有界的 2 倍，不随会话长度增长。
+
+**`PostToolUse` 发出的日志会先于对应 span 到达后端**（相隔一个 turn 的剩余时间，崩溃补发场景下更长）。由于 `span_id` 在两侧一致，关联不受顺序影响。但后端若有"日志引用了不存在的 span"类告警，需要相应放宽。
 
 `emitAuditLog` / `emitContentRecords` 均显式传入 span context（`trace.setSpanContext(ROOT_CONTEXT, …)`），否则 LogRecord 内建的 trace_id / span_id 为空——nio 的 span 全部由 ROOT_CONTEXT 手工构造，进程内没有 active context 可供 SDK 自动拾取。
 

@@ -23,7 +23,7 @@ export {};
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import type { ChatContentSink } from '../traces-collector.js';
 import type { ContentLimits } from './truncate.js';
-import { buildContentRecords, buildToolOutputRecord } from './emit.js';
+import { buildContentRecords, buildToolInputRecord, buildToolOutputRecord } from './emit.js';
 import { emitContentRecords } from '../logs-collector.js';
 
 /**
@@ -73,6 +73,38 @@ export function emitToolOutputContent(
   try {
     emitContentRecords(provider, [
       buildToolOutputRecord(opts.result, opts.spanId, opts.traceId, limits, opts.toolCallId),
+    ]);
+  } catch {
+    // Non-critical — see createContentSink.
+  }
+}
+
+/**
+ * Emit one tool call's ARGUMENTS against the tool span id minted at
+ * PreToolUse.
+ *
+ * Deliberately independent of `ConversationSource`: this is what keeps
+ * tool arguments on the wire when a session has no transcript to replay
+ * (see `buildToolInputRecord` for why the chat call's `tool_use` block
+ * does not subsume it). Same gating as `emitToolOutputContent` — no
+ * provider, no ids, or nothing to say means nothing is emitted.
+ */
+export function emitToolInputContent(
+  provider: LoggerProvider | null | undefined,
+  limits: ContentLimits,
+  opts: {
+    input: string;
+    spanId: string;
+    traceId: string;
+    toolCallId?: string;
+  },
+): void {
+  if (!provider) return;
+  if (!opts.spanId || !opts.traceId) return;
+  if (!opts.input) return;
+  try {
+    emitContentRecords(provider, [
+      buildToolInputRecord(opts.input, opts.spanId, opts.traceId, limits, opts.toolCallId),
     ]);
   } catch {
     // Non-critical — see createContentSink.

@@ -184,12 +184,25 @@ describe('content wiring: a turn\'s content records join back to their chat span
     // One record per emittable block (thinking + text + tool_use) per call.
     const thinking = byContentType(logger.emitted(), 'thinking');
     const text = byContentType(logger.emitted(), 'text');
-    const toolInput = byContentType(logger.emitted(), 'tool_input');
     assert.equal(thinking.length, 2);
     assert.equal(text.length, 2);
-    assert.equal(toolInput.length, 2);
 
-    const spanIds = new Set(chatSpans.map((s) => s.spanContext().spanId));
+    // `tool_input` has two producers by design (see buildToolInputRecord):
+    // the chat call's `tool_use` block, and PostToolUse's source-free
+    // record. Only the former belongs to a chat span; split them by span
+    // id so this test keeps asserting the chat-span association it is
+    // about, rather than silently accepting either producer.
+    const chatSpanIds = new Set(chatSpans.map((s) => s.spanContext().spanId));
+    const allToolInput = byContentType(logger.emitted(), 'tool_input');
+    const toolInput = allToolInput.filter((r) => chatSpanIds.has(r.spanContext!.spanId));
+    assert.equal(toolInput.length, 2, 'one tool_use block record per chat call');
+    assert.equal(
+      allToolInput.length - toolInput.length,
+      2,
+      'and one source-free PostToolUse record per tool call, on the tool span',
+    );
+
+    const spanIds = chatSpanIds;
     for (const record of [...thinking, ...text, ...toolInput]) {
       // Built-in OTLP LogRecord fields — what a backend maps to trace_id / span_id.
       assert.ok(record.spanContext, 'record must carry a span context (emitAuditLog/emitContentRecords must pass one)');
@@ -368,6 +381,160 @@ describe('content wiring: tool output rides the logs signal, keyed to its tool s
       'the tool output record and the tool span must share a span id, or they can never be joined',
     );
     assert.equal(toolSpans[0]!.spanContext().traceId, outputs[0]!.spanContext!.traceId);
+  });
+});
+
+// ── Tool arguments survive the degraded (no ConversationSource) path ───
+
+describe('content wiring: tool arguments do not depend on a ConversationSource', () => {
+  it('emits the arguments at PostToolUse even with no transcript to replay', async () => {
+    // The degraded path: no transcript_path, so createSourceForPlatform
+    // yields nothing, endTurn falls back to the flat `turn → tool` shape
+    // and no chat call — hence no `tool_use` block — ever exists. Since
+    // PreToolUse parks identity only (genAiToolCallIdAttributes), this
+    // record is the ONLY place the arguments can still be found.
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    const sessionId = 'sess-tool-input-degraded';
+
+    const command = `grep -rn "needle-${'q'.repeat(400)}" /some/haystack`;
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command, timeout: 120000 },
+      tool_use_id: 'toolu_deg1',
+      session_id: sessionId,
+      cwd: '/tmp',
+    };
+    for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+      await dispatchCollectorEvent({
+        event,
+        input: event === 'PostToolUse' ? { ...input, tool_response: { output: 'ok' } } : input,
+        platform: 'claude-code',
+        config: baseConfig,
+        meterProvider: null,
+        tracerProvider: tracer.provider,
+        loggerProvider: logger.provider,
+        logsConfig,
+      });
+    }
+
+    const inputs = byContentType(logger.emitted(), 'tool_input');
+    assert.equal(inputs.length, 1, 'the arguments must be captured even without a source');
+    const body = String(inputs[0]!.body);
+    assert.ok(
+      body.includes(`needle-${'q'.repeat(400)}`),
+      'the full argument payload must survive, not just the 300-char nio.tool_summary prefix',
+    );
+    assert.ok(body.includes('120000'), 'non-primary argument keys must survive too');
+    assert.equal(attr(inputs[0]!, 'gen_ai.tool.call.id'), 'toolu_deg1');
+
+    const recordSpanId = inputs[0]!.spanContext!.spanId;
+    assert.ok(recordSpanId && recordSpanId !== '0'.repeat(16), 'record must carry a real span id');
+
+    // Close the turn with no transcript: the degradation must be
+    // structural only. No chat span, and the tool span still carries the
+    // id the argument record was stamped with.
+    await dispatchCollectorEvent({
+      event: 'Stop',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      loggerProvider: logger.provider,
+      logsConfig,
+    });
+
+    assert.equal(
+      tracer.finished().filter((s) => s.name.startsWith('chat ')).length,
+      0,
+      'this test is only meaningful while the degraded path really produces no chat span',
+    );
+    const toolSpans = byName(tracer.finished(), 'execute_tool Bash');
+    assert.equal(toolSpans.length, 1);
+    assert.equal(
+      toolSpans[0]!.spanContext().spanId,
+      recordSpanId,
+      'the argument record and the tool span must share a span id, or they can never be joined',
+    );
+
+    // And the span itself still carries no arguments attribute — the
+    // record above is genuinely the only carrier, not a belt-and-braces
+    // copy of something still on the span.
+    assert.equal(
+      toolSpans[0]!.attributes['gen_ai.tool.call.arguments'],
+      undefined,
+      'arguments must ride the logs signal, not the span attributes',
+    );
+  });
+
+  it('redacts and truncates the arguments like every other content record', async () => {
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    const sessionId = 'sess-tool-input-redact';
+
+    const secret = 'sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
+    const input = {
+      tool_name: 'Bash',
+      tool_input: { command: `curl -H "x: ${secret}" https://example.invalid` },
+      tool_use_id: 'toolu_deg2',
+      session_id: sessionId,
+      cwd: '/tmp',
+    };
+    for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+      await dispatchCollectorEvent({
+        event,
+        input: event === 'PostToolUse' ? { ...input, tool_response: { output: 'ok' } } : input,
+        platform: 'claude-code',
+        config: baseConfig,
+        meterProvider: null,
+        tracerProvider: tracer.provider,
+        loggerProvider: logger.provider,
+        logsConfig,
+      });
+    }
+
+    const inputs = byContentType(logger.emitted(), 'tool_input');
+    assert.equal(inputs.length, 1);
+    const body = String(inputs[0]!.body);
+    assert.ok(!body.includes(secret), 'the secret must not reach the wire');
+    assert.match(body, /REDACTED/);
+    assert.ok((attr(inputs[0]!, 'nio.content.redactions') as number) >= 1);
+  });
+
+  it('emits nothing when the tool took no arguments', async () => {
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    const sessionId = 'sess-tool-input-empty';
+
+    const input = {
+      tool_name: 'Bash',
+      tool_input: {},
+      tool_use_id: 'toolu_deg3',
+      session_id: sessionId,
+      cwd: '/tmp',
+    };
+    for (const event of ['PreToolUse', 'PostToolUse'] as const) {
+      await dispatchCollectorEvent({
+        event,
+        input: event === 'PostToolUse' ? { ...input, tool_response: { output: 'ok' } } : input,
+        platform: 'claude-code',
+        config: baseConfig,
+        meterProvider: null,
+        tracerProvider: tracer.provider,
+        loggerProvider: logger.provider,
+        logsConfig,
+      });
+    }
+
+    assert.equal(
+      byContentType(logger.emitted(), 'tool_input').length,
+      0,
+      'an empty argument object is not worth a record',
+    );
   });
 });
 

@@ -398,13 +398,12 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 Codex, and Hermes park finished tool spans in `traces-state-store.json`
 until the turn closes, and every hook event rewrites that file whole — so
 the tool's arguments and result are deliberately kept off the span there
-and carried by the logs signal instead: the arguments as the `tool_input`
-content record of the chat call that issued them, the result as a
-`tool_output` content record emitted at `PostToolUse` (see
-[Content records](#content-records)). Both records carry the same span id
-as the span itself, so the join works on the backend. `nio.tool_summary`
-stays on the span so a trace list is still readable without joining
-anything.
+and carried by the logs signal instead: the arguments as a `tool_input`
+content record, the result as a `tool_output` content record, both
+emitted at `PostToolUse` (see [Content records](#content-records)). Both
+carry the same span id as the span itself, so the join works on the
+backend. `nio.tool_summary` stays on the span so a trace list is still
+readable without joining anything.
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
@@ -593,7 +592,7 @@ so there is nothing to emit through).
 | Attribute | Description |
 | --- | --- |
 | `nio.content.type` | `thinking` / `text` / `tool_input` / `tool_output` |
-| `nio.content.index` | Position of the source block within its LLM call; `0` for `tool_output` |
+| `nio.content.index` | Position of the source block within its LLM call; `0` for the `PostToolUse`-emitted `tool_input` / `tool_output` records, which have no block sequence |
 | `nio.content.fidelity` | `full` / `summary` — only on `thinking`. Follows the model provider, not the platform: Anthropic models return complete reasoning, OpenAI's reasoning series returns step summaries. Do not treat the two as interchangeable |
 | `nio.content.truncated` | `true` only when the body was cut |
 | `nio.content.original_bytes` | Pre-truncation UTF-8 byte length; only present when truncated |
@@ -616,13 +615,33 @@ become available at different moments:
 
 | Content | Associated span | Emitted at |
 | --- | --- | --- |
-| `thinking` · `text` · `tool_input` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
-| `tool_output` | the `execute_tool` span | **`PostToolUse`**, immediately — the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
+| `thinking` · `text` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
+| `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — requires a `ConversationSource` |
+| `tool_input` (from the hook payload) | the `execute_tool` span | **`PostToolUse`**, immediately — the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
+| `tool_output` | the `execute_tool` span | **`PostToolUse`**, immediately — same pre-allocated id |
 
-So a `tool_output` record reaches the backend *before* the span it names,
-by up to the remaining length of the turn (longer if the turn had to be
-recovered after a crash). The ids match either way; only "log references a
-span I haven't seen" alerting needs to allow for it.
+So a `PostToolUse`-emitted record reaches the backend *before* the span it
+names, by up to the remaining length of the turn (longer if the turn had
+to be recovered after a crash). The ids match either way; only "log
+references a span I haven't seen" alerting needs to allow for it.
+
+**`tool_input` has two producers, on purpose.** Neither subsumes the
+other, so they are not deduplicated:
+
+- The **chat-call `tool_use` block** exists only when a
+  `ConversationSource` could be built (a readable transcript, or Hermes's
+  `post_llm_call` envelope). It is the only producer that covers calls
+  which never reach `PostToolUse` — anything the guard denied, and
+  interrupted calls.
+- The **`PostToolUse` record** needs no source at all, so it is the only
+  producer in a degraded session (no `transcript_path`, unreadable
+  session file). Without it, losing the chat layer would silently cost
+  the arguments too, leaving only `nio.tool_summary`'s 300-char prefix.
+
+Tell them apart — or collapse them — by `nio.span_id`: chat span vs. tool
+span, with the same `nio.content.type` and the same
+`gen_ai.tool.call.id`. The overlap is a bounded 2x on tool arguments
+only; it does not grow with session length.
 
 **Redaction runs before truncation, always.** The reverse order can slice
 a credential in half at the cut point, leaving one half of a live secret

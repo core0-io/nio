@@ -66,6 +66,9 @@ const BLOCK_TYPE_TO_KIND: Record<EmittableBlockType, ContentKind> = {
  * the tool finish, not from the call that requested it) and is built by
  * `buildToolOutputRecord` instead. `user_prompt` is still carried as a
  * turn-span attribute and has no builder here yet.
+ *
+ * `tool_input` has TWO producers, deliberately — see
+ * `buildToolInputRecord`.
  */
 type EmittedContentType = 'thinking' | 'text' | 'tool_input' | 'tool_output';
 
@@ -153,14 +156,73 @@ export function buildToolOutputRecord(
   limits: ContentLimits,
   toolCallId?: string
 ): ContentRecord {
-  const { text: redacted, hits } = redactSecrets(result);
-  const { text: body, truncated, originalBytes } = truncateContent(redacted, limits.tool_output);
+  return buildOutOfBandRecord('tool_output', result, spanId, traceId, limits.tool_output, toolCallId);
+}
+
+/**
+ * Build the record carrying a tool call's ARGUMENTS, from the hook
+ * payload rather than from a `ChatCall`.
+ *
+ * Why this exists alongside the `tool_use` block records
+ * `buildContentRecords` already produces: those only exist when a
+ * `ConversationSource` could be built (a readable transcript, or Hermes's
+ * envelope). Without one — no `transcript_path`, an unreadable session
+ * file — `endTurn` degrades to the flat `turn → tool` shape AND, before
+ * this builder existed, the arguments vanished entirely: the tool span
+ * had been switched from `genAiToolCallInputAttributes` to
+ * `genAiToolCallIdAttributes`, leaving only the 300-char
+ * `nio.tool_summary`. That made the degraded path a net loss against the
+ * pre-chat-layer behaviour. This record is emitted from PostToolUse,
+ * where the tool span id has been known since PreToolUse, so it needs no
+ * source at all.
+ *
+ * The two producers are NOT deduplicated, on purpose — neither one
+ * subsumes the other:
+ *
+ *   - The `tool_use` block covers calls that never reach PostToolUse:
+ *     anything the guard denied, and interrupted calls. Dropping it would
+ *     lose exactly the arguments a security reviewer most wants.
+ *   - This record covers sessions with no `ConversationSource` at all,
+ *     and lands on the TOOL span (next to `tool_output`) rather than on
+ *     the chat span.
+ *
+ * They are cheap to tell apart or collapse downstream: same
+ * `nio.content.type`, same `gen_ai.tool.call.id`, different `nio.span_id`
+ * (chat span vs. tool span). Bounded 2x on tool arguments only — unlike
+ * the per-turn replay this pipeline had to fix elsewhere, it does not
+ * grow with session length.
+ */
+export function buildToolInputRecord(
+  input: string,
+  spanId: string,
+  traceId: string,
+  limits: ContentLimits,
+  toolCallId?: string
+): ContentRecord {
+  return buildOutOfBandRecord('tool_input', input, spanId, traceId, limits.tool_input, toolCallId);
+}
+
+/**
+ * Shared body for the two builders that are driven by a hook payload
+ * instead of a `ChatCall` block. Same redact-then-truncate order as
+ * `buildRecord`; see the module docs for why that order is load-bearing.
+ */
+function buildOutOfBandRecord(
+  type: 'tool_input' | 'tool_output',
+  text: string,
+  spanId: string,
+  traceId: string,
+  limit: number,
+  toolCallId?: string
+): ContentRecord {
+  const { text: redacted, hits } = redactSecrets(text);
+  const { text: body, truncated, originalBytes } = truncateContent(redacted, limit);
 
   const attributes: ContentRecordAttributes = {
-    'nio.content.type': 'tool_output',
-    // A tool call produces exactly one result; there is no block
-    // sequence to preserve, so the index is a constant 0 rather than a
-    // fabricated ordinal.
+    'nio.content.type': type,
+    // A tool call has exactly one argument payload and produces exactly
+    // one result; there is no block sequence to preserve, so the index is
+    // a constant 0 rather than a fabricated ordinal.
     'nio.content.index': 0,
     'nio.trace_id': traceId,
     'nio.span_id': spanId,
