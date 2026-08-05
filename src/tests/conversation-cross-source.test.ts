@@ -212,8 +212,19 @@ describe('OpenClaw known gap: tool_use is not reconstructed', () => {
   // openclaw-source.ts, this assertion goes red, and the fix is to
   // widen the parity comparison above to four sources, not to leave
   // OpenClaw quietly out of step with the other three.
+  // Includes a genuine tool-call event (before_tool_call), semantically
+  // equivalent to the search_docs call the other three sources' fixtures
+  // all carry (see this file's header + HERMES_PAYLOAD above). Field
+  // names are a guess like the rest of this unverified source — see
+  // openclaw-source.ts's module doc — but a tool call must be *present*
+  // in the input for "no tool_use in the output" to mean anything: with
+  // no tool-call event anywhere in OPENCLAW_EVENTS, any correct
+  // implementation — including one that never reconstructs tool_use at
+  // all — would trivially produce ['thinking', 'text'] here, and this
+  // assertion would guard nothing.
   const OPENCLAW_EVENTS = [
     { hook: 'before_message_write', event: { body: 'Thinking\nplaceholder reasoning: deciding how to search' } },
+    { hook: 'before_tool_call', event: { callId: 'call-cross-a', name: 'search_docs', arguments: '{"q":"x"}' } },
     {
       hook: 'llm_output',
       event: {
@@ -238,7 +249,8 @@ describe('OpenClaw known gap: tool_use is not reconstructed', () => {
     assert.equal(
       calls[0].blocks.some((b) => b.type === 'tool_use'),
       false,
-      'openclaw must not fabricate a tool_use block it has no verified way to reconstruct',
+      'openclaw must not fabricate a tool_use block it has no verified way to reconstruct — ' +
+        'the input above contains a real before_tool_call event, so this is a meaningful negative, not a vacuous one',
     );
   });
 });
