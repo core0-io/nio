@@ -151,14 +151,95 @@ describe('hermes source', () => {
     const fullCalls = createHermesSource(fullHistory).callsSince(0);
     const trimmedCalls = createHermesSource(trimmedHistory).callsSince(0);
 
-    // fullHistory has three assistant entries (indices 1, 3, 5); the one
-    // under test — assistantWithReasoning — sits last in both payloads.
-    assert.equal(fullCalls.length, 3);
+    // fullHistory has three assistant entries (indices 1, 3, 5) but only
+    // the trailing TAIL_CALL_WINDOW (2) are returned; the one under test
+    // — assistantWithReasoning — sits last in both payloads either way.
+    assert.equal(fullCalls.length, 2);
     assert.equal(trimmedCalls.length, 1);
     const fromFull = fullCalls[fullCalls.length - 1];
     const fromTrimmed = trimmedCalls[trimmedCalls.length - 1];
     assert.equal(fromFull.callId, fromTrimmed.callId, 'callId must survive history truncation');
     assert.equal(fromFull.callId, 'rs_stable_abc123', 'must prefer the provider-issued reasoning-item id');
+  });
+
+  // ── Tail window (quadratic-amplification guard) ─────────────────────
+  //
+  // Hermes fires post_llm_call once per LLM CALL and replays the whole
+  // conversation_history each time. Without a cap, N calls in a session
+  // produce N(N+1)/2 chat spans (and the same multiple of content log
+  // records), each under a fresh span id in a fresh trace — nothing
+  // downstream dedups them. These tests pin the cap and the two
+  // properties it must not break: which entries survive, and whether
+  // tool attribution still works after the cut.
+
+  /** History with `n` assistant messages, each preceded by a user one. */
+  function historyWithAssistants(n: number): unknown {
+    const entries: unknown[] = [];
+    for (let i = 0; i < n; i++) {
+      entries.push({ role: 'user', content: `placeholder question ${i}` });
+      entries.push({ role: 'assistant', content: `placeholder reply ${i}`, finish_reason: 'stop' });
+    }
+    return { extra: { model: 'gpt-5.5', conversation_history: entries } };
+  }
+
+  it('caps output at the two trailing assistant messages however long the history is', () => {
+    const calls = createHermesSource(historyWithAssistants(10)).callsSince(0);
+    assert.equal(
+      calls.length,
+      2,
+      'a 10-assistant-message history must still yield exactly 2 calls — the whole point of the cap',
+    );
+  });
+
+  it('keeps the LAST two assistant messages, not the first two', () => {
+    const calls = createHermesSource(historyWithAssistants(10)).callsSince(0);
+    const texts = calls.map((c) => c.blocks.find((b) => b.type === 'text')?.content);
+    assert.deepEqual(
+      texts,
+      ['placeholder reply 8', 'placeholder reply 9'],
+      'the surviving window must be the tail; keeping the head would drop the call currently in flight',
+    );
+  });
+
+  it('still attributes a tool_use declared by the SECOND-TO-LAST call', () => {
+    // A tool is issued by one LLM call and executes during the next, so
+    // at endTurn the in-flight tool span belongs to the previous call.
+    // That is exactly why the window is 2 and not 1: this id must still
+    // be reachable, otherwise buildSpanTree orphans the tool span onto
+    // the turn root.
+    const entries: unknown[] = [];
+    for (let i = 0; i < 8; i++) {
+      entries.push({ role: 'user', content: `placeholder question ${i}` });
+      entries.push({ role: 'assistant', content: `placeholder reply ${i}`, finish_reason: 'stop' });
+    }
+    // Second-to-last assistant entry issues the tool call...
+    entries.push({ role: 'user', content: 'placeholder question 8' });
+    entries.push({
+      role: 'assistant',
+      content: 'placeholder reply 8',
+      finish_reason: 'tool_calls',
+      tool_calls: [
+        { id: 'call_from_previous_turn', function: { name: 'exec_command', arguments: '{"cmd":"placeholder"}' } },
+      ],
+    });
+    // ...and the last one is the call during which it executed.
+    entries.push({ role: 'user', content: 'placeholder question 9' });
+    entries.push({ role: 'assistant', content: 'placeholder reply 9', finish_reason: 'stop' });
+
+    const calls = createHermesSource({
+      extra: { model: 'gpt-5.5', conversation_history: entries },
+    }).callsSince(0);
+
+    assert.equal(calls.length, 2);
+    const toolUse = calls[0].blocks.find((b) => b.type === 'tool_use');
+    assert.ok(toolUse?.toolUse, 'the second-to-last call must keep its tool_use block');
+    assert.equal(toolUse!.toolUse!.id, 'call_from_previous_turn');
+  });
+
+  it('does not throw when the history holds only a single assistant message', () => {
+    const calls = createHermesSource(historyWithAssistants(1)).callsSince(0);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].blocks.find((b) => b.type === 'text')?.content, 'placeholder reply 0');
   });
 
   it('returns an empty array when the payload has no extra object', () => {

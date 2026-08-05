@@ -214,6 +214,33 @@ function toToolUseBlocks(toolCalls: unknown, ordinalPrefix: string): PartialBloc
   return blocks;
 }
 
+/**
+ * How many trailing assistant messages `callsSince` is allowed to return.
+ *
+ * Why a cap at all: Hermes fires `post_llm_call` (→ our `Stop`) once per
+ * *LLM call*, not once per user turn, and every one of those envelopes
+ * replays the ENTIRE `conversation_history`. Returning one `ChatCall` per
+ * historical assistant message therefore re-emits every earlier call at
+ * every subsequent turn — N(N+1)/2 chat spans and content records for N
+ * calls (30 calls → 465 chat spans, 100 → 5050), each under a fresh span
+ * id in a fresh trace, so no backend dedups them. Unbounded quadratic
+ * growth in both span count and egress bytes.
+ *
+ * Why 2 and not 1: a tool call is *issued* by one LLM call and *executes*
+ * during the next one, so at `endTurn` the deferred tool spans belong to
+ * either the current call or the one immediately before it. Two entries
+ * is exactly the window `buildSpanTree` needs to attribute every tool
+ * span in flight (Hermes calls are `timing: 'synthetic'`, so attribution
+ * runs purely off `tool_use` ids — an id that fell out of this window
+ * would leave its tool span orphaned onto the turn root).
+ *
+ * Why not 0/dedup-by-id instead: the callIds available here are only
+ * partly provider-issued (`stableCallId` falls back to a position-derived
+ * `hermes-{i}` for messages carrying neither a reasoning-item id nor a
+ * tool-call id), so an id-only dedup drifts when history is trimmed.
+ */
+const TAIL_CALL_WINDOW = 2;
+
 export function createHermesSource(payload: unknown): ConversationSource {
   return {
     name: 'hermes-post-llm-call',
@@ -227,12 +254,17 @@ export function createHermesSource(payload: unknown): ConversationSource {
       if (!Array.isArray(history)) return [];
 
       const nowMs = Date.now();
-      const assistantIndices: number[] = [];
+      const allAssistantIndices: number[] = [];
       history.forEach((entry, i) => {
         if (entry && typeof entry === 'object' && (entry as RawHistoryMessage).role === 'assistant') {
-          assistantIndices.push(i);
+          allAssistantIndices.push(i);
         }
       });
+
+      // Only the tail — see TAIL_CALL_WINDOW. `slice(-n)` on a shorter
+      // array yields the whole array, so a history with one (or zero)
+      // assistant message needs no special-casing here.
+      const assistantIndices = allAssistantIndices.slice(-TAIL_CALL_WINDOW);
 
       const calls: ChatCall[] = assistantIndices.map((historyIndex, ordinal) => {
         const msg = history[historyIndex] as RawHistoryMessage;
