@@ -5,31 +5,27 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { execFileSync, spawn } from 'node:child_process';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import {
+  HERMES_HOOK_CLI, HERMES_HOOK_TIMEOUT_MS, runHermesHookAsync,
+} from './helpers/hermes-hook.js';
 
-// Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
-// dist/scripts/ — see hook-cli.test.ts for the same resolution.
-const HERE = dirname(fileURLToPath(import.meta.url));
-const CLI = join(
-  HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'hook-cli.js',
-);
+const CLI = HERMES_HOOK_CLI;
 
 function freshHome(): string {
   return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-hermes-')));
 }
 
-// Same reasoning and value as hermes-exit.test.ts's EXIT_TIMEOUT_MS (kept
-// in sync with it — see that file for the measured timings this is sized
-// against): this suite's fixtures include an unreachable collector.
-// endpoint, and without an explicit timeout a regression that
-// reintroduces *both* the hang (hook-cli.ts's writeAndExit) *and* the
-// monitor gate (this file's own subject) at once would block CI forever
-// instead of failing fast.
-const HOOK_TIMEOUT_MS = 45000;
+// Shared with hermes-exit.test.ts rather than kept in sync by hand — see
+// helpers/hermes-hook.ts. This suite's fixtures include an unreachable
+// collector.endpoint, and without an explicit timeout a regression that
+// reintroduces BOTH the hang (hook-cli.ts's writeAndExit) AND the monitor
+// gate (this file's own subject) at once would block CI forever instead
+// of failing fast.
+const HOOK_TIMEOUT_MS = HERMES_HOOK_TIMEOUT_MS;
 
 function runHook(home: string, envelope: unknown): string {
   return execFileSync('node', [CLI, '--platform', 'hermes', '--stdin'], {
@@ -40,58 +36,15 @@ function runHook(home: string, envelope: unknown): string {
   });
 }
 
-/**
- * Async equivalent of runHook(), required (not just preferred) for the
- * armed-vs-unarmed sink test below.
- *
- * execFileSync/spawnSync blocks the calling process's entire event loop
- * until the child exits — including the in-process `http.createServer`
- * sink that test stands up. Since the spawned hook-cli.js child needs to
- * connect *back* to that same parent process's HTTP server, a sync spawn
- * deadlocks: the child's connection sits unserviced until the parent's
- * event loop is free, which only happens after the (still-waiting) child
- * exits. Confirmed empirically — swapping runHook (execFileSync) in for
- * this in the sink test reproduced a hang that "Request timed out"
- * diagnostics in the audit log traced back to exactly this; switching to
- * spawn (which does not block the parent's event loop) fixed it
- * immediately, no other change required.
- */
-function runHookAsync(home: string, envelope: unknown, timeoutMs = HOOK_TIMEOUT_MS): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('node', [CLI, '--platform', 'hermes', '--stdin'], {
-      env: { ...process.env, NIO_HOME: home },
-    });
-    let out = '';
-    let err = '';
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      child.kill('SIGKILL');
-      reject(new Error(`hook-cli timed out after ${timeoutMs}ms; stderr so far: ${err}`));
-    }, timeoutMs);
-    child.stdout.on('data', (d) => { out += d; });
-    child.stderr.on('data', (d) => { err += d; });
-    child.on('error', (e) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(e);
-    });
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`hook-cli exited with code ${code}; stderr: ${err}`));
-        return;
-      }
-      resolve(out);
-    });
-    child.stdin.write(JSON.stringify(envelope));
-    child.stdin.end();
-  });
-}
+// The async spawn — required, not merely preferred, for the
+// armed-vs-unarmed sink test below: execFileSync/spawnSync blocks the
+// calling process's entire event loop until the child exits, including
+// the in-process http.createServer sink that test stands up, and the
+// child has to connect BACK to it — so a sync spawn deadlocks.
+// Shared with hermes-exit.test.ts, which drives the same binary the same
+// way; see helpers/hermes-hook.ts for the full reasoning and for the
+// measured timings HOOK_TIMEOUT_MS is sized against.
+const runHookAsync = runHermesHookAsync;
 
 describe('hermes collector gating', () => {
   it('still writes the local audit log for an unmonitored session', () => {
