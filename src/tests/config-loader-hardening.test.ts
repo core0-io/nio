@@ -3,26 +3,66 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir, homedir } from 'node:os';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-function withEnv<T>(nioHome: string | undefined, fn: () => T): T {
-  const prev = process.env['NIO_HOME'];
+/**
+ * Runs `fn` with NIO_HOME set to `nioHome` (or unset when undefined) AND
+ * HOME repointed at a freshly minted temp directory.
+ *
+ * The HOME swap matters because `nioDir()` in config-loader.ts falls back
+ * to `homedir()/.nio` whenever NIO_HOME is unset OR empty — `os.homedir()`
+ * reads `$HOME` first on POSIX. Without this swap, a test that exercises
+ * that fallback (e.g. NIO_HOME="") would resolve straight to the
+ * developer's real `~/.nio/config.yaml` / `~/.nio/audit.jsonl`, making the
+ * test read (and, on a corrupt real config, write diagnostics into) the
+ * machine it happens to run on. See review C1.
+ */
+function withEnv<T>(nioHome: string | undefined, fn: (fakeHome: string) => T): T {
+  const prevNioHome = process.env['NIO_HOME'];
+  const prevHome = process.env['HOME'];
+  const fakeHome = mkdtempSync(join(tmpdir(), 'nio-fake-home-'));
+  process.env['HOME'] = fakeHome;
   if (nioHome === undefined) delete process.env['NIO_HOME'];
   else process.env['NIO_HOME'] = nioHome;
-  try { return fn(); } finally {
-    if (prev === undefined) delete process.env['NIO_HOME'];
-    else process.env['NIO_HOME'] = prev;
+  try {
+    return fn(fakeHome);
+  } finally {
+    if (prevNioHome === undefined) delete process.env['NIO_HOME'];
+    else process.env['NIO_HOME'] = prevNioHome;
+    if (prevHome === undefined) delete process.env['HOME'];
+    else process.env['HOME'] = prevHome;
   }
 }
 
 describe('NIO_HOME empty-string handling', () => {
-  it('treats NIO_HOME="" as unset, matching adapters/common.ts', async () => {
-    const { loadLogsConfig } = await import('../scripts/lib/config-loader.js');
-    const p = withEnv('', () => loadLogsConfig().path);
-    assert.equal(p, join(homedir(), '.nio', 'audit.jsonl'),
-      'empty NIO_HOME must fall back to ~/.nio, not resolve to /audit.jsonl');
+  it('treats NIO_HOME="" as unset, matching adapters/common.ts, without touching the real ~/.nio', async () => {
+    const { loadLogsConfig, loadCollectorConfig } = await import('../scripts/lib/config-loader.js');
+
+    let fakeHome = '';
+    const result = withEnv('', (home) => {
+      fakeHome = home;
+      // Plant a config with an unmistakable marker value. If the empty
+      // NIO_HOME fallback ever resolved to the real ~/.nio instead of this
+      // fake one, the assertion below would fail (or, worse, silently
+      // read whatever the developer's real config happens to contain).
+      mkdirSync(join(home, '.nio'), { recursive: true });
+      writeFileSync(
+        join(home, '.nio', 'config.yaml'),
+        'collector:\n  endpoint: "http://FAKE-ISOLATED-ENDPOINT"\n',
+        'utf-8',
+      );
+      return {
+        path: loadLogsConfig().path,
+        endpoint: loadCollectorConfig().endpoint,
+      };
+    });
+
+    assert.equal(result.path, join(fakeHome, '.nio', 'audit.jsonl'),
+      'empty NIO_HOME must fall back to ~/.nio (the fake HOME here), not resolve to /audit.jsonl');
+    assert.equal(result.endpoint, 'http://FAKE-ISOLATED-ENDPOINT',
+      'must read the isolated fake-home config, never the developer\'s real ~/.nio/config.yaml');
   });
 });
 
