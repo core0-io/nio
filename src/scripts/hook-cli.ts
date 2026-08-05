@@ -49,6 +49,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import { dumpPayload } from './lib/payload-dump.js';
 import {
@@ -237,35 +238,51 @@ async function runHermesCollector(
     ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
-  await dispatchCollectorEvent({
-    event: canonicalEvent,
-    input: collectorInput,
-    platform: 'hermes',
-    config: collectorConfig,
-    meterProvider,
-    tracerProvider,
-    loggerProvider,
-    logsConfig,
-    // Hermes's conversation lives in the raw envelope, not in the
-    // canonical payload above: `extra.conversation_history` is the only
-    // place the LLM calls of this turn exist, and there is no transcript
-    // file to read them back from. Passed on every event rather than
-    // just `post_llm_call` — `createHermesSource` returns zero calls for
-    // an envelope without a history, so a session_end or tool event
-    // degrades to the same flat tree it produced before.
-    conversationInput: { payload: rawPayload },
-  });
+  // Shared deadline over the dispatch AND the closing flush — see
+  // lib/flush-budget.ts. Most dispatch branches end in a library helper
+  // that carries its own `provider.forceFlush()`, so an endpoint that
+  // drops packets hangs inside dispatch and the closing flush is never
+  // reached: measured unbounded on a `post_tool_call`, still alive when
+  // killed at 95s. Hermes runs us under `subprocess.run(timeout=60)`, so
+  // without this the observable symptom is a 60s freeze per tool call
+  // followed by the host reporting a hook failure.
+  const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
+  await withFlushBudget(
+    dispatchCollectorEvent({
+      event: canonicalEvent,
+      input: collectorInput,
+      platform: 'hermes',
+      config: collectorConfig,
+      meterProvider,
+      tracerProvider,
+      loggerProvider,
+      logsConfig,
+      // Hermes's conversation lives in the raw envelope, not in the
+      // canonical payload above: `extra.conversation_history` is the only
+      // place the LLM calls of this turn exist, and there is no transcript
+      // file to read them back from. Passed on every event rather than
+      // just `post_llm_call` — `createHermesSource` returns zero calls for
+      // an envelope without a history, so a session_end or tool event
+      // degrades to the same flat tree it produced before.
+      conversationInput: { payload: rawPayload },
+    }),
+    undefined,
+  );
 
   // Every hook-cli invocation is a fresh subprocess that exits right
   // after this returns. PeriodicExportingMetricReader batches metrics
   // on a 1s timer, and the HTTP exporter chunks requests — without an
   // explicit flush here the recorded metric/span/log can sit in-memory
   // and never reach OTLP before the process dies.
-  await Promise.all([
-    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-  ]);
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 }
 
 // ── Platform-specific stdout formatting ────────────────────────────────
@@ -516,14 +533,30 @@ async function main(): Promise<void> {
 
     const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
 
+    // One shared deadline covering EVERY OTLP-touching await between here
+    // and the guard decision reaching Hermes — see lib/flush-budget.ts.
+    // `recordGuardDecision`, `dispatchCollectorEvent` and
+    // `recordPostToolUse` each end in their own internal
+    // `provider.forceFlush()`, so bounding only the closing Promise.all
+    // would leave the block decision hostage to the OS TCP connect
+    // timeout: measured unbounded against 192.0.2.1:4318, both the allow
+    // and the deny run were still alive when killed at 95s. A deny that
+    // arrives after Hermes's own 60s `subprocess.run` timeout is a
+    // dangerous action allowed through, so this one is an enforcement
+    // bound, not just a latency bound.
+    const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
     // Guard decision metric (nio.decision.count).
     if (meterProvider) {
-      await recordGuardDecision(
-        meterProvider,
-        result.decision,
-        result.riskLevel || 'low',
-        result.riskScore ?? 0,
-        toolName,
+      await withFlushBudget(
+        recordGuardDecision(
+          meterProvider,
+          result.decision,
+          result.riskLevel || 'low',
+          result.riskScore ?? 0,
+          toolName,
+        ).catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        undefined,
       );
     }
 
@@ -531,16 +564,19 @@ async function main(): Promise<void> {
     // saved AND nio.tool_use.count{event=PreToolUse}
     // is emitted, mirroring Claude Code's parallel hook chain.
     if (collectorConfig.enabled || logsConfig?.local !== false) {
-      await dispatchCollectorEvent({
-        event: 'PreToolUse',
-        input: hermesToCollectorInput(payload, 'PreToolUse'),
-        platform: 'hermes',
-        config: collectorConfig,
-        meterProvider,
-        tracerProvider,
-        loggerProvider,
-        logsConfig,
-      });
+      await withFlushBudget(
+        dispatchCollectorEvent({
+          event: 'PreToolUse',
+          input: hermesToCollectorInput(payload, 'PreToolUse'),
+          platform: 'hermes',
+          config: collectorConfig,
+          meterProvider,
+          tracerProvider,
+          loggerProvider,
+          logsConfig,
+        }),
+        undefined,
+      );
     }
 
     // Bridge guard attrs to the eventual PostToolUse span (allow path)
@@ -575,12 +611,23 @@ async function main(): Promise<void> {
       if (isBlock) {
         const cwd = collectorInput.cwd ?? process.cwd();
         const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-        const r = await recordPostToolUse(
-          tracerProvider, state, key, cwd,
-          guardAttrs,
-          reason,
+        // Budgeted like every other OTLP-touching await here: this call
+        // ends in `provider.forceFlush()`. On timeout `state` keeps the
+        // value it had before the call, so `saveState` below still runs
+        // and the queued span is left for deferred recovery rather than
+        // the block decision stalling on an unreachable endpoint.
+        const r = await withFlushBudget(
+          recordPostToolUse(
+            tracerProvider, state, key, cwd,
+            guardAttrs,
+            reason,
+          ).catch(e => {
+            reportFlushFailure('traces', collectorConfig.endpoint, e);
+            return null;
+          }),
+          null,
         );
-        state = r.state;
+        if (r) state = r.state;
       }
       saveState(logsConfig, state);
     }
@@ -588,11 +635,14 @@ async function main(): Promise<void> {
     // Make sure network exports complete before the subprocess exits;
     // the PeriodicExportingMetricReader batches by default and would
     // drop the counter we just recorded without an explicit flush.
-    await Promise.all([
-      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-    ]);
+    await withFlushBudget(
+      Promise.all([
+        meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+        loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+      ]).then(() => undefined),
+      undefined,
+    );
 
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');

@@ -38,6 +38,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
 import { dumpPayload } from './lib/payload-dump.js';
 import { spanKey, toolSummary, parseMcpToolName, type HookStdinPayload } from './lib/collector-core.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
@@ -56,25 +57,6 @@ function getArg(name: string): string | undefined {
 }
 const PLATFORM = getArg('platform') ?? 'claude-code';
 const PLATFORM_KEY = PLATFORM.replace(/-/g, '_');
-
-// Upper bound on how long the exit path waits for the OTEL providers'
-// forceFlush() calls to drain before the guard decision is emitted.
-//
-// `collector.timeout` does NOT bound them: that config only governs the
-// request timeout once a socket is connected, and does nothing during
-// TCP connect. Against an endpoint that silently drops packets
-// (firewalled/unroutable IP, VPN torn down) connect() blocks until the
-// OS-level TCP timeout — ~75s on macOS, 100s+ on Linux — and because
-// guard-hook runs on PreToolUse it holds the host's tool call hostage
-// for that entire window (measured on this machine: the unbounded
-// version was still alive at 40s, see the deferred-batch report).
-//
-// Same backstop-timer pattern as `SHUTDOWN_BACKSTOP_MS` in
-// scanner-hook.ts and `WRITE_CALLBACK_BACKSTOP_MS` in hook-cli.ts: race
-// the drain against an unref'd timer and continue regardless of which
-// one wins. Losing a span/metric on an unreachable endpoint is strictly
-// better than stalling the agent — telemetry never blocks enforcement.
-const FLUSH_BACKSTOP_MS = 5000;
 
 // ---------------------------------------------------------------------------
 // Read stdin
@@ -208,19 +190,9 @@ async function main(): Promise<void> {
   // final flush leaves the earlier ones free to block for the full OS TCP
   // connect timeout. Measured on this machine against an unroutable
   // endpoint: the hang was inside `recordGuardDecision`, before the final
-  // flush was ever reached.
-  //
-  // A single deadline (rather than a fresh timer per await) is what makes
-  // the total bounded: three sequential 5s races would be a 15s ceiling.
-  const flushBudgetMs = Math.min(collectorConfig.timeout ?? FLUSH_BACKSTOP_MS, FLUSH_BACKSTOP_MS);
-  const flushDeadline = Date.now() + flushBudgetMs;
-  function withFlushBudget<T>(p: Promise<T>, onTimeout: T): Promise<T> {
-    const remaining = Math.max(0, flushDeadline - Date.now());
-    return Promise.race([
-      p,
-      new Promise<T>((resolve) => setTimeout(() => resolve(onTimeout), remaining).unref()),
-    ]);
-  }
+  // flush was ever reached. See lib/flush-budget.ts for the full rationale
+  // and the measured numbers.
+  const withFlushBudget = createFlushBudget(collectorConfig.timeout);
 
   // Record guard decision metrics
   const payload = (input as HookStdinPayload | Record<string, unknown>);
