@@ -617,7 +617,7 @@ For the full per-signal schema (every metric instrument, every span attribute, e
 │                                                                     │
 │   collector-hook.ts (async, runs per hook event)                    │
 │     └─ dispatchCollectorEvent → traces-collector pure functions     │
-│        + state via traces-state-store.json (cross-process bridge)   │
+│        + state via traces-state-store-<session>.json (per session)  │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
 │     ├─ MeterProvider → guard decision + risk score metrics          │
@@ -739,7 +739,7 @@ across platforms; what differs is only **where the per-session
   Node process. State is bridged via the JSON file managed by
   [traces-state-store.ts](../src/scripts/lib/traces-state-store.ts):
   1. `PreToolUse` → writes `{start_ms, span_id}` for the pending tool
-     into `traces-state-store.json`
+     into `traces-state-store-<session>.json`
   2. `PostToolUse` → reads pending entry, calls `recordPostToolUse`
      which emits the span retroactively with the original start time
   3. `Stop` / `SubagentStop` → `endTurn` emits the turn root span
@@ -751,15 +751,20 @@ across platforms; what differs is only **where the per-session
   bridging; otherwise identical lifecycle (the same pure-function calls
   are used at the same lifecycle points).
 
-State file location (Claude Code / Hermes only): derived from
+State file location (Claude Code / Codex / Hermes only): derived from
 `collector.logs.path` (sits in the same directory as `audit.jsonl`);
-falls back to `${NIO_HOME ?? ~/.nio}/`.
+falls back to `${NIO_HOME ?? ~/.nio}/`. There is one file PER SESSION —
+`traces-state-store-<session>.json`, the id sanitised to `[A-Za-z0-9_-]`
+and suffixed with a short digest — so two host windows open at once
+cannot write each other's turn state. See
+[COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#traces) for the sharding
+rationale and the shard lifecycle.
 
 ### Local JSONL backup
 
 The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Hermes; not user-facing observability data.
+Metrics and traces have **no** local file — they are OTLP-only. The disk files [`traces-state-store-<session>.json`](../src/scripts/lib/traces-state-store.ts) are internal state used to bridge cross-process span lifecycle for Claude Code / Codex / Hermes; not user-facing observability data.
 
 ---
 

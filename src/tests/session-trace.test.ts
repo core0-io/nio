@@ -90,7 +90,7 @@ describe('session-trace: SessionStart mints session_trace_id/session_span_id/ses
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const state = loadState(logsConfig);
+    const state = loadState(logsConfig, sessionId);
     assert.ok(state, 'state file should exist after SessionStart');
     assert.match(state!.session_trace_id ?? '', /^[0-9a-f]{32}$/, 'session_trace_id must be 32 hex chars');
     assert.match(state!.session_span_id ?? '', /^[0-9a-f]{16}$/, 'session_span_id must be 16 hex chars');
@@ -110,7 +110,7 @@ describe('session-trace: turn root links to the session span', () => {
       event: 'SessionStart', input: { session_id: sessionId }, platform: 'claude-code',
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
-    const afterStart = loadState(logsConfig);
+    const afterStart = loadState(logsConfig, sessionId);
     assert.ok(afterStart?.session_trace_id && afterStart?.session_span_id);
 
     await runOneTurn(sessionId, logsConfig, tracer.provider);
@@ -131,7 +131,7 @@ describe('session-trace: turn root links to the session span', () => {
       event: 'SessionStart', input: { session_id: sessionId }, platform: 'claude-code',
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
-    const afterStart = loadState(logsConfig);
+    const afterStart = loadState(logsConfig, sessionId);
 
     await runOneTurn(sessionId, logsConfig, tracer.provider);
     await runOneTurn(sessionId, logsConfig, tracer.provider);
@@ -158,7 +158,7 @@ describe('session-trace: SessionEnd emits the session span', () => {
       event: 'SessionStart', input: { session_id: sessionId }, platform: 'claude-code',
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
-    const afterStart = loadState(logsConfig);
+    const afterStart = loadState(logsConfig, sessionId);
 
     await dispatchCollectorEvent({
       event: 'SessionEnd', input: { session_id: sessionId, cwd: '/tmp' }, platform: 'claude-code',
@@ -173,7 +173,7 @@ describe('session-trace: SessionEnd emits the session span', () => {
     assert.equal(sessionSpan!.name, 'session');
     assert.equal(sessionSpan!.attributes['session.id'], sessionId);
 
-    const afterEnd = loadState(logsConfig);
+    const afterEnd = loadState(logsConfig, sessionId);
     assert.equal(afterEnd?.session_trace_id, undefined, 'session_trace_id must be cleared after SessionEnd');
     assert.equal(afterEnd?.session_span_id, undefined, 'session_span_id must be cleared after SessionEnd');
   });

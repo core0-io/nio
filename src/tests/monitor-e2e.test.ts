@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,6 +87,16 @@ function preToolUse(sessionId: string, cwd: string): unknown {
   };
 }
 
+/**
+ * The trace state store is sharded per session, so the filename carries a
+ * sanitised + digested session id rather than being a fixed string.
+ * These end-to-end tests only care whether ANY state was written for the
+ * home they drove, so they match on the shared prefix.
+ */
+function stateShards(home: string): string[] {
+  return readdirSync(home).filter((f) => f.startsWith('traces-state-store-'));
+}
+
 describe('monitor gate end-to-end', () => {
   it('writes local audit but no trace state when unmonitored', () => {
     const home = freshHome();
@@ -94,7 +104,7 @@ describe('monitor gate end-to-end', () => {
 
     assert.equal(existsSync(join(home, 'audit.jsonl')), true,
       'local audit log must be written even when unmonitored');
-    assert.equal(existsSync(join(home, 'traces-state-store.json')), false,
+    assert.deepEqual(stateShards(home), [],
       'no tracer provider means no pending span state');
   });
 
@@ -109,10 +119,10 @@ describe('monitor gate end-to-end', () => {
 
     fireHook(home, preToolUse('sess-e2e-on', home));
 
-    assert.equal(existsSync(join(home, 'traces-state-store.json')), true,
-      'armed session must open a pending span');
+    const shards = stateShards(home);
+    assert.equal(shards.length, 1, 'armed session must open a pending span');
     const state = JSON.parse(
-      readFileSync(join(home, 'traces-state-store.json'), 'utf-8'),
+      readFileSync(join(home, shards[0]!), 'utf-8'),
     ) as { session_id: string; pending_spans: Record<string, unknown> };
     assert.equal(state.session_id, 'sess-e2e-on');
     assert.equal('toolu_e2e_1' in state.pending_spans, true);
@@ -125,7 +135,7 @@ describe('monitor gate end-to-end', () => {
     execFileSync('node', [MONITOR, 'off'], { env, cwd: home, encoding: 'utf-8', timeout: EXEC_TIMEOUT_MS });
 
     fireHook(home, preToolUse('sess-e2e-toggle', home));
-    assert.equal(existsSync(join(home, 'traces-state-store.json')), false);
+    assert.deepEqual(stateShards(home), []);
   });
 
   it('monitor_all_sessions captures without arming', () => {
@@ -135,7 +145,7 @@ describe('monitor gate end-to-end', () => {
       'utf-8');
 
     fireHook(home, preToolUse('sess-e2e-all', home));
-    assert.equal(existsSync(join(home, 'traces-state-store.json')), true);
+    assert.equal(stateShards(home).length, 1);
   });
 
   it('guard still blocks rm -rf / while a session is armed', () => {

@@ -146,7 +146,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
     await runToolPair(logsConfig, tracer.provider, logger.provider, sessionId, 'toolu_c2');
 
     const { loadState } = await import('../scripts/lib/traces-state-store.js');
-    const turnStart = loadState(logsConfig)!.turn_start_ms;
+    const turnStart = loadState(logsConfig, sessionId)!.turn_start_ms;
 
     const transcriptPath = join(dir, 'transcript.jsonl');
     writeFileSync(
@@ -239,7 +239,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
     await runToolPair(logsConfig, tracer.provider, logger.provider, sessionId, 'toolu_r1');
 
     const { loadState } = await import('../scripts/lib/traces-state-store.js');
-    const turnStart = loadState(logsConfig)!.turn_start_ms;
+    const turnStart = loadState(logsConfig, sessionId)!.turn_start_ms;
 
     const secret = 'sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
     const transcriptPath = join(dir, 'transcript.jsonl');
@@ -297,7 +297,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
       await runToolPair(logsConfig, tracer.provider, logger.provider, sessionId, 'toolu_t1');
 
       const { loadState } = await import('../scripts/lib/traces-state-store.js');
-      const turnStart = loadState(logsConfig)!.turn_start_ms;
+      const turnStart = loadState(logsConfig, sessionId)!.turn_start_ms;
 
       const long = 'x'.repeat(4096);
       const transcriptPath = join(dir, 'transcript.jsonl');
@@ -604,7 +604,7 @@ describe('deferred state carries metadata only', () => {
       logsConfig,
     });
 
-    const afterPre = readFileSync(statePath(logsConfig), 'utf-8');
+    const afterPre = readFileSync(statePath(logsConfig, sessionId), 'utf-8');
     assert.ok(
       !afterPre.includes('gen_ai.tool.call.arguments'),
       'PreToolUse must not park the tool arguments in the state file',
@@ -621,7 +621,7 @@ describe('deferred state carries metadata only', () => {
       logsConfig,
     });
 
-    const afterPost = readFileSync(statePath(logsConfig), 'utf-8');
+    const afterPost = readFileSync(statePath(logsConfig, sessionId), 'utf-8');
     assert.ok(
       !afterPost.includes('gen_ai.tool.call.result'),
       'PostToolUse must not park the tool result in the state file',
@@ -666,7 +666,7 @@ describe('content capture is gated by the monitor master switch', () => {
     await runToolPair(logsConfig, tracer.provider, null, sessionId, 'toolu_u1');
 
     const { loadState } = await import('../scripts/lib/traces-state-store.js');
-    const turnStart = loadState(logsConfig)!.turn_start_ms;
+    const turnStart = loadState(logsConfig, sessionId)!.turn_start_ms;
     const transcriptPath = join(dir, 'transcript.jsonl');
     writeFileSync(
       transcriptPath,
@@ -723,7 +723,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
       });
 
       const { loadState } = await import('../scripts/lib/traces-state-store.js');
-      const turnStart = loadState(logsConfig)!.turn_start_ms;
+      const turnStart = loadState(logsConfig, sessionId)!.turn_start_ms;
 
       const sessionFile = join(dir, platform === 'codex' ? 'rollout.jsonl' : 'transcript.jsonl');
       writeFileSync(

@@ -5,7 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname } from 'node:path';
+import { join, dirname, basename } from 'node:path';
 import {
   statePath,
   loadState,
@@ -14,10 +14,20 @@ import {
   type DeferredSpan,
 } from '../scripts/lib/traces-state-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-collector-state-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-collector-state-')));
 }
+
+// The store is sharded per session, so every call here needs an id. These
+// tests are about path derivation and round-tripping, not about isolation
+// between sessions — that lives in state-store-session-isolation.test.ts —
+// so they all use the one id `sample()` already carries.
+const SESSION = 'sess-1';
+
+/** Shard filenames all share this prefix; the suffix is derived from the id. */
+const SHARD_PREFIX = 'traces-state-store-';
 
 const sample = (overrides: Partial<CollectorState> = {}): CollectorState => ({
   session_id: 'sess-1',
@@ -48,30 +58,34 @@ const sample = (overrides: Partial<CollectorState> = {}): CollectorState => ({
 describe('statePath', () => {
   it('derives state file from dirname(logsConfig.path)', () => {
     const cfg: CollectorLogsConfig = { path: '/tmp/x/audit.jsonl' };
-    assert.equal(statePath(cfg), '/tmp/x/traces-state-store.json');
+    const resolved = statePath(cfg, SESSION);
+    assert.equal(dirname(resolved), '/tmp/x');
+    assert.ok(basename(resolved).startsWith(SHARD_PREFIX),
+      `expected a shard filename, got ${basename(resolved)}`);
   });
 
   it('expands ~/ in logsConfig.path before deriving', () => {
     const cfg: CollectorLogsConfig = { path: '~/.custom/audit.jsonl' };
-    assert.equal(statePath(cfg), join(homedir(), '.custom', 'traces-state-store.json'));
+    assert.equal(dirname(statePath(cfg, SESSION)), join(homedir(), '.custom'));
   });
 
   it('falls back to NIO_HOME default when no logsConfig', () => {
-    const resolved = statePath(undefined);
-    assert.ok(resolved.endsWith('/traces-state-store.json'),
+    const resolved = statePath(undefined, SESSION);
+    assert.ok(basename(resolved).startsWith(SHARD_PREFIX),
       `expected default state path, got ${resolved}`);
+    assert.equal(dirname(resolved), process.env['NIO_HOME'] || join(homedir(), '.nio'));
   });
 
   it('falls back to default when logsConfig has no path', () => {
     const cfg: CollectorLogsConfig = { enabled: true, local: true };
-    const resolved = statePath(cfg);
-    assert.ok(resolved.endsWith('/traces-state-store.json'));
+    const resolved = statePath(cfg, SESSION);
+    assert.equal(dirname(resolved), process.env['NIO_HOME'] || join(homedir(), '.nio'));
   });
 
   it('places state file next to audit log when both customised', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'sub', 'audit.jsonl') };
-    assert.equal(dirname(statePath(cfg)), join(dir, 'sub'));
+    assert.equal(dirname(statePath(cfg, SESSION)), join(dir, 'sub'));
   });
 });
 
@@ -81,14 +95,14 @@ describe('loadState', () => {
   it('returns null when the file is missing', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
-    assert.equal(loadState(cfg), null);
+    assert.equal(loadState(cfg, SESSION), null);
   });
 
   it('returns null on JSON parse error (does not throw)', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
-    writeFileSync(statePath(cfg), 'not-json{');
-    assert.equal(loadState(cfg), null);
+    writeFileSync(statePath(cfg, SESSION), 'not-json{');
+    assert.equal(loadState(cfg, SESSION), null);
   });
 });
 
@@ -99,27 +113,27 @@ describe('saveState ↔ loadState', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
     const state = sample();
-    saveState(cfg, state);
-    const loaded = loadState(cfg);
+    saveState(cfg, state, SESSION);
+    const loaded = loadState(cfg, SESSION);
     assert.deepEqual(loaded, state);
   });
 
   it('saveState creates parent directory if missing', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'a', 'b', 'c', 'audit.jsonl') };
-    saveState(cfg, sample());
-    assert.ok(existsSync(statePath(cfg)));
+    saveState(cfg, sample(), SESSION);
+    assert.ok(existsSync(statePath(cfg, SESSION)));
   });
 
   it('latest write wins (serial saves both observable via load)', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
 
-    saveState(cfg, sample({ turn_number: 1 }));
-    assert.equal(loadState(cfg)!.turn_number, 1);
+    saveState(cfg, sample({ turn_number: 1 }), SESSION);
+    assert.equal(loadState(cfg, SESSION)!.turn_number, 1);
 
-    saveState(cfg, sample({ turn_number: 2 }));
-    assert.equal(loadState(cfg)!.turn_number, 2);
+    saveState(cfg, sample({ turn_number: 2 }), SESSION);
+    assert.equal(loadState(cfg, SESSION)!.turn_number, 2);
   });
 });
 
@@ -129,8 +143,9 @@ describe('saveState atomicity', () => {
   it('leaves no temp file behind on success', () => {
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
-    saveState(cfg, sample());
-    const stray = readdirSync(dir).filter(f => f !== 'traces-state-store.json' && f !== 'audit.jsonl');
+    saveState(cfg, sample(), SESSION);
+    const stateFile = basename(statePath(cfg, SESSION));
+    const stray = readdirSync(dir).filter(f => f !== stateFile && f !== 'audit.jsonl');
     assert.deepEqual(stray, [], `unexpected leftovers: ${stray.join(',')}`);
   });
 
@@ -143,9 +158,9 @@ describe('saveState atomicity', () => {
     // exists to clean up after.
     const dir = freshDir();
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
-    mkdirSync(statePath(cfg));
+    mkdirSync(statePath(cfg, SESSION));
 
-    assert.throws(() => saveState(cfg, sample()));
+    assert.throws(() => saveState(cfg, sample(), SESSION));
 
     const stray = readdirSync(dir).filter(f => f.includes('.tmp-'));
     assert.deepEqual(stray, [], `unexpected temp residue after failed rename: ${stray.join(',')}`);
@@ -175,8 +190,8 @@ describe('saveState ↔ loadState — deferred spans and session trace', () => {
       ],
     });
 
-    saveState(cfg, state);
-    const loaded = loadState(cfg);
+    saveState(cfg, state, SESSION);
+    const loaded = loadState(cfg, SESSION);
 
     assert.deepEqual(loaded, state);
   });
@@ -190,8 +205,8 @@ describe('saveState ↔ loadState — deferred spans and session trace', () => {
       session_start_ms: 1700000000500,
     });
 
-    saveState(cfg, state);
-    const loaded = loadState(cfg);
+    saveState(cfg, state, SESSION);
+    const loaded = loadState(cfg, SESSION);
 
     assert.deepEqual(loaded, state);
   });
@@ -209,9 +224,9 @@ describe('saveState ↔ loadState — deferred spans and session trace', () => {
       pending_spans: {},
       pending_task_spans: {},
     };
-    writeFileSync(statePath(cfg), JSON.stringify(legacy, null, 2), 'utf-8');
+    writeFileSync(statePath(cfg, SESSION), JSON.stringify(legacy, null, 2), 'utf-8');
 
-    const loaded = loadState(cfg);
+    const loaded = loadState(cfg, SESSION);
 
     assert.ok(loaded);
     assert.equal(loaded!.session_id, 'sess-legacy');
@@ -226,15 +241,15 @@ describe('saveState ↔ loadState — deferred spans and session trace', () => {
     const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
 
     const emptyState = sample({ deferred_spans: [] });
-    saveState(cfg, emptyState);
-    const loadedEmpty = loadState(cfg);
+    saveState(cfg, emptyState, SESSION);
+    const loadedEmpty = loadState(cfg, SESSION);
     assert.deepEqual(loadedEmpty!.deferred_spans, []);
     assert.notEqual(loadedEmpty!.deferred_spans, undefined);
 
     const undefinedState = sample();
     delete undefinedState.deferred_spans;
-    saveState(cfg, undefinedState);
-    const loadedUndefined = loadState(cfg);
+    saveState(cfg, undefinedState, SESSION);
+    const loadedUndefined = loadState(cfg, SESSION);
     assert.equal(loadedUndefined!.deferred_spans, undefined);
   });
 });

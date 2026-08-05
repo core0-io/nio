@@ -606,7 +606,7 @@ async function main(): Promise<void> {
       const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
       const sessionId = collectorInput.session_id ?? 'unknown';
       const key = spanKey(collectorInput);
-      let state = ensureTurn(loadState(logsConfig), sessionId);
+      let state = ensureTurn(loadState(logsConfig, sessionId), sessionId);
       state = setPendingGuardAttrs(state, key, guardAttrs);
       if (isBlock) {
         const cwd = collectorInput.cwd ?? process.cwd();
@@ -629,7 +629,7 @@ async function main(): Promise<void> {
         );
         if (r) state = r.state;
       }
-      saveState(logsConfig, state);
+      saveState(logsConfig, state, sessionId);
     }
 
     // Make sure network exports complete before the subprocess exits;

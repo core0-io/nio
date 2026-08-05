@@ -61,7 +61,9 @@ import {
   hasOrphanedDeferredTree,
   recoverDeferredTree,
 } from './traces-collector.js';
-import { loadState, saveState, type CollectorState } from './traces-state-store.js';
+import {
+  loadState, saveState, discardState, takeAbandonedShards, type CollectorState,
+} from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
@@ -108,8 +110,8 @@ export interface DispatchOptions {
   loggerProvider?: LoggerProvider | null;
   /**
    * Audit log + trace state path config. Used to resolve audit.jsonl AND
-   * the traces-state-store.json location (state file sits next to audit
-   * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
+   * the traces-state-store shard location (the state files sit next to
+   * the audit log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
   /**
@@ -422,10 +424,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     // both "some other event arrives first" and "SessionStart is the
     // first thing to arrive" — SessionStart is just another event here.
     if (tracerProvider) {
-      const stale = loadState(logsConfig);
+      const stale = loadState(logsConfig, sessionId);
       if (hasOrphanedDeferredTree(stale, sessionId)) {
         const recovered = await recoverDeferredTree(tracerProvider, stale!);
-        saveState(logsConfig, recovered);
+        saveState(logsConfig, recovered, sessionId);
       } else if (stale?.turn_trace_id && stale.session_id === sessionId) {
         // Same synthetic turn span id endTurn forces onto the root, so
         // audit records land on the turn span itself, not a phantom.
@@ -440,10 +442,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider && input.prompt) {
-        const prev = loadState(logsConfig);
+        const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         state = recordUserPrompt(state, input.prompt);
-        saveState(logsConfig, state);
+        saveState(logsConfig, state, sessionId);
       }
 
     } else if (event === 'PreToolUse') {
@@ -452,7 +454,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const summary = toolSummary(toolName, toolInput);
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
+        const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         const key = allocateSpanKey(state, input);
         // Identity only — the tool's arguments are NOT parked in state.
@@ -463,7 +465,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           state, key, toolName, summary,
           genAiToolCallIdAttributes(input.tool_use_id),
         );
-        saveState(logsConfig, state);
+        saveState(logsConfig, state, sessionId);
       }
 
       if (meterProvider) {
@@ -474,7 +476,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
+        const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         // Resolve the pending entry's key with composite-fallback. Hermes's
         // pre_tool_call hook doesn't carry tool_call_id while post_tool_call
@@ -515,7 +517,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           },
           err ?? null,
         );
-        saveState(logsConfig, result.state);
+        saveState(logsConfig, result.state, sessionId);
 
         // A plain `output` string is the common shape and is emitted
         // verbatim; anything else is serialised whole so structured
@@ -566,10 +568,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       );
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
+        const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         state = recordPreTaskToolUse(state, taskId, summary);
-        saveState(logsConfig, state);
+        saveState(logsConfig, state, sessionId);
       }
 
       if (meterProvider) {
@@ -585,12 +587,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       );
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
+        const prev = loadState(logsConfig, sessionId);
         const state = ensureTurn(prev, sessionId);
         const result = await recordPostTaskToolUse(
           tracerProvider, state, taskId, cwd,
         );
-        saveState(logsConfig, result.state);
+        saveState(logsConfig, result.state, sessionId);
       }
 
       if (meterProvider) {
@@ -612,7 +614,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       // SessionEnd for the same session — e.g. Claude Code firing both
       // Stop (closes the turn) and SessionEnd (would otherwise mint and
       // immediately export a phantom empty turn on top of it).
-      const prev = loadState(logsConfig);
+      const prev = loadState(logsConfig, sessionId);
       const hasActiveTurn = Boolean(prev?.turn_trace_id);
 
       if (hasActiveTurn && tracerProvider) {
@@ -630,7 +632,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const next = await endTurn(
           tracerProvider, prev!, cwd, transcriptPath, calls, contentSink,
         );
-        if (next) saveState(logsConfig, next);
+        if (next) saveState(logsConfig, next, sessionId);
       }
 
       if (hasActiveTurn && meterProvider) {
@@ -642,17 +644,22 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // closing has had its chance to save — reload rather than reuse
         // `prev`/`next` so this sees whichever of them actually landed.
         if (tracerProvider) {
-          const sessionState = loadState(logsConfig) ?? prev;
+          const sessionState = loadState(logsConfig, sessionId) ?? prev;
           if (sessionState?.session_trace_id && sessionState?.session_span_id) {
             await emitSessionSpan(tracerProvider, sessionState);
-            saveState(logsConfig, {
-              ...sessionState,
-              session_trace_id: undefined,
-              session_span_id: undefined,
-              session_start_ms: undefined,
-            });
           }
         }
+        // The session is over, so drop its shard instead of writing the
+        // cleared session-span fields back. Sharding means one file per
+        // session that is never reused, so something has to collect
+        // them; this is the clean-exit half (discardState also sweeps
+        // the shards of sessions whose host died before SessionEnd could
+        // fire). Removing the file subsumes what clearing
+        // session_trace_id / session_span_id in place used to do — stop
+        // a second SessionEnd re-emitting the session span — because the
+        // reload above then returns null, and `prev` (loaded earlier in
+        // this same dispatch) has already had its turn closed.
+        discardState(logsConfig, sessionId);
         forgetSession(sessionId, logsConfig);
       }
 
@@ -660,9 +667,23 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       writeAuditLog({ event, ...baseFields }, auditOptsFor());
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
+        // Sweep the shards left by sessions whose host died before
+        // SessionEnd. Pre-sharding this happened for free — a new session
+        // simply loaded the dead one's state out of the one shared file —
+        // and COLLECTOR-SIGNALS.md documents it ("the parked tree is
+        // flushed by the next event that finds it, or by the next
+        // SessionStart"). Per-session files mean it has to be done on
+        // purpose. Each tree is emitted on its OWN session's trace id,
+        // tagged nio.turn.incomplete, so recovery never re-attributes a
+        // dead session's spans to this one. SessionStart only — see
+        // takeAbandonedShards for why not on every event.
+        for (const shard of takeAbandonedShards(logsConfig, sessionId)) {
+          await recoverDeferredTree(tracerProvider, shard.state);
+        }
+
+        const prev = loadState(logsConfig, sessionId);
         const state = startSessionTrace(prev, sessionId);
-        saveState(logsConfig, state);
+        saveState(logsConfig, state, sessionId);
       }
 
     } else if (isKnownHookEvent(event)) {

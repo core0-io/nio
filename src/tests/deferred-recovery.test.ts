@@ -14,25 +14,27 @@
  * `deferred_spans` back out.
  *
  * Recovery has two entry points, both exercised below:
- *   (a) lazy — any event that arrives and finds an orphaned tree in the
- *       state it loads flushes that tree before doing its own work.
- *   (b) SessionStart — the same lazy check, but specifically covering
- *       the case where nothing else ever arrives to trigger it (a) — the
- *       user's next session simply starts.
- *
- * Both funnel through `hasOrphanedDeferredTree` / `recoverDeferredTree`
- * in traces-collector.ts, wired into `dispatchCollectorEvent` in
- * collector-core.ts ahead of all per-event handling.
+ *   (a) lazy, SAME session — any event that arrives and finds an
+ *       orphaned tree in its OWN state flushes it before doing its own
+ *       work. Funnels through `hasOrphanedDeferredTree` /
+ *       `recoverDeferredTree`, wired into `dispatchCollectorEvent`
+ *       ahead of all per-event handling.
+ *   (b) SessionStart sweep, ANOTHER session — the case where the crashed
+ *       session never comes back at all. Since the state store became
+ *       one file per session, the dead session's tree is no longer
+ *       sitting in a file the next session happens to open, so this is
+ *       an explicit sweep (`takeAbandonedShards`) gated on the shard
+ *       having gone untouched for SHARD_STALE_MS.
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, utimesSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
 import { recoverDeferredTree } from '../scripts/lib/traces-collector.js';
-import { loadState, saveState, type CollectorState, type DeferredSpan } from '../scripts/lib/traces-state-store.js';
+import { statePath, loadState, saveState, type CollectorState, type DeferredSpan } from '../scripts/lib/traces-state-store.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
@@ -87,7 +89,7 @@ describe('deferred-recovery: lazy recovery when turn_trace_id is empty but defer
       turn_attributes: {},
       deferred_spans: [orphanTool('a'.repeat(16))],
     };
-    saveState(logsConfig, stale);
+    saveState(logsConfig, stale, sessionId);
 
     // Any event on the same session should notice and flush.
     await dispatchCollectorEvent({
@@ -107,7 +109,7 @@ describe('deferred-recovery: lazy recovery when turn_trace_id is empty but defer
     const tool = spans.find((s) => s.name === 'execute_tool Bash');
     assert.ok(tool, 'the orphaned tool span must be exported too');
 
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.deepEqual(after?.deferred_spans, [], 'deferred_spans must be drained after recovery');
   });
 
@@ -126,7 +128,7 @@ describe('deferred-recovery: lazy recovery when turn_trace_id is empty but defer
       turn_attributes: {},
       deferred_spans: [orphanTool('b'.repeat(16))],
     };
-    saveState(logsConfig, stale);
+    saveState(logsConfig, stale, sessionId);
 
     for (let i = 0; i < 2; i++) {
       await dispatchCollectorEvent({
@@ -148,8 +150,18 @@ describe('deferred-recovery: lazy recovery when turn_trace_id is empty but defer
 // ── Trace id consistency: recovery reuses the leftover turn_trace_id ───
 
 describe('deferred-recovery: reuses the leftover turn_trace_id, never mints a new one', () => {
-  it('recovered spans land on the SAME trace id that was already persisted (session changed mid-turn)', async () => {
-    const { logsConfig } = freshFixture();
+  // Driven through `recoverDeferredTree` directly rather than through a
+  // hand-written state file. Pre-sharding this went in via
+  // hasOrphanedDeferredTree's "different session id" arm — one process
+  // opening another session's state out of the shared file. With one
+  // file per session that arm is no longer reachable from disk (a shard
+  // only ever holds the session it is named for), so writing a state
+  // whose inner session_id disagreed with its filename would be testing
+  // a shape production can no longer produce. The property under test —
+  // recovery REUSES the persisted turn_trace_id instead of minting a new
+  // one — is unchanged, and is what the SessionStart sweep below relies
+  // on to keep a dead session's spans on the dead session's trace.
+  it('recovered spans land on the SAME trace id that was already persisted', async () => {
     const tracer = makeInMemoryTracer();
 
     const staleTurnTraceId = 'b'.repeat(32);
@@ -163,21 +175,12 @@ describe('deferred-recovery: reuses the leftover turn_trace_id, never mints a ne
       turn_attributes: {},
       deferred_spans: [orphanTool('c'.repeat(16), 8000)],
     };
-    saveState(logsConfig, stale);
 
-    // A brand new session starts — this is the realistic crash-recovery
-    // trigger: the old process died mid-turn, and a fresh process/session
-    // picks up afterwards.
-    await dispatchCollectorEvent({
-      event: 'UserPromptSubmit',
-      input: { session_id: 'sess-new-2', prompt: 'hello again', cwd: '/tmp' },
-      platform: 'claude-code',
-      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
-    });
+    await recoverDeferredTree(tracer.provider, stale);
 
     const spans = tracer.finished();
     const root = incompleteRoot(spans);
-    assert.ok(root, 'recovery must fire on the session-changed trigger too');
+    assert.ok(root, 'recovery must emit a root tagged nio.turn.incomplete');
     assert.equal(
       root!.spanContext().traceId, staleTurnTraceId,
       'recovered root must reuse the leftover turn_trace_id, not a freshly minted one',
@@ -193,16 +196,24 @@ describe('deferred-recovery: reuses the leftover turn_trace_id, never mints a ne
   });
 });
 
-// ── (b) SessionStart scan: the "no third event ever arrives" fallback ──
+// ── (b) SessionStart scan: another session's abandoned shard ──────────
+//
+// One state file per session means a crashed session's parked tree is no
+// longer sitting in a file the next session happens to open. The
+// guarantee COLLECTOR-SIGNALS.md documents ("or by the next
+// SessionStart") is therefore carried by an explicit sweep:
+// `takeAbandonedShards`, which claims shards that have gone untouched for
+// SHARD_STALE_MS. The two tests below are a matched pair — the second is
+// what gives the first any meaning, because a sweep with no staleness
+// check would pass the first and fail the second.
 
-describe('deferred-recovery: SessionStart also scans for and flushes a leftover tree', () => {
-  it('a fresh SessionStart flushes a crashed prior session\'s orphaned tree before minting its own session trace', async () => {
-    const { logsConfig } = freshFixture();
-    const tracer = makeInMemoryTracer();
+describe('deferred-recovery: SessionStart sweeps another session\'s ABANDONED shard', () => {
+  const CRASHED = 'sess-crashed-3';
+  const staleTurnTraceId = 'd'.repeat(32);
 
-    const staleTurnTraceId = 'd'.repeat(32);
+  function crashedShard(logsConfig: CollectorLogsConfig): CollectorState {
     const stale: CollectorState = {
-      session_id: 'sess-crashed-3',
+      session_id: CRASHED,
       turn_number: 1,
       turn_trace_id: staleTurnTraceId,
       turn_start_ms: Date.now() - 20000,
@@ -211,7 +222,21 @@ describe('deferred-recovery: SessionStart also scans for and flushes a leftover 
       turn_attributes: {},
       deferred_spans: [orphanTool('e'.repeat(16), 15000)],
     };
-    saveState(logsConfig, stale);
+    saveState(logsConfig, stale, CRASHED);
+    return stale;
+  }
+
+  /** Backdate the shard so it reads as abandoned rather than live. */
+  function ageShard(logsConfig: CollectorLogsConfig, sessionId: string, ms: number): void {
+    const when = new Date(Date.now() - ms);
+    utimesSync(statePath(logsConfig, sessionId), when, when);
+  }
+
+  it('flushes the crashed session\'s tree, on the crashed session\'s own trace id, and removes the shard', async () => {
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    crashedShard(logsConfig);
+    ageShard(logsConfig, CRASHED, 2 * 60 * 60 * 1000);   // 2h — well past SHARD_STALE_MS
 
     await dispatchCollectorEvent({
       event: 'SessionStart',
@@ -220,16 +245,51 @@ describe('deferred-recovery: SessionStart also scans for and flushes a leftover 
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const spans = tracer.finished();
-    const root = incompleteRoot(spans);
-    assert.ok(root, 'SessionStart must flush the orphaned tree from the crashed session');
-    assert.equal(root!.spanContext().traceId, staleTurnTraceId);
+    const root = incompleteRoot(tracer.finished());
+    assert.ok(root, 'SessionStart must flush the abandoned shard\'s tree');
+    assert.equal(
+      root!.spanContext().traceId, staleTurnTraceId,
+      'the recovered tree must go out on the CRASHED session\'s trace, never the recovering one\'s',
+    );
 
-    const after = loadState(logsConfig);
-    assert.deepEqual(after?.deferred_spans, [], 'deferred_spans must be drained after the SessionStart scan');
-    // The new session still gets its own session trace minted (Task 4)
-    // on top of the recovery — the two concerns are independent.
-    assert.ok(after?.session_trace_id, 'SessionStart must still mint a session trace for the NEW session');
+    assert.ok(
+      !existsSync(statePath(logsConfig, CRASHED)),
+      'a claimed shard must be removed, or every later SessionStart re-emits the same tree',
+    );
+
+    const mine = loadState(logsConfig, 'sess-new-3');
+    assert.ok(mine?.session_trace_id, 'SessionStart must still mint a session trace for the NEW session');
+    assert.deepEqual(
+      mine?.deferred_spans ?? [], [],
+      'the recovering session must not inherit the dead session\'s spans into its own state',
+    );
+  });
+
+  it('leaves a FRESH shard belonging to a concurrently live session completely alone', async () => {
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    crashedShard(logsConfig);
+    // No ageing: this is the second host window, mid-turn, right now.
+
+    await dispatchCollectorEvent({
+      event: 'SessionStart',
+      input: { session_id: 'sess-new-3b' },
+      platform: 'claude-code',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    assert.equal(
+      incompleteRoot(tracer.finished()), undefined,
+      'a live session\'s in-flight tree must not be flushed out from under it',
+    );
+    assert.ok(
+      existsSync(statePath(logsConfig, CRASHED)),
+      'a live session\'s shard must not be deleted by another session starting up',
+    );
+    assert.equal(
+      loadState(logsConfig, CRASHED)?.deferred_spans?.length, 1,
+      'the live session\'s parked tree must still be there for it to flush itself',
+    );
   });
 });
 
@@ -307,7 +367,7 @@ describe('deferred-recovery: SessionStart on the SAME session that was just reco
       turn_attributes: {},
       deferred_spans: [orphanTool('f'.repeat(16))],
     };
-    saveState(logsConfig, stale);
+    saveState(logsConfig, stale, sessionId);
 
     // SessionStart for the SAME session id as the stale state: the lazy
     // crash-recovery block fires first (closed turn_trace_id, not a
@@ -322,7 +382,7 @@ describe('deferred-recovery: SessionStart on the SAME session that was just reco
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.deepEqual(
       after?.deferred_spans, [],
       'deferred_spans must stay empty after SessionStart on the just-recovered session — a leak here ' +

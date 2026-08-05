@@ -365,7 +365,7 @@ describe('end-to-end: turn → chat → tool', () => {
       'tool spans must be held back until the turn ends — attribution is not knowable at PostToolUse time',
     );
 
-    const mid = loadState(logsConfig);
+    const mid = loadState(logsConfig, sessionId);
     assert.equal(mid?.deferred_spans?.length, 2, 'both finished tool spans park in deferred_spans');
 
     // Transcript is written after the turn started so both calls pass the
@@ -453,7 +453,7 @@ describe('end-to-end: turn → chat → tool', () => {
       'the last call of a Claude Code transcript has no successor to borrow an end time from',
     );
 
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.deepEqual(after?.deferred_spans, [], 'deferred_spans must drain at end of turn');
   });
 

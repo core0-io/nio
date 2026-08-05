@@ -367,14 +367,14 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
 
     // Simulate the separate guard-hook process parking guard attrs.
     const key = spanKeyFn(preInput);
-    let s = ensureTurn(loadState(logsConfig), sessionId);
+    let s = ensureTurn(loadState(logsConfig, sessionId), sessionId);
     s = setPendingGuardAttrs(s, key, {
       'nio.guard.decision': 'allow',
       'nio.guard.risk_level': 'medium',
       'nio.guard.risk_score': 0.4,
       'nio.guard.eval_ms': 7,
     });
-    saveState(logsConfig, s);
+    saveState(logsConfig, s, sessionId);
 
     // Post: close the span. Guard attrs should be drained + merged in.
     await dispatchCollectorEvent({
@@ -402,7 +402,7 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
     assert.equal(attrs['nio.guard.eval_ms'], 7);
 
     // And the state file should no longer carry the drained entry.
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.equal(after?.pending_guard_attrs?.[key], undefined);
 
     // Do NOT shutdown — the global tracer is shared across tests, and
@@ -695,7 +695,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const mid = loadState(logsConfig);
+    const mid = loadState(logsConfig, sessionId);
     assert.equal(Object.keys(mid!.pending_spans).length, 2, 'two concurrent pending entries expected');
     assert.ok('terminal:ls' in mid!.pending_spans && 'terminal:ls#2' in mid!.pending_spans);
 
@@ -709,7 +709,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const mid2 = loadState(logsConfig);
+    const mid2 = loadState(logsConfig, sessionId);
     assert.deepEqual(mid2!.pending_spans, {}, 'pending_spans must drain empty — no leaked #N entry');
 
     await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
@@ -719,7 +719,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
     const starts = spans.map(spanStartMs).sort((a, b) => a - b);
     assert.ok(starts[1]! > starts[0]!, 'the two spans must carry distinct start times — one per pre entry, none reused');
 
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.deepEqual(after!.deferred_spans, [], 'deferred_spans must drain empty at end of turn');
   });
 
@@ -750,7 +750,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const mid = loadState(logsConfig);
+    const mid = loadState(logsConfig, sessionId);
     assert.deepEqual(mid!.pending_spans, {}, 'pending_spans must drain empty even under out-of-order completion');
 
     await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
@@ -778,7 +778,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       await sleep(5);
     }
 
-    const mid = loadState(logsConfig);
+    const mid = loadState(logsConfig, sessionId);
     assert.deepEqual(
       Object.keys(mid!.pending_spans).sort(),
       ['terminal:ls', 'terminal:ls#2', 'terminal:ls#3'],
@@ -791,7 +791,7 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       });
     }
 
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty for three concurrent calls too');
 
     await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);

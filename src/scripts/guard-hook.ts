@@ -252,7 +252,7 @@ async function main(): Promise<void> {
   if (tracerProvider && hookEventName === 'PreToolUse') {
     const sessionId = (payload as Record<string, unknown>).session_id as string || 'unknown';
     const key = spanKey(payload as HookStdinPayload);
-    let state = ensureTurn(loadState(logsConfig), sessionId);
+    let state = ensureTurn(loadState(logsConfig, sessionId), sessionId);
     state = setPendingGuardAttrs(state, key, guardAttrs);
 
     // Block path: PostToolUse will never fire → no one will close the
@@ -289,7 +289,7 @@ async function main(): Promise<void> {
       if (r) state = r.state;
     }
 
-    saveState(logsConfig, state);
+    saveState(logsConfig, state, sessionId);
   }
 
   // Flush OTEL providers before exit, sharing the deadline above so an

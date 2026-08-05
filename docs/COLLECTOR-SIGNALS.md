@@ -106,7 +106,7 @@ collected, but none of them can stop that timer. The other three
 platforms run one process per hook event, so nothing outlives it.
 
 State lives in `${NIO_HOME}/monitored-sessions.json`, separate from
-`traces-state-store.json` — session-scoped durable state versus
+`traces-state-store-<session>.json` — session-scoped durable state versus
 turn-scoped ephemeral state.
 
 There is **no backfill**: capture starts at the moment `/nio-monitor`
@@ -258,7 +258,7 @@ Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at St
 **Emission timing.** A tool span can only be nested under the LLM call
 that issued it, and that attribution is unknowable at `PostToolUse` time —
 it comes from the conversation source once the turn is over. So finished
-tool spans are parked in `traces-state-store.json` and the WHOLE tree
+tool spans are parked in `traces-state-store-<session>.json` and the WHOLE tree
 (chat spans, their tools, the unattributed tools, the turn root) is
 exported together at `Stop` / `SubagentStop` / `SessionEnd`. Two
 exceptions keep their immediate export: the guard's deny / confirm-denied
@@ -268,6 +268,22 @@ eager per-tool export.
 If the host process dies before the turn closes, the parked tree is
 flushed by the next event that finds it — or by the next `SessionStart` —
 under a root tagged `nio.turn.incomplete: true`.
+
+**One state file per session.** The store is sharded: the filename
+carries the session id, sanitised to `[A-Za-z0-9_-]` and suffixed with a
+short digest of the raw id. Two host windows open at once are two
+independent sessions, and before sharding they wrote the same file —
+which mis-attributed data rather than merely losing it (session A's
+`Stop` would close session B's turn, exporting A's conversation content
+under B's trace id). The two recovery legs follow from that: a session
+finds its OWN parked tree by loading its own shard, and a shard left by a
+session whose host never reached `SessionEnd` is claimed by the next
+`SessionStart` once it has gone untouched for an hour — flushed on the
+dead session's own trace id, never re-attributed to the recovering one.
+Shards of sessions that end cleanly are deleted at `SessionEnd`. A
+pre-upgrade `traces-state-store.json` is adopted once, by the session
+recorded inside it, so a tool call spanning the upgrade keeps its
+pre/post bridge.
 
 **Without a conversation source** (no transcript path, an unreadable
 session file, a platform whose conversation data never reached the
@@ -387,7 +403,7 @@ recovery in `hasOrphanedDeferredTree` / `recoverDeferredTree` covers
 `turn_trace_id` + `deferred_spans` only, not `session_trace_id` /
 `session_span_id` — a session that starts on Codex simply never gets its
 `session` root span exported, on a clean exit or a crash alike. The
-session ids still exist in `traces-state-store.json` for as long as the
+session ids still exist in the session's `traces-state-store` shard for as long as the
 session runs (and turn-root links to them remain intact), and are
 silently discarded by `startSessionTrace`'s `sessionChanged` branch the
 next time a *different* session starts on the same machine. If Codex
@@ -456,7 +472,7 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.guard.eval_ms` | Wall-clock cost of the guard evaluation (ms) | PreToolUse | all |
 
 **Where tool payloads live on the deferred platforms.** Claude Code,
-Codex, and Hermes park finished tool spans in `traces-state-store.json`
+Codex, and Hermes park finished tool spans in `traces-state-store-<session>.json`
 until the turn closes, and every hook event rewrites that file whole — so
 the tool's arguments and result are deliberately kept off the span there
 and carried by the logs signal instead: the arguments as a `tool_input`
@@ -751,7 +767,7 @@ collector:
   logs:
     enabled: true                   # OTLP logs export on/off (audit + content records)
     local: true                     # local JSONL backup on/off (audit entries only)
-    path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store.json
+    path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store-<session>.json
     max_size_mb: 100                # rotation threshold for the local file
   content_limits:                   # per-kind UTF-8 byte caps for content records; 0 = uncapped
     thinking: 65536

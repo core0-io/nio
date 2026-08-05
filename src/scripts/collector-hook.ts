@@ -110,7 +110,7 @@ async function main(): Promise<void> {
   // 95s. See lib/flush-budget.ts.
   //
   // A dispatch abandoned at the deadline leaves whatever it had already
-  // written to `traces-state-store.json` intact — every branch saves
+  // written to its session's traces-state-store shard intact — every branch saves
   // state before its metric flush, and the two that flush first
   // (`endTurn`, `emitSessionSpan`) simply leave the turn open, which the
   // next event's orphaned-tree recovery is already built to pick up.
