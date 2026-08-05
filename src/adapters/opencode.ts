@@ -30,6 +30,26 @@ const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, ActionType> = {
   websearch: 'network_request',
 };
 
+/**
+ * All sixteen opencode built-in tool names (same enumeration as the doc
+ * comment above `DEFAULT_NATIVE_TOOL_MAPPING`).
+ *
+ * `hook-engine.ts`'s `parseMcpToolName` needs this to short-circuit
+ * opencode's MCP-name fallback tier. opencode flattens MCP tool names as
+ * `<server>_<tool>` with no fixed delimiter, so when no registered server
+ * prefixes a name, the parser falls back to treating the *whole* name as
+ * an anonymous MCP tool. `apply_patch` is the one built-in whose name
+ * contains an underscore, so without this guard it would be misread as
+ * an MCP call the moment any MCP server is configured — silently
+ * re-gating opencode's core file-editing tool under `permitted_tools.mcp`
+ * / `blocked_tools.mcp` instead of `permitted_tools.opencode`.
+ */
+export const OPENCODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  'read', 'write', 'edit', 'apply_patch', 'glob', 'grep', 'list', 'bash',
+  'task', 'todowrite', 'todoread', 'webfetch', 'websearch', 'lsp', 'skill',
+  'question',
+]);
+
 export interface OpenCodeAdapterOptions {
   /** Config-driven tool → action type mapping, overrides the built-in default. */
   nativeToolMapping?: Record<string, string>;
