@@ -737,9 +737,14 @@ Add these members to the class:
       (decision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
 
     if (block) {
-      // The post-side event will never fire because the tool did not run.
-      // Flush the orphan span here with guard-error status.
-      await this.closeSpan(sessionId, spanKey, guardAttrs, reason);
+      // The post-side event will never fire because the tool did not run,
+      // so flush the orphan span here with guard-error status.
+      //
+      // NEVER let this throw. A deny is already decided at this point;
+      // if the span flush rejected, `onPreTool` would reject, the
+      // binding's fail-open catch would swallow it, and the blocked tool
+      // would RUN. Telemetry must never veto a guard verdict.
+      await this.safeCloseSpan(sessionId, spanKey, guardAttrs, reason);
       return { block: true, reason, decision };
     }
 
@@ -768,7 +773,9 @@ Add these members to the class:
 
     if (!confirmed) {
       const why = reason || 'Requires confirmation (Nio)';
-      await this.closeSpan(sessionId, spanKey, merged, why);
+      // Same rule as onPreTool: the user already refused, so a telemetry
+      // failure must not turn that into an allow.
+      await this.safeCloseSpan(sessionId, spanKey, merged, why);
       return { block: true, reason: why, decision: resolved };
     }
     return { block: false, decision: resolved };
@@ -817,6 +824,25 @@ Add these members to the class:
     const state = this.sessionState.get(sessionId);
     if (!state) return;
     this.sessionState.set(sessionId, setPendingGuardAttrs(state, spanKey, attrs));
+  }
+
+  /**
+   * `closeSpan` that cannot reject. Used on every path where a block or a
+   * refusal has ALREADY been decided — the span is best-effort, the
+   * verdict is not. Swallowing here is what keeps a failing OTEL exporter
+   * from silently disabling the guard.
+   */
+  private async safeCloseSpan(
+    sessionId: string,
+    spanKey: string,
+    attrs: Record<string, unknown>,
+    error: string | null,
+  ): Promise<void> {
+    try {
+      await this.closeSpan(sessionId, spanKey, attrs, error);
+    } catch {
+      // Best-effort telemetry; the caller's decision stands.
+    }
   }
 
   private async closeSpan(
