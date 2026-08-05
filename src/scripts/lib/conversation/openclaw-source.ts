@@ -45,6 +45,21 @@ export {};
  * "anthropic" gets `'full'`; everything else (openai, azure, unknown,
  * absent) gets the conservative default `'summary'` rather than
  * overclaiming a fidelity we have no evidence for.
+ *
+ * KNOWN GAP — this module never emits a `tool_use` block. The other
+ * three sources reconstruct it from data the platform hands them
+ * directly (Claude Code's `content[]`, Codex's `function_call`, Hermes'
+ * `tool_calls`); OpenClaw's equivalent data — `before_tool_call` /
+ * `after_tool_call` — lives in `openclaw-plugin.ts`, not in anything
+ * this module reads, and reattaching it here would require correlating
+ * those events back to the right chat call (by `runId`/`callId`) on a
+ * platform this module has never seen live. That correlation would be
+ * guesswork stacked on top of the guesswork the rest of this module
+ * already admits to, with no gateway available to check it against.
+ * Left out deliberately rather than implemented wrong and undetectably
+ * so — see `conversation-cross-source.test.ts`'s dedicated guard test,
+ * which pins this absence so it can't regress into a silent mismatch
+ * against the other three sources.
  */
 
 import type { ChatCall, ContentBlock, ConversationSource, ThinkingFidelity } from './types.js';
