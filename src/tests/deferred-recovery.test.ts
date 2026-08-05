@@ -31,6 +31,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
+import { recoverDeferredTree } from '../scripts/lib/traces-collector.js';
 import { loadState, saveState, type CollectorState, type DeferredSpan } from '../scripts/lib/traces-state-store.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
@@ -229,5 +230,104 @@ describe('deferred-recovery: SessionStart also scans for and flushes a leftover 
     // The new session still gets its own session trace minted (Task 4)
     // on top of the recovery — the two concerns are independent.
     assert.ok(after?.session_trace_id, 'SessionStart must still mint a session trace for the NEW session');
+  });
+});
+
+// ── I1 regression: recoverDeferredTree itself must drain and be idempotent ─
+//
+// Review finding I1: changing recoverDeferredTree's return value from
+// `deferred_spans: []` to `deferred_spans: deferred` (i.e. never
+// clearing it) left `deferred-recovery.test.ts` fully green, because
+// both suites above only observe recoverDeferredTree indirectly through
+// `dispatchCollectorEvent` → `ensureTurn`, and `ensureTurn`'s
+// new-turn branch (`carryPending`) unconditionally resets
+// `deferred_spans` to `[]` whenever it mints a fresh turn — which is
+// exactly what happens on the very next event after recovery. That
+// reset papers over a broken recoverDeferredTree before any test gets a
+// chance to read the drained value back out.
+//
+// The two tests below close that gap: the first calls
+// `recoverDeferredTree` directly — no `dispatchCollectorEvent`, no
+// `ensureTurn` in the call path at all — so a regression is visible on
+// the very state object the function returns. The second exercises the
+// one dispatch-level path that does NOT go through the masking
+// `ensureTurn` reset: a `SessionStart` for the SAME session id that was
+// just recovered takes `startSessionTrace`'s `base = prev` branch
+// (session unchanged), which passes `deferred_spans` through as-is
+// rather than resetting it — unlike the cross-session case in the
+// "(b) SessionStart scan" suite above, whose `sessionChanged` branch
+// always builds a clean skeleton and would hide the same bug.
+
+describe('deferred-recovery: recoverDeferredTree itself drains and is idempotent (bypasses dispatchCollectorEvent/ensureTurn)', () => {
+  it('draining: the returned state has deferred_spans == [] right after the call', async () => {
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-direct-1';
+
+    const state: CollectorState = {
+      session_id: sessionId,
+      turn_number: 1,
+      turn_trace_id: 'a'.repeat(32),
+      turn_start_ms: Date.now() - 5000,
+      pending_spans: {},
+      pending_task_spans: {},
+      turn_attributes: {},
+      deferred_spans: [orphanTool('1'.repeat(16))],
+    };
+
+    const first = await recoverDeferredTree(tracer.provider, state);
+    assert.deepEqual(first.deferred_spans, [], 'recoverDeferredTree must return deferred_spans: [] on its own result');
+
+    const spansAfterFirst = tracer.finished().length;
+    assert.ok(spansAfterFirst > 0, 'the first call must actually emit the recovered tree');
+
+    // Idempotency: calling it again on the (now-drained) result must be a
+    // pure no-op — same empty deferred_spans, no additional spans exported.
+    const second = await recoverDeferredTree(tracer.provider, first);
+    assert.deepEqual(second.deferred_spans, [], 'a second call on an already-drained state must still be []');
+    assert.equal(
+      tracer.finished().length, spansAfterFirst,
+      'a second call must not re-emit the tree — recoverDeferredTree is a no-op once deferred_spans is empty',
+    );
+  });
+});
+
+describe('deferred-recovery: SessionStart on the SAME session that was just recovered', () => {
+  it('deferred_spans stays empty — the base=prev pass-through path does not resurrect it', async () => {
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-same-session-recover';
+
+    const stale: CollectorState = {
+      session_id: sessionId,
+      turn_number: 2,
+      turn_trace_id: '',               // closed turn — the lazy-recovery trigger
+      turn_start_ms: 0,
+      pending_spans: {},
+      pending_task_spans: {},
+      turn_attributes: {},
+      deferred_spans: [orphanTool('f'.repeat(16))],
+    };
+    saveState(logsConfig, stale);
+
+    // SessionStart for the SAME session id as the stale state: the lazy
+    // crash-recovery block fires first (closed turn_trace_id, not a
+    // session mismatch), then the SessionStart branch reloads state and
+    // calls startSessionTrace with sessionChanged === false, so it takes
+    // the base=prev branch — the one path that carries deferred_spans
+    // through unchanged instead of resetting it.
+    await dispatchCollectorEvent({
+      event: 'SessionStart',
+      input: { session_id: sessionId },
+      platform: 'claude-code',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const after = loadState(logsConfig);
+    assert.deepEqual(
+      after?.deferred_spans, [],
+      'deferred_spans must stay empty after SessionStart on the just-recovered session — a leak here ' +
+      'would re-emit the same orphaned tree the next time hasOrphanedDeferredTree sees it',
+    );
+    assert.ok(after?.session_trace_id, 'SessionStart must still mint a session trace for this session');
   });
 });
