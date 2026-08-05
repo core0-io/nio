@@ -47,6 +47,7 @@ import {
   genAiToolCallInputAttributes,
   genAiToolCallOutputAttributes,
   nioGuardAttributes,
+  nioReclaimedSpanAttributes,
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
 import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
@@ -264,7 +265,30 @@ export class InProcessPluginRuntime {
     state = recordCacheHitRate(state);
 
     for (const k of Object.keys(state.pending_spans)) {
-      const r = await recordPostToolUse(this.tracerProvider, state, k, process.cwd(), {}, null);
+      // Reclaim, not a normal close. Two things have to be right here:
+      //
+      // 1. Drain the guard attrs parked for this key by `onPreTool`.
+      //    Only `onPostTool` / `closeSpan` used to do that, so a span
+      //    reclaimed here carried no `nio.guard.*` at all — and on
+      //    opencode that is the NORMAL path for every failing tool
+      //    call, because `tool.execute.after` never fires when a tool
+      //    throws. Same shape as `closeSpan` below.
+      // 2. Do not assert an outcome. The post-side event never arrived,
+      //    so whether the tool succeeded or threw is unknowable here.
+      //    `error` stays null (marking it ERROR would be as wrong as
+      //    claiming success), and the span is tagged with explicit
+      //    reclaim attrs so a consumer can tell it apart from a span
+      //    that was genuinely closed on a successful tool return.
+      const { state: drained, attrs } = takePendingGuardAttrs(state, k);
+      state = drained;
+      const r = await recordPostToolUse(
+        this.tracerProvider,
+        state,
+        k,
+        process.cwd(),
+        { ...attrs, ...nioReclaimedSpanAttributes() },
+        null,
+      );
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {

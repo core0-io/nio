@@ -68,6 +68,7 @@ async function withIsolatedNioHome<T>(
   fn: (nioHome: string) => Promise<T>,
   configYaml?: string,
 ): Promise<T> {
+  const had = Object.hasOwn(process.env, 'NIO_HOME');
   const prev = process.env.NIO_HOME;
   const nioHome = mkdtempSync(join(tmpdir(), 'nio-oc-plugin-test-'));
   process.env.NIO_HOME = nioHome;
@@ -75,7 +76,12 @@ async function withIsolatedNioHome<T>(
   try {
     return await fn(nioHome);
   } finally {
-    process.env.NIO_HOME = prev;
+    // Restore an originally-unset variable by DELETING it. Assigning
+    // `undefined` back into process.env stores the literal string
+    // "undefined", which later makes nioDir() resolve to a relative
+    // `undefined/` directory and write config + audit files into cwd.
+    if (had) process.env.NIO_HOME = prev;
+    else delete process.env.NIO_HOME;
   }
 }
 
