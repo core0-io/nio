@@ -425,20 +425,43 @@ Default weights:
 The `guard.confirm_action` config controls what happens when the decision is "confirm":
 - `allow` (default) — let the action through, record in audit log
 - `deny` — block the action (same as deny)
-- `ask` — use platform-native confirm if available, else fall back to allow
+- `ask` — use platform-native confirm where the host has one; where it
+  does not, the fallback is **per-platform** (allow on OpenClaw, deny on
+  Hermes — see below), not a single global rule
 
-Only two hosts can actually ask. **Pi** is the one with a first-class
-interactive channel: the `tool_call` handler opens a real
-`ctx.ui.confirm` dialog with a 60 s timeout, and because Pi's `confirm()`
-returns `false` on timeout an absent human reads as a refusal instead of
-hanging the agent. In print mode (`pi -p`, `ctx.hasUI === false`) there is
-no channel, so it folds back to the two-state behaviour without
-prompting. **opencode** has no dialog of its own to open from a plugin,
-but it does have a native permission system: an `ask` verdict is parked
-by `callID` in `tool.execute.before` and re-applied in `permission.ask`,
-forcing a real prompt (or an outright `deny` when
-`guard.confirm_action: deny`) instead of silently trusting opencode's own
-heuristics. Everywhere else `ask` folds to allow.
+Which hosts can actually ask:
+
+- **Claude Code** — yes. `guard-hook.ts` calls `outputAsk`, which prints
+  `hookSpecificOutput.permissionDecision: 'ask'` with the guard's reason
+  as `permissionDecisionReason`; Claude Code turns that into a real host
+  permission prompt.
+- **Pi** — yes, and it is the only host with a first-class interactive
+  channel of its own: the `tool_call` handler opens a real
+  `ctx.ui.confirm` dialog with a 60 s timeout, and because Pi's
+  `confirm()` returns `false` on timeout an absent human reads as a
+  refusal instead of hanging the agent. In print mode (`pi -p`,
+  `ctx.hasUI === false`) there is no channel, so it folds back to the
+  two-state behaviour without prompting.
+- **opencode** — yes, indirectly. It has no dialog a plugin can open, but
+  it does have a native permission system: an `ask` verdict is parked by
+  `callID` in `tool.execute.before` and re-applied in `permission.ask`,
+  forcing a real prompt (or an outright `deny` when
+  `guard.confirm_action: deny`) instead of silently trusting opencode's
+  own heuristics.
+- **Codex** — Codex runs the *same* `guard-hook.ts` as Claude Code
+  (`--platform codex` only swaps the adapter), so it emits the identical
+  `permissionDecision: 'ask'` payload. Whether the Codex host honours
+  that payload is **not established in this repo** — Codex's
+  `PermissionRequest` integration is deferred to phase 2 — so treat Codex
+  as unverified rather than supported.
+- **Hermes** — no. Hermes has no confirmation channel, and `hook-cli.ts`
+  **falls back to deny**, not allow: it returns `decision: 'block'` with
+  the guard's reason plus a stderr note that
+  `guard.confirm_action: 'ask'` is unsupported on Hermes. This is the one
+  place where `ask` is strictly more restrictive than `allow`.
+- **OpenClaw** — no. `InProcessPluginRuntime` leaves the provisional
+  decision unblocked and the binding never calls `resolveConfirm`, so
+  `ask` folds to allow.
 
 ---
 
@@ -797,6 +820,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 **Token usage collection** differs by platform:
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
 - **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
+- **Codex**: **none today.** `parseTranscriptUsage` is hard-coded to the Claude Code transcript schema — it only counts entries whose `type` is `"assistant"` and reads `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`. Codex's transcript JSONL uses different event types and a different shape (see the note on `CodexAdapter.inferInitiatingSkill`), so even when a transcript path reaches `endTurn` the parser matches nothing and returns null. Codex turn spans therefore carry no `gen_ai.usage.*`; a codex-specific parser is phase-2 work.
 - **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
 - **Pi**: `message_end` carries `message.usage` (`input` / `output` / `cacheRead` / `cacheWrite`) once per assistant message; accumulated the same way as OpenClaw.
 - **opencode**: `message.updated` carries cumulative `info.tokens`, but it is a **snapshot** republished on every change to the same message rather than a one-shot event. The binding keys the last-seen totals by message id and feeds only the delta into `onLlmUsage`, so a re-publish cannot compound the turn's totals. Messages without an id are skipped rather than risk inflating them.
