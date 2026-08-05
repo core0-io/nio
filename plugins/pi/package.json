@@ -1,0 +1,12 @@
+{
+  "name": "nio-pi",
+  "version": "2.5.1",
+  "description": "Execution assurance and observability for autonomous AI agents — real-time evaluation of every agent action before it executes, with full OpenTelemetry telemetry capture.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/nio/index.js"],
+    "skills": ["./skills"]
+  }
+}

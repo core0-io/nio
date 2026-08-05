@@ -606,6 +606,34 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   // `x-event-pipeline-id`, bearer auth) that a bare reachability probe
   // would not include, producing misleading 403/401 reports.
 
+  // ─── Platform Integrations ──────────────────────────────────────────
+  out.push('', '### Platform Integrations');
+
+  const home = process.env.HOME || process.env.USERPROFILE || '';
+
+  // Pi — installed either as a pi package (settings.json `extensions`
+  // entry) or by the CLI-less fallback (a bundle under extensions/nio/).
+  const piAgent = join(home, '.pi', 'agent');
+  const piBundle = join(piAgent, 'extensions', 'nio', 'index.js');
+  let piRegistered = existsSync(piBundle);
+  if (!piRegistered && existsSync(join(piAgent, 'settings.json'))) {
+    try {
+      const s = JSON.parse(readFileSync(join(piAgent, 'settings.json'), 'utf-8')) as {
+        extensions?: unknown[]; packages?: unknown[];
+      };
+      const mentionsNio = (arr: unknown[] | undefined): boolean =>
+        (arr ?? []).some((e) => {
+          const v = typeof e === 'string' ? e : (e as { source?: string })?.source;
+          return typeof v === 'string' && v.includes('nio');
+        });
+      piRegistered = mentionsNio(s.extensions) || mentionsNio(s.packages);
+    } catch { /* unreadable settings — treat as not registered */ }
+  }
+  out.push(piRegistered
+    ? '- ✓ pi: extension registered'
+    : '- · pi: not installed (run plugins/pi/setup.sh to enable)');
+  out.push('    note: Pi has no MCP support — the Phase 0 MCP gate is inactive there.');
+
   return { ok, report: out.join('\n') };
 }
 
