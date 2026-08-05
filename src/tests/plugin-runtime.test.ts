@@ -10,6 +10,7 @@ import { InProcessPluginRuntime, type PreToolResult } from '../adapters/plugin-r
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { ensureTurn } from '../scripts/lib/traces-collector.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
+import { SpanStatusCode } from '@opentelemetry/api';
 
 describe('InProcessPluginRuntime', () => {
   function makeRuntime() {
@@ -240,6 +241,74 @@ describe('InProcessPluginRuntime span wiring', () => {
       assert.equal(spans[0]!.attributes['nio.guard.decision'], 'confirm_denied');
       // The merge must preserve what onPreTool parked, not replace it.
       assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  // A1. `flushSessionTurn` reclaims any span the host never closed. On
+  // opencode that is the normal path for EVERY failing tool call:
+  // `tool.execute.after` does not fire when a tool throws, so
+  // `session.idle` → onTurnEnd is what closes the span. It used to call
+  // recordPostToolUse with `{}` attrs and `error: null`, which threw
+  // away the parked guard attribution and left the span
+  // indistinguishable from one closed on a successful return.
+  it('reclaimed span carries the guard attrs parked for it', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('allow', tracer);
+      await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
+      // No onPostTool — the tool "threw" and opencode skipped the
+      // after-hook. The turn flush has to reclaim the span.
+      await rt.onTurnEnd('s1');
+
+      const toolSpans = tracer.finished().filter(s => s.name.startsWith('execute_tool'));
+      assert.equal(toolSpans.length, 1, 'the pending span is reclaimed at turn flush');
+      const attrs = toolSpans[0]!.attributes;
+      assert.equal(attrs['nio.guard.decision'], 'allow');
+      assert.equal(attrs['nio.guard.risk_level'], 'low');
+      assert.equal(typeof attrs['nio.guard.risk_score'], 'number');
+      assert.equal(typeof attrs['nio.guard.eval_ms'], 'number');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('reclaimed span is tagged reclaimed and asserts no outcome', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('allow', tracer);
+      await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
+      await rt.onTurnEnd('s1');
+
+      const toolSpans = tracer.finished().filter(s => s.name.startsWith('execute_tool'));
+      assert.equal(toolSpans.length, 1);
+      const span = toolSpans[0]!;
+      // Explicitly marked as reclaimed, so a consumer can tell it apart
+      // from a span closed on a real tool return.
+      assert.equal(span.attributes['nio.span.reclaimed'], true);
+      assert.equal(span.attributes['nio.span.reclaim_reason'], 'no_post_tool_event');
+      // ...and no claim is made about the outcome in either direction:
+      // not ERROR (the tool may well have succeeded) and no result
+      // payload (nothing delivered one).
+      assert.notEqual(span.status.code, SpanStatusCode.ERROR);
+      assert.equal(span.attributes['gen_ai.tool.call.result'], undefined);
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('a normally closed span is NOT tagged reclaimed', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('allow', tracer);
+      await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
+      await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
+      await rt.onTurnEnd('s1');
+
+      const toolSpans = tracer.finished().filter(s => s.name.startsWith('execute_tool'));
+      assert.equal(toolSpans.length, 1, 'exactly one tool span, closed by the post side');
+      assert.equal(toolSpans[0]!.attributes['nio.span.reclaimed'], undefined);
     } finally {
       await tracer.shutdown();
     }
@@ -612,6 +681,7 @@ describe('registerPiExtension — block path and confirm dialog', () => {
     fn: () => Promise<T>,
     configYaml?: string,
   ): Promise<T> {
+    const had = Object.hasOwn(process.env, 'NIO_HOME');
     const prev = process.env.NIO_HOME;
     const nioHome = mkdtempSync(join(tmpdir(), 'nio-pi-plugin-test-'));
     process.env.NIO_HOME = nioHome;
@@ -619,7 +689,11 @@ describe('registerPiExtension — block path and confirm dialog', () => {
     try {
       return await fn();
     } finally {
-      process.env.NIO_HOME = prev;
+      // Restore an originally-unset variable by DELETING it — assigning
+      // `undefined` back stores the literal string "undefined", which
+      // makes nioDir() write into a relative `undefined/` directory.
+      if (had) process.env.NIO_HOME = prev;
+      else delete process.env.NIO_HOME;
     }
   }
 
@@ -872,6 +946,7 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     fn: () => Promise<T>,
     configYaml?: string,
   ): Promise<T> {
+    const had = Object.hasOwn(process.env, 'NIO_HOME');
     const prev = process.env.NIO_HOME;
     const nioHome = mkdtempSync(join(tmpdir(), 'nio-opencode-plugin-test-'));
     process.env.NIO_HOME = nioHome;
@@ -879,7 +954,11 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     try {
       return await fn();
     } finally {
-      process.env.NIO_HOME = prev;
+      // Restore an originally-unset variable by DELETING it — assigning
+      // `undefined` back stores the literal string "undefined", which
+      // makes nioDir() write into a relative `undefined/` directory.
+      if (had) process.env.NIO_HOME = prev;
+      else delete process.env.NIO_HOME;
     }
   }
 
@@ -1049,16 +1128,17 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
       // (`invoke_agent ...`) alongside whatever pending spans it reclaims,
       // so 2 total — the assertion that actually matters is that one of
       // them is the reclaimed tool span (proving it didn't leak forever),
-      // not the exact count. Note: the shared runtime's defensive flush
-      // path (flushSessionTurn) does not drain pending_guard_attrs the
-      // way onPostTool's normal close does, so nio.guard.decision is not
-      // expected on a span reclaimed this way — that's a pre-existing
-      // characteristic of InProcessPluginRuntime, not something this
-      // binding controls.
+      // not the exact count. Since A1, `flushSessionTurn` also drains
+      // `pending_guard_attrs` on the reclaim path, so the reclaimed span
+      // carries the same `nio.guard.*` attribution a normally closed one
+      // does, plus explicit reclaim markers saying the outcome is
+      // unknown.
       const spans = tracer.finished();
       assert.equal(spans.length, 2, 'the leaked pending span plus the turn root span');
       const toolSpan = spans.find(s => s.name.startsWith('execute_tool'));
       assert.ok(toolSpan, 'the leaked pending span must be reclaimed by session.idle');
+      assert.equal(toolSpan!.attributes['nio.guard.decision'], 'allow');
+      assert.equal(toolSpan!.attributes['nio.span.reclaimed'], true);
     } finally {
       await tracer.shutdown();
     }
@@ -1132,8 +1212,10 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     // zero, span duration stretched to the parent's next idle. This
     // fires session.idle for the CHILD session (not the parent, unlike
     // the sub-agent detection test above) and asserts the task span
-    // closes right away, with no turn-root span for the child (since
-    // onSubagentEnd runs INSTEAD of onTurnEnd for that session id).
+    // closes right away. No turn-root span for the child here: A2 added
+    // a child-state flush before onSubagentEnd, but this child never ran
+    // a tool, so `flushSessionTurn` finds no state and no-ops. The
+    // sibling test below covers the case where it does have state.
     const tracer = makeInMemoryTracer();
     try {
       const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
@@ -1158,6 +1240,79 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         'exactly the task span — no turn-root span for the child, since onSubagentEnd runs instead of onTurnEnd',
       );
       assert.equal(spans[0]!.name, 'task:execute');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('flushes the CHILD session\'s own turn state at the child\'s session.idle (A2)', async () => {
+    // A2: tools that run inside a sub-agent arrive at
+    // tool.execute.before with hookInput.sessionID set to the CHILD id,
+    // so onPreTool builds a CollectorState under that key. The
+    // sub-agent branch of session.idle used to `return` straight after
+    // onSubagentEnd, leaving that state to be swept only by dispose()'s
+    // disposeAllSessions() — the child's tool spans landed under a late,
+    // synthetic turn emitted at plugin teardown. Now the child's state
+    // is flushed at its own idle.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      })(pluginInput as never);
+
+      await hooks.event!({
+        event: { type: 'session.created', properties: { info: { id: 'sub-3', parentID: 'parent-3' } } },
+      } as never);
+
+      // A tool running INSIDE the sub-agent — keyed on the child id.
+      await hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID: 'sub-3', callID: 'c-sub' } as never,
+        { args: { command: 'ls' } } as never,
+      );
+      await hooks['tool.execute.after']!(
+        { tool: 'bash', sessionID: 'sub-3', callID: 'c-sub', args: { command: 'ls' } } as never,
+        { title: 'ls', output: 'ok', metadata: {} } as never,
+      );
+
+      // Before the child's idle, only the tool span has been emitted —
+      // the child's turn root is still open.
+      assert.equal(tracer.finished().length, 1);
+
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 'sub-3' } } } as never,
+      );
+
+      const spans = tracer.finished();
+      assert.ok(
+        spans.some(s => s.name === 'task:execute'),
+        'the parent-side task span still closes',
+      );
+      assert.ok(
+        spans.some(s => s.name.startsWith('invoke_agent')),
+        'the child session\'s own turn root is emitted at the child\'s idle, not at dispose()',
+      );
+      assert.equal(
+        spans.filter(s => s.name.startsWith('invoke_agent')).length,
+        1,
+        'exactly one turn root so far — the child\'s',
+      );
+
+      // ...and the child's state really is gone. Flush the parent too
+      // (its own idle), then dispose(): nothing is left to sweep, so no
+      // third, late turn root appears for the child.
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 'parent-3' } } } as never,
+      );
+      const beforeDispose = tracer.finished().filter(s => s.name.startsWith('invoke_agent')).length;
+      await hooks.dispose!();
+      assert.equal(
+        tracer.finished().filter(s => s.name.startsWith('invoke_agent')).length,
+        beforeDispose,
+        'dispose() must not emit a late turn root for a session already flushed',
+      );
     } finally {
       await tracer.shutdown();
     }

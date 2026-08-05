@@ -253,19 +253,24 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               // via onSubagentEnd instead of treating this as a turn end
               // for the child.
               //
-              // KNOWN GAP (deferred, not a claim of correctness): the
-              // child DOES accumulate its own turn state. Tools run
-              // inside a sub-agent arrive at tool.execute.before with
-              // hookInput.sessionID set to the CHILD id, so onPreTool
-              // creates a CollectorState under that key. Returning here
-              // skips onTurnEnd for the child, so that state is only
-              // released by dispose()'s disposeAllSessions() at plugin
-              // teardown — the child's tool spans are flushed late,
-              // under a turn root emitted at shutdown. Flushing the
-              // child here is follow-up work.
+              // The child ALSO accumulates turn state of its own: tools
+              // run inside a sub-agent arrive at tool.execute.before
+              // with hookInput.sessionID set to the CHILD id, so
+              // onPreTool creates a CollectorState under that key. Flush
+              // it here, at the child's own idle, so the child's tool
+              // spans land under a turn root emitted at the right time.
+              // Without this they survive until dispose()'s
+              // disposeAllSessions() sweep at plugin teardown and land
+              // under a late, synthetic turn.
+              //
+              // Guarded separately from onSubagentEnd so a flush failure
+              // cannot cost the parent its task-span close, and no
+              // recordTurnMetric(): a sub-agent's internal turn is not a
+              // user-facing turn and must not inflate nio.turn.count.
               const parentId = subagentParentByChild.get(sessionId);
               if (parentId) {
                 subagentParentByChild.delete(sessionId);
+                try { await rt.onTurnEnd(sessionId); } catch { /* non-critical */ }
                 await rt.onSubagentEnd(parentId, sessionId);
                 return;
               }
