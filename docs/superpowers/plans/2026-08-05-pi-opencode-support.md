@@ -170,6 +170,12 @@ export interface PluginRuntimeOptions {
   adapter: HookAdapter;
   /** Protection level override (strict/balanced/permissive). */
   level?: string;
+  /**
+   * Override `guard.confirm_action` for this runtime instance. Lets a
+   * caller (or a test) pick the confirm folding without mutating the
+   * on-disk config.
+   */
+  confirmAction?: 'allow' | 'deny' | 'ask';
   /** Custom Nio engine factory (tests inject a stub). */
   nioFactory?: () => NioInstance;
 }
@@ -200,7 +206,7 @@ export class InProcessPluginRuntime {
     if (opts.level && guard) {
       guard.protection_level = opts.level as typeof guard.protection_level;
     }
-    this.confirmAction = guard?.confirm_action ?? 'allow';
+    this.confirmAction = opts.confirmAction ?? guard?.confirm_action ?? 'allow';
 
     const collectorConfig = loadCollectorConfig();
     // Resource-level agent name is only set when the operator configured
@@ -369,10 +375,14 @@ Append to `src/tests/plugin-runtime.test.ts` (and extend the existing imports at
 ```ts
 describe('InProcessPluginRuntime tool path', () => {
   /** Stub engine whose verdict the test controls. */
-  function runtimeWithVerdict(verdict: 'allow' | 'deny' | 'confirm', level = 'balanced') {
-    const rt = new InProcessPluginRuntime({
+  function runtimeWithVerdict(
+    verdict: 'allow' | 'deny' | 'confirm',
+    confirmAction?: 'allow' | 'deny' | 'ask',
+  ) {
+    return new InProcessPluginRuntime({
       platform: 'test-platform',
       adapter: new OpenClawAdapter(),
+      ...(confirmAction ? { confirmAction } : {}),
       nioFactory: () => ({
         orchestrator: {
           async evaluate() {
@@ -389,8 +399,6 @@ describe('InProcessPluginRuntime tool path', () => {
         },
       }) as never,
     });
-    void level;
-    return rt;
   }
 
   it('allows and reports decision "allow"', async () => {
@@ -413,8 +421,7 @@ describe('InProcessPluginRuntime tool path', () => {
   });
 
   it('folds confirm to confirm_denied when confirm_action is deny', async () => {
-    const rt = runtimeWithVerdict('confirm');
-    (rt as unknown as { confirmActionOverride: string }).confirmActionOverride = 'deny';
+    const rt = runtimeWithVerdict('confirm', 'deny');
     const r = await rt.onPreTool('s1', 'call-1', 'exec', { command: 'curl x' }, {
       toolName: 'exec', params: { command: 'curl x' },
     });
@@ -486,13 +493,6 @@ export interface PreToolResult {
 Add these members to the class:
 
 ```ts
-  /** Test seam: lets a test override the configured confirm_action. */
-  protected confirmActionOverride?: 'allow' | 'deny' | 'ask';
-
-  private effectiveConfirmAction(): 'allow' | 'deny' | 'ask' {
-    return this.confirmActionOverride ?? this.confirmAction;
-  }
-
   /**
    * Evaluate a tool call through Phase 0–6 and record the pre-side span.
    *
@@ -541,7 +541,7 @@ Add these members to the class:
       ).catch(() => {});
     }
 
-    const confirmAction = this.effectiveConfirmAction();
+    const confirmAction = this.confirmAction;
     const decision: GuardDecisionTag =
       result.decision === 'deny'
         ? 'deny'
@@ -1818,7 +1818,6 @@ dialog with a timeout so the agent can never hang."
 **Files:**
 - Create: `plugins/pi/package.json`
 - Create: `plugins/pi/setup.sh`
-- Create: `plugins/pi/.gitignore` (ignore the generated `extensions/nio/`)
 - Modify: `scripts/build.js`
 - Modify: `scripts/sync-shared.js`
 - Modify: `scripts/release.js`
@@ -2106,15 +2105,32 @@ echo ""
 
 Make it executable: `chmod +x plugins/pi/setup.sh`
 
-- [ ] **Step 7: Ignore the generated bundle**
+- [ ] **Step 7: Verify the generated artefacts are ignored**
 
-Create `plugins/pi/.gitignore`:
+The repo keeps every build/sync artefact in the **root** `.gitignore` (see the
+`plugins/openclaw/plugin/plugin.js` and per-plugin `config.default.yaml`
+entries). Those entries for Pi are already in place:
 
 ```
-extensions/
+plugins/pi/extensions/nio/index.js
+plugins/pi/config.default.yaml
+plugins/pi/config.schema.json
+plugins/pi/README.md
 ```
 
-The bundle is a build artefact; `scripts/build.js` regenerates it and `release.js` zips it from the working tree.
+Do **not** create `plugins/pi/.gitignore` — that would diverge from the
+established pattern. `plugins/pi/package.json` (the pi manifest) IS tracked,
+mirroring the tracked `plugins/openclaw/plugin/package.json`.
+
+Confirm with:
+
+```bash
+git check-ignore -v plugins/pi/extensions/nio/index.js plugins/pi/config.default.yaml
+git status --short plugins/pi
+```
+
+Expected: both paths report as ignored, and `git status` lists only
+`package.json`, `setup.sh`, and the synced `skills/` tree.
 
 - [ ] **Step 8: Add the doctor probe**
 
@@ -3277,7 +3293,6 @@ tools that throw and therefore skip tool.execute.after."
 **Files:**
 - Create: `plugins/opencode/commands/nio.md`
 - Create: `plugins/opencode/setup.sh`
-- Create: `plugins/opencode/.gitignore`
 - Modify: `scripts/build.js`
 - Modify: `scripts/sync-shared.js`
 - Modify: `scripts/release.js`
@@ -3518,13 +3533,30 @@ echo ""
 
 Make it executable: `chmod +x plugins/opencode/setup.sh`
 
-- [ ] **Step 6: Ignore the generated bundle**
+- [ ] **Step 6: Verify the generated artefacts are ignored**
 
-Create `plugins/opencode/.gitignore`:
+As with Pi, the root `.gitignore` already carries these entries:
 
 ```
-plugins/
+plugins/opencode/plugins/nio.js
+plugins/opencode/config.default.yaml
+plugins/opencode/config.schema.json
+plugins/opencode/README.md
 ```
+
+Do **not** create `plugins/opencode/.gitignore`. Note that the ESM sentinel
+`plugins/opencode/plugins/package.json` written by `writeEsmSentinel` **is**
+tracked — matching the tracked `plugins/hermes/scripts/package.json`.
+
+Confirm with:
+
+```bash
+git check-ignore -v plugins/opencode/plugins/nio.js plugins/opencode/config.default.yaml
+git status --short plugins/opencode
+```
+
+Expected: both paths ignored; `git status` lists `setup.sh`, `commands/nio.md`,
+`plugins/package.json`, and the synced `skills/` tree.
 
 - [ ] **Step 7: Add the doctor probe**
 
