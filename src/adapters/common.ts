@@ -11,7 +11,7 @@ import { riskLevelToNumericScore } from '../types/scanner.js';
 import { validateConfig } from './config-schema.js';
 import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
-import { SENSITIVE_FILE_PATHS } from '../core/shared/detection-data.js';
+import { matchesSensitiveFilePath } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
 import { reportDiagnostic } from './diagnostics.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditDiagnosticEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
@@ -136,9 +136,7 @@ export function isSensitivePath(filePath: string): boolean {
   if (normalized.startsWith('~/')) {
     normalized = '/HOME' + normalized.slice(1);
   }
-  return SENSITIVE_FILE_PATHS.some(
-    (p) => normalized.includes(`/${p}`) || normalized.endsWith(p)
-  );
+  return matchesSensitiveFilePath(normalized);
 }
 
 // ---------------------------------------------------------------------------

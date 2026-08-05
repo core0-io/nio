@@ -1,5 +1,8 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { evaluateHook } from '../adapters/hook-engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { createTestContext } from './helpers/test-utils.js';
@@ -1616,6 +1619,93 @@ describe('Integration: MCP config & persistence write protection (groups X, Y)',
       assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
     });
   }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// D1: XDG_CONFIG_HOME relocation.
+//
+// SENSITIVE_FILE_PATHS is a list of static substrings, so the hardcoded
+// `.config/opencode/` entry protects nothing for a user who has moved
+// their XDG config dir — and `<xdg>/opencode/plugins/*.js` is a
+// code-execution persistence channel (opencode globs and loads it at
+// startup; our own installer writes there). mcp-registry.ts and both
+// setup.sh scripts already honour the variable; these lock in that path
+// detection does too, without losing the default case.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('Integration: sensitive-path detection honours XDG_CONFIG_HOME (D1)', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  /** Never touches a real XDG dir, and restores an originally-unset
+   *  variable by DELETING it rather than assigning an empty string. */
+  async function withXdgConfigHome<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+    const had = Object.hasOwn(process.env, 'XDG_CONFIG_HOME');
+    const prev = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = dir;
+    try {
+      return await fn();
+    } finally {
+      if (had) process.env.XDG_CONFIG_HOME = prev;
+      else delete process.env.XDG_CONFIG_HOME;
+    }
+  }
+
+  const write = async (filePath: string) => {
+    ctx = createTestContext('balanced');
+    return evaluateHook(ctx.claudeAdapter, {
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Write',
+      tool_input: { file_path: filePath, content: 'module.exports = () => {}' },
+    }, ctx.options);
+  };
+
+  it('a write into a relocated opencode plugin dir is SENSITIVE_PATH', async () => {
+    const xdg = mkdtempSync(join(tmpdir(), 'nio-xdg-'));
+    const result = await withXdgConfigHome(xdg, () =>
+      write(join(xdg, 'opencode', 'plugins', 'evil.js')));
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('a write into a relocated opencode config file is SENSITIVE_PATH', async () => {
+    const xdg = mkdtempSync(join(tmpdir(), 'nio-xdg-'));
+    const result = await withXdgConfigHome(xdg, () =>
+      write(join(xdg, 'opencode', 'opencode.json')));
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('the default ~/.config/opencode path still matches while XDG points elsewhere', async () => {
+    // The relocation ADDS coverage; it must never replace the static list.
+    const xdg = mkdtempSync(join(tmpdir(), 'nio-xdg-'));
+    const result = await withXdgConfigHome(xdg, () =>
+      write('/Users/test/.config/opencode/plugins/evil.js'));
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('an unrelated file under the relocated XDG root is NOT flagged', async () => {
+    // Guards against the derived entry degenerating into "anything under
+    // $XDG_CONFIG_HOME", which would deny half the user's config edits.
+    const xdg = mkdtempSync(join(tmpdir(), 'nio-xdg-'));
+    const result = await withXdgConfigHome(xdg, () =>
+      write(join(xdg, 'htop', 'htoprc')));
+    assert.notEqual(result.decision, 'deny');
+  });
+
+  it('with XDG_CONFIG_HOME unset, only the static list applies', async () => {
+    const had = Object.hasOwn(process.env, 'XDG_CONFIG_HOME');
+    const prev = process.env.XDG_CONFIG_HOME;
+    delete process.env.XDG_CONFIG_HOME;
+    try {
+      const result = await write('/Users/test/.config/opencode/plugins/evil.js');
+      assert.equal(result.decision, 'deny');
+      assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+    } finally {
+      if (had) process.env.XDG_CONFIG_HOME = prev;
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
