@@ -134,15 +134,37 @@ const HERMES_COLLECTOR_EVENTS: Record<string, string> = {
 };
 
 /**
+ * A `HookStdinPayload` whose `session_id` is known to be present.
+ *
+ * `HookStdinPayload.session_id` is optional because the Claude Code /
+ * Codex payloads it also describes may genuinely omit it.
+ * `hermesToCollectorInput` never does — it always writes a string, `''`
+ * included — and every call site was compensating for the wider type
+ * with a `?? 'unknown'` that could not fire. Narrowing the return type
+ * here is what lets those fallbacks go: the invariant is now checked by
+ * the compiler instead of asserted three times at runtime and explained
+ * in a comment.
+ *
+ * The distinction matters because `''` is load-bearing: it is what makes
+ * `UNTRUSTED_SESSION_IDS` reject the event (fail closed). Substituting a
+ * placeholder — which is exactly what a `??` "cleaned up" into a `||`
+ * would do — would quietly relabel that event in the audit log.
+ */
+type HermesCollectorInput = HookStdinPayload & { session_id: string };
+
+/**
  * Convert a Hermes-shaped envelope into the HookStdinPayload the
  * collector core consumes. Hermes places event-specific fields
  * (user message, tool result, task id) inside the `extra` object;
  * we lift the ones the dispatcher recognises.
+ *
+ * Pure: same envelope + same canonical event ⇒ same object. Call sites
+ * rely on that to translate once and share the result.
  */
 function hermesToCollectorInput(
   raw: unknown,
   canonicalEvent: string,
-): HookStdinPayload {
+): HermesCollectorInput {
   const r = (raw ?? {}) as Record<string, unknown>;
   const extra = (r.extra ?? {}) as Record<string, unknown>;
   // `||`, not `??`. Hermes never omits `session_id` — its
@@ -171,7 +193,7 @@ function hermesToCollectorInput(
     (extra.parent_session_id as string | undefined) ||
     '';
 
-  const input: HookStdinPayload = {
+  const input: HermesCollectorInput = {
     hook_event_name: canonicalEvent,
     session_id: sessionId,
     cwd: r.cwd as string | undefined,
@@ -225,7 +247,7 @@ async function runHermesCollector(
   // raw Hermes envelope twice.
   const collectorInput = hermesToCollectorInput(rawPayload, canonicalEvent);
   const monitored = isSessionMonitored(
-    collectorInput.session_id ?? 'unknown',
+    collectorInput.session_id,
     collectorInput.cwd ?? null,
     logsConfig,
   );
@@ -503,13 +525,20 @@ async function main(): Promise<void> {
       : undefined;
     const logsConfig = config.collector?.logs;
 
+    // Translated ONCE and reused by all three consumers below (the
+    // monitor gate, the collector dispatch, and the span bookkeeping).
+    // `hermesToCollectorInput` is a pure function of `payload`, so the
+    // three separate calls this replaces were three identical objects;
+    // the only thing the duplication bought was the chance for one call
+    // site to drift to a different `canonicalEvent` than the others.
+    const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
+
     // Gate before creating any provider — an unmonitored session must
     // not get OTLP exporters, even though evaluateHook() and the
     // guard decision below still run unconditionally.
-    const monitorInput = hermesToCollectorInput(payload, 'PreToolUse');
     const monitored = isSessionMonitored(
-      monitorInput.session_id ?? 'unknown',
-      monitorInput.cwd ?? null,
+      collectorInput.session_id,
+      collectorInput.cwd ?? null,
       logsConfig,
     );
 
@@ -567,7 +596,7 @@ async function main(): Promise<void> {
       await withFlushBudget(
         dispatchCollectorEvent({
           event: 'PreToolUse',
-          input: hermesToCollectorInput(payload, 'PreToolUse'),
+          input: collectorInput,
           platform: 'hermes',
           config: collectorConfig,
           meterProvider,
@@ -603,8 +632,7 @@ async function main(): Promise<void> {
       'nio.guard.eval_ms': evalMs,
     };
     if (tracerProvider) {
-      const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
-      const sessionId = collectorInput.session_id ?? 'unknown';
+      const sessionId = collectorInput.session_id;
       const key = spanKey(collectorInput);
       let state = ensureTurn(loadState(logsConfig, sessionId), sessionId);
       state = setPendingGuardAttrs(state, key, guardAttrs);
