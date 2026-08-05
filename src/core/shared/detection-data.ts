@@ -77,10 +77,9 @@ export const SENSITIVE_FILE_PATHS = [
   '.openclaw/openclaw.json',
   '.openclaw/',
   // Pi core has no MCP; the third-party pi-mcp-adapter package supplies
-  // it and stores its server map under this same directory. These paths
-  // are sensitive because they
-  // control which extensions load and which skills are trusted, not
-  // because Pi has an MCP server registry.
+  // it and stores its server map (mcp.json) under this same directory.
+  // settings.json itself is sensitive because it controls which
+  // extensions load and which skills are trusted.
   '.pi/settings.json',
   '.pi/agent/settings.json',
   '.pi/',
