@@ -79,6 +79,62 @@ describe('hermes source', () => {
     for (const c of calls) assert.equal(c.model, 'gpt-5.5');
   });
 
+  it('gives the same assistant message the same callId whether or not earlier history was trimmed', () => {
+    // Hermes replays the *entire* conversation_history on every
+    // post_llm_call (see module doc); the span layer's only defence
+    // against reprocessing the same call twice is deduplicating on
+    // callId. A long session eventually trims/compacts leading history
+    // entries, shifting every surviving index — an index-only callId
+    // (`hermes-{i}`) would silently break dedup at that point. This test
+    // is the dedup contract's only guard: the same assistant message
+    // must yield the same callId whether it sits at index 5 in a full
+    // history or index 0 after the first 5 entries were dropped.
+    const assistantWithReasoning = {
+      role: 'assistant',
+      content: 'placeholder reply after trim',
+      finish_reason: 'stop',
+      codex_reasoning_items: [
+        { type: 'reasoning', id: 'rs_stable_abc123', summary: [{ type: 'summary_text', text: 'placeholder plan' }] },
+      ],
+    };
+
+    const fullHistory = {
+      extra: {
+        model: 'gpt-5.5',
+        conversation_history: [
+          { role: 'user', content: 'placeholder turn 1' },
+          { role: 'assistant', content: 'placeholder reply 1' },
+          { role: 'user', content: 'placeholder turn 2' },
+          { role: 'assistant', content: 'placeholder reply 2' },
+          { role: 'user', content: 'placeholder turn 3' },
+          assistantWithReasoning,
+        ],
+      },
+    };
+
+    const trimmedHistory = {
+      extra: {
+        model: 'gpt-5.5',
+        // Simulates the host dropping the first 5 entries once history
+        // grew past whatever cap it enforces — the same assistant
+        // message now sits at index 0 instead of index 5.
+        conversation_history: [assistantWithReasoning],
+      },
+    };
+
+    const fullCalls = createHermesSource(fullHistory).callsSince(0);
+    const trimmedCalls = createHermesSource(trimmedHistory).callsSince(0);
+
+    // fullHistory has three assistant entries (indices 1, 3, 5); the one
+    // under test — assistantWithReasoning — sits last in both payloads.
+    assert.equal(fullCalls.length, 3);
+    assert.equal(trimmedCalls.length, 1);
+    const fromFull = fullCalls[fullCalls.length - 1];
+    const fromTrimmed = trimmedCalls[trimmedCalls.length - 1];
+    assert.equal(fromFull.callId, fromTrimmed.callId, 'callId must survive history truncation');
+    assert.equal(fromFull.callId, 'rs_stable_abc123', 'must prefer the provider-issued reasoning-item id');
+  });
+
   it('returns an empty array when the payload has no extra object', () => {
     assert.deepEqual(createHermesSource({ session_id: 'x' }).callsSince(0), []);
     assert.deepEqual(createHermesSource(undefined).callsSince(0), []);

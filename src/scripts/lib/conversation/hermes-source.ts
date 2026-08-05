@@ -56,6 +56,7 @@ interface RawAnthropicBlock {
 }
 
 interface RawCodexReasoningItem {
+  id?: string;
   _issuer_kind?: string;
   summary?: { type?: string; text?: string }[];
 }
@@ -112,6 +113,32 @@ function hasCodexMarker(msg: RawHistoryMessage): boolean {
       item !== null &&
       (item._issuer_kind === undefined || (typeof item._issuer_kind === 'string' && item._issuer_kind.includes('codex'))),
   );
+}
+
+/**
+ * Picks a callId that survives `conversation_history` being trimmed or
+ * compacted, which a long-running session eventually forces (see module
+ * doc: every `post_llm_call` replays the *entire* history, so the span
+ * layer's only defence against reprocessing old calls is deduplicating
+ * on `callId`). `hermes-{historyIndex}` alone is not that id — once the
+ * host drops leading entries, every surviving index shifts and a call
+ * that was `hermes-12` yesterday is `hermes-9` today, silently defeating
+ * dedup.
+ *
+ * Preference order: `codex_reasoning_items[0].id` (a real provider-side
+ * id, e.g. `rs_0595fac6f16ca92f...`, observed on a live capture — stable
+ * because it names the item, not its position) → the first tool call's
+ * id (also provider-issued and position-independent) → the index-based
+ * fallback, kept only for messages that carry neither.
+ */
+function stableCallId(msg: RawHistoryMessage, historyIndex: number): string {
+  const reasoningId = msg.codex_reasoning_items?.[0]?.id;
+  if (typeof reasoningId === 'string' && reasoningId.length > 0) return reasoningId;
+
+  const toolCallId = msg.tool_calls?.[0]?.id;
+  if (typeof toolCallId === 'string' && toolCallId.length > 0) return toolCallId;
+
+  return `hermes-${historyIndex}`;
 }
 
 function reasoningText(msg: RawHistoryMessage): string | undefined {
@@ -209,7 +236,7 @@ export function createHermesSource(payload: unknown): ConversationSource {
 
       const calls: ChatCall[] = assistantIndices.map((historyIndex, ordinal) => {
         const msg = history[historyIndex] as RawHistoryMessage;
-        const callId = `hermes-${historyIndex}`;
+        const callId = stableCallId(msg, historyIndex);
         const isLast = ordinal === assistantIndices.length - 1;
 
         const partials: PartialBlock[] = [...toThinkingAndText(msg)];
