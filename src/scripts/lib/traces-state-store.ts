@@ -44,6 +44,32 @@ export interface PendingTaskSpan {
   span_id: string;
 }
 
+/**
+ * A span that has finished but is being held back until the turn ends.
+ *
+ * Tool spans can only be nested under the chat call that issued them,
+ * and that attribution is not knowable at PostToolUse time — it comes
+ * from the transcript once the turn is complete. So finished tool spans
+ * park here, and the whole tree is emitted together at endTurn.
+ *
+ * Only metadata lives here. Content (prompts, thinking, results) goes
+ * out through the logs signal as it happens, keyed by the span id that
+ * was pre-allocated at PreToolUse — otherwise this file would grow with
+ * every tool call and the per-event read/write would degrade.
+ */
+export interface DeferredSpan {
+  kind: 'tool' | 'task';
+  name: string;
+  span_id: string;
+  start_ms: number;
+  end_ms: number;
+  attributes: Record<string, unknown>;
+  /** Sets the span status to ERROR and records an exception. */
+  error?: string;
+  /** Used to attribute this span to the chat call that issued it. */
+  tool_use_id?: string;
+}
+
 export interface CollectorState {
   session_id: string;
   turn_number: number;
@@ -59,6 +85,12 @@ export interface CollectorState {
    */
   pending_guard_attrs?: Record<string, Record<string, unknown>>;
   turn_attributes?: Record<string, unknown>;
+  /** Finished spans awaiting the end-of-turn flush. */
+  deferred_spans?: DeferredSpan[];
+  /** Session-level trace. Minted at SessionStart so turns can link to it. */
+  session_trace_id?: string;
+  session_span_id?: string;
+  session_start_ms?: number;
 }
 
 // ── Path resolution ────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import {
   loadState,
   saveState,
   type CollectorState,
+  type DeferredSpan,
 } from '../scripts/lib/traces-state-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 
@@ -119,5 +120,92 @@ describe('saveState ↔ loadState', () => {
 
     saveState(cfg, sample({ turn_number: 2 }));
     assert.equal(loadState(cfg)!.turn_number, 2);
+  });
+});
+
+// ── deferred spans + session trace fields ──────────────────────────────
+
+describe('saveState ↔ loadState — deferred spans and session trace', () => {
+  const deferredSpan = (overrides: Partial<DeferredSpan> = {}): DeferredSpan => ({
+    kind: 'tool',
+    name: 'Bash',
+    span_id: 'd'.repeat(16),
+    start_ms: 1700000003000,
+    end_ms: 1700000003500,
+    attributes: { 'nio.tool.name': 'Bash' },
+    ...overrides,
+  });
+
+  it('round-trips a state with populated deferred_spans', () => {
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+    const state = sample({
+      deferred_spans: [
+        deferredSpan(),
+        deferredSpan({ kind: 'task', name: 'subagent', tool_use_id: 'toolu_x', error: 'boom' }),
+      ],
+    });
+
+    saveState(cfg, state);
+    const loaded = loadState(cfg);
+
+    assert.deepEqual(loaded, state);
+  });
+
+  it('round-trips a state with session_trace_id / session_span_id / session_start_ms', () => {
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+    const state = sample({
+      session_trace_id: 'e'.repeat(32),
+      session_span_id: 'f'.repeat(16),
+      session_start_ms: 1700000000500,
+    });
+
+    saveState(cfg, state);
+    const loaded = loadState(cfg);
+
+    assert.deepEqual(loaded, state);
+  });
+
+  it('loads an old-format state (no new fields) without throwing, leaving new fields undefined', () => {
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+    // Simulate a pre-upgrade on-disk file: write only the legacy shape,
+    // bypassing saveState/CollectorState entirely.
+    const legacy = {
+      session_id: 'sess-legacy',
+      turn_number: 1,
+      turn_trace_id: 'a'.repeat(32),
+      turn_start_ms: 1700000000000,
+      pending_spans: {},
+      pending_task_spans: {},
+    };
+    writeFileSync(statePath(cfg), JSON.stringify(legacy, null, 2), 'utf-8');
+
+    const loaded = loadState(cfg);
+
+    assert.ok(loaded);
+    assert.equal(loaded!.session_id, 'sess-legacy');
+    assert.equal(loaded!.deferred_spans, undefined);
+    assert.equal(loaded!.session_trace_id, undefined);
+    assert.equal(loaded!.session_span_id, undefined);
+    assert.equal(loaded!.session_start_ms, undefined);
+  });
+
+  it('distinguishes deferred_spans as an empty array from deferred_spans left undefined', () => {
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+
+    const emptyState = sample({ deferred_spans: [] });
+    saveState(cfg, emptyState);
+    const loadedEmpty = loadState(cfg);
+    assert.deepEqual(loadedEmpty!.deferred_spans, []);
+    assert.notEqual(loadedEmpty!.deferred_spans, undefined);
+
+    const undefinedState = sample();
+    delete undefinedState.deferred_spans;
+    saveState(cfg, undefinedState);
+    const loadedUndefined = loadState(cfg);
+    assert.equal(loadedUndefined!.deferred_spans, undefined);
   });
 });
