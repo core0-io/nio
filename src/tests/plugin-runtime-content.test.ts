@@ -53,6 +53,22 @@ function llmOutput(model: string, text: string, callId: string): unknown {
   };
 }
 
+/** One assistant entry of a Pi session JSONL, newline-terminated. */
+function piLine(id: string, timestampMs: number, text: string): string {
+  return JSON.stringify({
+    type: 'message',
+    id,
+    timestamp: new Date(timestampMs).toISOString(),
+    message: {
+      role: 'assistant',
+      content: [{ type: 'text', text }],
+      provider: 'anthropic',
+      model: 'pi-replay-model',
+      timestamp: timestampMs,
+    },
+  }) + '\n';
+}
+
 describe('plugin runtime: chat spans reach the wire', () => {
   let home: string;
   beforeEach(() => {
@@ -157,6 +173,103 @@ describe('plugin runtime: chat spans reach the wire', () => {
         total, 2,
         'the second turn must contribute exactly one more chat span, not replay the first',
       );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('keeps a replay platform\'s transcript path across the turn boundary', async () => {
+    // The mirror image of the event-clearing rule above, and it points
+    // the OTHER way. Accumulated events are per-TURN and must be dropped
+    // at the boundary; a session file is per-SESSION and must survive it,
+    // because every later turn replays the same file scoped by its own
+    // `turn_start_ms`. Clearing `transcriptPaths` in `flushSessionTurn`
+    // alongside `conversationEvents` — the symmetric-looking move — costs
+    // every turn after the first its entire chat layer, silently.
+    armSession(home, 'sess-replay');
+    const sessionFile = join(home, 'session.jsonl');
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'pi',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        loggerProvider: null,
+      });
+
+      rt.onSessionStart('sess-replay');
+      rt.setTranscriptPath('sess-replay', sessionFile);
+
+      rt.onUserPrompt('sess-replay', 'first');
+      writeFileSync(sessionFile, piLine('m2', Date.now() + 5, 'reply one'), 'utf-8');
+      await rt.onTurnEnd('sess-replay');
+      assert.equal(
+        tracer.finished().filter((s) => s.name.startsWith('chat')).length, 1,
+        'sanity: turn one replayed the file',
+      );
+
+      // Turn two: same file, one further entry. `callsSince` scopes it to
+      // this turn, so the earlier entry must NOT come back.
+      rt.onUserPrompt('sess-replay', 'second');
+      writeFileSync(
+        sessionFile,
+        piLine('m2', 1, 'reply one') + piLine('m4', Date.now() + 5, 'reply two'),
+        'utf-8',
+      );
+      await rt.onTurnEnd('sess-replay');
+
+      const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
+      assert.equal(
+        chats.length, 2,
+        'turn two must still find the session file — exactly one more chat span, not zero and not a replay of turn one',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('stops replaying a transcript once it is cleared — by a null path or by a new session', async () => {
+    // Two independent ways a stale session file must stop being ours to
+    // replay, pinned in one place because each is otherwise masked by
+    // the other: `setTranscriptPath(id, null)` (the binding says "this
+    // session has no file", e.g. Pi's ephemeral sessions) and
+    // `onSessionStart(id)` (a recycled id — a NEW session must not
+    // inherit the old one's transcript even if its binding never gets
+    // round to handing over a path of its own).
+    armSession(home, 'sess-clear');
+    const sessionFile = join(home, 'session-clear.jsonl');
+    // Far enough ahead to be inside every turn window opened below, so
+    // "no chat span" can only mean the path was dropped.
+    writeFileSync(sessionFile, piLine('m2', Date.now() + 60_000, 'stale reply'), 'utf-8');
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'pi',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        loggerProvider: null,
+      });
+      const chats = () => tracer.finished().filter((s) => s.name.startsWith('chat')).length;
+
+      rt.onSessionStart('sess-clear');
+      rt.setTranscriptPath('sess-clear', sessionFile);
+      rt.onUserPrompt('sess-clear', 'first');
+      await rt.onTurnEnd('sess-clear');
+      assert.equal(chats(), 1, 'sanity: the file is replayable while the path is set');
+
+      // (1) A null path clears it, mid-session.
+      rt.setTranscriptPath('sess-clear', null);
+      rt.onUserPrompt('sess-clear', 'second');
+      await rt.onTurnEnd('sess-clear');
+      assert.equal(chats(), 1, 'a null path must clear the stored one, not be ignored');
+
+      // (2) And a new session under the same id clears it too, without
+      //     the binding having to say anything.
+      rt.setTranscriptPath('sess-clear', sessionFile);
+      rt.onSessionStart('sess-clear');
+      rt.onUserPrompt('sess-clear', 'third');
+      await rt.onTurnEnd('sess-clear');
+      assert.equal(chats(), 1, 'a recycled session id must not inherit the previous session\'s transcript');
     } finally {
       await tracer.shutdown();
     }

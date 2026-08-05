@@ -25,6 +25,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
 // ---------------------------------------------------------------------------
 // Structural subset of Pi's extension API
@@ -39,7 +40,16 @@ interface PiContext {
   hasUI: boolean;
   cwd: string;
   ui: PiUi;
-  sessionManager: { getSessionId(): string };
+  sessionManager: {
+    getSessionId(): string;
+    /**
+     * Absolute path of the session JSONL under `~/.pi/agent/sessions/`,
+     * or null for an ephemeral session that is never persisted. Optional
+     * because older Pi releases predate it — an absent method degrades to
+     * "no session file", the same as an ephemeral session.
+     */
+    getSessionFile?(): string | null;
+  };
 }
 
 export interface PiExtensionApi {
@@ -78,6 +88,14 @@ export interface PiPluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Same seam for the logs signal. Needed on top of `tracerProvider`
+   * because conversation CONTENT (the assistant's words, the tool
+   * arguments off a `tool_use` block) rides the logs signal, not the
+   * spans — without this a test can see Pi's chat spans but not whether
+   * anything was ever said inside them.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
 /** How long an interactive confirm dialog waits before auto-cancelling. */
@@ -99,6 +117,7 @@ export function registerPiExtension(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    loggerProvider: options.loggerProvider,
   });
 
   const sid = (ctx: unknown): string =>
@@ -210,7 +229,24 @@ export function registerPiExtension(
   });
 
   pi.on('session_start', async (_event: unknown, ctx: unknown) => {
-    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      const sessionId = sid(ctx);
+      rt.onSessionStart(sessionId);
+      // Pi is a replay platform: its conversation lives in the session
+      // JSONL, not in events we accumulate. Hand the runtime the path
+      // once, here — `onSessionStart` has just cleared any stale one, and
+      // every turn in this session replays the same file scoped by its
+      // own turn start.
+      //
+      // An ephemeral session has no file (`getSessionFile()` returns
+      // null), and so does a Pi old enough not to expose the method at
+      // all. Both land on `setTranscriptPath(id, null)`, so the factory
+      // yields no source and the turn degrades to the flat turn → tool
+      // shape — the same graceful degradation any platform without a
+      // transcript gets, not a crash and not an empty chat span.
+      const c = ctx as PiContext;
+      rt.setTranscriptPath(sessionId, c.sessionManager?.getSessionFile?.() ?? null);
+    } catch { /* non-critical */ }
   });
 
   pi.on('session_shutdown', async (_event: unknown, ctx: unknown) => {

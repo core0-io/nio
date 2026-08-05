@@ -29,6 +29,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
 /** Thrown to stop a tool call. Must escape the before-hook. */
 export class NioBlockedError extends Error {
@@ -93,6 +94,14 @@ export interface OpenCodePluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Same seam for the logs signal. Needed on top of `tracerProvider`
+   * because conversation CONTENT (the assistant's words, the tool
+   * arguments off a `tool_use` block) rides the logs signal, not the
+   * spans — without this a test can see opencode's chat spans but not
+   * whether anything was ever said inside them.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
 export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePlugin {
@@ -108,6 +117,7 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       nioFactory: options.nioFactory,
       tracerProvider: options.tracerProvider,
       meterProvider: options.meterProvider,
+      loggerProvider: options.loggerProvider,
     });
 
     /** Guard verdicts parked by callID so permission.ask can reuse them. */
@@ -299,6 +309,12 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                 };
               } | undefined;
               if (info?.role !== 'assistant' || !info.sessionID) return;
+              // opencode has no session file a plugin can read back, so
+              // the assistant envelope is accumulated here and replayed
+              // by createOpenCodeSource at end of turn. It is a snapshot,
+              // and the source collapses re-publishes by message id — so
+              // handing over every one of them is correct, not wasteful.
+              rt.recordConversationEvent(info.sessionID, { kind: 'message', info });
               // message.updated is a cumulative SNAPSHOT, republished on
               // every change to the same message — unlike Pi's
               // message_end, which fires once. Without a message id to
@@ -322,6 +338,23 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                   cacheWrite: Math.max(0, current.cacheWrite - prev.cacheWrite),
                 });
               }
+              return;
+            }
+            case 'message.part.updated': {
+              // The parts ARE the assistant's content — reasoning, text
+              // and tool calls. Like the envelope they are snapshots
+              // (a streaming text part is re-emitted per chunk carrying
+              // the full text so far), and the source replaces by
+              // `part.id` rather than appending, so forwarding every
+              // republish is correct.
+              //
+              // Routed by `sessionID` (which runtime session owns it) but
+              // grouped by `messageID` inside the source (which call it
+              // belongs to) — a part without a session id has nowhere to
+              // go and is dropped here.
+              const part = props.part as { sessionID?: string } | undefined;
+              if (!part?.sessionID) return;
+              rt.recordConversationEvent(part.sessionID, { kind: 'part', part });
               return;
             }
             default:

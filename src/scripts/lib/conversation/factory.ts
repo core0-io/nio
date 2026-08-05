@@ -6,10 +6,11 @@ export {};
 /**
  * Dispatches a platform tag to its `ConversationSource` implementation.
  *
- * The four host platforms hand the collector their conversation data in
- * four different shapes — Claude Code and Codex point at a session file
- * on disk, Hermes hands over a payload envelope, OpenClaw hands over an
- * accumulated event array. Callers (collector-core) know which platform
+ * The host platforms hand the collector their conversation data in
+ * three different shapes — Claude Code, Codex and Pi point at a session
+ * file on disk, Hermes hands over a payload envelope, OpenClaw and
+ * opencode hand over an accumulated event array. Callers (collector-core,
+ * InProcessPluginRuntime) know which platform
  * they are running under but shouldn't have to know which constructor
  * that platform needs or which field of `SourceInput` it reads — this
  * is the one place that mapping lives.
@@ -25,13 +26,15 @@ import { createClaudeCodeSource } from './claude-code-source.js';
 import { createCodexSource } from './codex-source.js';
 import { createHermesSource } from './hermes-source.js';
 import { createOpenClawSource } from './openclaw-source.js';
+import { createPiSource } from './pi-source.js';
+import { createOpenCodeSource } from './opencode-source.js';
 
 export interface SourceInput {
-  /** Replay platforms: path to the session file. */
+  /** Replay platforms (Claude Code, Codex, Pi): path to the session file. */
   transcriptPath?: string | null;
   /** Hermes: the post_llm_call envelope. */
   payload?: unknown;
-  /** OpenClaw: accumulated events. */
+  /** Streaming platforms (OpenClaw, opencode): accumulated events. */
   events?: unknown[];
 }
 
@@ -43,8 +46,12 @@ export function createSourceForPlatform(platform: string, input: SourceInput): C
       return input.transcriptPath ? createCodexSource(input.transcriptPath) : null;
     case 'hermes':
       return input.payload !== undefined && input.payload !== null ? createHermesSource(input.payload) : null;
+    case 'pi':
+      return input.transcriptPath ? createPiSource(input.transcriptPath) : null;
     case 'openclaw':
       return input.events ? createOpenClawSource(input.events) : null;
+    case 'opencode':
+      return input.events ? createOpenCodeSource(input.events) : null;
     default:
       return null;
   }

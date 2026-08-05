@@ -34,6 +34,7 @@ import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/com
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import { writeCaptureOnConfig } from './helpers/capture-on.js';
 
 const baseConfig: ResolvedMetricsConfig = {
   endpoint: '',
@@ -701,6 +702,91 @@ describe('content capture is gated by the monitor master switch', () => {
 
 // ── Platform wiring: each entry point reaches its ConversationSource ────
 
+/**
+ * A fresh NIO_HOME with capture ON, for the two in-process bindings
+ * (Pi, opencode). Unlike the hook-driven platforms above — which get
+ * their providers handed to `dispatchCollectorEvent` and so never meet
+ * the gate — `InProcessPluginRuntime` consults the per-session monitor
+ * gate before it resolves ANY provider, so without this every assertion
+ * below would reduce to "nothing was emitted".
+ */
+async function withCaptureOnHome<T>(prefix: string, fn: (home: string) => Promise<T>): Promise<T> {
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), prefix)));
+  writeCaptureOnConfig(home);
+  const previousHome = process.env['NIO_HOME'];
+  process.env['NIO_HOME'] = home;
+  try {
+    return await fn(home);
+  } finally {
+    if (previousHome === undefined) delete process.env['NIO_HOME'];
+    else process.env['NIO_HOME'] = previousHome;
+  }
+}
+
+/** Minimal stand-in for Pi's ExtensionAPI: just captures the handlers. */
+function fakePiApi(): {
+  handlers: Map<string, (e: unknown, c: unknown) => Promise<unknown> | unknown>;
+  on(name: string, fn: (e: unknown, c: unknown) => Promise<unknown> | unknown): void;
+  registerCommand(): void;
+} {
+  const handlers = new Map<string, (e: unknown, c: unknown) => Promise<unknown> | unknown>();
+  return {
+    handlers,
+    on(name, fn) { handlers.set(name, fn); },
+    registerCommand() { /* unused here */ },
+  };
+}
+
+/** Pi ctx whose sessionManager reports `sessionFile` (null = ephemeral). */
+function fakePiCtx(sessionId: string, sessionFile: string | null): unknown {
+  return {
+    hasUI: false,
+    cwd: '/tmp',
+    ui: { async confirm() { return true; }, notify() { /* no-op */ } },
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => sessionFile,
+    },
+  };
+}
+
+/** One assistant entry of a Pi session JSONL (format version 3). */
+function piAssistantLine(opts: { id: string; timestampMs: number; text: string; model?: string }): string {
+  return JSON.stringify({
+    type: 'message',
+    id: opts.id,
+    parentId: null,
+    timestamp: new Date(opts.timestampMs).toISOString(),
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: opts.text },
+        { type: 'toolCall', id: 'call_1', name: 'bash', arguments: { command: 'ls' } },
+      ],
+      api: 'messages',
+      provider: 'anthropic',
+      model: opts.model ?? 'pi-test-model',
+      usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+      stopReason: 'toolUse',
+      timestamp: opts.timestampMs,
+    },
+  });
+}
+
+/** A guard verdict stub, so these tests never run real Phase 0–6. */
+function stubNioAllow(): never {
+  return (() => ({
+    orchestrator: {
+      async evaluate() {
+        return {
+          decision: 'allow', risk_level: 'low', scores: { final: 0 },
+          findings: [], explanation: 'test verdict', phase_stopped: 1, diagnostics: [],
+        };
+      },
+    },
+  })) as never;
+}
+
 describe('platform wiring: every platform reaches a conversation source', () => {
   it('claude-code and codex build theirs from transcript_path', async () => {
     for (const platform of ['claude-code', 'codex'] as const) {
@@ -1017,6 +1103,212 @@ describe('platform wiring: every platform reaches a conversation source', () => 
       else process.env['NIO_HOME'] = previousHome;
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+
+  it('pi builds its source from the session file its extension hands over', async () => {
+    // Pi is the replay member of the in-process family: no accumulated
+    // events at all, just `ctx.sessionManager.getSessionFile()` handed to
+    // the runtime at session_start. Driven through the real extension so
+    // the binding's setTranscriptPath call is part of what is under test
+    // — a factory case that never receives a path is as dead as one that
+    // returns null.
+    await withCaptureOnHome('nio-content-pi-', async (home) => {
+      const tracer = makeInMemoryTracer();
+      const logger = makeInMemoryLogger();
+      try {
+        const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+        const pi = fakePiApi();
+        registerPiExtension(pi as never, {
+          nioFactory: stubNioAllow(),
+          tracerProvider: tracer.provider,
+          // Explicitly null, not omitted: `undefined` would have the
+          // runtime build a real MeterProvider whose 1s export timer then
+          // outlives the test process.
+          meterProvider: null,
+          loggerProvider: logger.provider,
+        });
+
+        const sessionFile = join(home, 'session.jsonl');
+        const ctx = fakePiCtx('pi-wiring-1', sessionFile);
+
+        await pi.handlers.get('session_start')!({}, ctx);
+        await pi.handlers.get('input')!({ text: 'list the files' }, ctx);
+
+        // The turn is open now, so `turn_start_ms` is already fixed —
+        // callsSince drops anything stamped before it, which is why the
+        // entry is written after the prompt rather than before.
+        writeFileSync(
+          sessionFile,
+          piAssistantLine({ id: 'm2', timestampMs: Date.now() + 5, text: 'pi assistant reply' }) + '\n',
+          'utf-8',
+        );
+
+        await pi.handlers.get('agent_end')!({}, ctx);
+
+        const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
+        assert.equal(chats.length, 1, 'the session file entry must become a chat span');
+        assert.equal(chats[0]!.name, 'chat pi-test-model');
+        const texts = byContentType(logger.emitted(), 'text');
+        assert.ok(
+          texts.some((r) => String(r.body).includes('pi assistant reply')),
+          'the assistant text must reach the logs signal',
+        );
+        assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
+      } finally {
+        await tracer.shutdown();
+        await logger.shutdown();
+      }
+    });
+  });
+
+  it('pi with an ephemeral session (no session file) degrades to the flat turn → tool shape', async () => {
+    // `getSessionFile()` returning null is a normal Pi state, not an
+    // error: an ephemeral session is never persisted. The binding must
+    // hand over null, the factory must answer "no source", and the turn
+    // must still export — structure without the chat layer, exactly like
+    // Hermes with no conversationInput.
+    //
+    // Staged as a RECYCLED session id, with a real file on disk left over
+    // from the previous session under that id. "No chat span" then has
+    // exactly one cause — the null path actually cleared the stale one —
+    // instead of the vacuous "there was never a path to begin with",
+    // which would stay green even if `setTranscriptPath(id, null)` were
+    // a no-op.
+    await withCaptureOnHome('nio-content-pi-eph-', async (home) => {
+      const tracer = makeInMemoryTracer();
+      const logger = makeInMemoryLogger();
+      try {
+        const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+        const pi = fakePiApi();
+        registerPiExtension(pi as never, {
+          nioFactory: stubNioAllow(),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: logger.provider,
+        });
+
+        const sessionFile = join(home, 'session.jsonl');
+        writeFileSync(
+          sessionFile,
+          // Comfortably inside any turn window opened below, so this
+          // entry WOULD become a chat span if the path survived.
+          piAssistantLine({ id: 'm2', timestampMs: Date.now() + 60_000, text: 'stale reply' }) + '\n',
+          'utf-8',
+        );
+
+        // The previous session under this id had a real file…
+        await pi.handlers.get('session_start')!({}, fakePiCtx('pi-wiring-ephemeral', sessionFile));
+        // …and now the id is recycled by an ephemeral one that does not.
+        const ctx = fakePiCtx('pi-wiring-ephemeral', null);
+        await pi.handlers.get('session_start')!({}, ctx);
+        await pi.handlers.get('input')!({ text: 'list the files' }, ctx);
+        // A real tool call, so "no chat span" is a statement about the
+        // chat layer rather than about an empty turn.
+        await pi.handlers.get('tool_call')!(
+          { toolName: 'bash', toolCallId: 'call_e1', input: { command: 'ls' } }, ctx,
+        );
+        await pi.handlers.get('tool_result')!(
+          { toolName: 'bash', toolCallId: 'call_e1', content: 'a.txt', isError: false }, ctx,
+        );
+        await pi.handlers.get('agent_end')!({}, ctx);
+
+        const spans = tracer.finished();
+        const turn = byName(spans, 'invoke_agent UserPromptSubmit')[0];
+        const tool = byName(spans, 'execute_tool bash')[0];
+        assert.ok(turn && tool, 'the turn root and the tool span must still be exported');
+        assert.equal(
+          spans.filter((s) => s.name.startsWith('chat')).length, 0,
+          'an ephemeral session has no file to replay — and must not inherit the recycled id\'s old one',
+        );
+        assert.equal(
+          tool!.parentSpanContext?.spanId,
+          turn!.spanContext().spanId,
+          'the tool span falls back to hanging off the turn',
+        );
+        // NOT asserted here: a `tool_output` content record. The
+        // in-process runtime has no `emitToolOutputContent` call — that
+        // lives in collector-core's hook path only — so on Pi, opencode
+        // and OpenClaw tool arguments and results reach the wire ONLY as
+        // the issuing chat call's `tool_use` block. Which means on this
+        // degraded path they do not reach it at all. Real gap, wider than
+        // this task; recorded rather than papered over with an assertion
+        // that would pass for the wrong reason.
+        assert.equal(byContentType(logger.emitted(), 'tool_output').length, 0);
+      } finally {
+        await tracer.shutdown();
+        await logger.shutdown();
+      }
+    });
+  });
+
+  it('opencode builds its source from the message parts its plugin accumulated', async () => {
+    // opencode is the streaming member of the in-process family: no
+    // session file, so the envelope (`message.updated`) and its parts
+    // (`message.part.updated`) are accumulated by the binding and
+    // replayed at end of turn. Both event kinds are required — an
+    // envelope with no parts yields no blocks, and parts with no envelope
+    // yield no call — so this drives the real plugin rather than seeding
+    // the runtime directly.
+    await withCaptureOnHome('nio-content-oc-parts-', async () => {
+      const tracer = makeInMemoryTracer();
+      const logger = makeInMemoryLogger();
+      try {
+        const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: logger.provider,
+        })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+        const sessionID = 'oc-wiring-parts';
+        await hooks.event!({ event: { type: 'session.created', properties: { info: { id: sessionID } } } });
+        await hooks['chat.message']!(
+          {}, { message: { sessionID }, parts: [{ type: 'text', text: 'do the thing' }] },
+        );
+
+        // Same reasoning as the Pi case: the turn is open, so the call
+        // has to be stamped at or after its start.
+        const created = Date.now() + 5;
+        await hooks.event!({
+          event: {
+            type: 'message.updated',
+            properties: {
+              info: {
+                id: 'msg_1', sessionID, role: 'assistant',
+                modelID: 'oc-parts-model', providerID: 'anthropic',
+                tokens: { input: 5, output: 3, cache: { read: 0, write: 0 } },
+                time: { created, completed: created + 10 },
+              },
+            },
+          },
+        });
+        await hooks.event!({
+          event: {
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: 'prt_1', type: 'text', messageID: 'msg_1', sessionID,
+                text: 'opencode assistant reply',
+              },
+            },
+          },
+        });
+        await hooks.event!({ event: { type: 'session.idle', properties: { sessionID } } });
+
+        const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
+        assert.equal(chats.length, 1, 'the accumulated envelope + part must become one chat span');
+        assert.equal(chats[0]!.name, 'chat oc-parts-model');
+        const texts = byContentType(logger.emitted(), 'text');
+        assert.ok(
+          texts.some((r) => String(r.body).includes('opencode assistant reply')),
+          'the assistant text must reach the logs signal',
+        );
+        assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
+      } finally {
+        await tracer.shutdown();
+        await logger.shutdown();
+      }
+    });
   });
 
   it('hermes without conversationInput degrades to the flat turn → tool shape', async () => {

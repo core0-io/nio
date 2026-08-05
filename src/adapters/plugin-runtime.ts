@@ -130,6 +130,16 @@ export class InProcessPluginRuntime {
    */
   private readonly conversationEvents = new Map<string, unknown[]>();
 
+  /**
+   * Per-session transcript path, for the replay platforms in this family
+   * (Pi). Unlike `conversationEvents` this is deliberately NOT cleared at
+   * the turn boundary: the session file is a property of the SESSION, and
+   * every turn after the first replays the same file, scoped by
+   * `callsSince(turn_start_ms)`. Dropping it in `flushSessionTurn` would
+   * leave turn 2 onwards with no source at all.
+   */
+  private readonly transcriptPaths = new Map<string, string>();
+
   private readonly opts: PluginRuntimeOptions;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
@@ -383,11 +393,27 @@ export class InProcessPluginRuntime {
   }
 
   /**
-   * Where this platform's conversation comes from. Replay platforms
-   * override to return a transcript path; the default is the streaming
-   * shape.
+   * Hand the runtime a session file to replay instead of events.
+   *
+   * Pi is the replay platform in this family: it has a real session JSONL
+   * on disk, so its binding calls this at `session_start` rather than
+   * feeding `recordConversationEvent`. A null path (Pi's ephemeral
+   * sessions, where `getSessionFile()` returns null) clears any prior
+   * entry, so the session degrades to "no source" rather than replaying a
+   * stale file from a recycled id.
+   */
+  setTranscriptPath(sessionId: string, path: string | null): void {
+    if (path) this.transcriptPaths.set(sessionId, path);
+    else this.transcriptPaths.delete(sessionId);
+  }
+
+  /**
+   * Where this platform's conversation comes from. A transcript path
+   * handed over by a replay binding wins; otherwise the streaming shape.
    */
   protected conversationInputFor(sessionId: string): SourceInput {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath) return { transcriptPath };
     return { events: this.conversationEvents.get(sessionId) ?? [] };
   }
 
@@ -395,8 +421,12 @@ export class InProcessPluginRuntime {
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
     // A recycled session id must not inherit the previous session's
-    // calls — they would be replayed as this session's chat spans.
+    // calls — they would be replayed as this session's chat spans. Same
+    // reasoning for the transcript path: a new session under a reused id
+    // must not replay the old session's file until its own
+    // setTranscriptPath arrives.
     this.conversationEvents.delete(sessionId);
+    this.transcriptPaths.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -404,6 +434,9 @@ export class InProcessPluginRuntime {
   async onSessionEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
+    // The session file belongs to the session, so this — not the turn
+    // boundary — is where it stops being ours to replay.
+    this.transcriptPaths.delete(sessionId);
     // Drop the session's arm record now instead of leaving it for the
     // 7-day TTL backstop — these are long-running hosts, so a session
     // that ends here won't get another chance to be reaped until the
