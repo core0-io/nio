@@ -317,6 +317,16 @@ replay) and prompt visibility for no structural gain. Closing the
 exception requires teaching `openclaw-source.ts` to reconstruct
 `tool_use` first.
 
+Both halves of the exception — the eager export AND the sibling
+parentage — are pinned by
+`src/tests/openclaw-span-hierarchy.test.ts`, which drives a real
+`before_tool_call` / `after_tool_call` pair through the plugin against an
+OTLP sink. It is deliberately not a "no tool span appeared" assertion:
+that shape would pass under any implementation. Switching the plugin to
+the deferred path turns the eager assertions red; re-parenting the span
+turns the parentage assertions red. If you close this exception, that
+test is what tells you the documentation above is now stale.
+
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
 One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.
