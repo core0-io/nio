@@ -333,6 +333,92 @@ describe('loadMCPRegistry: enabled:false applies to every source, not just openc
   });
 });
 
+describe('loadMCPRegistry: ~/.pi/agent/mcp.json (pi-mcp-adapter)', () => {
+  let originalPiCodingAgentDir: string | undefined;
+
+  beforeEach(() => {
+    originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+    delete process.env.PI_CODING_AGENT_DIR;
+  });
+
+  afterEach(() => {
+    // Restore an originally-unset var by deleting it, never by assigning
+    // the string "undefined".
+    if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
+  });
+
+  it('parses a mcpServers map with source "pi"', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+      mcpServers: { xcodebuild: { command: 'npx', args: ['-y', 'xcodebuild-mcp'] } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'xcodebuild');
+    assert.equal(reg.entries[0].source, 'pi');
+    assert.deepEqual(reg.entries[0].cliPackages, ['xcodebuild-mcp']);
+  });
+
+  it('falls back to the "mcp-servers" key', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+      'mcp-servers': { hass: { url: 'http://homeassistant.local:8123/api/mcp' } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'hass');
+    assert.equal(reg.entries[0].source, 'pi');
+  });
+
+  it('honours PI_CODING_AGENT_DIR — reads that dir\'s mcp.json, not ~/.pi/agent/mcp.json', () => {
+    const altDir = mkdtempSync(join(tmpdir(), 'nio-pi-agent-dir-'));
+    try {
+      process.env.PI_CODING_AGENT_DIR = altDir;
+      writeJson(join(altDir, 'mcp.json'), {
+        mcpServers: { alt: { url: 'http://alt.local/mcp' } },
+      });
+      // A decoy at the default location must NOT be read.
+      mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+      writeJson(join(HOME, '.pi', 'agent', 'mcp.json'), {
+        mcpServers: { decoy: { url: 'http://decoy.local/mcp' } },
+      });
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 1);
+      assert.equal(reg.entries[0].serverName, 'alt');
+    } finally {
+      rmSync(altDir, { recursive: true, force: true });
+    }
+  });
+
+  it('expands a leading ~ in PI_CODING_AGENT_DIR against home, not literally', () => {
+    process.env.PI_CODING_AGENT_DIR = '~/custom-pi-dir';
+    mkdirSync(join(HOME, 'custom-pi-dir'), { recursive: true });
+    writeJson(join(HOME, 'custom-pi-dir', 'mcp.json'), {
+      mcpServers: { tilde: { url: 'http://tilde.local/mcp' } },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.length, 1);
+    assert.equal(reg.entries[0].serverName, 'tilde');
+  });
+
+  it('absent mcp.json contributes no entries and does not throw', () => {
+    assert.doesNotThrow(() => {
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 0);
+    });
+  });
+
+  it('malformed mcp.json contributes no entries and does not throw', () => {
+    mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });
+    writeFileSync(join(HOME, '.pi', 'agent', 'mcp.json'), '{not valid json');
+    assert.doesNotThrow(() => {
+      const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+      assert.equal(reg.entries.length, 0);
+    });
+  });
+});
+
 describe('loadMCPRegistry: cross-source merge', () => {
   it('merges handles from multiple sources for the same server name', () => {
     writeJson(join(HOME, '.claude.json'), {

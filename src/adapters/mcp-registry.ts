@@ -24,7 +24,7 @@ import { loadConfig } from './common.js';
 import type { NioConfig } from './config-schema.js';
 
 export type MCPSource =
-  'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'opencode' | 'manual';
+  'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'opencode' | 'pi' | 'manual';
 
 export interface MCPServerEntry {
   serverName: string;
@@ -111,7 +111,40 @@ function discoverSources(home: string): SourceDescriptor[] {
     parse: (data) => extractFromMcpServers(data, ['mcp']),
   });
 
+  // Pi core has no MCP. The third-party `pi-mcp-adapter` package adds it
+  // and reads its server map from `$PI_CODING_AGENT_DIR/mcp.json`, else
+  // `~/.pi/agent/mcp.json` (pi-mcp-adapter config.ts:159-161,382-390;
+  // agent-dir.ts:4-16). Key is `mcpServers` with a `mcp-servers` fallback
+  // (config.ts:606).
+  //
+  // Deliberately NOT registered here: the adapter also probes
+  // `~/.config/mcp/mcp.json` and `~/.agents/mcp{,/mcp}.json`, which are
+  // cross-agent conventions rather than Pi-owned files — claiming them as
+  // `source: 'pi'` would put false provenance into diagnostics. Its two
+  // project-relative probes (`<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`) are
+  // out of reach because `discoverSources` is home-scoped. Servers
+  // declared only in those five files are a known coverage gap: their
+  // tools reach the anonymous fallback tier and are gateable by full name.
+  const piAgentDir = process.env.PI_CODING_AGENT_DIR
+    ? expandHome(process.env.PI_CODING_AGENT_DIR, home)
+    : join(home, '.pi', 'agent');
+  sources.push({
+    path: join(piAgentDir, 'mcp.json'),
+    source: 'pi',
+    format: 'json',
+    parse: (data) =>
+      extractFromMcpServers(data, ['mcpServers'])
+      ?? extractFromMcpServers(data, ['mcp-servers']),
+  });
+
   return sources;
+}
+
+/** Expand a leading `~` the way pi-mcp-adapter's agent-dir.ts does. */
+function expandHome(p: string, home: string): string {
+  if (p === '~') return home;
+  if (p.startsWith('~/')) return join(home, p.slice(2));
+  return p;
 }
 
 function extractFromMcpServers(data: unknown, path: string[]): Record<string, unknown> | null {

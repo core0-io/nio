@@ -25,6 +25,21 @@ const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, ActionType> = {
   read: 'read_file',
 };
 
+/**
+ * Pi core's seven built-in tools.
+ *
+ * `hook-engine.ts`'s `parseMcpToolName` needs this to short-circuit the
+ * Pi anonymous-MCP fallback tier, exactly as `OPENCODE_BUILTIN_TOOLS`
+ * does for opencode. None of the seven currently contains an underscore,
+ * so the guard is presently redundant — it is here so that a future Pi
+ * built-in named like `apply_patch` cannot be silently re-gated under
+ * `permitted_tools.mcp` the moment an MCP server is configured. That is
+ * the exact defect Task 9 found in the opencode branch.
+ */
+export const PI_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  'bash', 'read', 'write', 'edit', 'ls', 'find', 'grep',
+]);
+
 export interface PiAdapterOptions {
   /** Config-driven tool → action type mapping, overrides the built-in default. */
   nativeToolMapping?: Record<string, string>;

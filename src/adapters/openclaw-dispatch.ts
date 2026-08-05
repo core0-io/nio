@@ -616,23 +616,32 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   const piAgent = join(home, '.pi', 'agent');
   const piBundle = join(piAgent, 'extensions', 'nio', 'index.js');
   let piRegistered = existsSync(piBundle);
+  let piMcpAdapter = false;
   if (!piRegistered && existsSync(join(piAgent, 'settings.json'))) {
     try {
       const s = JSON.parse(readFileSync(join(piAgent, 'settings.json'), 'utf-8')) as {
         extensions?: unknown[]; packages?: unknown[];
       };
-      const mentionsNio = (arr: unknown[] | undefined): boolean =>
+      const mentionsSubstring = (arr: unknown[] | undefined, needle: string): boolean =>
         (arr ?? []).some((e) => {
           const v = typeof e === 'string' ? e : (e as { source?: string })?.source;
-          return typeof v === 'string' && v.includes('nio');
+          return typeof v === 'string' && v.includes(needle);
         });
+      const mentionsNio = (arr: unknown[] | undefined): boolean => mentionsSubstring(arr, 'nio');
       piRegistered = mentionsNio(s.extensions) || mentionsNio(s.packages);
+      piMcpAdapter = mentionsSubstring(s.extensions, 'pi-mcp-adapter')
+        || mentionsSubstring(s.packages, 'pi-mcp-adapter');
     } catch { /* unreadable settings — treat as not registered */ }
   }
   out.push(piRegistered
     ? '- ✓ pi: extension registered'
     : '- · pi: not installed (run plugins/pi/setup.sh to enable)');
-  out.push('    note: Pi has no MCP support — the Phase 0 MCP gate is inactive there.');
+  out.push(piMcpAdapter
+    ? '    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.'
+    : '    note: Pi core has no MCP; the pi-mcp-adapter package adds it and Nio gates those calls.');
+  out.push('    MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.');
+  out.push('    Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).');
+  out.push('    Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.');
 
   // opencode — plugin + slash command are copied into the config dir.
   const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
