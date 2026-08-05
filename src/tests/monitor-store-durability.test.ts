@@ -79,17 +79,50 @@ describe('saveMonitorStore atomicity', () => {
 });
 
 describe('loadMonitorStore corruption reporting', () => {
-  it('still returns an empty store on corrupt JSON', () => {
+  it('still returns an empty store on corrupt JSON', async () => {
+    // Isolate + drain this test's own (fire-and-forget, unawaited) corrupt-
+    // JSON diagnostic before returning. loadMonitorStore's diagnostic write
+    // happens via a delayed dynamic import (see pollForAuditEntry's doc
+    // comment) — without draining it here, the write can land AFTER this
+    // test has finished, racing against whatever the NEXT test sets
+    // `_setDiagnosticsAuditPathForTests` to, and landing in that test's
+    // audit file instead of this one's. That exact leak previously produced
+    // a false positive in "does not report a diagnostic when the file is
+    // simply absent" below.
     const { dir, logsConfig } = freshDir();
-    writeFileSync(join(dir, 'monitored-sessions.json'), '{not json', 'utf-8');
-    assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+    const auditPath = join(dir, 'audit.jsonl');
+    _setDiagnosticsAuditPathForTests(auditPath);
+    try {
+      writeFileSync(join(dir, 'monitored-sessions.json'), '{not json', 'utf-8');
+      assert.deepEqual(loadMonitorStore(logsConfig), { sessions: {} });
+      await pollForAuditEntry(auditPath, 'monitor_store_corrupt', 2000);
+    } finally {
+      _setDiagnosticsAuditPathForTests(null);
+    }
   });
 
-  it('does not report a diagnostic when the file is simply absent', () => {
+  it('does not report a diagnostic when the file is simply absent', async () => {
+    // Diagnostics are redirected to a temp path here (mirroring the
+    // positive-case test below) precisely BECAUSE the assertion needs to be
+    // meaningful: loadMonitorStore never writes to logsConfig's directory at
+    // all, so asserting against `join(dir, 'audit.jsonl')` would pass
+    // whether or not the missing-file branch reports — it's asserting
+    // against a path diagnostics never targets in the first place. With the
+    // redirect in place, this test actually exercises the "did NOT call
+    // reportDiagnostic" path — see review I2.
     const { dir, logsConfig } = freshDir();
-    loadMonitorStore(logsConfig);
-    assert.equal(existsSync(join(dir, 'audit.jsonl')), false,
-      'a missing store is normal and must stay silent');
+    const auditPath = join(dir, 'audit.jsonl');
+    _setDiagnosticsAuditPathForTests(auditPath);
+    try {
+      const result = loadMonitorStore(logsConfig);
+      assert.deepEqual(result, { sessions: {} });
+
+      const found = await pollForAuditEntry(auditPath, 'monitor_store_corrupt', 300);
+      assert.equal(found, false,
+        'a missing store is normal — this must NOT report monitor_store_corrupt (that would spam every never-armed session)');
+    } finally {
+      _setDiagnosticsAuditPathForTests(null);
+    }
   });
 
   it('reports a monitor_store_corrupt diagnostic when the file exists but fails to parse', async () => {
