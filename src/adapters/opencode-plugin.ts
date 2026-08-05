@@ -312,9 +312,17 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               // opencode has no session file a plugin can read back, so
               // the assistant envelope is accumulated here and replayed
               // by createOpenCodeSource at end of turn. It is a snapshot,
-              // and the source collapses re-publishes by message id — so
-              // handing over every one of them is correct, not wasteful.
-              rt.recordConversationEvent(info.sessionID, { kind: 'message', info });
+              // republished on every change to the same message, so it is
+              // handed over under a dedup key: the runtime keeps only the
+              // latest snapshot per message id, in the slot the first one
+              // claimed. That is the same collapse createOpenCodeSource
+              // performs at read time — done at ingest so the runtime's
+              // per-session cap counts LLM calls rather than the number
+              // of times opencode happened to republish them.
+              rt.recordConversationEvent(
+                info.sessionID, { kind: 'message', info },
+                info.id ? `message:${info.id}` : undefined,
+              );
               // message.updated is a cumulative SNAPSHOT, republished on
               // every change to the same message — unlike Pi's
               // message_end, which fires once. Without a message id to
@@ -342,19 +350,26 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
             }
             case 'message.part.updated': {
               // The parts ARE the assistant's content — reasoning, text
-              // and tool calls. Like the envelope they are snapshots
-              // (a streaming text part is re-emitted per chunk carrying
-              // the full text so far), and the source replaces by
-              // `part.id` rather than appending, so forwarding every
-              // republish is correct.
+              // and tool calls. Like the envelope they are snapshots (a
+              // streaming text part is re-emitted per chunk carrying the
+              // full text so far), so they go over under a `part:<id>`
+              // dedup key for the same reason: this is the stream that
+              // dominates the event count on a real turn — one delivery
+              // per chunk — and letting it consume one cap slot per
+              // chunk is what evicted the turn's earliest chat spans.
+              // Both the runtime and the source collapse by part id, so
+              // the reconstructed blocks are identical either way.
               //
               // Routed by `sessionID` (which runtime session owns it) but
               // grouped by `messageID` inside the source (which call it
               // belongs to) — a part without a session id has nowhere to
               // go and is dropped here.
-              const part = props.part as { sessionID?: string } | undefined;
+              const part = props.part as { id?: string; sessionID?: string } | undefined;
               if (!part?.sessionID) return;
-              rt.recordConversationEvent(part.sessionID, { kind: 'part', part });
+              rt.recordConversationEvent(
+                part.sessionID, { kind: 'part', part },
+                part.id ? `part:${part.id}` : undefined,
+              );
               return;
             }
             default:

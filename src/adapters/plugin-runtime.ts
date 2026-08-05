@@ -129,6 +129,11 @@ export interface PluginRuntimeOptions {
 /**
  * Oldest conversation events are dropped past this many per session.
  * See `recordConversationEvent`.
+ *
+ * The unit is a SLOT, not a delivered event: a binding that hands over
+ * repeated snapshots of the same logical thing gives them all one dedup
+ * key and they share one slot. Denominating the cap in raw deliveries
+ * was wrong for any streaming platform — see `recordConversationEvent`.
  */
 const MAX_CONVERSATION_EVENTS = 200;
 
@@ -163,7 +168,14 @@ export class InProcessPluginRuntime {
    * try/finally in `flushSessionTurn` for why no timestamp filter can
    * make up for a missed clear.
    */
-  private readonly conversationEvents = new Map<string, unknown[]>();
+  private readonly conversationEvents = new Map<string, Map<string, unknown>>();
+
+  /**
+   * Source of the synthetic slot keys handed to unkeyed events. Process-
+   * wide rather than per-session so no two sessions can ever collide, and
+   * monotonic so `Map` insertion order stays the arrival order.
+   */
+  private conversationSlotSeq = 0;
 
   /**
    * Per-session transcript path, for the replay platforms in this family
@@ -411,20 +423,45 @@ export class InProcessPluginRuntime {
    * of one. Only the export at turn close is gated — and an unmonitored
    * turn's events are dropped there rather than exported, so nothing
    * accumulated while unarmed can leak later.
+   *
+   * `dedupKey` collapses SNAPSHOT streams at ingest. opencode publishes
+   * one `message.updated` per change to an assistant message and one
+   * `message.part.updated` per streamed chunk of every part, each
+   * carrying the whole thing so far; its `ConversationSource` already
+   * throws all but the last snapshot of each id away when it rebuilds
+   * the turn. Keeping them all until then is not just waste — it is what
+   * made the cap below count network deliveries instead of LLM calls, so
+   * a 10-call turn streaming 100 chunks per call blew a 200-slot budget
+   * with ~1030 events and lost 8 of its 10 chat spans, orphaning the
+   * tool spans that would have nested under them back onto the turn
+   * root. With a key, a snapshot REPLACES its predecessor in the slot it
+   * first claimed — same collapse the source performs, moved to where
+   * the cap can see it, and `Map.set` on an existing key keeps that
+   * first-seen position so block order is unchanged.
+   *
+   * Omitting the key (OpenClaw, whose `llm_output` is one delivery per
+   * LLM call and never re-published) gives every event its own slot,
+   * i.e. exactly the previous append-and-cap behaviour.
    */
-  recordConversationEvent(sessionId: string, event: unknown): void {
-    const list = this.conversationEvents.get(sessionId) ?? [];
-    list.push(event);
+  recordConversationEvent(sessionId: string, event: unknown, dedupKey?: string): void {
+    const slots = this.conversationEvents.get(sessionId) ?? new Map<string, unknown>();
+    // Namespaced apart so a binding's key can never collide with a
+    // synthetic one, however the binding chooses to spell it.
+    const key = dedupKey !== undefined ? `k:${dedupKey}` : `#${this.conversationSlotSeq++}`;
+    slots.set(key, event);
     // Hard cap. These are long-running hosts, and an unbounded
-    // per-session array is a memory leak with extra steps. A turn with
+    // per-session store is a memory leak with extra steps. A turn with
     // more calls than this loses its earliest chat spans — the tool
     // spans that would have named them fall back to hanging off the turn
     // root, the same degraded shape as having no source at all, which is
     // a better failure than growing without bound.
-    if (list.length > MAX_CONVERSATION_EVENTS) {
-      list.splice(0, list.length - MAX_CONVERSATION_EVENTS);
+    if (slots.size > MAX_CONVERSATION_EVENTS) {
+      for (const k of slots.keys()) {
+        slots.delete(k);
+        if (slots.size <= MAX_CONVERSATION_EVENTS) break;
+      }
     }
-    this.conversationEvents.set(sessionId, list);
+    this.conversationEvents.set(sessionId, slots);
   }
 
   /**
@@ -449,7 +486,9 @@ export class InProcessPluginRuntime {
   protected conversationInputFor(sessionId: string): SourceInput {
     const transcriptPath = this.transcriptPaths.get(sessionId);
     if (transcriptPath) return { transcriptPath };
-    return { events: this.conversationEvents.get(sessionId) ?? [] };
+    // Slot values in first-claimed order — the array shape every
+    // streaming `ConversationSource` expects.
+    return { events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
   }
 
   /** Hard session boundary — drop stale turn numbering, write audit row. */
