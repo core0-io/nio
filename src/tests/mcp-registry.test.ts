@@ -283,6 +283,31 @@ describe('loadMCPRegistry: caching & invalidation', () => {
   });
 });
 
+describe('loadMCPRegistry: ~/.config/opencode/opencode.json', () => {
+  it('parses local and remote opencode MCP servers and skips disabled ones', () => {
+    delete process.env.XDG_CONFIG_HOME;
+    mkdirSync(join(HOME, '.config', 'opencode'), { recursive: true });
+    writeJson(join(HOME, '.config', 'opencode', 'opencode.json'), {
+      mcp: {
+        github: { type: 'remote', url: 'https://mcp.github.test/sse', enabled: true },
+        fs: { type: 'local', command: ['npx', '-y', 'mcp-fs'], enabled: true },
+        off: { type: 'local', command: ['npx', 'nope'], enabled: false },
+      },
+    });
+
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    const byName = (n: string) => reg.entries.find(e => e.serverName === n);
+
+    assert.equal(byName('github')?.urls[0], 'https://mcp.github.test/sse');
+    assert.equal(byName('github')?.source, 'opencode');
+    // Array-form command: argv[0] is the binary, the rest are args, and
+    // npx is a package runner so the package name lands in cliPackages.
+    assert.deepEqual(byName('fs')?.binaries, ['npx']);
+    assert.deepEqual(byName('fs')?.cliPackages, ['mcp-fs']);
+    assert.equal(byName('off'), undefined);
+  });
+});
+
 describe('loadMCPRegistry: cross-source merge', () => {
   it('merges handles from multiple sources for the same server name', () => {
     writeJson(join(HOME, '.claude.json'), {

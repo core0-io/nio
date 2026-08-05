@@ -23,7 +23,8 @@ import { load as yamlLoad } from 'js-yaml';
 import { loadConfig } from './common.js';
 import type { NioConfig } from './config-schema.js';
 
-export type MCPSource = 'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'manual';
+export type MCPSource =
+  'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'opencode' | 'manual';
 
 export interface MCPServerEntry {
   serverName: string;
@@ -102,6 +103,14 @@ function discoverSources(home: string): SourceDescriptor[] {
     parse: (data) => extractFromMcpServers(data, ['mcp', 'servers']),
   });
 
+  const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
+  sources.push({
+    path: join(ocRoot, 'opencode', 'opencode.json'),
+    source: 'opencode',
+    format: 'json',
+    parse: (data) => extractFromMcpServers(data, ['mcp']),
+  });
+
   return sources;
 }
 
@@ -125,17 +134,25 @@ const PACKAGE_RUNNERS = new Set([
 
 /**
  * Parse one server config block (Claude / Claude Desktop / Hermes / OpenClaw
- * all share the same shape: a record under their respective key).
+ * / opencode all share roughly the same shape: a record under their
+ * respective key).
  *
  * Supported fields:
  *  - `url` / `endpoint` → urls (with `unix:/path` rerouted to sockets)
  *  - `socket` → sockets
  *  - `command` → binaries (basename) or, when it's a package runner,
  *    `args[0]` becomes a cliPackage and the runner itself is recorded as a
- *    binary
+ *    binary. opencode passes the whole argv as an array (`command`); every
+ *    other source passes a command string plus a separate `args` array —
+ *    both forms are normalised to (command, args).
  *  - `args` → for package runners, scan for the package name
+ *  - `enabled: false` (opencode) → server contributes no entry (`null`)
  */
-function parseServerBlock(serverName: string, block: unknown, source: MCPSource): MCPServerEntry {
+function parseServerBlock(
+  serverName: string,
+  block: unknown,
+  source: MCPSource,
+): MCPServerEntry | null {
   const entry: MCPServerEntry = {
     serverName,
     urls: [],
@@ -147,6 +164,10 @@ function parseServerBlock(serverName: string, block: unknown, source: MCPSource)
 
   if (!block || typeof block !== 'object') return entry;
   const b = block as Record<string, unknown>;
+
+  // opencode marks servers it should not start with `enabled: false`.
+  // A disabled server contributes no reachable handles.
+  if (b['enabled'] === false) return null;
 
   // url / endpoint → urls or sockets (unix: prefix)
   for (const key of ['url', 'endpoint']) {
@@ -168,9 +189,13 @@ function parseServerBlock(serverName: string, block: unknown, source: MCPSource)
     for (const s of socks) if (typeof s === 'string') entry.sockets.push(s);
   }
 
-  // command → binaries / cliPackages depending on whether it's a runner
-  const cmd = b['command'];
-  const args = b['args'];
+  // command → binaries / cliPackages depending on whether it's a runner.
+  // opencode passes the whole argv as an array; every other source passes
+  // a command string plus a separate `args` array. Normalise both to
+  // (command, args).
+  const rawCmd = b['command'];
+  const cmd = Array.isArray(rawCmd) ? rawCmd[0] : rawCmd;
+  const args = Array.isArray(rawCmd) ? rawCmd.slice(1) : b['args'];
   if (typeof cmd === 'string' && cmd.length > 0) {
     const cmdBase = basename(cmd);
     entry.binaries.push(cmdBase);
@@ -249,7 +274,8 @@ function loadFromSource(desc: SourceDescriptor): MCPServerEntry[] {
   const entries: MCPServerEntry[] = [];
   for (const [name, block] of Object.entries(servers)) {
     if (!name) continue;
-    entries.push(parseServerBlock(name, block, desc.source));
+    const entry = parseServerBlock(name, block, desc.source);
+    if (entry) entries.push(entry);
   }
   sourceCache.set(desc.path, { mtimeMs, entries });
   return entries;
