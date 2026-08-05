@@ -37,6 +37,7 @@ import {
 } from './lib/traces-collector.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { dumpPayload } from './lib/payload-dump.js';
 import { spanKey, toolSummary, parseMcpToolName, type HookStdinPayload } from './lib/collector-core.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
@@ -55,6 +56,25 @@ function getArg(name: string): string | undefined {
 }
 const PLATFORM = getArg('platform') ?? 'claude-code';
 const PLATFORM_KEY = PLATFORM.replace(/-/g, '_');
+
+// Upper bound on how long the exit path waits for the OTEL providers'
+// forceFlush() calls to drain before the guard decision is emitted.
+//
+// `collector.timeout` does NOT bound them: that config only governs the
+// request timeout once a socket is connected, and does nothing during
+// TCP connect. Against an endpoint that silently drops packets
+// (firewalled/unroutable IP, VPN torn down) connect() blocks until the
+// OS-level TCP timeout — ~75s on macOS, 100s+ on Linux — and because
+// guard-hook runs on PreToolUse it holds the host's tool call hostage
+// for that entire window (measured on this machine: the unbounded
+// version was still alive at 40s, see the deferred-batch report).
+//
+// Same backstop-timer pattern as `SHUTDOWN_BACKSTOP_MS` in
+// scanner-hook.ts and `WRITE_CALLBACK_BACKSTOP_MS` in hook-cli.ts: race
+// the drain against an unref'd timer and continue regardless of which
+// one wins. Losing a span/metric on an unreachable endpoint is strictly
+// better than stalling the agent — telemetry never blocks enforcement.
+const FLUSH_BACKSTOP_MS = 5000;
 
 // ---------------------------------------------------------------------------
 // Read stdin
@@ -181,16 +201,40 @@ async function main(): Promise<void> {
   );
   const evalMs = Date.now() - evalStartMs;
 
+  // One shared budget covers EVERY OTLP-touching await between here and
+  // the decision write — not just the closing Promise.all. The library
+  // helpers below (`recordGuardDecision`, `recordPostToolUse`) each end
+  // with their own internal `provider.forceFlush()`, so bounding only the
+  // final flush leaves the earlier ones free to block for the full OS TCP
+  // connect timeout. Measured on this machine against an unroutable
+  // endpoint: the hang was inside `recordGuardDecision`, before the final
+  // flush was ever reached.
+  //
+  // A single deadline (rather than a fresh timer per await) is what makes
+  // the total bounded: three sequential 5s races would be a 15s ceiling.
+  const flushBudgetMs = Math.min(collectorConfig.timeout ?? FLUSH_BACKSTOP_MS, FLUSH_BACKSTOP_MS);
+  const flushDeadline = Date.now() + flushBudgetMs;
+  function withFlushBudget<T>(p: Promise<T>, onTimeout: T): Promise<T> {
+    const remaining = Math.max(0, flushDeadline - Date.now());
+    return Promise.race([
+      p,
+      new Promise<T>((resolve) => setTimeout(() => resolve(onTimeout), remaining).unref()),
+    ]);
+  }
+
   // Record guard decision metrics
   const payload = (input as HookStdinPayload | Record<string, unknown>);
   const toolName = (payload as Record<string, unknown>).tool_name as string || '';
   if (meterProvider) {
-    await recordGuardDecision(
-      meterProvider,
-      result.decision,
-      result.riskLevel || 'low',
-      result.riskScore ?? 0,
-      toolName,
+    await withFlushBudget(
+      recordGuardDecision(
+        meterProvider,
+        result.decision,
+        result.riskLevel || 'low',
+        result.riskScore ?? 0,
+        toolName,
+      ).catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      undefined,
     );
   }
 
@@ -254,23 +298,41 @@ async function main(): Promise<void> {
         evalStartMs,
       );
       const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-      const r = await recordPostToolUse(
-        tracerProvider, state, key, cwd,
-        guardAttrs,
-        reason,
+      // Budgeted like every other OTLP-touching await here: this call
+      // ends in `provider.forceFlush()`. On timeout `state` keeps the
+      // value it had before the call, so `saveState` below still runs
+      // and the queued span is left for deferred recovery rather than
+      // the whole hook stalling on an unreachable endpoint.
+      const r = await withFlushBudget(
+        recordPostToolUse(
+          tracerProvider, state, key, cwd,
+          guardAttrs,
+          reason,
+        ).catch(e => {
+          reportFlushFailure('traces', collectorConfig.endpoint, e);
+          return null;
+        }),
+        null,
       );
-      state = r.state;
+      if (r) state = r.state;
     }
 
     saveState(logsConfig, state);
   }
 
-  // Flush OTEL providers before exit
-  await Promise.all([
-    meterProvider?.forceFlush(),
-    tracerProvider?.forceFlush(),
-    loggerProvider?.forceFlush(),
-  ]);
+  // Flush OTEL providers before exit, sharing the deadline above so an
+  // unreachable endpoint can't hold the PreToolUse decision hostage.
+  // Each flush carries its own .catch(): an unhandled rejection here
+  // would reject the Promise.all and abort main() before the decision is
+  // ever written.
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 
   const diags = result.diagnostics;
 
