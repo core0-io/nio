@@ -87,7 +87,7 @@ interface RunResult {
  * would ever be opened, and the test would pass without touching the code
  * path it exists to pin.
  */
-function nioHome(): string {
+function nioHome(timeoutLine = ''): string {
   const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-collector-flush-')));
   writeFileSync(join(home, 'config.yaml'), `guard:
   protection_level: balanced
@@ -95,7 +95,7 @@ function nioHome(): string {
 collector:
   endpoint: "${UNROUTABLE_ENDPOINT}"
   monitor_all_sessions: true
-`, 'utf-8');
+${timeoutLine}`, 'utf-8');
   return home;
 }
 
@@ -103,9 +103,14 @@ collector:
  * Async spawn (not execFileSync) so every case runs concurrently — they
  * would otherwise serialize behind each other's multi-second budget.
  */
-function runHook(cli: string, args: string[], payloadFor: (home: string) => unknown): Promise<RunResult> {
+function runHook(
+  cli: string,
+  args: string[],
+  payloadFor: (home: string) => unknown,
+  timeoutLine = '',
+): Promise<RunResult> {
   return new Promise((resolve, reject) => {
-    const home = nioHome();
+    const home = nioHome(timeoutLine);
     const start = Date.now();
     const child = spawn('node', [cli, ...args], { env: { ...process.env, NIO_HOME: home } });
     let stdout = '';
@@ -141,6 +146,7 @@ describe('collector flush backstop against a packet-dropping OTLP endpoint', () 
   let hermesAllowRun: Promise<RunResult>;
   let hermesDenyRun: Promise<RunResult>;
   let hermesPostRun: Promise<RunResult>;
+  let longTimeoutRun: Promise<RunResult>;
 
   before(() => {
     collectorRun = runHook(COLLECTOR_HOOK, ['--platform', 'claude-code'], (home) => ({
@@ -176,6 +182,27 @@ describe('collector flush backstop against a packet-dropping OTLP endpoint', () 
       cwd: home,
       extra: { result: 'ok', tool_call_id: 'tc-flush-1' },
     }));
+
+    // Review finding I3: every other fixture in the repo leaves
+    // `collector.timeout` at its 5000 default, which is *exactly*
+    // FLUSH_BACKSTOP_MS — so `Math.min(configured, backstop)` and
+    // `Math.max(...)` produce the same number and the clamp is invisible.
+    // 30000 is an entirely reasonable thing for a user to set (it is a
+    // REQUEST timeout, not a "how long may my agent freeze" knob), and
+    // under the max-mutation it buys a 30s freeze per hook, well past
+    // EXIT_BOUND_MS.
+    longTimeoutRun = runHook(
+      COLLECTOR_HOOK, ['--platform', 'claude-code'],
+      (home) => ({
+        hook_event_name: 'PostToolUse',
+        tool_name: 'Bash',
+        tool_input: { command: 'ls' },
+        tool_response: { output: 'x' },
+        session_id: 'sess-collector-flush-long',
+        cwd: home,
+      }),
+      '  timeout: 30000\n',
+    );
   });
 
   it('collector-hook exits within the budget on PostToolUse', async () => {
@@ -225,5 +252,17 @@ describe('collector flush backstop against a packet-dropping OTLP endpoint', () 
     );
     assert.equal(r.code, 0, `expected exit code 0, got ${r.code}; stderr: ${r.stderr.slice(0, 400)}`);
     assert.equal(r.stdout.trim(), '{}', `unexpected collector stdout: ${r.stdout.slice(0, 200)}`);
+  });
+
+  it('a large collector.timeout does NOT lengthen the freeze — the backstop still wins', async () => {
+    const r = await longTimeoutRun;
+    assert.ok(
+      !r.timedOut,
+      `collector-hook with collector.timeout: 30000 did not exit within ${EXIT_BOUND_MS}ms — ` +
+      'collector.timeout is being allowed to RAISE the flush budget above FLUSH_BACKSTOP_MS, ' +
+      `so the host's tool call freezes for as long as the user's request timeout; stderr: ` +
+      `${r.stderr.slice(0, 400)}`,
+    );
+    assert.equal(r.code, 0, `expected exit code 0, got ${r.code}; stderr: ${r.stderr.slice(0, 400)}`);
   });
 });
