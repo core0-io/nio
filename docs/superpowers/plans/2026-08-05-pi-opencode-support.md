@@ -4323,6 +4323,11 @@ fi
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling Nio (opencode)..."
   rm -f  "$OC_HOME/plugins/nio.js"  2>/dev/null && echo "  Removed plugin"  || true
+  # Only remove the ESM sentinel if WE wrote it (marker present).
+  if [ -f "$OC_HOME/plugins/.nio-esm-sentinel" ]; then
+    rm -f "$OC_HOME/plugins/package.json" "$OC_HOME/plugins/.nio-esm-sentinel" 2>/dev/null \
+      && echo "  Removed ESM sentinel" || true
+  fi
   rm -f  "$OC_HOME/commands/nio.md" 2>/dev/null && echo "  Removed command" || true
   rm -rf "$OC_HOME/skills/nio"      2>/dev/null && echo "  Removed skill"   || true
   for s in $FOCUSED_SKILLS; do
@@ -4341,8 +4346,28 @@ rm -f "$OC_HOME/plugins/nio.js"
 cp "$SCRIPT_DIR/plugins/nio.js" "$OC_HOME/plugins/nio.js"
 # ESM sentinel: opencode imports the bundle directly, and the install dir
 # has no ESM-declaring ancestor package.json.
-if [ -f "$SCRIPT_DIR/plugins/package.json" ] && [ ! -f "$OC_HOME/plugins/package.json" ]; then
-  cp "$SCRIPT_DIR/plugins/package.json" "$OC_HOME/plugins/package.json"
+#
+# AMENDED (Task 11 review, human ruling): $OC_HOME/plugins/ is opencode's
+# SHARED plugin directory, not Nio-exclusive. Writing {"type":"module"}
+# there flips any sibling CJS plugin that has no package.json of its own,
+# and the breakage would outlive uninstalling Nio. So: only write the
+# sentinel when we are the only plugin in the directory, mark that we own
+# it, and remove it on uninstall. When siblings exist, skip and warn.
+OC_SENTINEL="$OC_HOME/plugins/package.json"
+OC_SENTINEL_MARKER="$OC_HOME/plugins/.nio-esm-sentinel"
+if [ -f "$SCRIPT_DIR/plugins/package.json" ] && [ ! -f "$OC_SENTINEL" ]; then
+  # Any *.js / *.ts in the dir other than our own bundle is a sibling plugin.
+  OC_SIBLINGS=$(find "$OC_HOME/plugins" -maxdepth 1 \
+    \( -name '*.js' -o -name '*.ts' \) ! -name 'nio.js' 2>/dev/null | head -n 1)
+  if [ -z "$OC_SIBLINGS" ]; then
+    cp "$SCRIPT_DIR/plugins/package.json" "$OC_SENTINEL"
+    : > "$OC_SENTINEL_MARKER"
+  else
+    echo "  WARN: other plugins present in $OC_HOME/plugins — skipping the"
+    echo "        ESM sentinel so their module format is left untouched."
+    echo "        If opencode fails to load nio.js, add a package.json"
+    echo "        containing {\"type\": \"module\"} to that directory."
+  fi
 fi
 echo "  OK: $OC_HOME/plugins/nio.js"
 
@@ -4457,6 +4482,37 @@ NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_OC"  
 find "$TMP_OC" -maxdepth 2 -type f | sort                                        # identical listing
 NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_OC" --uninstall
 find "$TMP_OC" -type f | sort                                                    # nio files gone
+```
+
+AMENDED (Task 11 review, human ruling) — the sentinel now has three cases
+that must each be exercised by hand in a temp dir. `XDG_CONFIG_HOME` must be
+cleared and `NIO_HOME` must be a `mktemp -d` for every invocation.
+
+```bash
+# Case A — clean dir: sentinel written, ownership marker written,
+#          uninstall removes both.
+TMP_A=$(mktemp -d)
+NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_A"
+test -f "$TMP_A/plugins/package.json"      && echo "A: sentinel written"
+test -f "$TMP_A/plugins/.nio-esm-sentinel" && echo "A: marker written"
+NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_A" --uninstall
+test ! -f "$TMP_A/plugins/package.json"      && echo "A: sentinel removed"
+test ! -f "$TMP_A/plugins/.nio-esm-sentinel" && echo "A: marker removed"
+
+# Case B — sibling CJS plugin present: sentinel SKIPPED, warning printed,
+#          the sibling's module format is left as it was.
+TMP_B=$(mktemp -d); mkdir -p "$TMP_B/plugins"; : > "$TMP_B/plugins/other.js"
+NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_B" | grep -q 'WARN: other plugins present' \
+  && echo "B: warned"
+test ! -f "$TMP_B/plugins/package.json"      && echo "B: sentinel skipped"
+test ! -f "$TMP_B/plugins/.nio-esm-sentinel" && echo "B: no marker"
+
+# Case C — a package.json we do NOT own is never touched, not even on uninstall.
+TMP_C=$(mktemp -d); mkdir -p "$TMP_C/plugins"
+echo '{"name":"someone-else"}' > "$TMP_C/plugins/package.json"
+NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_C"
+NIO_HOME=$(mktemp -d) bash plugins/opencode/setup.sh --opencode-home "$TMP_C" --uninstall
+grep -q 'someone-else' "$TMP_C/plugins/package.json" && echo "C: foreign manifest intact"
 ```
 
 - [ ] **Step 10: Commit**
