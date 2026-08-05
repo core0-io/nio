@@ -74,6 +74,42 @@ export function linesFromTailBuffer(buf: Buffer, bytesRead: number): string[] {
  * directory), or empty file all yield an empty array. Individual line
  * content is not validated here; callers are responsible for
  * tolerating malformed JSON per line.
+ *
+ * ── On the blocking read ────────────────────────────────────────────
+ *
+ * This is deliberately synchronous, and staying synchronous is a
+ * measured decision rather than an accident of the call site.
+ *
+ * The constraint: `ConversationSource.callsSince(sinceMs): ChatCall[]`
+ * (see `types.ts`) is a synchronous interface implemented by all four
+ * platform sources, so an async read here would have to be threaded
+ * through every source and every caller of every source — for a hook
+ * process whose whole job finishes in tens of milliseconds.
+ *
+ * The measurement (this machine, Node 25, APFS/NVMe; a JSONL transcript
+ * of ~1.1KB records, read in a fresh process so nothing is warmed by a
+ * previous call — i.e. exactly a hook invocation's view):
+ *
+ *   7.81 MB (just under the cap, full-read path) → 6.3–7.4 ms
+ *   4.00 MB (full-read path)                     → 1.3 ms  (warm: 1.3 ms)
+ *   1.00 MB (full-read path)                     → 0.4 ms
+ *   70.0 MB (over the cap, tail path)            → 0.5 ms
+ *
+ * So the worst case this function can ever take is bounded at ~7 ms by
+ * `MAX_CONVERSATION_FILE_BYTES` — anything larger takes the tail path,
+ * which is flat in file size (the 70 MB case is *faster* than the 8 MB
+ * one, because it reads 2 MB instead of 7.81). For scale, Node process
+ * startup alone is several times that, and the host hook budgets are
+ * three to four orders of magnitude larger (Hermes: 60 s default per
+ * `shell_hooks.py`; Claude Code / Codex: tens of seconds).
+ *
+ * Going async would therefore buy nothing measurable and cost an
+ * interface change across four sources. If `MAX_CONVERSATION_FILE_BYTES`
+ * is ever raised substantially, re-run this measurement first — the
+ * bound above is what makes the blocking read safe, not the read itself.
+ * The tail-path behaviour that enforces it is pinned by
+ * `conversation-read-jsonl.test.ts` ("takes the tail-only path once the
+ * file exceeds maxBytes").
  */
 export function readJsonlTail(
   path: string,
