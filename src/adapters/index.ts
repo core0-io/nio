@@ -12,6 +12,12 @@ export {
   type OpenClawPluginOptions,
 } from './openclaw-plugin.js';
 export {
+  InProcessPluginRuntime,
+  type PluginRuntimeOptions,
+  type PreToolResult,
+  type GuardDecisionTag,
+} from './plugin-runtime.js';
+export {
   loadConfig,
   resetConfig,
   loadMetricsConfig,

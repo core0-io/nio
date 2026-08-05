@@ -213,6 +213,13 @@ export class InProcessPluginRuntime {
     if (this.loggerProvider) await this.loggerProvider.forceFlush();
   }
 
+  /** Increment the per-turn counter. Separate from onTurnEnd so
+   *  platforms that flush turns and count turns at different events can
+   *  call them independently. */
+  async recordTurnMetric(): Promise<void> {
+    if (this.meterProvider) await recordTurn(this.meterProvider);
+  }
+
   protected writeLifecycle(
     sessionId: string,
     lifecycleType: AuditLifecycleEntry['lifecycle_type'],
