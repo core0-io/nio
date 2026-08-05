@@ -137,6 +137,15 @@ export class InProcessPluginRuntime {
     return this.sessionState.has(sessionId);
   }
 
+  /**
+   * Seed in-memory session state directly. Test-only seam — lets tests
+   * assert that a state-clearing method actually cleared seeded state,
+   * rather than asserting a no-op against a runtime that never had any.
+   */
+  _setSessionStateForTests(sessionId: string, state: CollectorState): void {
+    this.sessionState.set(sessionId, state);
+  }
+
   /** Hard session boundary — drop stale turn numbering, write audit row. */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
