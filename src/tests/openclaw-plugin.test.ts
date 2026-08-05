@@ -3,6 +3,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 
@@ -36,6 +39,55 @@ function stubNio(verdict: 'allow' | 'deny') {
       },
     },
   }) as never;
+}
+
+/** Orchestrator stub whose raw decision is 'confirm' — the only input that
+ *  makes evaluateHook produce the caller-facing 'ask' decision. */
+function stubNioConfirm() {
+  return () => ({
+    orchestrator: {
+      async evaluate() {
+        return {
+          decision: 'confirm',
+          risk_level: 'medium',
+          scores: { final: 0.5 },
+          findings: [{ rule_id: 'TEST_RULE' }],
+          explanation: 'characterization confirm verdict',
+          phase_stopped: 2,
+          diagnostics: [],
+        };
+      },
+    },
+  }) as never;
+}
+
+/** Isolate NIO_HOME to a fresh tmpdir for the duration of `fn`, then
+ *  restore whatever isolate-nio-home.js had already pinned it to. Never
+ *  touches the real `~/.nio`. */
+async function withIsolatedNioHome<T>(
+  fn: (nioHome: string) => Promise<T>,
+  configYaml?: string,
+): Promise<T> {
+  const prev = process.env.NIO_HOME;
+  const nioHome = mkdtempSync(join(tmpdir(), 'nio-oc-plugin-test-'));
+  process.env.NIO_HOME = nioHome;
+  if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+  try {
+    return await fn(nioHome);
+  } finally {
+    process.env.NIO_HOME = prev;
+  }
+}
+
+function readAuditRows(nioHome: string): Array<{
+  lifecycle_type?: string;
+  details?: Record<string, unknown>;
+}> {
+  const raw = readFileSync(join(nioHome, 'audit.jsonl'), 'utf-8');
+  return raw
+    .split('\n')
+    .filter(line => line.trim().length > 0)
+    .map(line => JSON.parse(line) as { lifecycle_type?: string; details?: Record<string, unknown> });
 }
 
 const CTX = { sessionKey: 'oc-session-1' };
@@ -192,5 +244,97 @@ describe('OpenClaw plugin — characterization', () => {
     });
     assert.equal(typeof out.content[0]!.text, 'string');
     assert.ok(out.content[0]!.text.length > 0);
+  });
+});
+
+// Fix round 1: closes the coverage gap that let three drifts (fabricated
+// gen_ai.tool.call.id, lost run_id on sub-agent audit rows, 'ask' leaking
+// onto span attributes) slip past the spans-and-shapes-only suite above.
+describe('OpenClaw plugin — fix round 1 regressions', () => {
+  it('sub-agent lifecycle audit rows carry BOTH subagent_id and run_id', async () => {
+    await withIsolatedNioHome(async (nioHome) => {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('allow'), tracerProvider: null, meterProvider: null,
+      });
+      await api.handlers.get('subagent_spawning')!(
+        { subagentId: 'sub-42', runId: 'run-99' }, CTX,
+      );
+      await api.handlers.get('subagent_ended')!(
+        { subagentId: 'sub-42', runId: 'run-99' }, CTX,
+      );
+
+      const rows = readAuditRows(nioHome).filter(
+        r => r.lifecycle_type === 'subagent_spawning' || r.lifecycle_type === 'subagent_ended',
+      );
+      assert.equal(rows.length, 2);
+      for (const row of rows) {
+        assert.equal(row.details?.['subagent_id'], 'sub-42');
+        assert.equal(row.details?.['run_id'], 'run-99');
+      }
+    });
+  });
+
+  it('confirm_action "ask" folds the span decision to confirm_allowed, not "ask"', async () => {
+    await withIsolatedNioHome(async () => {
+      const tracer = makeInMemoryTracer();
+      try {
+        const api = fakeApi();
+        registerOpenClawPlugin(api as never, {
+          nioFactory: stubNioConfirm(),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+        });
+        const out = await api.handlers.get('before_tool_call')!(
+          { toolName: 'exec', params: { command: 'curl x' }, toolCallId: 'c1' }, CTX,
+        );
+        // No interactive channel: 'ask' folds to allow at the block decision.
+        assert.equal(out, undefined);
+
+        await api.handlers.get('after_tool_call')!(
+          { toolName: 'exec', toolCallId: 'c1', result: 'ok' }, CTX,
+        );
+        const spans = tracer.finished();
+        assert.equal(spans.length, 1);
+        assert.equal(spans[0]!.attributes['nio.guard.decision'], 'confirm_allowed');
+      } finally {
+        await tracer.shutdown();
+      }
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('gen_ai.tool.call.id is present only when the event supplies a real toolCallId', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+
+      // No toolCallId on the event → must NOT fabricate one from the tool name.
+      await api.handlers.get('before_tool_call')!(
+        { toolName: 'exec', params: { command: 'ls' } }, CTX,
+      );
+      await api.handlers.get('after_tool_call')!(
+        { toolName: 'exec', result: 'ok' }, CTX,
+      );
+
+      // Real toolCallId on the event → carried through verbatim.
+      await api.handlers.get('before_tool_call')!(
+        { toolName: 'exec', params: { command: 'ls' }, toolCallId: 'call-77' }, CTX,
+      );
+      await api.handlers.get('after_tool_call')!(
+        { toolName: 'exec', toolCallId: 'call-77', result: 'ok' }, CTX,
+      );
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 2);
+      assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], undefined);
+      assert.equal(spans[1]!.attributes['gen_ai.tool.call.id'], 'call-77');
+    } finally {
+      await tracer.shutdown();
+    }
   });
 });

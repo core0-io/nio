@@ -279,13 +279,17 @@ export class InProcessPluginRuntime {
     toolName: string,
     params: Record<string, unknown>,
     rawEvent: unknown,
-    extraPreAttrs?: Record<string, unknown>,
+    opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
     if (this.tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      // `spanKey` is the internal correlation key (falls back to the tool
+      // name when the platform gives no id) — it must never leak onto the
+      // span as `gen_ai.tool.call.id`. Only a real platform-supplied id
+      // may produce that attribute; otherwise it's omitted entirely.
       const preAttrs: Record<string, unknown> = {
-        ...genAiToolCallInputAttributes(params, spanKey),
-        ...(extraPreAttrs ?? {}),
+        ...genAiToolCallInputAttributes(params, opts?.toolCallId),
+        ...(opts?.extraPreAttrs ?? {}),
       };
       state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
       this.sessionState.set(sessionId, state);
@@ -325,10 +329,17 @@ export class InProcessPluginRuntime {
               : 'confirm_allowed'
           : 'allow';
 
+    // The span taxonomy documented in traces-collector.ts is
+    // {allow, deny, confirm_allowed, confirm_denied} — 'ask' is a
+    // caller-facing signal ("prompt the user"), never a span value.
+    // resolveConfirm overwrites this with the real outcome once a
+    // platform that actually prompts (Pi) resolves it.
+    const spanDecision: GuardDecisionTag = decision === 'ask' ? 'confirm_allowed' : decision;
+
     const guardAttrs: Record<string, unknown> = {
       ...nioGuardAttributes(
-        decision,
-        result.riskLevel || (decision === 'allow' ? 'low' : 'unknown'),
+        spanDecision,
+        result.riskLevel || (spanDecision === 'allow' ? 'low' : 'unknown'),
         result.riskScore ?? 0,
         result.riskTags,
         result.phaseStopped,
@@ -443,8 +454,12 @@ export class InProcessPluginRuntime {
   }
 
   /** Sub-agent / Task span open. */
-  async onSubagentStart(sessionId: string, taskId: string): Promise<void> {
-    this.writeLifecycle(sessionId, 'subagent_spawning', { subagent_id: taskId });
+  async onSubagentStart(
+    sessionId: string,
+    taskId: string,
+    auditDetails?: Record<string, unknown>,
+  ): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_spawning', auditDetails ?? { subagent_id: taskId });
     if (this.tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       state = recordPreTaskToolUse(state, taskId, '');
@@ -454,8 +469,12 @@ export class InProcessPluginRuntime {
   }
 
   /** Sub-agent / Task span close. */
-  async onSubagentEnd(sessionId: string, taskId: string): Promise<void> {
-    this.writeLifecycle(sessionId, 'subagent_ended', { subagent_id: taskId });
+  async onSubagentEnd(
+    sessionId: string,
+    taskId: string,
+    auditDetails?: Record<string, unknown>,
+  ): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_ended', auditDetails ?? { subagent_id: taskId });
     if (this.tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
