@@ -345,7 +345,7 @@ export class ActionOrchestrator {
     // ── Phase 6: External APIs (0..N endpoints, concurrent) ──────────
     if (this.externalScorers.length > 0) {
       // Snapshot of Phase 2-5 scores. All concurrent external scorers see the
-      // same snapshot — they do NOT see each other's results (decision: 互不可见).
+      // same snapshot — they do NOT see each other's results (mutually blind).
       const priorScoreSnapshot: Record<string, number | undefined> = {
         runtime:     scores.runtime,
         static:      scores.static,
