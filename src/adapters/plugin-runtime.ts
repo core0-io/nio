@@ -62,6 +62,22 @@ export interface PluginRuntimeOptions {
   confirmAction?: 'allow' | 'deny' | 'ask';
   /** Custom Nio engine factory (tests inject a stub). */
   nioFactory?: () => NioInstance;
+  /**
+   * Override the tracer provider instead of building one from collector
+   * config. Tests inject an in-memory tracer (`makeInMemoryTracer()`) so
+   * the span wiring — pending-span park/drain, orphan-span emission on
+   * the block path — actually runs instead of being skipped because
+   * `collector.endpoint` is unset. `undefined` (the default) builds from
+   * config as usual; `null` explicitly disables tracing, distinct from
+   * "not provided".
+   */
+  tracerProvider?: ReturnType<typeof createTracerProvider>;
+  /**
+   * Override the meter provider instead of building one from collector
+   * config. Same `undefined` (build from config) vs `null` (explicitly
+   * disabled) semantics as `tracerProvider`.
+   */
+  meterProvider?: ReturnType<typeof createMeterProvider>;
 }
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
@@ -111,8 +127,12 @@ export class InProcessPluginRuntime {
         ? this.config.agent_name
         : undefined;
 
-    this.tracerProvider = createTracerProvider(collectorConfig, opts.platform, agentName);
-    this.meterProvider = createMeterProvider(collectorConfig, opts.platform, agentName);
+    this.tracerProvider = opts.tracerProvider !== undefined
+      ? opts.tracerProvider
+      : createTracerProvider(collectorConfig, opts.platform, agentName);
+    this.meterProvider = opts.meterProvider !== undefined
+      ? opts.meterProvider
+      : createMeterProvider(collectorConfig, opts.platform, agentName);
     const logsConfig = this.config.collector?.logs;
     this.loggerProvider =
       logsConfig?.enabled !== false

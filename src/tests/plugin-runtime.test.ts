@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { InProcessPluginRuntime, type PreToolResult } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { ensureTurn } from '../scripts/lib/traces-collector.js';
+import { makeInMemoryTracer } from './helpers/tracer.js';
 
 describe('InProcessPluginRuntime', () => {
   function makeRuntime() {
@@ -133,5 +134,111 @@ describe('InProcessPluginRuntime tool path', () => {
     const rt = runtimeWithVerdict('allow');
     await rt.onPostTool('s-unknown', 'call-x', 'exec', { result: 'ok' });
     assert.equal(rt.hasSessionState('s-unknown'), false);
+  });
+});
+
+// The tests above run with both OTEL providers null (the harness pins
+// NIO_HOME to an empty tmpdir, so collector.endpoint is unset). That
+// leaves the span wiring — park guard attrs, drain them exactly once,
+// emit an orphan span when a call is blocked — completely unexercised.
+// These tests inject an in-memory tracer so that wiring can actually
+// fail. `makeInMemoryTracer` is the repo's existing helper, already used
+// by src/tests/traces-collector.test.ts.
+describe('InProcessPluginRuntime span wiring', () => {
+  function runtimeWithTracer(
+    verdict: 'allow' | 'deny' | 'confirm',
+    tracer: ReturnType<typeof makeInMemoryTracer>,
+    confirmAction?: 'allow' | 'deny' | 'ask',
+  ) {
+    return new InProcessPluginRuntime({
+      platform: 'test-platform',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: tracer.provider,
+      meterProvider: null,
+      ...(confirmAction ? { confirmAction } : {}),
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            return {
+              decision: verdict,
+              risk_level: verdict === 'allow' ? 'low' : 'high',
+              scores: { final: verdict === 'allow' ? 0 : 0.9 },
+              findings: verdict === 'allow' ? [] : [{ rule_id: 'TEST_RULE' }],
+              explanation: 'test verdict',
+              phase_stopped: 2,
+              diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+  }
+
+  const preEvent = (command: string) => ({
+    toolName: 'exec', params: { command },
+  });
+
+  it('allow path emits one tool span carrying the guard attrs', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('allow', tracer);
+      await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
+      assert.equal(tracer.finished().length, 0, 'no span before the post side');
+
+      await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      assert.equal(spans[0]!.attributes['nio.guard.decision'], 'allow');
+      assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('deny path emits the orphan span immediately and drains attrs once', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('deny', tracer);
+      const r = await rt.onPreTool(
+        's1', 'call-1', 'exec', { command: 'rm -rf /' }, preEvent('rm -rf /'),
+      );
+      assert.equal(r.block, true);
+
+      // The platform's post-side event never fires for a blocked call, so
+      // onPreTool must have emitted the span itself.
+      const afterBlock = tracer.finished();
+      assert.equal(afterBlock.length, 1, 'orphan span emitted on the block path');
+      assert.equal(afterBlock[0]!.attributes['nio.guard.decision'], 'deny');
+
+      // A defensive post call must not emit a second span for the same key.
+      await rt.onPostTool('s1', 'call-1', 'exec', { result: 'never ran' });
+      assert.equal(tracer.finished().length, 1, 'guard attrs drained exactly once');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('resolveConfirm("no") closes the span and keeps the earlier guard attrs', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = runtimeWithTracer('confirm', tracer, 'ask');
+      const r = await rt.onPreTool(
+        's1', 'call-1', 'exec', { command: 'curl x' }, preEvent('curl x'),
+      );
+      assert.equal(r.decision, 'ask');
+      assert.equal(r.block, false);
+      assert.equal(tracer.finished().length, 0, 'nothing emitted while awaiting the user');
+
+      const resolved = await rt.resolveConfirm('s1', 'call-1', 'ask', r.reason, false);
+      assert.equal(resolved.block, true);
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      assert.equal(spans[0]!.attributes['nio.guard.decision'], 'confirm_denied');
+      // The merge must preserve what onPreTool parked, not replace it.
+      assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
+    } finally {
+      await tracer.shutdown();
+    }
   });
 });
