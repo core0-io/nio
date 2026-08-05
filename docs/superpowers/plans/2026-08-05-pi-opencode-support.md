@@ -4529,6 +4529,349 @@ opencode's config/plugin.ts glob over {plugin,plugins}/*.{ts,js}."
 
 ---
 
+### Task 11b: Pi MCP support (`pi-mcp-adapter`)
+
+> ADDED AFTER THE ORIGINAL PLAN. Task 7 surfaced that the maintainer's own
+> Pi install lists the third-party `pi-mcp-adapter` package. Pi CORE has no
+> MCP (design spec §4.2 is accurate), but the human ruled that Pi users
+> install that adapter by default, so "Pi has no MCP" is misleading in
+> practice and a wording-only fix is not enough: as shipped, those tools
+> fall through as `UNCATEGORIZED_TOOL` and Phase 0's `permitted_tools.mcp`
+> / `blocked_tools.mcp` lists cannot gate them at all. Sequenced before
+> Task 12 so the documentation describes shipped behaviour.
+
+**Files:**
+- Modify: `src/adapters/pi.ts` (export `PI_BUILTIN_TOOLS`)
+- Modify: `src/adapters/hook-engine.ts` (`parseMcpToolName` + its two call sites)
+- Modify: `src/adapters/mcp-registry.ts` (`MCPSource` gains `'pi'`; new source descriptor)
+- Modify: `src/adapters/openclaw-dispatch.ts` (`runDoctor` Pi note)
+- Modify: `src/core/shared/detection-data.ts` (comment only)
+- Modify: `src/tests/mcp-registry.test.ts`
+- Create: `src/tests/pi-mcp.test.ts`
+
+**Interfaces:**
+- Consumes: `ParsedMcpToolName`, `parseMcpToolName(toolName, platform, knownServers?)`, `MCPRegistry`.
+- Produces: `parseMcpToolName` gains an optional FOURTH parameter
+  `toolInput?: Record<string, unknown>`; `MCPSource` gains `'pi'`;
+  `src/adapters/pi.ts` exports `PI_BUILTIN_TOOLS`.
+
+**Upstream facts (verified against the published `pi-mcp-adapter@2.20.1`
+tarball — do not re-derive, do not guess):**
+
+1. **Default mode is a single proxy tool.** All MCP traffic goes through one
+   Pi tool literally named `mcp` (`index.ts:669-695`, `registerProxyTool`).
+   Its parameter schema carries the target as a top-level **`tool`** string
+   (the unprefixed original tool name, e.g. `xcodebuild_list_sims`) and an
+   optional top-level **`server`** string ("Filter to specific server (also
+   disambiguates tool calls)", `index.ts:693`). Server and tool are separate
+   properties — there is no `server/tool` or `server.tool` combined form.
+   Other modes of the same tool (`connect`, `describe`, `search`, `action`)
+   carry no `tool` value.
+2. **Opt-in `directTools: true` registers one Pi tool per MCP tool**, named
+   by `formatToolName()` (`types.ts:640-646`) with a prefix from
+   `getServerPrefix()` (`types.ts:626-651`). `ToolPrefix` is
+   `"server" | "none" | "short" | "mcp"` (`types.ts:428`), default
+   `"server"` (`direct-tools.ts:214`, `index.ts:154`):
+   - `"server"` → `<server>_<tool>` (server hyphens → `_`, tool dots → `_`)
+   - `"short"`  → same shape, server's trailing `-mcp`/`mcp` stripped
+   - `"mcp"`    → `mcp__<server>_<tool>` (double underscore after `mcp`, single before the tool)
+   - `"none"`   → bare `<tool>` — indistinguishable from a native tool. **Not supportable**; say so in the code comment rather than inventing a heuristic.
+3. **Server list on disk.** `loadMcpConfig()` (`config.ts:261-278`) probes,
+   in order: `~/.config/mcp/mcp.json`, `~/.agents/mcp.json`,
+   `~/.agents/mcp/mcp.json`, **`$PI_CODING_AGENT_DIR/mcp.json` (else
+   `~/.pi/agent/mcp.json`)**, `<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`. All
+   are JSON (comments + trailing commas tolerated) with the server map under
+   **`mcpServers`**, falling back to `mcp-servers` (`config.ts:606`).
+   `$PI_CODING_AGENT_DIR` is honoured including `~` expansion
+   (`agent-dir.ts:4-16`) — the same override Task 7 already threads through
+   `plugins/pi/setup.sh`.
+
+**Scope ruling — only the Pi-owned path becomes a registry source.** Add
+`$PI_CODING_AGENT_DIR/mcp.json` (else `~/.pi/agent/mcp.json`) as source
+`'pi'`. The generic `~/.config/mcp/mcp.json` and `~/.agents/**` paths are
+cross-agent conventions, not Pi-owned — labelling them `source: 'pi'` would
+put a false provenance into diagnostics output. The two `<cwd>`-relative
+paths are out of scope because `discoverSources()` is home-scoped and has no
+cwd parameter. Record both exclusions in the code comment; they are a known
+coverage gap, not an oversight.
+
+- [ ] **Step 1: Export the Pi built-in tool set**
+
+In `src/adapters/pi.ts`, directly below `DEFAULT_NATIVE_TOOL_MAPPING`, add:
+
+```ts
+/**
+ * Pi core's seven built-in tools.
+ *
+ * `hook-engine.ts`'s `parseMcpToolName` needs this to short-circuit the
+ * Pi anonymous-MCP fallback tier, exactly as `OPENCODE_BUILTIN_TOOLS`
+ * does for opencode. None of the seven currently contains an underscore,
+ * so the guard is presently redundant — it is here so that a future Pi
+ * built-in named like `apply_patch` cannot be silently re-gated under
+ * `permitted_tools.mcp` the moment an MCP server is configured. That is
+ * the exact defect Task 9 found in the opencode branch.
+ */
+export const PI_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  'bash', 'read', 'write', 'edit', 'ls', 'find', 'grep',
+]);
+```
+
+- [ ] **Step 2: Add the `pi` registry source**
+
+In `src/adapters/mcp-registry.ts`:
+
+```ts
+export type MCPSource =
+  'claude' | 'claude_desktop' | 'hermes' | 'openclaw' | 'opencode' | 'pi' | 'manual';
+```
+
+In `discoverSources(home)`, after the `opencode` descriptor and before the
+`return`:
+
+```ts
+  // Pi core has no MCP. The third-party `pi-mcp-adapter` package adds it
+  // and reads its server map from `$PI_CODING_AGENT_DIR/mcp.json`, else
+  // `~/.pi/agent/mcp.json` (pi-mcp-adapter config.ts:159-161,382-390;
+  // agent-dir.ts:4-16). Key is `mcpServers` with a `mcp-servers` fallback
+  // (config.ts:606).
+  //
+  // Deliberately NOT registered here: the adapter also probes
+  // `~/.config/mcp/mcp.json` and `~/.agents/mcp{,/mcp}.json`, which are
+  // cross-agent conventions rather than Pi-owned files — claiming them as
+  // `source: 'pi'` would put false provenance into diagnostics. Its two
+  // project-relative probes (`<cwd>/.mcp.json`, `<cwd>/.pi/mcp.json`) are
+  // out of reach because `discoverSources` is home-scoped. Servers
+  // declared only in those five files are a known coverage gap: their
+  // tools reach the anonymous fallback tier and are gateable by full name.
+  const piAgentDir = process.env.PI_CODING_AGENT_DIR
+    ? expandHome(process.env.PI_CODING_AGENT_DIR, home)
+    : join(home, '.pi', 'agent');
+  sources.push({
+    path: join(piAgentDir, 'mcp.json'),
+    source: 'pi',
+    format: 'json',
+    parse: (data) =>
+      extractFromMcpServers(data, ['mcpServers'])
+      ?? extractFromMcpServers(data, ['mcp-servers']),
+  });
+```
+
+Add the `expandHome` helper next to `claudeDesktopConfigPath` if the file
+has no equivalent already — check first, and reuse whatever is there:
+
+```ts
+/** Expand a leading `~` the way pi-mcp-adapter's agent-dir.ts does. */
+function expandHome(p: string, home: string): string {
+  if (p === '~') return home;
+  if (p.startsWith('~/')) return join(home, p.slice(2));
+  return p;
+}
+```
+
+- [ ] **Step 3: Teach `parseMcpToolName` the Pi conventions**
+
+Extend the signature with an optional fourth parameter and extend the doc
+comment's bullet list with a Pi entry:
+
+```ts
+export function parseMcpToolName(
+  toolName: string,
+  platform: string,
+  knownServers?: readonly string[],
+  toolInput?: Record<string, unknown>,
+): ParsedMcpToolName {
+```
+
+Insert the Pi branch immediately BEFORE the `opencode` branch:
+
+```ts
+  // Pi core has no MCP; the third-party `pi-mcp-adapter` package supplies
+  // it, in two shapes (verified against pi-mcp-adapter@2.20.1):
+  //
+  //   1. DEFAULT — one proxy tool literally named `mcp`, carrying the
+  //      target in `tool` and optionally the server in `server`
+  //      (index.ts:669-695). The tool NAME alone says nothing, so this is
+  //      the one branch that has to read `toolInput`.
+  //   2. OPT-IN `directTools: true` — one Pi tool per MCP tool, named
+  //      `<server>_<tool>` (default `toolPrefix: "server"`, also `"short"`)
+  //      or `mcp__<server>_<tool>` (`toolPrefix: "mcp"`), types.ts:626-651.
+  //
+  // `toolPrefix: "none"` emits the bare tool name, which is byte-identical
+  // to a native tool call. It is NOT detectable and we do not guess —
+  // those calls stay uncategorised, and the doctor note says so.
+  if (platform === 'pi') {
+    if (name === 'mcp') {
+      const target = typeof toolInput?.tool === 'string' ? toolInput.tool.trim() : '';
+      const server = typeof toolInput?.server === 'string' ? toolInput.server.trim() : '';
+      if (target) return { isMcp: true, server: server || undefined, local: target };
+      // `connect` / `describe` / `search` / `action` modes carry no target.
+      // Still MCP surface, but there is no tool to attribute, so follow the
+      // Hermes anonymous convention: gate it by the name the user sees.
+      return { isMcp: true, local: name };
+    }
+
+    if (!knownServers || knownServers.length === 0) return { isMcp: false };
+    if (PI_BUILTIN_TOOLS.has(name)) return { isMcp: false };
+
+    // toolPrefix: "mcp" → `mcp__<server>_<tool>`.
+    const body = name.startsWith('mcp__') ? name.slice(5) : name;
+    if (!body.includes('_')) return { isMcp: false };
+
+    const matches = knownServers
+      .filter(s => body.startsWith(`${s}_`) && body.length > s.length + 1)
+      .sort((a, b) => b.length - a.length);
+
+    if (matches.length > 0) {
+      const server = matches[0]!;
+      return { isMcp: true, server, local: body.slice(server.length + 1) };
+    }
+    // Only the explicitly-prefixed form is safe to claim anonymously: a
+    // bare `<something>_<something>` we cannot attribute is far more
+    // likely to be an unmapped native tool than an MCP call.
+    if (name.startsWith('mcp__')) return { isMcp: true, local: name };
+    return { isMcp: false };
+  }
+```
+
+Add the import at the top of `hook-engine.ts`, beside the existing
+`OPENCODE_BUILTIN_TOOLS` import:
+
+```ts
+import { PI_BUILTIN_TOOLS } from './pi.js';
+```
+
+> Note the asymmetry with the opencode branch, and keep it: opencode's
+> unattributed tier claims ANY underscored name as anonymous MCP, because
+> opencode really does flatten every MCP tool that way. On Pi, the
+> unprefixed `<server>_<tool>` form is opt-in and coexists with arbitrary
+> native tools from other extensions, so claiming every underscored name
+> would mis-gate them. Attribute what the registry can prove; otherwise
+> only trust the unambiguous `mcp__` marker.
+
+- [ ] **Step 4: Pass `toolInput` at both call sites**
+
+`parseMcpToolName` has exactly two production callers. Both already hold the
+payload — thread it through:
+
+- In `checkToolGate`, the `parseMcpToolName(toolName, platform, knownServers)`
+  call becomes `parseMcpToolName(toolName, platform, knownServers, toolInput)`.
+- In the MCP envelope fallback inside the main hook path, the call becomes
+  `parseMcpToolName(input.toolName, adapter.name, registry.entries.map(e => e.serverName), input.toolInput)`.
+
+Verify with `grep -rn "parseMcpToolName(" src --include="*.ts" | grep -v tests`
+that no third call site exists before you edit.
+
+- [ ] **Step 5: Correct the doctor note**
+
+In `src/adapters/openclaw-dispatch.ts`, replace the single line
+
+```ts
+  out.push('    note: Pi has no MCP support — the Phase 0 MCP gate is inactive there.');
+```
+
+with an accurate note, plus detection of the adapter itself. `runDoctor`
+already parses Pi's `settings.json` into `s` with `extensions` / `packages`
+arrays and already has the `mentionsNio` helper — generalise the matcher
+rather than re-reading the file:
+
+```ts
+  out.push(piMcpAdapter
+    ? '    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.'
+    : '    note: Pi core has no MCP; the pi-mcp-adapter package adds it and Nio gates those calls.');
+  out.push('    MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.');
+  out.push('    Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).');
+  out.push('    Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.');
+```
+
+`piMcpAdapter` is computed inside the same `try` that already reads
+`settings.json`, using the same shape-tolerant traversal as `mentionsNio`
+(entries may be strings or `{ source }` objects) and matching the substring
+`pi-mcp-adapter`. It defaults to `false`, and an unreadable or absent
+`settings.json` must leave it `false` — never throw, never `markFail`. This
+probe stays informational like every other line in this section.
+
+- [ ] **Step 6: Fix the stale comment in `detection-data.ts`**
+
+`src/core/shared/detection-data.ts:79` currently justifies the `.pi/`
+sensitive paths with "Pi has no MCP support." Correct the claim without
+changing any path entry — `.pi/` already subsumes `~/.pi/agent/mcp.json`,
+so no new entry is needed and none should be added:
+
+```ts
+  // Pi core has no MCP; the third-party pi-mcp-adapter package supplies
+  // it and stores its server map under this same directory. These paths
+  // are sensitive because they
+```
+
+- [ ] **Step 7: Tests**
+
+Create `src/tests/pi-mcp.test.ts`, modelled on `src/tests/opencode-mcp.test.ts`
+(same header, same `node:test` + `node:assert/strict` style). Required cases —
+each must fail if the corresponding branch arm is removed:
+
+Proxy tool (`mcp`):
+1. `parseMcpToolName('mcp', 'pi', [], { tool: 'list_sims', server: 'xcodebuild' })` → `{ isMcp: true, server: 'xcodebuild', local: 'list_sims' }`. Note the empty `knownServers` — the proxy path must NOT depend on the registry.
+2. Same without `server` → `{ isMcp: true, local: 'list_sims' }` and `server` undefined.
+3. `{ tool: '  list_sims  ' }` → trimmed to `list_sims`.
+4. `parseMcpToolName('mcp', 'pi', [], { action: 'connect' })` → `{ isMcp: true, local: 'mcp' }` (targetless discovery mode).
+5. `parseMcpToolName('mcp', 'pi', [])` with NO `toolInput` at all → same as case 4, no throw.
+6. `{ tool: 42 }` (non-string) → treated as targetless, no throw.
+
+Direct tools:
+7. `parseMcpToolName('xcodebuild_list_sims', 'pi', ['xcodebuild'])` → server `xcodebuild`, local `list_sims`.
+8. Longest-prefix wins: `parseMcpToolName('my_server_search', 'pi', ['my', 'my_server'])` → server `my_server`, local `search`.
+9. `parseMcpToolName('mcp__xcodebuild_list_sims', 'pi', ['xcodebuild'])` → server `xcodebuild`, local `list_sims` (the `mcp__` prefix is stripped before attribution).
+10. `parseMcpToolName('mcp__unknown_tool', 'pi', ['xcodebuild'])` → `{ isMcp: true, local: 'mcp__unknown_tool' }` — anonymous, full name preserved.
+11. `parseMcpToolName('some_other_tool', 'pi', ['xcodebuild'])` → `{ isMcp: false }`. This is the asymmetry with opencode and must be pinned.
+12. Empty registry: `parseMcpToolName('xcodebuild_list_sims', 'pi', [])` and the same with `knownServers` omitted → both `{ isMcp: false }`.
+13. Built-ins are never MCP: every name in `PI_BUILTIN_TOOLS`, with a registry configured, → `{ isMcp: false }`. Include a case where a server name would otherwise prefix-match a built-in (server `gr`, tool name `grep`) to prove the short-circuit runs before attribution.
+14. Cross-platform non-regression: `parseMcpToolName('mcp', 'opencode', ['x'], { tool: 'y' })` must NOT take the Pi path.
+
+Registry (`src/tests/mcp-registry.test.ts`), following the isolation
+discipline already in that file — every case sets `HOME` to a `mktemp -d`
+and restores the prior value (including `PI_CODING_AGENT_DIR`, which must be
+restored by DELETING it when it was originally unset, not by assigning the
+string `"undefined"` — that bug is already ledgered twice on this branch):
+15. `~/.pi/agent/mcp.json` with a `mcpServers` map → entries appear with `source: 'pi'`.
+16. Same file using the `mcp-servers` fallback key → same result.
+17. `PI_CODING_AGENT_DIR` set to a different temp dir → that file is read and `~/.pi/agent/mcp.json` is not.
+18. `PI_CODING_AGENT_DIR` set to `~/somewhere` → the `~` is expanded, not taken literally.
+19. Absent / malformed `mcp.json` → no entries, no throw.
+
+- [ ] **Step 8: Build and verify**
+
+```bash
+pnpm run build && pnpm test && pnpm typecheck
+```
+
+Bite-check before reporting — each mutation must redden a NAMED test, and
+you must report which:
+- Delete the `if (name === 'mcp')` block → proxy cases fail.
+- Delete the `PI_BUILTIN_TOOLS.has(name)` short-circuit → case 13 fails.
+- Change the final `return { isMcp: false }` to `{ isMcp: true, local: name }`
+  → case 11 fails.
+- Drop the `toolInput` argument at the `checkToolGate` call site → a Phase 0
+  gating test must fail. If none does, that is a coverage hole: add one
+  driving `checkToolGate` (or the hook path) with `permitted_tools.mcp`
+  set and a proxy `mcp` call, and say so in your report.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add src/adapters/pi.ts src/adapters/hook-engine.ts src/adapters/mcp-registry.ts \
+        src/adapters/openclaw-dispatch.ts src/core/shared/detection-data.ts \
+        src/tests/pi-mcp.test.ts src/tests/mcp-registry.test.ts
+git commit -m "feat(pi): gate third-party MCP tools through Phase 0
+
+Pi core has no MCP, but pi-mcp-adapter is the de-facto default for Pi
+users and its tools previously fell through as UNCATEGORIZED_TOOL, so
+permitted_tools.mcp / blocked_tools.mcp could not gate them. Handles the
+proxy tool 'mcp' (target read from tool/server params) and both direct-
+tool namings; toolPrefix 'none' is undetectable and documented as such."
+```
+
+---
+
 ## Phase D — Verification and documentation
 
 ### Task 12: E2E documents, repo docs, and changeset
@@ -4561,7 +4904,7 @@ Create `e2e-test/pi-trace-e2e-task.md`, following the structure of `e2e-test/ope
 6. **Confirm path** — set `guard.confirm_action: ask`, trigger a `confirm` verdict, and verify a real dialog appears; answer no and confirm the span records `confirm_denied`. Then re-run with `pi -p` (print mode, `ctx.hasUI === false`) and confirm it folds to the two-state behaviour without hanging.
 7. **`user_bash` audit-only** — type `!rm -rf /tmp/nio-e2e-nonexistent`; confirm an audit row with `lifecycle_type: user_bash` and `actor: user` appears **and that the command was not blocked**.
 8. **`/nio` command** — run `/nio scan <path>` and `/nio report`; confirm output renders and that the command did **not** go through the LLM (no assistant message is generated for it).
-9. **MCP note** — run `/nio doctor`; confirm it prints the "Pi does not support MCP" line.
+9. **MCP note** — run `/nio doctor`; confirm it prints the Pi MCP block Task 11b installed (core-has-no-MCP vs adapter-detected line, the two naming shapes, the server-config path, and the `toolPrefix: "none"` caveat). If `pi-mcp-adapter` is installed in the sandbox, also add an MCP allow/deny leg: put the proxy tool's target in `blocked_tools.mcp`, call it, and confirm the audit row shows `decision: deny` with the MCP tool name rather than an `UNCATEGORIZED_TOOL` pass-through.
 10. **Teardown** — `bash plugins/pi/setup.sh --pi-home "$PI_HOME" --uninstall`; confirm `settings.json` has no nio entries left.
 
 - [ ] **Step 2: Write the opencode e2e document**
@@ -4575,7 +4918,7 @@ Create `e2e-test/opencode-trace-e2e-task.md` with the same sandbox discipline (`
 
 In the "Project Structure" section, add two entries after the `plugins/codex/` entry, matching the existing entries' level of detail:
 
-- `plugins/pi/` — Pi extension. The release zip is itself a valid pi package (`package.json` with the `pi` manifest key and the `pi-package` keyword), so `setup.sh` prefers `pi install "$SCRIPT_DIR"` and falls back to copying the bundle into `~/.pi/agent/extensions/nio/` plus an explicit path entry in `settings.json`. Subscribes `tool_call` (blocking) / `tool_result` / `input` / `session_start` / `session_shutdown` / `agent_end` / `message_end` / `user_bash`. `/nio` is a real slash command via `pi.registerCommand`, bypassing the LLM. Pi is the only platform with an interactive channel, so a `confirm` verdict opens a real `ctx.ui.confirm` dialog with a timeout. **Pi has no MCP and no subagent concept** — the Phase 0 MCP gate is inactive and no Task spans are emitted. Adapter at `src/adapters/pi.ts`; binding at `src/adapters/pi-plugin.ts`.
+- `plugins/pi/` — Pi extension. The release zip is itself a valid pi package (`package.json` with the `pi` manifest key and the `pi-package` keyword), so `setup.sh` prefers `pi install "$SCRIPT_DIR"` and falls back to copying the bundle into `~/.pi/agent/extensions/nio/` plus an explicit path entry in `settings.json`. Subscribes `tool_call` (blocking) / `tool_result` / `input` / `session_start` / `session_shutdown` / `agent_end` / `message_end` / `user_bash`. `/nio` is a real slash command via `pi.registerCommand`, bypassing the LLM. Pi is the only platform with an interactive channel, so a `confirm` verdict opens a real `ctx.ui.confirm` dialog with a timeout. **Pi has no subagent concept**, so no Task spans are emitted. **Pi core has no MCP either, but the third-party `pi-mcp-adapter` package adds it** and is the de-facto default for Pi users, so `parseMcpToolName` carries a `pi` branch (Task 11b): the proxy tool `mcp` resolves its target from the `tool` / `server` parameters, and `directTools` mode is matched as `<server>_<tool>` / `mcp__<server>_<tool>` against servers read from `$PI_CODING_AGENT_DIR/mcp.json` (else `~/.pi/agent/mcp.json`). `toolPrefix: "none"` is undetectable by design. Adapter at `src/adapters/pi.ts`; binding at `src/adapters/pi-plugin.ts`.
 - `plugins/opencode/` — opencode plugin. No plugin-install CLI exists, so `setup.sh` does an idempotent nuke + copy into `~/.config/opencode/` (`plugins/nio.js`, `commands/nio.md`, `skills/`). Hooks: `tool.execute.before` (throws `NioBlockedError` to block) / `tool.execute.after` / `chat.message` / `permission.ask` / `event` / `dispose`. No plugin API for slash commands, so `/nio` is a `commands/nio.md` template that instructs the model to call the plugin-registered `nio_command` tool. MCP tool names are `<sanitize(server)>_<sanitize(tool)>`, handled by the two-tier `opencode` branch in `parseMcpToolName`. Adapter at `src/adapters/opencode.ts`; binding at `src/adapters/opencode-plugin.ts`.
 
 Also update the "Skill" section note about focused skills — the current text says "**Claude Code + Codex only**". Change it to "**Claude Code, Codex, Pi, and opencode**" and adjust the parenthetical to "(OpenClaw/Hermes keep the unified `/nio`)".
@@ -4658,7 +5001,7 @@ After Task 12, run the complete acceptance checklist from design spec §9.4:
 - [ ] `pnpm typecheck` clean
 - [ ] `bash plugins/pi/setup.sh --pi-home $(mktemp -d)` installs idempotently; `--uninstall` removes cleanly
 - [ ] `bash plugins/opencode/setup.sh --opencode-home $(mktemp -d)` installs idempotently; `--uninstall` removes cleanly
-- [ ] `/nio doctor` correctly reports install state on both platforms, including the "Pi has no MCP" note
+- [ ] `/nio doctor` correctly reports install state on both platforms, including the Pi MCP block from Task 11b (Pi core has no MCP / pi-mcp-adapter detected, the two MCP naming shapes, the server-config path, and the `toolPrefix: "none"` caveat)
 - [ ] `e2e-test/openclaw-trace-e2e-task.md` still passes unchanged (the Task 4 regression gate)
 - [ ] `e2e-test/pi-trace-e2e-task.md` passes
 - [ ] `e2e-test/opencode-trace-e2e-task.md` passes, with both mandatory measurements recorded in the document
