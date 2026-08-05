@@ -66,11 +66,13 @@ The CLI prints JSON.
 
 When a session is armed, these are exported to the configured OTLP endpoint:
 
-- **traces** — turn / tool-call spans
+- **traces** — turn / tool-call spans, including the redacted user prompt that opened the turn (`nio.turn.user_prompt`, ≤2 KB) and per-call content-length counters (thinking/text character counts) on each LLM-call span
 - **metrics** — tool-use and guard-decision counters
-- **logs** — audit records
+- **logs** — audit records, **plus conversation content**: model reasoning ("thinking"), assistant reply text, tool arguments, and tool output. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
 
-When it is not armed, none of the three leave the machine.
+When it is not armed, none of the above leave the machine.
+
+**This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read/wrote, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.
 
 ## Known Limitation on OpenClaw
 
