@@ -724,9 +724,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // The session is over, so drop its shard instead of writing the
         // cleared session-span fields back. Sharding means one file per
         // session that is never reused, so something has to collect
-        // them; this is the clean-exit half (discardState also sweeps
-        // the shards of sessions whose host died before SessionEnd could
-        // fire). Removing the file subsumes what clearing
+        // them; this is the clean-exit half. The other half is
+        // `takeAbandonedShards`, run from SessionStart, which salvages the
+        // parked tree of a session whose host died before SessionEnd could
+        // fire and GCs its shard a week later. Removing the file subsumes what clearing
         // session_trace_id / session_span_id in place used to do — stop
         // a second SessionEnd re-emitting the session span — because the
         // reload above then returns null, and `prev` (loaded earlier in

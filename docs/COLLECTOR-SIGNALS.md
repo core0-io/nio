@@ -278,10 +278,29 @@ which mis-attributed data rather than merely losing it (session A's
 under B's trace id). The two recovery legs follow from that: a session
 finds its OWN parked tree by loading its own shard, and a shard left by a
 session whose host never reached `SessionEnd` is claimed by the next
-`SessionStart` once it has gone untouched for an hour — flushed on the
-dead session's own trace id, never re-attributed to the recovering one.
-Shards of sessions that end cleanly are deleted at `SessionEnd`. A
-pre-upgrade `traces-state-store.json` is adopted once, by the session
+`SessionStart` once it has gone untouched for an hour.
+
+That claim is a **salvage, not a delete**. An hour of silence is not proof
+of death — one `Bash` call that runs for two hours, and a window left open
+overnight, look identical through mtime — so `takeAbandonedShards` takes
+`deferred_spans` and writes the shard back with `turn_trace_id`,
+`turn_number`, `pending_spans` and the session-trace ids untouched. A
+session that was merely idle keeps an unbroken turn, still closes it at
+`Stop`, and still emits its `session` span at `SessionEnd`; the only cost
+of guessing wrong is that its already-finished spans went out early under
+a detached root tagged `nio.turn.incomplete`. Deleting the shard is a
+separate leg on a separate clock: a week untouched, at which point nothing
+in it can belong to a running host. Shards of sessions that end cleanly
+are deleted immediately at `SessionEnd`.
+
+Recovered trees keep the DEAD session's identity, not the recovering
+one's. `nio.platform` / `service.name` / `gen_ai.agent.name` live on the
+OTEL Resource, so the shard records the platform and agent name that wrote
+it and the sweep builds a short-lived provider from them when they differ
+— all four platforms share `$NIO_HOME` by default, and Claude Code and
+Codex are the same scripts behind a different `--platform` flag.
+
+A pre-upgrade `traces-state-store.json` is adopted once, by the session
 recorded inside it, so a tool call spanning the upgrade keeps its
 pre/post bridge.
 
@@ -414,9 +433,11 @@ recovery in `hasOrphanedDeferredTree` / `recoverDeferredTree` covers
 `session_span_id` — a session that starts on Codex simply never gets its
 `session` root span exported, on a clean exit or a crash alike. The
 session ids still exist in the session's `traces-state-store` shard for as long as the
-session runs (and turn-root links to them remain intact), and are
-silently discarded by `startSessionTrace`'s `sessionChanged` branch the
-next time a *different* session starts on the same machine. If Codex
+session runs (and turn-root links to them remain intact). Post-sharding a
+different session never loads this session's state, so nothing discards
+them early either: the shard is left alone by the 1-hour salvage leg —
+which takes `deferred_spans` and nothing else — and is finally removed by
+`takeAbandonedShards`' GC leg once it has gone a week untouched. If Codex
 ever adds a session-boundary hook, wire it to `collector-hook.js` with
 `event: 'SessionEnd'` and this paragraph goes away.
 
