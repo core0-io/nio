@@ -370,12 +370,23 @@ span 上保留短摘要（沿用现有 `nio.tool_summary`，前 200 字符），
 
 ## 四、平台覆盖矩阵
 
-| 平台 | prompt | response | thinking | LLM 级 span | 依据 |
-|---|---|---|---|---|---|
-| Claude Code | 是 | 是 | 取决于模型（Claude → 完整原文） | 是 | 已实机验证 |
-| Codex | 是 | 是 | 取决于模型（GPT-5 → 步骤摘要，需 `effort=high`） | 是 | 已实机验证 |
-| Hermes | 是 | 是（`assistant_response`） | 取决于模型（实测 gpt-5.5 → 步骤摘要） | 是（事件对） | 已实机验证 |
-| OpenClaw | 是 | 是 | 取决于模型 | 是 | 官方文档，**未实机验证** |
+| 平台 | prompt | response | thinking | LLM 级 span | tool span 嵌在 chat span 下 | 依据 |
+|---|---|---|---|---|---|---|
+| Claude Code | 是 | 是 | 取决于模型（Claude → 完整原文） | 是 | 是 | 已实机验证 |
+| Codex | 是 | 是 | 取决于模型（GPT-5 → 步骤摘要，需 `effort=high`） | 是 | 是 | 已实机验证 |
+| Hermes | 是 | 是（`assistant_response`） | 取决于模型（实测 gpt-5.5 → 步骤摘要） | 是（事件对） | 是 | 已实机验证 |
+| OpenClaw | 是 | 是 | 取决于模型 | 是 | **否——chat 与 tool 是兄弟** | 官方文档，**未实机验证** |
+
+#### 平台例外：OpenClaw 上 chat 与 tool 是兄弟关系
+
+验收标准「工具 span 嵌套在发起它的 chat span 之下」在 OpenClaw 上**不成立**，两者都直挂 turn root。这不是遗漏，是 `buildSpanTree` 的两条归属通道在这个平台上都不可用：
+
+1. `createOpenClawSource` 从不产出 `tool_use` 块——这是该 source 自己记录的 KNOWN GAP（`openclaw-source.ts` 模块注释 + `conversation-cross-source.test.ts` 的专门守护用例）：OpenClaw 文档化的 `llm_output` 事件不含内容字段，把 `before_tool_call` / `after_tool_call` 关联回正确的 chat call 在一个从未实机验证过的平台上纯属猜测。
+2. OpenClaw 的 call 全部是 `timing: 'synthetic'`（无任何事件带真实时间戳），而 `findCallByTime` 按设计跳过 synthetic call。
+
+因此每个 tool span 都是 orphan，**与它何时发送无关**。已实测验证：把 `after_tool_call` 改成 `deferPostToolUse`（延迟到 `endTurn` 与其它平台一致）后，parent 仍然是 turn root。所以「改成延迟」买不到嵌套，只会白白牺牲崩溃韧性（OpenClaw 状态在内存里，没有 `recoverDeferredTree` 可补）和即时可见性。
+
+关闭这个例外的前提是先让 `openclaw-source.ts` 重建 `tool_use`，那需要一个可实机验证的 gateway。当前形态由 `content-wiring.test.ts` 的 "openclaw emits chat and tool spans as SIBLINGS" 用例钉住——它一旦转红，说明归属通道通了，本节和 `COLLECTOR-SIGNALS.md` 必须同步更新。
 
 ### thinking 的形态由模型提供商决定，不是平台属性
 

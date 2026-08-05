@@ -898,6 +898,126 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     }
   });
 
+  it('openclaw emits chat and tool spans as SIBLINGS under the turn — the documented platform exception', async () => {
+    // Every other platform nests `execute_tool` under the `chat` span
+    // that issued it. OpenClaw cannot, and this test pins that so the
+    // exception stays a documented fact rather than an unexplained
+    // difference someone later "fixes" by rearranging the plugin.
+    //
+    // The cause is NOT that the plugin exports tool spans eagerly. Both
+    // of buildSpanTree's attribution channels are unavailable on this
+    // platform: createOpenClawSource never emits a `tool_use` block (its
+    // own documented known gap — see conversation-cross-source.test.ts),
+    // and its calls are `timing: 'synthetic'`, which the time-window
+    // fallback skips by design. So every tool span is an orphan and
+    // lands on the turn root no matter when it is emitted. Verified by
+    // running this exact scenario against a deferred variant of the
+    // plugin: the parent stayed the turn root.
+    //
+    // To close it, openclaw-source.ts has to reconstruct tool_use; until
+    // then, deferring here would only trade crash-resilience and prompt
+    // visibility for nothing.
+    const home = mkdtempSync(join(tmpdir(), 'nio-content-oc-sib-'));
+    const received: Array<{ url: string; body: string }> = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        received.push({ url: req.url ?? '', body: Buffer.concat(chunks).toString('utf-8') });
+        res.writeHead(200);
+        res.end('{}');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+
+    writeFileSync(
+      join(home, 'config.yaml'),
+      `collector:\n  endpoint: "http://127.0.0.1:${port}"\n`,
+      'utf-8',
+    );
+    const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
+    const previousHome = process.env['NIO_HOME'];
+    process.env['NIO_HOME'] = home;
+
+    try {
+      const { saveMonitorStore } = await import('../scripts/lib/monitor-store.js');
+      const sessionId = 'oc-sibling-shape';
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionId]: { armed_at: Date.now(), cwd: process.cwd() } },
+      });
+
+      const { registerOpenClawPlugin } = await import('../adapters/openclaw-plugin.js');
+      const handlers = new Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>();
+      registerOpenClawPlugin({
+        on(name: string, h: (e: unknown, c?: unknown) => Promise<unknown> | unknown) {
+          handlers.set(name, h);
+        },
+      });
+
+      const ctx = { sessionKey: sessionId };
+      await handlers.get('before_agent_reply')!({ cleanedBody: 'do the thing' }, ctx);
+      await handlers.get('llm_output')!(
+        {
+          runId: 'run-sib-1', callId: 'call-sib-1', provider: 'anthropic',
+          model: 'oc-sibling-model', outcome: 'tool_use', durationMs: 10,
+          assistantTexts: ['about to run a command'], usage: { input: 5, output: 3 },
+        },
+        ctx,
+      );
+      await handlers.get('before_tool_call')!(
+        { toolName: 'exec', params: { command: 'echo hi' }, toolCallId: 'tc-sib-1', runId: sessionId },
+        ctx,
+      );
+      await handlers.get('after_tool_call')!(
+        {
+          toolName: 'exec', params: { command: 'echo hi' }, toolCallId: 'tc-sib-1',
+          runId: sessionId, result: 'hi', durationMs: 4,
+        },
+        ctx,
+      );
+      await handlers.get('agent_end')!({}, ctx);
+      await new Promise<void>((r) => setTimeout(r, 400));
+
+      // The OTLP HTTP trace exporter posts uncompressed JSON, so the
+      // parent links can be read straight off the request bodies.
+      const spans: Array<{ name: string; spanId: string; parentSpanId?: string }> = [];
+      for (const rec of received.filter((r) => r.url === '/v1/traces')) {
+        const parsed = JSON.parse(rec.body) as {
+          resourceSpans?: Array<{ scopeSpans?: Array<{ spans?: Array<{ name: string; spanId: string; parentSpanId?: string }> }> }>;
+        };
+        for (const rs of parsed.resourceSpans ?? []) {
+          for (const ss of rs.scopeSpans ?? []) {
+            for (const s of ss.spans ?? []) spans.push(s);
+          }
+        }
+      }
+
+      const chat = spans.find((s) => s.name.startsWith('chat '));
+      const tool = spans.find((s) => s.name.startsWith('execute_tool '));
+      const turn = spans.find((s) => s.name === 'invoke_agent UserPromptSubmit');
+      assert.ok(chat, 'the llm_output event must have produced a chat span');
+      assert.ok(tool, 'the tool call must have produced a tool span');
+      assert.ok(turn, 'the turn root must have been exported');
+
+      assert.equal(chat!.parentSpanId, turn!.spanId, 'the chat span hangs off the turn root');
+      assert.equal(
+        tool!.parentSpanId,
+        turn!.spanId,
+        'and so does the tool span — on OpenClaw the two are siblings, not parent and child',
+      );
+      assert.notEqual(
+        tool!.parentSpanId,
+        chat!.spanId,
+        'stated as an inequality too: if this ever goes red, OpenClaw gained tool attribution and the docs must follow',
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env['NIO_HOME'];
+      else process.env['NIO_HOME'] = previousHome;
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+
   it('hermes without conversationInput degrades to the flat turn → tool shape', async () => {
     const { logsConfig } = freshFixture();
     const tracer = makeInMemoryTracer();

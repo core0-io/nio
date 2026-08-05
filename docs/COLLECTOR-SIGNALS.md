@@ -250,7 +250,7 @@ Trace: session                        (its own trace; emitted at SessionEnd)
    ↑ span link
 Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
   ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
-  │    └─ Span: execute_tool <name>   (the tools THAT call issued)
+  │    └─ Span: execute_tool <name>   (the tools THAT call issued; not on OpenClaw — see below)
   ├─ Span: execute_tool <name>   (tools that could not be attributed — hung off the turn)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
 ```
@@ -272,7 +272,34 @@ under a root tagged `nio.turn.incomplete: true`.
 **Without a conversation source** (no transcript path, an unreadable
 session file, a platform whose conversation data never reached the
 collector) the chat layer is skipped entirely and every tool span hangs
-off the turn — the pre-chat-layer shape, degraded but never broken.
+off the turn — the pre-chat-layer shape, degraded but never broken. The
+tool's arguments and result still reach the backend either way: both go
+out as content records at `PostToolUse`, which needs no source (see
+[Content records](#content-records)).
+
+**Platform exception · on OpenClaw, `chat` and `execute_tool` are
+siblings.** Every other platform nests a tool span under the chat span
+that issued it. OpenClaw cannot, because both of `buildSpanTree`'s
+attribution channels are unavailable there:
+
+1. `createOpenClawSource` never emits a `tool_use` block — its own
+   documented known gap. OpenClaw's `llm_output` event carries no content
+   field, and correlating `before_tool_call` / `after_tool_call` back to
+   the right chat call would be guesswork on a platform the source has
+   never been verified against live.
+2. All OpenClaw calls are `timing: 'synthetic'` (no event carries a real
+   timestamp), and the time-window fallback skips synthetic calls by
+   design.
+
+So every OpenClaw tool span is an orphan and lands on the turn root
+**regardless of when it is emitted** — verified by running the plugin
+with its `after_tool_call` deferred like every other platform's: the
+parent stayed the turn root. That is why the plugin keeps its eager
+per-tool export: deferring would trade crash-resilience (OpenClaw holds
+its state in memory, so there is nothing on disk for the recovery path to
+replay) and prompt visibility for no structural gain. Closing the
+exception requires teaching `openclaw-source.ts` to reconstruct
+`tool_use` first.
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
