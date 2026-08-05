@@ -284,8 +284,19 @@ describe('loadMCPRegistry: caching & invalidation', () => {
 });
 
 describe('loadMCPRegistry: ~/.config/opencode/opencode.json', () => {
-  it('parses local and remote opencode MCP servers and skips disabled ones', () => {
+  let originalXdgConfigHome: string | undefined;
+
+  beforeEach(() => {
+    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
     delete process.env.XDG_CONFIG_HOME;
+  });
+
+  afterEach(() => {
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  });
+
+  it('parses local and remote opencode MCP servers and skips disabled ones', () => {
     mkdirSync(join(HOME, '.config', 'opencode'), { recursive: true });
     writeJson(join(HOME, '.config', 'opencode', 'opencode.json'), {
       mcp: {
@@ -305,6 +316,20 @@ describe('loadMCPRegistry: ~/.config/opencode/opencode.json', () => {
     assert.deepEqual(byName('fs')?.binaries, ['npx']);
     assert.deepEqual(byName('fs')?.cliPackages, ['mcp-fs']);
     assert.equal(byName('off'), undefined);
+  });
+});
+
+describe('loadMCPRegistry: enabled:false applies to every source, not just opencode', () => {
+  it('skips a disabled server declared in ~/.claude.json', () => {
+    writeJson(join(HOME, '.claude.json'), {
+      mcpServers: {
+        hass: { url: 'http://homeassistant.local:8123/api/mcp', enabled: false },
+        active: { url: 'http://active.local/mcp' },
+      },
+    });
+    const reg = loadMCPRegistry({ home: HOME, configLoader: emptyConfig });
+    assert.equal(reg.entries.find(e => e.serverName === 'hass'), undefined);
+    assert.equal(reg.entries.find(e => e.serverName === 'active')?.serverName, 'active');
   });
 });
 

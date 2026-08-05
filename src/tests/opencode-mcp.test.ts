@@ -45,6 +45,16 @@ describe('parseMcpToolName — opencode', () => {
     assert.equal(parseMcpToolName('bash', 'opencode', ['github']).isMcp, false);
   });
 
+  it('never misclassifies apply_patch, the one underscored built-in', () => {
+    // Regression guard: without the built-in check this falls into the
+    // anonymous-MCP tier, and a permitted_tools.mcp allowlist would then
+    // gate (and deny) opencode's core file-editing tool.
+    const r = parseMcpToolName('apply_patch', 'opencode', ['github']);
+    assert.equal(r.isMcp, false);
+    // Also true when a server name happens to prefix it.
+    assert.equal(parseMcpToolName('apply_patch', 'opencode', ['apply']).isMcp, false);
+  });
+
   it('leaves other platforms untouched', () => {
     const r = parseMcpToolName('mcp__github__create_issue', 'claude-code');
     assert.equal(r.isMcp, true);

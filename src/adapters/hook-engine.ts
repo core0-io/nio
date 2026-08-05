@@ -14,6 +14,7 @@ import {
 } from './mcp-route-detect/index.js';
 import { loadMCPRegistry } from './mcp-registry.js';
 import { isNioSelfInvocation } from './self-invocation.js';
+import { OPENCODE_BUILTIN_TOOLS } from './opencode.js';
 
 function policyHookReason(
   explanation: string,
@@ -162,6 +163,11 @@ export function parseMcpToolName(
   if (platform === 'opencode') {
     if (!knownServers || knownServers.length === 0) return { isMcp: false };
     if (!name.includes('_')) return { isMcp: false };
+    // A built-in is never an MCP call, however it is spelled. Without
+    // this, `apply_patch` — the one underscored built-in — reaches the
+    // anonymous-MCP fallback below as soon as any server is configured,
+    // and a permitted_tools.mcp allowlist would then deny core file edits.
+    if (OPENCODE_BUILTIN_TOOLS.has(name)) return { isMcp: false };
 
     const matches = knownServers
       .filter(s => name.startsWith(`${s}_`) && name.length > s.length + 1)
