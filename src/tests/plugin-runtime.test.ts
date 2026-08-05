@@ -511,6 +511,87 @@ describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
   });
 });
 
+// ── The accumulated conversation events are PER TURN ──────────────────
+//
+// `recordConversationEvent` is the only conversation source the streaming
+// platforms have (OpenClaw, opencode): there is no session file to read
+// back, so the events themselves ARE the conversation. That makes their
+// lifetime load-bearing — anything still in the map when the next turn
+// closes is replayed as THAT turn's chat spans, with no timestamp
+// backstop to catch it (`openclaw-source.ts` synthesises `startMs` from
+// `Date.now()` at read time, so `callsSince`'s filter is always true).
+//
+// The platform tag matters here: `createSourceForPlatform` only builds an
+// event source for a real platform name, so these use 'openclaw' rather
+// than the 'test-platform' tag the suites above use.
+describe('InProcessPluginRuntime conversation-event lifecycle', () => {
+  /**
+   * An `llm_output` envelope in the shape OpenClaw's docs actually
+   * commit to: metadata only, NO `usage` and NO `assistantTexts`. That
+   * matters — openclaw-plugin.ts calls `onLlmUsage` only when `usage`
+   * is present and `onAssistantReply` only when `assistantTexts` is
+   * non-empty, so an event of this shape creates no turn state at all.
+   */
+  function llmOutput(callId: string) {
+    return {
+      hook: 'llm_output',
+      event: {
+        runId: 'run-1', callId, provider: 'anthropic', model: 'claude-x',
+        outcome: 'success', durationMs: 5,
+      },
+    };
+  }
+
+  function openClawRuntime(tracer: ReturnType<typeof makeInMemoryTracer>) {
+    return new InProcessPluginRuntime({
+      platform: 'openclaw',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: tracer.provider,
+      meterProvider: null,
+      loggerProvider: null,
+    });
+  }
+
+  const chatSpans = (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    tracer.finished().filter(s => s.name.startsWith('chat'));
+
+  it('a turn that ended with no state still drops its events (C1)', async () => {
+    // The `!state` early return in `flushSessionTurn` used to be the one
+    // exit that kept `conversationEvents` — and it is a routinely-taken
+    // production path, not a theoretical one: a turn made only of
+    // documented-shape `llm_output` events never reaches `onLlmUsage` /
+    // `onAssistantReply`, so `agent_end` finds no turn state. Turn 2
+    // then replayed turn 1's events as its own chat spans.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+
+      rt.recordConversationEvent('s1', llmOutput('t1-a'));
+      rt.recordConversationEvent('s1', llmOutput('t1-b'));
+      rt.recordConversationEvent('s1', llmOutput('t1-c'));
+      await rt.onTurnEnd('s1');
+      assert.equal(
+        tracer.finished().length, 0,
+        'sanity: a turn with no state exports nothing, so turn 1 contributes no span of its own',
+      );
+
+      // Turn 2 DOES have state (a user prompt), so it reaches the export
+      // path and reconstructs chat spans from whatever is in the map.
+      rt.onUserPrompt('s1', 'second turn');
+      rt.recordConversationEvent('s1', llmOutput('t2-a'));
+      await rt.onTurnEnd('s1');
+
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'turn 2 must produce exactly its own chat span — turn 1\'s three events were dropped at ITS boundary',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+});
+
 describe('registerPiExtension', () => {
   /** Minimal stand-in for Pi's ExtensionAPI. */
   function fakePi() {

@@ -523,6 +523,32 @@ export class InProcessPluginRuntime {
    * Idempotent: no-op if no state exists.
    */
   protected async flushSessionTurn(sessionId: string): Promise<void> {
+    // The accumulated conversation events belong to the TURN that is
+    // ending here, so they are dropped on EVERY exit — including the two
+    // early returns and an unexpected throw out of the export path.
+    // try/finally rather than a delete per exit: the `!state` early
+    // return used to be the one path that kept them, and that path is
+    // routinely taken in production. OpenClaw's binding only calls
+    // `onLlmUsage` / `onAssistantReply` when the undocumented `usage` /
+    // `assistantTexts` fields happen to be present (see
+    // openclaw-source.ts's module doc), so a turn made of
+    // documented-shape `llm_output` events alone reaches `agent_end`
+    // with no turn state at all. Anything left in the map then gets
+    // replayed by the NEXT turn as its own chat spans — and the
+    // `callsSince` timestamp filter cannot catch it, because
+    // `openclaw-source.ts` synthesises `startMs` from `Date.now()` at
+    // read time, making the filter unconditionally true.
+    //
+    // Contrast `transcriptPaths`, which is per-SESSION and deliberately
+    // survives the turn boundary — see its field comment.
+    try {
+      await this.flushSessionTurnInner(sessionId);
+    } finally {
+      this.conversationEvents.delete(sessionId);
+    }
+  }
+
+  private async flushSessionTurnInner(sessionId: string): Promise<void> {
     // Cleanup and export are separate concerns: an unmonitored session
     // must still have its state dropped, otherwise state accumulated
     // while briefly armed (then disarmed before this boundary fired)
@@ -533,7 +559,6 @@ export class InProcessPluginRuntime {
     const tracerProvider = monitored ? this.getTracerProvider() : null;
     if (!tracerProvider) {
       this.sessionState.delete(sessionId);
-      this.conversationEvents.delete(sessionId);
       return;
     }
     let state = this.sessionState.get(sessionId);
@@ -597,7 +622,6 @@ export class InProcessPluginRuntime {
 
     await endTurn(tracerProvider, state, process.cwd(), null, calls, contentSink);
     this.sessionState.delete(sessionId);
-    this.conversationEvents.delete(sessionId);
     await tracerProvider.forceFlush();
     if (loggerProvider) await loggerProvider.forceFlush();
   }
