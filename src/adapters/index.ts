@@ -7,6 +7,7 @@ export { CodexAdapter, type CodexAdapterOptions } from './codex.js';
 export { OpenClawAdapter } from './openclaw.js';
 export { HermesAdapter, type HermesAdapterOptions } from './hermes.js';
 export { PiAdapter, type PiAdapterOptions } from './pi.js';
+export { OpenCodeAdapter, type OpenCodeAdapterOptions } from './opencode.js';
 export { evaluateHook } from './hook-engine.js';
 export {
   registerOpenClawPlugin,

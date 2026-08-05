@@ -1,0 +1,6 @@
+{
+  "tool": "bash",
+  "sessionID": "ses_7c1f2a9b",
+  "callID": "call_4d2e",
+  "args": { "command": "ls /etc | head -5", "description": "list etc" }
+}

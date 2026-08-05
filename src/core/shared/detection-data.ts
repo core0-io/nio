@@ -82,6 +82,9 @@ export const SENSITIVE_FILE_PATHS = [
   '.pi/settings.json',
   '.pi/agent/settings.json',
   '.pi/',
+  '.opencode/opencode.json',
+  '.config/opencode/opencode.json',
+  '.opencode/',
 
   // ── Persistence channels (next-launch / scheduled triggers) ────────
   'Library/LaunchAgents/',
