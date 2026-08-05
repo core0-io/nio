@@ -598,3 +598,166 @@ describe('collector-core: SessionEnd after Stop does not mint a phantom turn', (
     // shutting it down here would break later tests that re-register.
   });
 });
+
+// ── resolveSpanKey — concurrent same-signature composite calls ────────
+//
+// Two or more in-flight calls that share tool_name + tool_summary (the
+// Hermes composite-key case: pre lacks tool_use_id, post has one but it
+// was never recorded against any pending entry) get suffixed keys from
+// allocateSpanKey (`terminal:ls`, `terminal:ls#2`, …). resolveSpanKey
+// must be able to find the `#N` entries too, not just the unsuffixed
+// base — see review I1.
+//
+// No id crosses the pre/post boundary in this fallback path, so nothing
+// here can recover which physical call a given post response *truly*
+// belongs to when completion order doesn't match allocation order. The
+// guaranteed contract is narrower than "always correct": every post, in
+// any arrival order, resolves to a DIFFERENT still-open entry — no span
+// is silently dropped, and pending_spans always drains back to empty.
+
+describe('collector-core: resolveSpanKey — concurrent same-signature composite calls', () => {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function pre(sessionId: string): HookStdinPayload {
+    return {
+      tool_name: 'terminal',
+      tool_input: { command: 'ls' },
+      session_id: sessionId,
+      // tool_use_id intentionally absent — mirrors Hermes's pre_tool_call.
+    };
+  }
+
+  function post(sessionId: string, tag: string): HookStdinPayload {
+    return {
+      tool_name: 'terminal',
+      tool_input: { command: 'ls' },
+      session_id: sessionId,
+      // Present here (mirrors Hermes's post_tool_call), but unrelated to
+      // any pending key since pre never recorded one.
+      tool_use_id: `call_${tag}`,
+      tool_response: { output: tag },
+    };
+  }
+
+  function spanStartMs(span: { startTime: readonly [number, number] }): number {
+    return span.startTime[0] * 1000 + Math.round(span.startTime[1] / 1_000_000);
+  }
+
+  it('FIFO completion: both concurrent spans are emitted with correct, distinct durations; pending_spans drains empty', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-fifo';
+
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await sleep(5);
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const mid = loadState(logsConfig);
+    assert.equal(Object.keys(mid!.pending_spans).length, 2, 'two concurrent pending entries expected');
+    assert.ok('terminal:ls' in mid!.pending_spans && 'terminal:ls#2' in mid!.pending_spans);
+
+    // FIFO: the first call's post arrives first.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'first'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'second'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 2, 'both concurrent calls must produce a span (regression: 2nd used to vanish)');
+
+    const starts = spans.map(spanStartMs).sort((a, b) => a - b);
+    assert.ok(starts[1]! > starts[0]!, 'the two spans must carry distinct start times — one per pre entry, none reused');
+
+    const after = loadState(logsConfig);
+    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty — no leaked #N entry');
+  });
+
+  it('LIFO completion: the later-processed post is not dropped, and no start time is reused across the two spans', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-lifo';
+
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await sleep(5);
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    // LIFO: the second call's post arrives (is processed) before the first's.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'second'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'first'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 2,
+      'out-of-order completion must not drop the later-processed post (regression: old code returned durationMs:null for it)');
+
+    const starts = spans.map(spanStartMs).sort((a, b) => a - b);
+    assert.notEqual(starts[0], starts[1],
+      'the second-processed post must not be matched onto the same start time already consumed by the first');
+
+    const after = loadState(logsConfig);
+    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty even under out-of-order completion');
+  });
+
+  it('three concurrent same-signature calls all resolve to distinct spans in FIFO order', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-triple';
+
+    for (let i = 0; i < 3; i++) {
+      await dispatchCollectorEvent({
+        event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+        config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+      });
+      await sleep(5);
+    }
+
+    const mid = loadState(logsConfig);
+    assert.deepEqual(
+      Object.keys(mid!.pending_spans).sort(),
+      ['terminal:ls', 'terminal:ls#2', 'terminal:ls#3'],
+    );
+
+    for (const tag of ['a', 'b', 'c']) {
+      await dispatchCollectorEvent({
+        event: 'PostToolUse', input: post(sessionId, tag), platform: 'hermes',
+        config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+      });
+    }
+
+    const spans = tracer.finished();
+    assert.equal(spans.length, 3, 'all three concurrent calls must each produce a span');
+
+    const starts = spans.map(spanStartMs);
+    assert.equal(new Set(starts).size, 3, 'all three spans must carry distinct start times');
+
+    const after = loadState(logsConfig);
+    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty for three concurrent calls too');
+  });
+});

@@ -215,19 +215,56 @@ export function parseMcpToolName(
 }
 
 /** Resolve the actual key that has a pending entry — primary spanKey
- * first, composite-fallback second. Handles the Hermes asymmetry
- * where pre's tool_use_id is empty (composite key saved) but post
- * has the real tool_use_id (would generate a tool_use_id-based key
- * that misses the composite entry). */
+ * first, composite-fallback second, suffixed-composite scan third.
+ *
+ * Handles the Hermes asymmetry where pre's tool_use_id is empty
+ * (composite key saved) but post has the real tool_use_id (would
+ * generate a tool_use_id-based key that misses the composite entry).
+ *
+ * The third tier handles `allocateSpanKey`'s `#N` suffixes (minted
+ * when two or more concurrent calls share the same tool_name +
+ * tool_summary). Neither `primary` nor `fallback` above ever carries
+ * a `#N` suffix — spanKey() never mints one — so without this tier a
+ * post that resolves to a still-suffixed key (because the unsuffixed
+ * base was already closed by an earlier, unrelated post) never
+ * matches anything: no span, and a `#N` entry leaks in pending_spans
+ * until endTurn.
+ *
+ * Picks the SMALLEST pending `#N` (FIFO dequeue — earliest allocated,
+ * i.e. earliest still-open call). This is the best a stateless
+ * composite key can do: nothing here can recover which physical call
+ * a given post response truly belongs to (no id crosses the pre/post
+ * boundary in this fallback), so the contract is narrower than
+ * "correct" — every post, in any arrival order, resolves to a
+ * DIFFERENT still-open entry, so no span is silently dropped and
+ * pending_spans always drains empty by end of turn.
+ */
 function resolveSpanKey(
   state: CollectorState,
   input: HookStdinPayload,
 ): string {
   const primary = spanKey(input);
   if (state.pending_spans[primary]) return primary;
+
   const name = input.tool_name ?? 'unknown';
-  const fallback = `${name}:${toolSummary(name, input.tool_input ?? {})}`;
-  if (state.pending_spans[fallback]) return fallback;
+  const compositeBase = `${name}:${toolSummary(name, input.tool_input ?? {})}`;
+  if (state.pending_spans[compositeBase]) return compositeBase;
+
+  const prefix = `${compositeBase}#`;
+  let best: string | null = null;
+  let bestN = Infinity;
+  for (const key of Object.keys(state.pending_spans)) {
+    if (!key.startsWith(prefix)) continue;
+    const suffix = key.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) continue;
+    const n = Number(suffix);
+    if (n < bestN) {
+      bestN = n;
+      best = key;
+    }
+  }
+  if (best) return best;
+
   return primary;
 }
 
