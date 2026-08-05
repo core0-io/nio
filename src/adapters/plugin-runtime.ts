@@ -34,6 +34,18 @@ import {
 } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider } from '../scripts/lib/metrics-collector.js';
 import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
+import { evaluateHook } from './hook-engine.js';
+import {
+  ensureTurn,
+  recordPreToolUse,
+  setPendingGuardAttrs,
+  takePendingGuardAttrs,
+  genAiToolCallInputAttributes,
+  genAiToolCallOutputAttributes,
+  nioGuardAttributes,
+} from '../scripts/lib/traces-collector.js';
+import { toolSummary } from '../scripts/lib/collector-core.js';
+import { recordToolUse, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
 
 export interface PluginRuntimeOptions {
   /** Platform tag — lands on the OTEL Resource and audit entries. */
@@ -50,6 +62,17 @@ export interface PluginRuntimeOptions {
   confirmAction?: 'allow' | 'deny' | 'ask';
   /** Custom Nio engine factory (tests inject a stub). */
   nioFactory?: () => NioInstance;
+}
+
+export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
+
+export interface PreToolResult {
+  /** True when the binding layer must stop the tool from running. */
+  block: boolean;
+  /** Human-readable denial reason; present whenever `block` is true. */
+  reason?: string;
+  /** User-visible decision taxonomy carried on spans and metrics. */
+  decision: GuardDecisionTag;
 }
 
 export class InProcessPluginRuntime {
@@ -208,5 +231,182 @@ export class InProcessPluginRuntime {
     await endTurn(this.tracerProvider, state, process.cwd());
     this.sessionState.delete(sessionId);
     await this.tracerProvider.forceFlush();
+  }
+
+  /**
+   * Evaluate a tool call through Phase 0–6 and record the pre-side span.
+   *
+   * Returns a decision rather than deciding HOW to block: Pi needs
+   * `{ block: true, reason }`, opencode needs a thrown error, OpenClaw
+   * needs `{ block: true, blockReason }`. Those shapes stay in the
+   * binding layer.
+   */
+  async onPreTool(
+    sessionId: string,
+    spanKey: string,
+    toolName: string,
+    params: Record<string, unknown>,
+    rawEvent: unknown,
+    extraPreAttrs?: Record<string, unknown>,
+  ): Promise<PreToolResult> {
+    if (this.tracerProvider) {
+      let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      const preAttrs: Record<string, unknown> = {
+        ...genAiToolCallInputAttributes(params, spanKey),
+        ...(extraPreAttrs ?? {}),
+      };
+      state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
+      this.sessionState.set(sessionId, state);
+    }
+    if (this.meterProvider) {
+      recordToolUse(this.meterProvider, toolName, 'PreToolUse').catch(() => {});
+    }
+
+    const startMs = Date.now();
+    const result = await evaluateHook(
+      this.adapter,
+      rawEvent,
+      { config: this.config, nio: { orchestrator: this.orchestrator } },
+      this.auditOpts,
+    );
+    const evalMs = Date.now() - startMs;
+
+    if (this.meterProvider) {
+      recordGuardDecision(
+        this.meterProvider,
+        result.decision,
+        result.riskLevel || 'low',
+        result.riskScore ?? 0,
+        toolName,
+      ).catch(() => {});
+    }
+
+    const confirmAction = this.confirmAction;
+    const decision: GuardDecisionTag =
+      result.decision === 'deny'
+        ? 'deny'
+        : result.decision === 'ask'
+          ? confirmAction === 'deny'
+            ? 'confirm_denied'
+            : confirmAction === 'ask'
+              ? 'ask'
+              : 'confirm_allowed'
+          : 'allow';
+
+    const guardAttrs: Record<string, unknown> = {
+      ...nioGuardAttributes(
+        decision,
+        result.riskLevel || (decision === 'allow' ? 'low' : 'unknown'),
+        result.riskScore ?? 0,
+        result.riskTags,
+        result.phaseStopped,
+        result.topFindingRule,
+      ),
+      'nio.guard.eval_ms': evalMs,
+    };
+    this.stashGuardAttrs(sessionId, spanKey, guardAttrs);
+
+    const block = decision === 'deny' || decision === 'confirm_denied';
+    const reason =
+      result.reason ||
+      (decision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
+
+    if (block) {
+      // The post-side event will never fire because the tool did not run.
+      // Flush the orphan span here with guard-error status.
+      await this.closeSpan(sessionId, spanKey, guardAttrs, reason);
+      return { block: true, reason, decision };
+    }
+
+    return { block: false, decision, ...(decision === 'ask' ? { reason } : {}) };
+  }
+
+  /**
+   * Apply the outcome of an interactive confirmation dialog. Only
+   * platforms with a real user channel (Pi) call this; everyone else
+   * gets the folded decision straight from `onPreTool`.
+   */
+  async resolveConfirm(
+    sessionId: string,
+    spanKey: string,
+    decision: GuardDecisionTag,
+    reason: string | undefined,
+    confirmed: boolean,
+  ): Promise<PreToolResult> {
+    if (decision !== 'ask') return { block: false, decision, ...(reason ? { reason } : {}) };
+
+    const resolved: GuardDecisionTag = confirmed ? 'confirm_allowed' : 'confirm_denied';
+    const state = this.sessionState.get(sessionId);
+    const prior = state ? (state.pending_guard_attrs?.[spanKey] ?? {}) : {};
+    const merged = { ...prior, 'nio.guard.decision': resolved };
+    this.stashGuardAttrs(sessionId, spanKey, merged);
+
+    if (!confirmed) {
+      const why = reason || 'Requires confirmation (Nio)';
+      await this.closeSpan(sessionId, spanKey, merged, why);
+      return { block: true, reason: why, decision: resolved };
+    }
+    return { block: false, decision: resolved };
+  }
+
+  /** Close the tool span with the post-side outcome. */
+  async onPostTool(
+    sessionId: string,
+    spanKey: string,
+    toolName: string,
+    outcome: { result?: unknown; error?: string | null; durationMs?: number },
+  ): Promise<void> {
+    if (this.tracerProvider) {
+      const state = this.sessionState.get(sessionId);
+      if (state) {
+        const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
+        const postAttrs: Record<string, unknown> = {
+          ...attrs,
+          ...genAiToolCallOutputAttributes({
+            result: outcome.result,
+            error: outcome.error ?? null,
+            durationMs: outcome.durationMs,
+          }),
+        };
+        const r = await recordPostToolUse(
+          this.tracerProvider,
+          drained,
+          spanKey,
+          process.cwd(),
+          postAttrs,
+          outcome.error ?? null,
+        );
+        this.sessionState.set(sessionId, r.state);
+      }
+    }
+    if (this.meterProvider) {
+      await recordToolUse(this.meterProvider, toolName, 'PostToolUse');
+    }
+  }
+
+  private stashGuardAttrs(
+    sessionId: string,
+    spanKey: string,
+    attrs: Record<string, unknown>,
+  ): void {
+    const state = this.sessionState.get(sessionId);
+    if (!state) return;
+    this.sessionState.set(sessionId, setPendingGuardAttrs(state, spanKey, attrs));
+  }
+
+  private async closeSpan(
+    sessionId: string,
+    spanKey: string,
+    attrs: Record<string, unknown>,
+    error: string | null,
+  ): Promise<void> {
+    if (!this.tracerProvider) return;
+    const state = this.sessionState.get(sessionId);
+    if (!state) return;
+    const { state: drained } = takePendingGuardAttrs(state, spanKey);
+    const r = await recordPostToolUse(
+      this.tracerProvider, drained, spanKey, process.cwd(), attrs, error,
+    );
+    this.sessionState.set(sessionId, r.state);
   }
 }
