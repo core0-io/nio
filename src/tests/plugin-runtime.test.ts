@@ -5,6 +5,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { InProcessPluginRuntime } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
+import { ensureTurn } from '../scripts/lib/traces-collector.js';
 
 describe('InProcessPluginRuntime', () => {
   function makeRuntime() {
@@ -25,19 +26,34 @@ describe('InProcessPluginRuntime', () => {
 
   it('onSessionStart clears any prior state for that session id', async () => {
     const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
     rt.onSessionStart('s1');
     assert.equal(rt.hasSessionState('s1'), false);
   });
 
-  it('onSessionEnd is a no-op when no state exists', async () => {
+  it('onSessionEnd flushes and clears existing session state', async () => {
     const rt = makeRuntime();
-    await rt.onSessionEnd('never-seen');
-    assert.equal(rt.hasSessionState('never-seen'), false);
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
+    await rt.onSessionEnd('s1');
+    assert.equal(rt.hasSessionState('s1'), false);
+  });
+
+  it('onTurnEnd flushes and clears existing session state', async () => {
+    const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
+    await rt.onTurnEnd('s1');
+    assert.equal(rt.hasSessionState('s1'), false);
   });
 
   it('onTurnEnd is idempotent', async () => {
     const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
     await rt.onTurnEnd('s1');
+    assert.equal(rt.hasSessionState('s1'), false);
     await rt.onTurnEnd('s1');
     assert.equal(rt.hasSessionState('s1'), false);
   });
