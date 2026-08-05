@@ -83,9 +83,18 @@ Claude Code, Codex and Hermes are unaffected — each hook event is its own proc
 | Behaviour | Affected by this switch? |
 |-----------|--------------------------|
 | Guard blocking dangerous commands | No — always active |
-| Risk scoring (Phase 0–6) | No — always active |
+| Risk scoring (Phase 0–4: pattern matching, static rules, behavioural AST analysis) | No — always active, fully local |
+| Phase 5 LLM analyser (sends the content being evaluated to the Anthropic API) | No — gated by its own switch, `guard.llm_analyser.enabled`, **off by default** |
+| Phase 6 external analyser (GET-only request to fetch a score; sends no evaluated content) | No — gated by its own switch, `guard.external_analyser` (empty list = off), **off by default** |
 | Local `~/.nio/audit.jsonl` | No — always written |
 | OTLP export of metrics/traces/logs | **Yes** |
+
+**Phase 5 and Phase 6 are separate outbound paths that this switch does not touch.** Arming or disarming `/nio-monitor` has no effect on either — they are controlled entirely by their own config keys, and both ship disabled.
+
+- **Phase 5** (`guard.llm_analyser`) sends the actual content under evaluation — the command, file, or action being scanned — to the Anthropic API for semantic analysis. It requires both `enabled: true` and an `api_key`; with the shipped defaults (`enabled: false`) it never runs.
+- **Phase 6** (`guard.external_analyser`) is different in kind: every request is GET-only and carries no evaluated content in the body — it only fetches a `{score, reason?}` from an endpoint you configured. What it can leak is the fact that this machine is running nio and when a guard evaluation happened, not what was evaluated. It's off by default because the list is empty (`external_analyser: []`); nothing is contacted until you add an endpoint.
+
+If you want to confirm your own machine sends nothing outbound regardless of monitoring state, check `~/.nio/config.yaml` for `guard.llm_analyser.enabled` and `guard.external_analyser` — both absent/false/empty means Phase 5 and Phase 6 are inert.
 
 ## Notes
 

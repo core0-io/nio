@@ -59,6 +59,13 @@ Nio exports nothing by default. Each of the three signals is created only
 for sessions the user explicitly armed, or for every session when
 `collector.monitor_all_sessions: true` is set.
 
+This gate covers only the three OTLP signals above. The guard pipeline's
+Phase 5 (`guard.llm_analyser`) and Phase 6 (`guard.external_analyser`) have
+their own, independent outbound paths — see "Two things are outside the
+gate" below — and are not affected by monitor state either way. Both ship
+disabled (`llm_analyser.enabled: false`, `external_analyser: []`), so on
+an unmodified config nothing leaves the machine through them either.
+
 Arming is `/nio-monitor on` on Claude Code and Codex, and `/nio monitor on`
 on OpenClaw and Hermes — those two platforms do not install the focused
 `nio-*` skills, so the unified `/nio` is their entry point. Both run the
@@ -73,7 +80,14 @@ inventory and its risk levels off the machine before anything was armed.
 Two things are outside the gate:
 
 - **Guard enforcement.** Phase 0–6 risk evaluation and blocking run
-  regardless. The switch controls reporting, not enforcement.
+  regardless. The switch controls reporting, not enforcement. Phases 0–4
+  are local pattern/AST matching with no network I/O. Phase 5
+  (`guard.llm_analyser`) sends the content under evaluation to the
+  Anthropic API when enabled; Phase 6 (`guard.external_analyser`) issues
+  a GET-only request per configured endpoint to fetch a score, without
+  sending any evaluated content. Both are independent of monitor state
+  and both ship disabled by default (`llm_analyser.enabled: false`,
+  `external_analyser: []`).
 - **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
   it never leaves the machine and backs `/nio report`.
 
