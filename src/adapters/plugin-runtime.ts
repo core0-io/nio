@@ -30,6 +30,10 @@ import {
   recordCacheHitRate,
   recordPostToolUse,
   recordPostTaskToolUse,
+  recordUserPrompt,
+  recordAssistantReply,
+  accumulateGenAiUsage,
+  recordPreTaskToolUse,
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider } from '../scripts/lib/metrics-collector.js';
@@ -45,7 +49,8 @@ import {
   nioGuardAttributes,
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
-import { recordToolUse, recordGuardDecision } from '../scripts/lib/metrics-collector.js';
+import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
+import { dispatchNioCommand } from './openclaw-dispatch.js';
 
 export interface PluginRuntimeOptions {
   /** Platform tag — lands on the OTEL Resource and audit entries. */
@@ -401,6 +406,78 @@ export class InProcessPluginRuntime {
     }
     if (this.meterProvider) {
       await recordToolUse(this.meterProvider, toolName, 'PostToolUse');
+    }
+  }
+
+  /** Capture the user prompt onto turn state; applied at endTurn time. */
+  onUserPrompt(sessionId: string, text: string): void {
+    if (!this.tracerProvider || !text) return;
+    let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+    state = recordUserPrompt(state, text);
+    this.sessionState.set(sessionId, state);
+  }
+
+  /** Capture the assistant reply onto turn state. */
+  onAssistantReply(sessionId: string, text: string): void {
+    if (!this.tracerProvider || !text) return;
+    let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+    state = recordAssistantReply(state, text);
+    this.sessionState.set(sessionId, state);
+  }
+
+  /** Accumulate token usage for the current turn. */
+  onLlmUsage(
+    sessionId: string,
+    usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
+  ): void {
+    let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+    state = accumulateGenAiUsage(state, usage);
+    this.sessionState.set(sessionId, state);
+  }
+
+  /** Sub-agent / Task span open. */
+  async onSubagentStart(sessionId: string, taskId: string): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_spawning', { subagent_id: taskId });
+    if (this.tracerProvider) {
+      let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      state = recordPreTaskToolUse(state, taskId, '');
+      this.sessionState.set(sessionId, state);
+    }
+    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCreated');
+  }
+
+  /** Sub-agent / Task span close. */
+  async onSubagentEnd(sessionId: string, taskId: string): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_ended', { subagent_id: taskId });
+    if (this.tracerProvider) {
+      const state = this.sessionState.get(sessionId);
+      if (state) {
+        const r = await recordPostTaskToolUse(this.tracerProvider, state, taskId, process.cwd());
+        this.sessionState.set(sessionId, r.state);
+      }
+    }
+    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCompleted');
+  }
+
+  /**
+   * A shell command the *user* typed directly (Pi's `!` / `!!`).
+   * Audit-only: Nio guards agent actions, not human keystrokes, so this
+   * never blocks and never runs Phase 0–6.
+   */
+  onUserBash(sessionId: string, command: string, cwd: string): void {
+    this.writeLifecycle(sessionId, 'user_bash', { command, cwd, actor: 'user' });
+  }
+
+  /** `/nio ...` sub-command router, shared by every platform. */
+  async dispatchCommand(rawArgs: string): Promise<string> {
+    try {
+      return await dispatchNioCommand(rawArgs ?? '', {
+        orchestrator: this.orchestrator,
+        scanner: this.scanner,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.stack || err.message : String(err);
+      return `[nio error] ${msg}`;
     }
   }
 
