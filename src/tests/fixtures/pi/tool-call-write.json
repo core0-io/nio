@@ -1,0 +1,5 @@
+{
+  "toolName": "write",
+  "toolCallId": "call_01H8XKR",
+  "input": { "path": "/tmp/demo.txt", "content": "hello" }
+}

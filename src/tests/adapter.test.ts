@@ -7,6 +7,7 @@ import { ClaudeCodeAdapter } from '../adapters/claude-code.js';
 import { CodexAdapter } from '../adapters/codex.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
+import { PiAdapter } from '../adapters/pi.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -705,6 +706,87 @@ describe('CodexAdapter', () => {
       const input = adapter.parseInput(loadFixture('pre-tool-use-bash.json'));
       const skill = await adapter.inferInitiatingSkill(input);
       assert.equal(skill, null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PiAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('PiAdapter', () => {
+  const adapter = new PiAdapter();
+  // Test runs from dist/tests/; fixtures live in src/tests/fixtures/pi/ and
+  // are never copied into dist/ (tsc only emits .ts sources). Resolve from
+  // PROJECT_ROOT (computed above for the Codex fixtures) rather than from
+  // import.meta.url so this works against the compiled output.
+  const PI_FIXTURES_DIR = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'pi');
+  const piFixture = (name: string) =>
+    JSON.parse(readFileSync(join(PI_FIXTURES_DIR, name), 'utf-8'));
+
+  it('should have name "pi"', () => {
+    assert.equal(adapter.name, 'pi');
+  });
+
+  describe('parseInput', () => {
+    it('reads tool parameters from `input`, not `params`', () => {
+      const parsed = adapter.parseInput(piFixture('tool-call-bash.json'));
+      assert.equal(parsed.toolName, 'bash');
+      assert.equal(parsed.eventType, 'pre');
+      assert.deepEqual(parsed.toolInput, { command: 'ls /etc | head -5' });
+    });
+
+    it('handles missing fields gracefully', () => {
+      const parsed = adapter.parseInput({});
+      assert.equal(parsed.toolName, '');
+      assert.deepEqual(parsed.toolInput, {});
+      assert.equal(parsed.eventType, 'pre');
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('maps Pi built-in tools', () => {
+      assert.equal(adapter.mapToolToActionType('bash'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('write'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('edit'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('read'), 'read_file');
+    });
+
+    it('returns null for Pi tools with no action mapping', () => {
+      // Pi core ships bash/read/write/edit/ls/find/grep and no network tool.
+      assert.equal(adapter.mapToolToActionType('ls'), null);
+      assert.equal(adapter.mapToolToActionType('find'), null);
+      assert.equal(adapter.mapToolToActionType('grep'), null);
+      assert.equal(adapter.mapToolToActionType('webfetch'), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('builds an exec_command envelope from a bash call', () => {
+      const env = adapter.buildEnvelope(adapter.parseInput(piFixture('tool-call-bash.json')));
+      assert.ok(env);
+      assert.equal(env.action.type, 'exec_command');
+      assert.equal((env.action.data as { command: string }).command, 'ls /etc | head -5');
+    });
+
+    it('builds a write_file envelope carrying a content preview', () => {
+      const env = adapter.buildEnvelope(adapter.parseInput(piFixture('tool-call-write.json')));
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
+    });
+
+    it('returns null for an unmapped tool', () => {
+      assert.equal(adapter.buildEnvelope(adapter.parseInput({ toolName: 'ls', input: {} })), null);
+    });
+  });
+
+  describe('custom native_tool_mapping', () => {
+    it('honours a config-provided mapping', () => {
+      const custom = new PiAdapter({ nativeToolMapping: { my_fetch: 'network_request' } });
+      assert.equal(custom.mapToolToActionType('my_fetch'), 'network_request');
+      assert.equal(custom.mapToolToActionType('bash'), null);
     });
   });
 });
