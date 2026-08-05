@@ -27,34 +27,10 @@ export {};
  * because of the gate.
  */
 
-import { realpathSync } from 'node:fs';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
-import { loadMonitorStore, saveMonitorStore } from './monitor-store.js';
+import { loadMonitorStore, saveMonitorStore, canonicaliseCwd } from './monitor-store.js';
 import { resolveMonitorGate } from './monitor-gate.js';
 import { loadMonitorAllSessions } from './config-loader.js';
-
-/**
- * Resolve a path to its canonical form so cwd comparisons survive
- * symlinks.
- *
- * `monitor-cli` stamps `pending_arm.cwd` from `process.cwd()`, which
- * POSIX always reports resolved (`/private/var/...` on macOS, where
- * `/var` is a symlink). Hook payloads carry whatever form the host
- * chose, which may be the unresolved one (`/var/...`). Comparing the
- * two raw would make the arm unclaimable on any machine where the
- * working directory sits under a symlink — on macOS that includes
- * anything under `/tmp`.
- *
- * Falls back to the input when the path cannot be resolved (it may not
- * exist yet); a best-effort canonical form still beats no comparison.
- */
-function canonicalisePath(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
-}
 
 /**
  * Session ids that are placeholders, not identities.
@@ -100,7 +76,7 @@ export function isSessionMonitored(
     const result = resolveMonitorGate({
       store,
       sessionId,
-      cwd: cwd === null ? null : canonicalisePath(cwd),
+      cwd: cwd === null ? null : canonicaliseCwd(cwd),
       monitorAllSessions: loadMonitorAllSessions(),
       nowMs: Date.now(),
     });

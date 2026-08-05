@@ -138,16 +138,27 @@ function describeMonitorResult(result: MonitorResult): string {
         `${result.cwd} claims it; the request expires in 60s if nothing happens.`;
   }
   if (result.action === 'off') {
-    return result.removed
-      ? 'Telemetry capture OFF for this session.'
-      : 'Telemetry capture was not on for this session; any pending arm has been cleared.';
+    if (!result.removed) {
+      // Only ever the truth on this platform when the directory sweep
+      // below found nothing: nothing armed here, so nothing to disarm.
+      return 'Nothing was armed for this session or this directory; any pending arm has been cleared.';
+    }
+    return result.matched_by === 'cwd'
+      ? `Telemetry capture OFF. Disarmed ${result.removed_sessions} session(s) armed from this ` +
+        'directory — this platform exposes no session id, so `off` clears the directory it was ' +
+        'run in.'
+      : 'Telemetry capture OFF for this session.';
   }
   const lines = [
     result.monitor_all_sessions
       ? 'Telemetry capture is ON for every session (collector.monitor_all_sessions is true).'
-      : result.monitored
-        ? 'Telemetry capture is ON for this session.'
-        : 'Telemetry capture is OFF for this session.',
+      : result.session_undetermined
+        ? 'Telemetry capture state for THIS session cannot be determined — this platform ' +
+          'exposes no session id, and an armed record is keyed by an id only the hooks see. ' +
+          'Run `/nio monitor off` here to disarm anything armed from this directory.'
+        : result.monitored
+          ? 'Telemetry capture is ON for this session.'
+          : 'Telemetry capture is OFF for this session.',
   ];
   if (result.pending_arm && !result.monitored) {
     lines.push(

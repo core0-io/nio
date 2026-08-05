@@ -16,7 +16,9 @@ export {};
  * `${NIO_HOME ?? ~/.nio}/monitored-sessions.json`.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync, realpathSync,
+} from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -44,6 +46,36 @@ export interface MonitorStore {
 }
 
 const STORE_FILE_NAME = 'monitored-sessions.json';
+
+/**
+ * Resolve a directory to its canonical form so `cwd` comparisons survive
+ * symlinks.
+ *
+ * Every cwd in this store is compared against some other cwd sooner or
+ * later — the gate matches `pending_arm.cwd` against a hook payload's
+ * cwd, and `/nio-monitor off` matches an armed record's cwd against the
+ * caller's. The two sides arrive in different forms: `monitor-cli`
+ * stamps `process.cwd()`, which POSIX always reports resolved
+ * (`/private/var/...` on macOS, where `/var` is a symlink), while hook
+ * payloads carry whatever form the host chose, which may be the
+ * unresolved one (`/var/...`). Comparing them raw makes an arm
+ * unclaimable — and, worse for `off`, undeletable — on any machine whose
+ * working directory sits under a symlink, which on macOS includes
+ * everything under `/tmp`.
+ *
+ * Falls back to the input when the path cannot be resolved (it may not
+ * exist any more); a best-effort canonical form still beats no
+ * comparison. Lives here, next to the records whose `cwd` field it
+ * normalises, so the gate and the `off` command cannot drift apart on
+ * what "the same directory" means.
+ */
+export function canonicaliseCwd(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 function expandHome(p: string): string {
   return p.startsWith('~/') ? join(homedir(), p.slice(2)) : p;

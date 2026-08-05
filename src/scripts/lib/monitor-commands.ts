@@ -37,6 +37,7 @@ import { loadLogsConfig, loadMonitorAllSessions } from './config-loader.js';
 import {
   loadMonitorStore,
   saveMonitorStore,
+  canonicaliseCwd,
   type MonitorStore,
 } from './monitor-store.js';
 import { resolveMonitorGate } from './monitor-gate.js';
@@ -94,14 +95,49 @@ export interface MonitorOnResult {
 
 export interface MonitorOffResult {
   action: 'off';
+  /** True when at least one armed session record was actually deleted. */
   removed: boolean;
+  /** How many armed session records were deleted. */
+  removed_sessions: number;
+  /**
+   * How the records to delete were chosen:
+   *
+   * - `session` — the host exposed a session id and only that session's
+   *   record was touched.
+   * - `cwd` — no session id was resolvable, so every armed session whose
+   *   record is keyed to this directory was removed. See the `off`
+   *   branch of `runMonitorCommand` for why that is the correct fallback.
+   */
+  matched_by: 'session' | 'cwd';
 }
 
 export interface MonitorStatusResult {
   action: 'status';
   monitor_all_sessions: boolean;
   session_id: string | null;
+  /**
+   * Whether *this* session is being captured right now.
+   *
+   * Only meaningful when `session_undetermined` is false. When that flag
+   * is true there is no session id to look up, so this field is `false`
+   * in the weak sense of "not known to be monitored" — never read it on
+   * its own, or you will tell a user capture is off while the hooks are
+   * still exporting. Read `session_undetermined` first.
+   */
   monitored: boolean;
+  /**
+   * The honest "I cannot answer that" case: this platform exposes no
+   * session id (Codex / Hermes / OpenClaw all take this path) *and* the
+   * store holds at least one live armed session. One of those records
+   * may well be this very session — it would have been created by a hook
+   * event claiming a pending arm, using an id only the hook ever saw —
+   * but nothing readable from this process can decide which.
+   *
+   * With `armed_sessions: 0` the answer is not in doubt (nothing is
+   * armed anywhere, so this session is certainly not being captured) and
+   * this stays false.
+   */
+  session_undetermined: boolean;
   /**
    * A live, unclaimed `pending_arm` is sitting in the store: capture has
    * been requested but has not bound to a session yet. It binds on the
@@ -156,11 +192,61 @@ export function runMonitorCommand(
 
   if (command === 'off') {
     const sessions = { ...store.sessions };
-    const removed = sessionId !== null && sessionId in sessions;
-    if (sessionId) delete sessions[sessionId];
+    let removedCount = 0;
+    let matchedBy: 'session' | 'cwd';
+
+    if (sessionId) {
+      // The host told us exactly which session this is, so honour it
+      // literally. Sweeping the directory as well would be actively
+      // wrong here: two Claude Code sessions in one project directory
+      // are independent, and `off` in one must not disarm the other.
+      matchedBy = 'session';
+      if (sessionId in sessions) {
+        delete sessions[sessionId];
+        removedCount = 1;
+      }
+    } else {
+      // No resolvable session id — Codex, Hermes and OpenClaw are all
+      // here, permanently, because SESSION_ENV_VARS lists only Claude
+      // Code's variable. These are precisely the platforms that must
+      // take the pending-arm route: `on` writes `pending_arm`, and the
+      // next hook event claims it into `sessions[<id the hook saw>]`.
+      // That id is never visible from this process, so keying `off` off
+      // it deletes nothing and leaves the session exporting for the full
+      // 7-day TTL — worst on Codex, which has no SessionEnd hook to
+      // clean up behind it.
+      //
+      // So `off` falls back to the same key the arm was *claimed* by:
+      // the directory. This is the exact inverse of the claim rule in
+      // `resolveMonitorGate` (`pendingArm.cwd === cwd`), which is what
+      // makes it correct rather than a guess — anything armed from here
+      // was armed by an `on` typed here.
+      //
+      // Every match in this directory goes, not just one. Concurrent
+      // sessions sharing a directory make the choice ambiguous, and the
+      // two ways to be wrong are not symmetric: deleting one too many
+      // costs some uncollected telemetry the user can restore with
+      // another `on`, while deleting one too few keeps shipping data the
+      // user was just told was off. `off` is a privacy control, so it
+      // resolves ambiguity towards silence.
+      matchedBy = 'cwd';
+      const target = canonicaliseCwd(cwd);
+      for (const [id, entry] of Object.entries(sessions)) {
+        if (canonicaliseCwd(entry.cwd) === target) {
+          delete sessions[id];
+          removedCount++;
+        }
+      }
+    }
+
     // Saving without `pending_arm` is what clears it.
     saveMonitorStore(logsConfig, { sessions });
-    return { action: 'off', removed };
+    return {
+      action: 'off',
+      removed: removedCount > 0,
+      removed_sessions: removedCount,
+      matched_by: matchedBy,
+    };
   }
 
   return statusResult(store, sessionId, now);
@@ -203,15 +289,28 @@ function statusResult(
     nowMs: now,
   });
 
+  // Counted off the gate's post-sweep store, so a record past
+  // SESSION_TTL_MS is not reported as armed when the hooks would reject
+  // it.
+  const armedSessions = Object.keys(gate.store.sessions).length;
+
+  // Without a session id the store lookup above was never a real
+  // question — it looked up the empty string, which by construction
+  // matches nothing. Reporting its `false` as the verdict is a lie on
+  // exactly the platforms that always take the pending-arm path: their
+  // armed record is keyed by an id only the hook process ever saw, so a
+  // session that *is* being captured reads as `monitored: false` here.
+  // Say so instead. `monitor_all_sessions` needs no such hedge — it
+  // short-circuits the gate for every session, id or no id.
+  const undetermined = !monitorAll && sessionId === null && armedSessions > 0;
+
   return {
     action: 'status',
     monitor_all_sessions: monitorAll,
     session_id: sessionId,
     monitored: monitorAll || gate.monitored,
+    session_undetermined: undetermined,
     pending_arm: gate.store.pending_arm !== undefined,
-    // Counted off the gate's post-sweep store, so a record past
-    // SESSION_TTL_MS is not reported as armed when the hooks would
-    // reject it.
-    armed_sessions: Object.keys(gate.store.sessions).length,
+    armed_sessions: armedSessions,
   };
 }

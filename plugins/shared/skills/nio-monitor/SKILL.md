@@ -43,17 +43,22 @@ The CLI prints JSON.
 - `direct` — the session id was resolved from the environment. Capture begins on the next tool call. Tell the user monitoring is on.
 - `pending` — the session id was not available on this platform, so a pending arm was left in place. It is claimed by the next hook event from this directory, within 60 seconds. Tell the user monitoring will begin on their next action, and that it expires in 60s if nothing happens.
 
-**`off`** returns `removed`: `true` if a session was armed and is now disarmed, `false` if nothing was armed.
+**`off`** returns:
+
+- `removed` — `true` if at least one armed session record was deleted, `false` if there was nothing to delete. A live but unclaimed `pending_arm` is always cleared either way, so `removed: false` does **not** mean `off` did nothing.
+- `removed_sessions` — how many armed records were deleted.
+- `matched_by` — how they were chosen. `session` means the platform exposed a session id and only that one session was disarmed. `cwd` means it did not (Codex, Hermes and OpenClaw are always here), so `off` disarmed **every** session armed from the current directory — which is the only handle those platforms have on their own record, since it was created by a hook event under an id the CLI never sees. Tell the user which happened when `removed_sessions > 1`.
 
 **`status`** returns:
 
 - `monitor_all_sessions` — the global config flag. When `true`, every session is captured regardless of per-session state.
-- `monitored` — whether the current session is being captured right now. This is the same verdict the hooks enforce, so it accounts for the 7-day expiry: a record older than that reads as `false`, because the hooks would reject it too.
+- `session_undetermined` — **read this before `monitored`.** `true` means the platform exposes no session id *and* something is armed, so this session's state genuinely cannot be read from here. Say exactly that; do not report capture as off. Recommend `off` (which disarms by directory) if the user wants it stopped.
+- `monitored` — whether the current session is being captured right now, valid only when `session_undetermined` is `false`. It is the same verdict the hooks enforce, so it accounts for the 7-day expiry: a record older than that reads as `false`, because the hooks would reject it too.
 - `pending_arm` — an `on` is waiting to bind to a session. It binds on the next hook event from the directory `on` was run in, and expires 60s after it was made.
 - `armed_sessions` — how many live (unexpired) sessions are armed in total.
 - `session_id` — the session id resolved from the environment, or `null` when the platform does not expose one.
 
-**Reading a pending state.** On any platform where `on` returned `mode: pending` — which is every platform except Claude Code, Codex included — an immediately following `status` reports `monitored: false`, `pending_arm: true`, `armed_sessions: 0`. That is not a failure: capture has been requested and has not bound to a session yet. Tell the user monitoring starts with their next action. Once a hook event claims the arm, the same command reports `monitored: true` (when the platform exposes a session id) or simply `pending_arm: false` with `armed_sessions: 1`.
+**Reading a pending state.** On any platform where `on` returned `mode: pending` — which is every platform except Claude Code, Codex included — an immediately following `status` reports `monitored: false`, `pending_arm: true`, `armed_sessions: 0`, `session_undetermined: false`. That is not a failure: capture has been requested and has not bound to a session yet, and nothing is armed anywhere, so "not captured" is the honest answer. Tell the user monitoring starts with their next action. Once a hook event claims the arm, the same command reports `monitored: true` on a platform that exposes a session id; on one that does not it reports `pending_arm: false`, `armed_sessions: 1`, `session_undetermined: true` — capture is running, and this surface cannot tie it to this session.
 
 `status` is read-only. Running it never claims a pending arm and never expires a record — it only reports.
 
