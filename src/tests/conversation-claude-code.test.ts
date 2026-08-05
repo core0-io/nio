@@ -17,6 +17,14 @@ import { createClaudeCodeSource } from '../scripts/lib/conversation/claude-code-
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(TEST_DIR, '..', '..');
 const FIXTURE = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'conversation', 'claude-code-transcript.jsonl');
+const MALFORMED_TYPES_FIXTURE = join(
+  PROJECT_ROOT,
+  'src',
+  'tests',
+  'fixtures',
+  'conversation',
+  'claude-code-malformed-lines.jsonl',
+);
 
 describe('claude-code source', () => {
   it('yields one call per assistant entry', () => {
@@ -72,5 +80,19 @@ describe('claude-code source', () => {
   it('returns an empty array for a nonexistent file', () => {
     const src = createClaudeCodeSource('/nonexistent/nope.jsonl');
     assert.deepEqual(src.callsSince(0), []);
+  });
+
+  it('does not throw on a bare null/array/string/number line and still parses the entries around them', () => {
+    // JSON.parse succeeds for `null`, `[1,2,3]`, `"str"`, and `42` — the
+    // try/catch around JSON.parse cannot catch these, only an explicit
+    // `!entry || typeof entry !== 'object'` guard does. Regression for
+    // the "null line aborts callsSince entirely" bug.
+    const calls = createClaudeCodeSource(MALFORMED_TYPES_FIXTURE).callsSince(0);
+    assert.equal(calls.length, 5, 'all five well-formed assistant entries must survive');
+    assert.deepEqual(
+      calls.map((c) => c.callId),
+      ['req_ml_a', 'req_ml_b', 'req_ml_c', 'req_ml_d', 'req_ml_e'],
+      'every entry around the malformed-type lines must still parse, in order, none dropped',
+    );
   });
 });

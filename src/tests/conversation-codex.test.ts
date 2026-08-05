@@ -17,6 +17,14 @@ import { createCodexSource } from '../scripts/lib/conversation/codex-source.js';
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = join(TEST_DIR, '..', '..');
 const FIXTURE = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'conversation', 'codex-rollout.jsonl');
+const MALFORMED_TYPES_FIXTURE = join(
+  PROJECT_ROOT,
+  'src',
+  'tests',
+  'fixtures',
+  'conversation',
+  'codex-malformed-lines.jsonl',
+);
 
 // Fixture contains exactly two `reasoning` entries (rs_001, rs_002).
 // The trailing assistant message attaches to rs_002's already-open
@@ -96,5 +104,20 @@ describe('codex source', () => {
   it('returns an empty array for a nonexistent file', () => {
     const src = createCodexSource('/nonexistent/nope.jsonl');
     assert.deepEqual(src.callsSince(0), []);
+  });
+
+  it('does not throw on a bare null/array/string/number line and still parses the entries around them', () => {
+    // JSON.parse succeeds for `null`, `[1,2,3]`, `"str"`, and `42` — the
+    // try/catch around JSON.parse cannot catch these, only an explicit
+    // `!entry || typeof entry !== 'object'` guard does. Regression for
+    // the "null line aborts callsSince entirely" bug. Fixture interleaves
+    // one of each malformed type between two reasoning-opened calls plus
+    // their function_call/message closers.
+    const calls = createCodexSource(MALFORMED_TYPES_FIXTURE).callsSince(0);
+    assert.equal(calls.length, 2, 'both reasoning-opened calls must survive the malformed-type lines');
+    const toolNames = calls.flatMap((c) => c.blocks.filter((b) => b.type === 'tool_use').map((b) => b.toolUse!.name));
+    assert.deepEqual(toolNames, ['exec_command', 'exec_command'], 'function_call entries around the malformed lines must still attach');
+    const text = calls.flatMap((c) => c.blocks).find((b) => b.type === 'text');
+    assert.equal(text?.content, 'final reply placeholder', 'trailing assistant message must still close the last call');
   });
 });

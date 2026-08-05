@@ -146,6 +146,14 @@ export function createClaudeCodeSource(transcriptPath: string): ConversationSour
         } catch {
           return; // malformed line: skip, don't abort the rest of the file
         }
+        // JSON.parse succeeds (and returns null) for a line that's just
+        // the literal `null`, and succeeds with a non-object for a bare
+        // string/number/array line too — none of those throw above, so
+        // this guard is the only thing standing between a stray `null`
+        // line and a TypeError on `entry.type` that would abort every
+        // call still left in the file. Mirrors hermes-source.ts /
+        // openclaw-source.ts's entry guards.
+        if (!entry || typeof entry !== 'object') return;
         const call = toCall(entry, i);
         if (call) calls.push(call);
       });
