@@ -26,6 +26,8 @@ plugins/codex/skills/nio/scripts/*.js
 plugins/codex/skills/nio/scripts/*.js.map
 plugins/pi/skills/nio/scripts/*.js
 plugins/pi/skills/nio/scripts/*.js.map
+plugins/opencode/skills/nio/scripts/*.js
+plugins/opencode/skills/nio/scripts/*.js.map
 plugins/openclaw/plugin/plugin.js
 plugins/pi/extensions/nio/index.js
 plugins/opencode/plugins/nio.js

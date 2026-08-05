@@ -27,6 +27,7 @@ const SKILL_PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'openclaw'),
   join(ROOT, 'plugins', 'codex'),
   join(ROOT, 'plugins', 'pi'),
+  join(ROOT, 'plugins', 'opencode'),
 ];
 
 // Plugins that don't install as a skill (hermes — runs via shell-hook
@@ -75,6 +76,7 @@ const FOCUSED_SKILL_PLUGIN_DIRS = [
   join(ROOT, 'plugins', 'claude-code'),
   join(ROOT, 'plugins', 'codex'),
   join(ROOT, 'plugins', 'pi'),
+  join(ROOT, 'plugins', 'opencode'),
 ];
 
 for (const dir of FOCUSED_SKILL_PLUGIN_DIRS) {
