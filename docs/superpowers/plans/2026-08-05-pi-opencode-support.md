@@ -2119,13 +2119,67 @@ describe('registerPiExtension', () => {
     assert.equal(out, undefined);
   });
 
-  it('user_bash never blocks', async () => {
+  it('user_bash never blocks AND never consults the guard', async () => {
+    // Asserting only "returns undefined" would pass for a binding that ran
+    // Phase 0-6 and threw the verdict away. Prove the orchestrator was
+    // never consulted.
     const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    let evaluated = false;
     const pi = fakePi();
-    registerPiExtension(pi as never);
-    const handler = pi.handlers.get('user_bash')!;
-    const out = await handler({ command: 'rm -rf /', cwd: '/tmp' }, fakeCtx(true));
+    registerPiExtension(pi as never, {
+      tracerProvider: null,
+      meterProvider: null,
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            evaluated = true;
+            return {
+              decision: 'deny', risk_level: 'high', scores: { final: 1 },
+              findings: [], explanation: 'x', phase_stopped: 1, diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+    const out = await pi.handlers.get('user_bash')!(
+      { command: 'rm -rf /', cwd: '/tmp' }, fakeCtx(true),
+    );
     assert.equal(out, undefined);
+    assert.equal(evaluated, false, 'user_bash must not run Phase 0-6');
+  });
+
+  it('a refusal survives a telemetry failure', async () => {
+    // The blanket catch must not convert a human "no" into an allow. Inject
+    // a tracer provider whose getTracer throws, so resolveConfirm blows up
+    // AFTER the user has already declined.
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const explodingProvider = {
+      getTracer() { throw new Error('boom'); },
+      async forceFlush() {},
+      async shutdown() {},
+    };
+    const pi = fakePi();
+    registerPiExtension(pi as never, {
+      confirmAction: 'ask',
+      tracerProvider: explodingProvider as never,
+      meterProvider: null,
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            return {
+              decision: 'confirm', risk_level: 'high', scores: { final: 0.9 },
+              findings: [{ rule_id: 'TEST_RULE' }], explanation: 'risky',
+              phase_stopped: 2, diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+    const out = await pi.handlers.get('tool_call')!(
+      { toolName: 'bash', toolCallId: 'c1', input: { command: 'rm -rf /' } },
+      fakeCtx(true, false),   // hasUI true, user answers "no"
+    ) as { block?: boolean };
+    assert.equal(out?.block, true, 'a refused action must stay blocked');
   });
 });
 ```
@@ -2195,7 +2249,15 @@ export interface PiExtensionApi {
 
 export interface PiPluginOptions {
   level?: string;
+  confirmAction?: 'allow' | 'deny' | 'ask';
   nioFactory?: () => NioInstance;
+  /**
+   * Test seam mirroring OpenClawPluginOptions: inject pre-built OTEL
+   * providers instead of deriving them from collector config.
+   * `undefined` builds from config (production); `null` disables.
+   */
+  tracerProvider?: ReturnType<typeof createTracerProvider>;
+  meterProvider?: ReturnType<typeof createMeterProvider>;
 }
 
 /** How long an interactive confirm dialog waits before auto-cancelling. */
@@ -2221,6 +2283,13 @@ export function registerPiExtension(
 
   // ---- Guard: tool_call can block -----------------------------------------
   pi.on('tool_call', async (event: unknown, ctx: unknown) => {
+    // Set the moment we learn the action must not run — either the guard
+    // denied it, or the human declined the confirmation dialog. Declared
+    // OUTSIDE the try on purpose: failing open is right for a Nio internal
+    // error, but it must never turn a refusal we already hold into a green
+    // light. Telemetry work happens after the answer is known, so without
+    // this a throw in resolveConfirm would run a tool the user just refused.
+    let denial: { block: true; reason?: string } | null = null;
     try {
       const e = event as {
         toolName?: string; toolCallId?: string; input?: Record<string, unknown>;
@@ -2235,31 +2304,42 @@ export function registerPiExtension(
         ...e, sessionId, cwd: c.cwd,
       }, { toolCallId: e.toolCallId });
 
-      if (r.block) return { block: true, reason: r.reason };
+      if (r.block) {
+        denial = { block: true, reason: r.reason };
+        return denial;
+      }
 
       // Provisional 'ask' means guard.confirm_action === 'ask'. Pi is the
       // only platform with a real user channel, so actually ask.
       if (r.decision === 'ask') {
         if (!c.hasUI) {
-          // Print / json mode: no channel to ask through. Fall back to the
-          // two-state semantics every other platform uses.
-          const folded = await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, true);
-          return folded.block ? { block: true, reason: folded.reason } : undefined;
+          // Print / json mode: no channel to ask through. Resolve the
+          // provisional attrs to confirm_allowed and let it run, matching
+          // the two-state fold every other platform uses. resolveConfirm
+          // with `true` cannot block, so there is nothing to branch on.
+          await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, true);
+          return undefined;
         }
         const ok = await c.ui.confirm(
           'Nio: confirm this action?',
           r.reason || 'This action was flagged as risky.',
           { timeout: CONFIRM_TIMEOUT_MS },
         );
-        // A timeout returns false — treated as "denied", so the agent never
-        // hangs waiting for an absent user.
+        // Pi's confirm() returns false on timeout (documented in
+        // extensions.md), so an absent human reads as a refusal instead of
+        // hanging the agent forever.
+        if (!ok) {
+          denial = { block: true, reason: r.reason || 'Denied by user (Nio)' };
+        }
         const resolved = await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, ok);
         if (resolved.block) return { block: true, reason: resolved.reason };
+        if (denial) return denial;
       }
 
       return undefined;
     } catch {
-      return undefined; // fail open
+      // Fail open on a Nio failure — but honour a refusal already given.
+      return denial ?? undefined;
     }
   });
 
