@@ -968,19 +968,13 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
   });
 
   // NOTE: review round 1 (I2) specified an additional branch — verdict
-  // 'ask' AND confirm_action 'deny' → force deny. That literal condition
-  // is implemented in the source (see permission.ask below) but is not
-  // bite-checked here: under self-consistent confirmAction usage it is
-  // unreachable, because if confirm_action were 'deny' at the time
-  // tool.execute.before ran, onPreTool would have folded straight to a
-  // block and already thrown — verdictByCall could never hold 'ask' in
-  // that case. Writing a test for it would require manufacturing a
-  // divergence between the confirmAction rt used to fold the original
-  // decision and the confirmAction this check reads, which is not
-  // something the current public API allows without adding a seam whose
-  // only purpose would be to fake the test. See the Fix Round 1 report
-  // section for the full trace; flagged there for the reviewer to
-  // confirm or correct.
+  // 'ask' AND confirm_action 'deny' → force deny. It was implemented
+  // literally, and the final review confirmed it is unreachable: if
+  // confirm_action were 'deny' at the time tool.execute.before ran,
+  // onPreTool would have folded straight to 'confirm_denied' and already
+  // thrown, so verdictByCall could never hold 'ask'. The branch has been
+  // removed from permission.ask rather than left as untestable dead code;
+  // 'ask' is now the only status that handler writes.
 
   it('event swallows an internal throw from a broken meter provider (session.idle path)', async () => {
     const explodingMeterProvider = {

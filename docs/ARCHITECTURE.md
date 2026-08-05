@@ -750,7 +750,7 @@ The bindings hold **no telemetry logic of their own** — each is a thin transla
 
 Two host quirks are worth calling out because they shape the runtime's contract:
 
-- **opencode skips `tool.execute.after` when the tool itself throws.** The pending span would leak, so the `session.idle` branch doubles as a safety net: `onTurnEnd` force-closes any leftover pending spans before emitting the turn root. Those spans are therefore *reclaimed* rather than closed precisely, and they carry no `gen_ai.tool.call.result`.
+- **opencode skips `tool.execute.after` when the tool itself throws.** The pending span would leak, so the `session.idle` branch doubles as a safety net: `onTurnEnd` force-closes any leftover pending spans before emitting the turn root. Those spans are therefore *reclaimed* rather than closed precisely: they carry no `gen_ai.tool.call.result`, no `nio.guard.*` attributes (only `onPostTool` drains the parked guard attrs, and it never ran), and they are recorded `status=OK` regardless of the tool's real outcome. The audit log and the `guard_decision` metric are emitted pre-side by `onPreTool` and are unaffected. Full caveat in [COLLECTOR-SIGNALS.md](./COLLECTOR-SIGNALS.md#per-platform-signal-coverage).
 - **opencode invokes plugin hooks through `Effect.promise(...)`**, which turns any rejection into an Effect *defect* rather than a typed error. Every handler in `opencode-plugin.ts` therefore needs total catch coverage; `NioBlockedError` is the single intentional escape.
 
 Despite its name, [`openclaw-dispatch.ts`](../src/adapters/openclaw-dispatch.ts) is the **shared** implementation of the `/nio` sub-command router and of `/nio doctor` for every in-process platform — the Pi and opencode install probes live there, not in an OpenClaw-only file.

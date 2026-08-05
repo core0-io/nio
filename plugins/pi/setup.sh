@@ -138,7 +138,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   fi
   [ -f "$SETTINGS" ] && settings_edit uninstall "$EXT_DIR/index.js" "$SKILLS_DIR" && echo "  Cleaned settings.json" || true
   rm -rf "$EXT_DIR" 2>/dev/null && echo "  Removed extension" || true
-  rm -rf "$SKILLS_DIR/nio" 2>/dev/null && echo "  Removed skill" || true
+  rm -rf "${SKILLS_DIR:?}/nio" 2>/dev/null && echo "  Removed skill" || true
   for s in nio-scan nio-action nio-report nio-config nio-doctor nio-external-score; do
     rm -rf "${SKILLS_DIR:?}/$s" 2>/dev/null || true
   done
@@ -151,6 +151,14 @@ fi
 
 echo "[1/3] Registering extension..."
 if command -v pi >/dev/null 2>&1; then
+  # Strip any prior CLI-less fallback registration first. A user who
+  # installed before the `pi` CLI was on PATH has the extension path and
+  # the skills path appended to settings.json; `pi install` adds a
+  # SECOND, package-based registration on top of it. Nio would then load
+  # twice — double guard evaluation, duplicate audit rows and duplicate
+  # spans per tool call. Idempotent: a no-op on a first-time CLI install,
+  # since settings_edit's `strip` just filters entries that aren't there.
+  [ -f "$SETTINGS" ] && settings_edit uninstall "$EXT_DIR/index.js" "$SKILLS_DIR" || true
   pi install "$SCRIPT_DIR"
   echo "  OK: Registered as a pi package"
 else

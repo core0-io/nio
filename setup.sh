@@ -266,7 +266,11 @@ if [ -d "$HERMES_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
 fi
 
 # ---- Pi ----
-if [ -d "$PI_HOME" ] || command -v pi >/dev/null 2>&1 || [ "${INSTALL_ALL:-}" = "1" ]; then
+# Config dir AND binary, matching install.sh's detect_platform. `pi` is a
+# generic enough command name that an unrelated binary on PATH would
+# otherwise be enough to make this script create and populate ~/.pi/agent
+# for an agent the user does not have.
+if { [ -d "$PI_HOME" ] && command -v pi >/dev/null 2>&1; } || [ "${INSTALL_ALL:-}" = "1" ]; then
   echo "  Detected: Pi ($PI_HOME)"
   echo ""
   bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
@@ -274,7 +278,8 @@ if [ -d "$PI_HOME" ] || command -v pi >/dev/null 2>&1 || [ "${INSTALL_ALL:-}" = 
 fi
 
 # ---- opencode ----
-if [ -d "$OCODE_HOME" ] || command -v opencode >/dev/null 2>&1 || [ "${INSTALL_ALL:-}" = "1" ]; then
+# Config dir AND binary — same predicate as install.sh's detect_platform.
+if { [ -d "$OCODE_HOME" ] && command -v opencode >/dev/null 2>&1; } || [ "${INSTALL_ALL:-}" = "1" ]; then
   echo "  Detected: opencode ($OCODE_HOME)"
   echo ""
   bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"

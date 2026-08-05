@@ -85,7 +85,16 @@ export const SENSITIVE_FILE_PATHS = [
   '.pi/',
   '.opencode/opencode.json',
   '.config/opencode/opencode.json',
+  // Both opencode roots are covered as broadly as `.pi/`, `.openclaw/`
+  // and `.hermes/plugins/`: the project-local `.opencode/` AND the
+  // user-level `~/.config/opencode/`. The latter is the auto-load
+  // directory opencode globs at startup (plugins/opencode/setup.sh
+  // installs Nio into `~/.config/opencode/plugins/` for exactly that
+  // reason), so a write there is arbitrary code execution on the next
+  // opencode launch — a code-execution persistence channel, not just a
+  // config file.
   '.opencode/',
+  '.config/opencode/',
 
   // ── Persistence channels (next-launch / scheduled triggers) ────────
   'Library/LaunchAgents/',
