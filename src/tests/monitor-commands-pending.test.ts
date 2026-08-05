@@ -15,6 +15,13 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 // and the session id via resolveSessionId() — both read the environment,
 // neither is a parameter. So the fixture drives it through NIO_HOME and
 // CLAUDE_CODE_SESSION_ID rather than passing them in.
+//
+// Like every other process.env['NIO_HOME'] mutator in this test suite
+// (see helpers/with-nio-home.ts's docblock for the full reasoning), this
+// is safe only under node:test's default serial-within-a-file execution —
+// there is no injectable seam in the production code to target instead.
+// try/finally restores on a thrown assertion so a failure inside `fn`
+// can't leak env vars into a later test in this file.
 function withEnv<T>(home: string, sessionId: string | null, fn: () => T): T {
   const prevHome = process.env['NIO_HOME'];
   const prevSid = process.env['CLAUDE_CODE_SESSION_ID'];

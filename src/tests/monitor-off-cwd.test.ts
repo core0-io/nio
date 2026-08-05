@@ -108,6 +108,13 @@ function storeAt(home: string): { sessions: Record<string, unknown>; pending_arm
  * The hook side of the loop, run for real rather than faked: this is the
  * function guard-hook / collector-hook / hook-cli / openclaw-plugin all
  * call, and it is what claims a pending arm into a session record.
+ *
+ * Mutates process.env['NIO_HOME'] directly — isSessionMonitored reads it
+ * with no injectable seam — so this is safe only under node:test's
+ * default serial-within-a-file execution; see helpers/with-nio-home.ts's
+ * docblock for the full reasoning. try/finally restores it even if
+ * isSessionMonitored throws (it shouldn't — it fails closed — but this
+ * keeps the guarantee independent of that).
  */
 function hookGate(sessionId: string, cwd: string, home: string): boolean {
   const prev = process.env['NIO_HOME'];

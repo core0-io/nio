@@ -84,6 +84,11 @@ describe('openclaw providers are created lazily, not at registration', () => {
     // 1. A config with NO collector endpoint at registration time.
     writeFileSync(join(home, 'config.yaml'), 'guard:\n  protection_level: balanced\n', 'utf-8');
 
+    // process.env['NIO_HOME'] mutation: registerOpenClawPlugin reads it
+    // with no injectable seam, so this is safe only under node:test's
+    // default serial-within-a-file execution — see helpers/with-nio-
+    // home.ts's docblock for the full reasoning. try/finally restores it
+    // even if the body below throws.
     const prev = process.env['NIO_HOME'];
     process.env['NIO_HOME'] = home;
     try {
@@ -146,6 +151,7 @@ describe('openclaw providers are created lazily, not at registration', () => {
       'utf-8',
     );
 
+    // Same process.env['NIO_HOME'] caveat as the test above.
     const prev = process.env['NIO_HOME'];
     process.env['NIO_HOME'] = home;
     try {

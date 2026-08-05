@@ -18,6 +18,14 @@ function freshHome(): { home: string; logsConfig: CollectorLogsConfig } {
   return { home, logsConfig: { path: join(home, 'audit.jsonl') } as CollectorLogsConfig };
 }
 
+// Mutates the process-global process.env.NIO_HOME because isSessionMonitored
+// (via loadMonitorStore/loadMonitorAllSessions) reads it directly — there is
+// no injectable seam. Safe only under node:test's default serial-within-a-
+// file execution; see helpers/with-nio-home.ts's docblock for the full
+// reasoning (that helper takes a slightly different shape — it owns
+// mkdtemp+cleanup itself — so it isn't reused verbatim here, but the same
+// process.env caveat applies). The try/finally still restores on a thrown
+// assertion so a failure in `fn` can't leak NIO_HOME into a later test.
 function withNioHome<T>(home: string, yaml: string | null, fn: () => T): T {
   if (yaml !== null) writeFileSync(join(home, 'config.yaml'), yaml, 'utf-8');
   const prev = process.env['NIO_HOME'];

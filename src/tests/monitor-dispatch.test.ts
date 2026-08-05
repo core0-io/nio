@@ -75,6 +75,12 @@ function parseTail(out: string): Record<string, unknown> {
  * inherited) because the developer running `pnpm test` from inside a
  * Claude Code session would otherwise flip these cases between the
  * direct-arm and pending-arm paths.
+ *
+ * Mutates process.env directly because the production code under test
+ * reads NIO_HOME/CLAUDE_CODE_SESSION_ID from the environment with no
+ * injectable seam — see helpers/with-nio-home.ts's docblock for the full
+ * reasoning. Safe only under node:test's default serial-within-a-file
+ * execution. try/finally restores both vars even if `body` throws.
  */
 async function withEnv(
   home: string,

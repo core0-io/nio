@@ -83,6 +83,12 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
    * only the module-level `sessionState` / `pendingGuardAttrs` maps in
    * openclaw-plugin.ts are process-global, so callers must use session
    * ids unique to their own test.
+   *
+   * process.env['NIO_HOME'] mutation here is safe only under node:test's
+   * default serial-within-a-file execution — there is no injectable seam
+   * in the production code to target instead; see helpers/with-nio-
+   * home.ts's docblock for the full reasoning. try/finally restores it
+   * even if `body` throws.
    */
   async function withPlugin(
     body: (handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>, logsConfig: CollectorLogsConfig) => Promise<void>,
