@@ -60,6 +60,7 @@ import {
   emitSessionSpan,
   hasOrphanedDeferredTree,
   recoverDeferredTree,
+  createTracerProvider,
 } from './traces-collector.js';
 import {
   loadState, saveState, discardState, takeAbandonedShards, type CollectorState,
@@ -67,7 +68,7 @@ import {
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
-import { loadContentLimits } from './config-loader.js';
+import { loadContentLimits, type CollectorConfig as ExporterConfig } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -361,6 +362,73 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     loggerProvider = null, logsConfig,
   } = opts;
 
+  /**
+   * Every write goes through here so the shard always carries the
+   * identity of the process that owns it. A shard outlives its process
+   * and can be swept by a different platform (see `CollectorState.platform`).
+   */
+  const persist = (state: CollectorState): void => {
+    saveState(logsConfig, {
+      ...state,
+      platform,
+      ...(agentName && agentName.length > 0 ? { agent_name: agentName } : {}),
+    }, sessionId);
+  };
+
+  /**
+   * Flush an abandoned shard's deferred tree under the identity of the
+   * session that PRODUCED it, not the one doing the sweep.
+   *
+   * `nio.platform`, `service.name` and `gen_ai.agent.name` live only on
+   * the OTEL Resource (9da6c81), and a Resource belongs to a provider —
+   * so re-using this process's `tracerProvider` for a foreign shard emits
+   * a dead Codex session's spans as `service.name=nio-claude-code` while
+   * the spans themselves still carry the Codex `session.id`. All four
+   * platforms share `$NIO_HOME` by default and cc/codex are the same
+   * scripts behind a different `--platform` flag, so that mismatch is a
+   * routine configuration rather than an exotic one.
+   *
+   * A shard with a matching identity (or one written before the identity
+   * fields existed) is emitted on the process's own provider, which is
+   * both correct and free. Anything else gets a short-lived,
+   * NON-registered provider carrying the shard's own Resource, shut down
+   * as soon as the tree is out. Both paths run inside the caller's flush
+   * budget, so a dead endpoint cannot turn recovery into a hang.
+   */
+  const recoverShard = async (state: CollectorState): Promise<void> => {
+    if (!tracerProvider) return;
+    const shardPlatform = state.platform ?? platform;
+    const shardAgent = state.agent_name ?? agentName ?? '';
+    if (shardPlatform === platform && shardAgent === (agentName ?? '')) {
+      await recoverDeferredTree(tracerProvider, state);
+      return;
+    }
+    // `DispatchOptions.config` is the narrower ResolvedMetricsConfig, but
+    // every production caller passes the loader's CollectorConfig, which
+    // also carries `headers`. Default it so a test fixture built from the
+    // narrow type still resolves — `collectorRequestHeaders` derives the
+    // auth header from `api_key` regardless.
+    const exporterConfig: ExporterConfig = {
+      headers: {},
+      ...(opts.config as Partial<ExporterConfig>),
+    } as ExporterConfig;
+    const foreign = createTracerProvider(
+      exporterConfig, shardPlatform, shardAgent, { register: false },
+    );
+    if (!foreign) {
+      // No endpoint / traces disabled: cannot happen while
+      // `tracerProvider` is non-null, but losing the tree outright would
+      // be worse than emitting it under the wrong label.
+      await recoverDeferredTree(tracerProvider, state);
+      return;
+    }
+    try {
+      await recoverDeferredTree(foreign, state);
+    } finally {
+      try { await foreign.shutdown(); } catch { /* best effort */ }
+    }
+  };
+
   const toolName = input.tool_name ?? '';
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
@@ -427,7 +495,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const stale = loadState(logsConfig, sessionId);
       if (hasOrphanedDeferredTree(stale, sessionId)) {
         const recovered = await recoverDeferredTree(tracerProvider, stale!);
-        saveState(logsConfig, recovered, sessionId);
+        persist(recovered);
       } else if (stale?.turn_trace_id && stale.session_id === sessionId) {
         // Same synthetic turn span id endTurn forces onto the root, so
         // audit records land on the turn span itself, not a phantom.
@@ -445,7 +513,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         state = recordUserPrompt(state, input.prompt);
-        saveState(logsConfig, state, sessionId);
+        persist(state);
       }
 
     } else if (event === 'PreToolUse') {
@@ -465,7 +533,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           state, key, toolName, summary,
           genAiToolCallIdAttributes(input.tool_use_id),
         );
-        saveState(logsConfig, state, sessionId);
+        persist(state);
       }
 
       if (meterProvider) {
@@ -517,7 +585,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           },
           err ?? null,
         );
-        saveState(logsConfig, result.state, sessionId);
+        persist(result.state);
 
         // A plain `output` string is the common shape and is emitted
         // verbatim; anything else is serialised whole so structured
@@ -571,7 +639,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig, sessionId);
         let state = ensureTurn(prev, sessionId);
         state = recordPreTaskToolUse(state, taskId, summary);
-        saveState(logsConfig, state, sessionId);
+        persist(state);
       }
 
       if (meterProvider) {
@@ -592,7 +660,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const result = await recordPostTaskToolUse(
           tracerProvider, state, taskId, cwd,
         );
-        saveState(logsConfig, result.state, sessionId);
+        persist(result.state);
       }
 
       if (meterProvider) {
@@ -632,7 +700,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const next = await endTurn(
           tracerProvider, prev!, cwd, transcriptPath, calls, contentSink,
         );
-        if (next) saveState(logsConfig, next, sessionId);
+        if (next) persist(next);
       }
 
       if (hasActiveTurn && meterProvider) {
@@ -674,16 +742,17 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // flushed by the next event that finds it, or by the next
         // SessionStart"). Per-session files mean it has to be done on
         // purpose. Each tree is emitted on its OWN session's trace id,
-        // tagged nio.turn.incomplete, so recovery never re-attributes a
-        // dead session's spans to this one. SessionStart only — see
+        // tagged nio.turn.incomplete, AND under its own platform identity
+        // (see recoverShard), so recovery never re-attributes a dead
+        // session's spans to this one. SessionStart only — see
         // takeAbandonedShards for why not on every event.
         for (const shard of takeAbandonedShards(logsConfig, sessionId)) {
-          await recoverDeferredTree(tracerProvider, shard.state);
+          await recoverShard(shard.state);
         }
 
         const prev = loadState(logsConfig, sessionId);
         const state = startSessionTrace(prev, sessionId);
-        saveState(logsConfig, state, sessionId);
+        persist(state);
       }
 
     } else if (isKnownHookEvent(event)) {

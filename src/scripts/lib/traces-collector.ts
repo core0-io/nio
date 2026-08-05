@@ -349,10 +349,27 @@ export function buildNioResource(platform: string, agentName?: string) {
   return resourceFromAttributes(nioResourceAttributes(platform, agentName));
 }
 
+export interface TracerProviderOptions {
+  /**
+   * Install this provider as the OTel global (`provider.register()`).
+   *
+   * Defaults to true, which is what every hook entrypoint wants. It is
+   * turned OFF for the short-lived providers `collector-core` builds to
+   * re-emit an abandoned shard under ITS OWN platform identity: identity
+   * lives on the Resource, one Resource belongs to one provider, and a
+   * second `register()` would either be dropped (the registry is a
+   * singleton) or clobber the process's real provider. Spans are emitted
+   * through `provider.getTracer(...)` rather than the global API, so a
+   * non-registered provider exports normally.
+   */
+  register?: boolean;
+}
+
 export function createTracerProvider(
   config: CollectorConfig,
   platform: string,
   agentName?: string,
+  options: TracerProviderOptions = {},
 ): NodeTracerProvider | null {
   if (!config.endpoint) return null;
   if (!config.traces_enabled) return null;
@@ -386,7 +403,7 @@ export function createTracerProvider(
     resource: buildNioResource(platform, agentName),
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
-  provider.register();
+  if (options.register !== false) provider.register();
   return provider;
 }
 

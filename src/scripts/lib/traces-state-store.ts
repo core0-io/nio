@@ -98,6 +98,29 @@ export interface DeferredSpan {
 
 export interface CollectorState {
   session_id: string;
+  /**
+   * The platform that owns this shard ('claude-code' / 'codex' /
+   * 'hermes'), and the `agent_name` configured for it.
+   *
+   * Recorded because a shard OUTLIVES the process that wrote it and can
+   * be picked up by a different platform entirely. All four platforms
+   * share `$NIO_HOME` by default and Claude Code / Codex are the same
+   * scripts behind a different `--platform` flag, so "a Codex shard swept
+   * by a Claude Code SessionStart" is a routine configuration.
+   *
+   * Since 9da6c81, `nio.platform` / `service.name` / `gen_ai.agent.name`
+   * live ONLY on the OTEL Resource, and a Resource belongs to a provider
+   * — so the recovering process cannot label the recovered spans
+   * correctly without knowing whose they were. Without these two fields a
+   * dead Codex session's tree went out as `service.name=nio-claude-code`
+   * while its spans still carried the Codex `session.id`.
+   *
+   * Optional because a shard written by an older version has neither;
+   * readers fall back to their own identity, which is the pre-existing
+   * behaviour.
+   */
+  platform?: string;
+  agent_name?: string;
   turn_number: number;
   turn_trace_id: string;    // 16-byte random hex, minted once per turn in ensureTurn()
   turn_start_ms: number;
