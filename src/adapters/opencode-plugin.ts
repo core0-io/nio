@@ -113,6 +113,30 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
     /** Guard verdicts parked by callID so permission.ask can reuse them. */
     const verdictByCall = new Map<string, 'allow' | 'ask' | 'deny'>();
 
+    /**
+     * Sub-agent child session id → parent session id, recorded when
+     * `session.created` carries `Session.parentID`. The task span opened
+     * by `onSubagentStart` lives under the PARENT's turn state, but the
+     * only signal that the sub-agent itself is done is the CHILD's own
+     * `session.idle` — so this map is what lets that event find its way
+     * back to the right `onSubagentEnd(parentId, childId)` call.
+     */
+    const subagentParentByChild = new Map<string, string>();
+
+    /**
+     * Last-seen cumulative token totals per assistant message id.
+     * `message.updated` is a snapshot event — opencode republishes the
+     * same message record (with growing cumulative totals) on every
+     * update, unlike Pi's `message_end` which fires once per message.
+     * Feeding a snapshot straight into `onLlmUsage` (which accumulates)
+     * would compound the totals on every re-publish; this map lets each
+     * event contribute only the delta since the last time this message
+     * id was seen.
+     */
+    const lastUsageByMessageId = new Map<string, {
+      input: number; output: number; cacheRead: number; cacheWrite: number;
+    }>();
+
     return {
       async 'tool.execute.before'(hookInput, hookOutput) {
         try {
@@ -173,10 +197,22 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
 
       async 'permission.ask'(hookInput, hookOutput) {
         try {
-          // Supplementary gate: opencode decided to ask on its own. If
-          // Nio already denied this call, harden the answer to deny.
+          // A 'deny' verdict already threw from tool.execute.before —
+          // opencode never runs item.execute for that call, so
+          // permission.ask is never reached for it; checking for 'deny'
+          // here would be dead code. The reachable verdict is 'ask':
+          // Nio flagged this call as needing confirmation but folded it
+          // to a provisional allow (no interactive channel of its own),
+          // letting the call proceed toward opencode's own permission
+          // system. Route that flag onto opencode's real interactive
+          // channel — force an actual ask rather than silently trusting
+          // whatever opencode's own heuristics decided for `status` —
+          // and honour a `confirm_action: deny` policy by denying
+          // outright instead of asking.
           const verdict = hookInput.callID ? verdictByCall.get(hookInput.callID) : undefined;
-          if (verdict === 'deny') hookOutput.status = 'deny';
+          if (verdict === 'ask') {
+            hookOutput.status = config.guard?.confirm_action === 'deny' ? 'deny' : 'ask';
+          }
         } catch { /* non-critical */ }
       },
 
@@ -188,6 +224,7 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               const info = props.info as { id?: string; parentID?: string } | undefined;
               if (!info?.id) return;
               if (info.parentID) {
+                subagentParentByChild.set(info.id, info.parentID);
                 await rt.onSubagentStart(info.parentID, info.id);
               } else {
                 rt.onSessionStart(info.id);
@@ -197,6 +234,19 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
             case 'session.idle': {
               const sessionId = props.sessionID as string | undefined;
               if (!sessionId) return;
+
+              // A sub-agent's OWN session going idle means the sub-agent
+              // is done — close the task span opened under the parent
+              // via onSubagentEnd instead of treating this as a turn end
+              // for the child (the child never accumulates its own turn
+              // state; only the parent does).
+              const parentId = subagentParentByChild.get(sessionId);
+              if (parentId) {
+                subagentParentByChild.delete(sessionId);
+                await rt.onSubagentEnd(parentId, sessionId);
+                return;
+              }
+
               // Also the safety net for tools that threw: opencode skips
               // tool.execute.after in that case, so pending spans would
               // otherwise leak. onTurnEnd force-closes them.
@@ -206,6 +256,7 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
             }
             case 'message.updated': {
               const info = props.info as {
+                id?: string;
                 sessionID?: string;
                 role?: string;
                 tokens?: {
@@ -214,12 +265,27 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                 };
               } | undefined;
               if (info?.role !== 'assistant' || !info.sessionID) return;
-              if (info.tokens) {
+              // message.updated is a cumulative SNAPSHOT, republished on
+              // every change to the same message — unlike Pi's
+              // message_end, which fires once. Without a message id to
+              // key the delta on, there is no safe way to avoid double-
+              // counting a re-publish, so skip rather than risk
+              // inflating totals.
+              if (info.tokens && info.id) {
+                const current = {
+                  input: info.tokens.input ?? 0,
+                  output: info.tokens.output ?? 0,
+                  cacheRead: info.tokens.cache?.read ?? 0,
+                  cacheWrite: info.tokens.cache?.write ?? 0,
+                };
+                const prev = lastUsageByMessageId.get(info.id)
+                  ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+                lastUsageByMessageId.set(info.id, current);
                 rt.onLlmUsage(info.sessionID, {
-                  input: info.tokens.input,
-                  output: info.tokens.output,
-                  cacheRead: info.tokens.cache?.read,
-                  cacheWrite: info.tokens.cache?.write,
+                  input: Math.max(0, current.input - prev.input),
+                  output: Math.max(0, current.output - prev.output),
+                  cacheRead: Math.max(0, current.cacheRead - prev.cacheRead),
+                  cacheWrite: Math.max(0, current.cacheWrite - prev.cacheWrite),
                 });
               }
               return;

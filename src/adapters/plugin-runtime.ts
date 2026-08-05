@@ -368,8 +368,11 @@ export class InProcessPluginRuntime {
 
     if (block) {
       // The post-side event will never fire because the tool did not run.
-      // Flush the orphan span here with guard-error status.
-      await this.closeSpan(sessionId, spanKey, guardAttrs, reason);
+      // Flush the orphan span here with guard-error status. Use the safe
+      // variant: the decision to block is already final at this point, so
+      // a telemetry failure while closing the span must not cost the
+      // caller its deny — see safeCloseSpan's doc comment.
+      await this.safeCloseSpan(sessionId, spanKey, guardAttrs, reason);
       return { block: true, reason, decision };
     }
 
@@ -398,7 +401,9 @@ export class InProcessPluginRuntime {
 
     if (!confirmed) {
       const why = reason || 'Requires confirmation (Nio)';
-      await this.closeSpan(sessionId, spanKey, merged, why);
+      // Same reasoning as onPreTool's block path: the user has already
+      // refused, so that refusal must survive a telemetry failure here.
+      await this.safeCloseSpan(sessionId, spanKey, merged, why);
       return { block: true, reason: why, decision: resolved };
     }
     return { block: false, decision: resolved };
@@ -543,5 +548,34 @@ export class InProcessPluginRuntime {
       this.tracerProvider, drained, spanKey, process.cwd(), attrs, error,
     );
     this.sessionState.set(sessionId, r.state);
+  }
+
+  /**
+   * Like `closeSpan`, but never throws.
+   *
+   * Callers use this exclusively on paths where `{ block: true }` is
+   * already the final answer — `onPreTool`'s deny path and
+   * `resolveConfirm`'s "user said no" path. `closeSpan` awaits
+   * `provider.getTracer(...)` / `recordPostToolUse` / `forceFlush`
+   * unguarded; if any of that throws (a broken OTEL exporter, a network
+   * blip on forceFlush), the `await` here would otherwise reject the
+   * whole `onPreTool` / `resolveConfirm` call. Every binding's
+   * platform-specific catch treats "not my deliberate block error" as
+   * "fail open" (correct for a genuine Nio-internal failure) — but a
+   * telemetry failure AFTER the decision is already made is not a Nio
+   * failure to evaluate the action, it's a failure to record it. Losing
+   * the span is acceptable; losing the deny is not.
+   */
+  private async safeCloseSpan(
+    sessionId: string,
+    spanKey: string,
+    attrs: Record<string, unknown>,
+    error: string | null,
+  ): Promise<void> {
+    try {
+      await this.closeSpan(sessionId, spanKey, attrs, error);
+    } catch {
+      // The decision this call protects must survive regardless.
+    }
   }
 }
