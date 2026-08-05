@@ -1613,9 +1613,11 @@ which have existed in traces-collector all along."
 - Create: `src/adapters/pi.ts`
 - Create: `src/tests/fixtures/pi/tool-call-bash.json`
 - Create: `src/tests/fixtures/pi/tool-call-write.json`
+- Create: `src/tests/fixtures/pi/tool-call-edit.json`
 - Create: `src/tests/fixtures/pi/tool-result-bash.json`
 - Create: `src/tests/fixtures/pi/README.md`
 - Modify: `src/tests/adapter.test.ts`
+- Modify: `src/tests/integration.test.ts`
 - Modify: `src/adapters/index.ts`
 - Modify: `src/core/shared/detection-data.ts`
 - Modify: `plugins/shared/config.default.yaml`
@@ -1649,7 +1651,17 @@ which have existed in traces-collector all along."
 }
 ```
 
-`src/tests/fixtures/pi/tool-result-bash.json`:
+`src/tests/fixtures/pi/tool-call-edit.json`:
+
+```json
+{
+  "toolName": "edit",
+  "toolCallId": "call_01H8XKS",
+  "input": { "path": "/tmp/demo.txt", "oldText": "hello", "newText": "goodbye" }
+}
+```
+
+`src/tests/fixtures/pi/tool-result-bash.json` (consumed by the Pi binding task, not by this task's tests):
 
 ```json
 {
@@ -1738,6 +1750,26 @@ describe('PiAdapter', () => {
       assert.equal(env.action.type, 'write_file');
       assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
       assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
+    });
+
+    it('reads the edit tool body from newText, not content', () => {
+      // Pi's write tool uses `content`; its edit tool uses `newText`.
+      // Without this the edit branch silently produces an empty preview
+      // and Phase 3 scans nothing.
+      const env = adapter.buildEnvelope(adapter.parseInput(piFixture('tool-call-edit.json')));
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'goodbye');
+    });
+
+    it('builds a read_file envelope carrying the path', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput({ toolName: 'read', input: { path: '/etc/passwd' } }),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'read_file');
+      assert.equal((env.action.data as { path: string }).path, '/etc/passwd');
     });
 
     it('returns null for an unmapped tool', () => {
@@ -1960,13 +1992,35 @@ In `plugins/shared/config.default.yaml`, inside `guard.native_tool_mapping`, aft
 
 Mirror the `native_tool_mapping` addition into the example/description in `plugins/shared/config.schema.json`.
 
-In `src/core/shared/detection-data.ts`, add these entries alongside the existing `.hermes/` and `.openclaw/` sensitive paths, so an agent cannot rewrite its own guard configuration:
+In `src/core/shared/detection-data.ts`, add these entries alongside the existing `.hermes/` and `.openclaw/` sensitive paths, so an agent cannot rewrite its own guard configuration (these control which extensions load and which skills are trusted — Pi has no MCP, so do not describe them as MCP config):
 
 ```ts
   '.pi/settings.json',
   '.pi/agent/settings.json',
   '.pi/',
 ```
+
+**These entries need a regression test, or nothing catches a future change to
+path matching that silently stops protecting them.** `src/tests/integration.test.ts`
+already has the right pattern — a data-driven loop in
+`describe('Integration: MCP config & persistence write protection (groups X, Y)')`
+that asserts a `Write` to each path is denied. Add Pi's settings path to that
+array:
+
+```ts
+  for (const path of [
+    '/Users/test/.claude.json',
+    '/Users/test/.claude/mcp.json',
+    '/Users/test/Library/Application Support/Claude/claude_desktop_config.json',
+    '/Users/test/.hermes/config.yaml',
+    '/Users/test/.openclaw/openclaw.json',
+    '/Users/test/.pi/agent/settings.json',
+  ]) {
+```
+
+The surrounding `it(...)` body and assertions are already written — you are only
+extending the array. Note the loop's test name derives from the path, so the new
+case names itself.
 
 - [ ] **Step 7: Sync and verify**
 
@@ -2748,6 +2802,7 @@ settings.json path entry when the pi CLI is absent."
 - Create: `src/tests/fixtures/opencode/tool-execute-after-bash.json`
 - Create: `src/tests/fixtures/opencode/README.md`
 - Modify: `src/tests/adapter.test.ts`
+- Modify: `src/tests/integration.test.ts`
 - Modify: `src/adapters/index.ts`
 - Modify: `src/core/shared/detection-data.ts`
 - Modify: `plugins/shared/config.default.yaml`
