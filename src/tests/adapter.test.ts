@@ -8,6 +8,7 @@ import { CodexAdapter } from '../adapters/codex.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
 import { PiAdapter } from '../adapters/pi.js';
+import { OpenCodeAdapter } from '../adapters/opencode.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -807,6 +808,97 @@ describe('PiAdapter', () => {
       const custom = new PiAdapter({ nativeToolMapping: { my_fetch: 'network_request' } });
       assert.equal(custom.mapToolToActionType('my_fetch'), 'network_request');
       assert.equal(custom.mapToolToActionType('bash'), null);
+    });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenCodeAdapter
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('OpenCodeAdapter', () => {
+  const adapter = new OpenCodeAdapter();
+  // Test runs from dist/tests/; fixtures live in src/tests/fixtures/ and are
+  // never copied into dist/ (tsc only emits .ts sources). Resolve from
+  // PROJECT_ROOT (computed above for the Codex fixtures) rather than from
+  // import.meta.url so this works against the compiled output.
+  const OPENCODE_FIXTURES_DIR = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'opencode');
+  const ocFixture = (name: string) =>
+    JSON.parse(readFileSync(join(OPENCODE_FIXTURES_DIR, name), 'utf-8'));
+
+  it('should have name "opencode"', () => {
+    assert.equal(adapter.name, 'opencode');
+  });
+
+  describe('parseInput', () => {
+    it('reads tool name from `tool` and parameters from `args`', () => {
+      const parsed = adapter.parseInput(ocFixture('tool-execute-before-bash.json'));
+      assert.equal(parsed.toolName, 'bash');
+      assert.equal(parsed.sessionId, 'ses_7c1f2a9b');
+      assert.equal(parsed.eventType, 'pre');
+      assert.equal(
+        (parsed.toolInput as { command: string }).command, 'ls /etc | head -5',
+      );
+    });
+
+    it('marks a payload carrying `output` as a post event', () => {
+      const parsed = adapter.parseInput(ocFixture('tool-execute-after-bash.json'));
+      assert.equal(parsed.eventType, 'post');
+    });
+
+    it('handles missing fields gracefully', () => {
+      const parsed = adapter.parseInput({});
+      assert.equal(parsed.toolName, '');
+      assert.deepEqual(parsed.toolInput, {});
+      assert.equal(parsed.eventType, 'pre');
+    });
+  });
+
+  describe('mapToolToActionType', () => {
+    it('maps opencode built-in tools', () => {
+      assert.equal(adapter.mapToolToActionType('bash'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('write'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('edit'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('apply_patch'), 'write_file');
+      assert.equal(adapter.mapToolToActionType('read'), 'read_file');
+      assert.equal(adapter.mapToolToActionType('webfetch'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('websearch'), 'network_request');
+    });
+
+    it('returns null for navigation-only tools', () => {
+      assert.equal(adapter.mapToolToActionType('glob'), null);
+      assert.equal(adapter.mapToolToActionType('grep'), null);
+      assert.equal(adapter.mapToolToActionType('list'), null);
+      assert.equal(adapter.mapToolToActionType('todowrite'), null);
+    });
+  });
+
+  describe('buildEnvelope', () => {
+    it('builds an exec_command envelope from a bash call', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-bash.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'exec_command');
+      assert.equal((env.action.data as { command: string }).command, 'ls /etc | head -5');
+    });
+
+    it('reads the write path from `filePath` (camelCase)', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-write.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
+    });
+
+    it('carries the opencode session id into the envelope context', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-bash.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.context.session_id, 'ses_7c1f2a9b');
     });
   });
 });
