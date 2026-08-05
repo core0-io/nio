@@ -2929,6 +2929,24 @@ function firstPatchTarget(patchText: string | undefined): string | null {
   return null;
 }
 
+/**
+ * opencode's complete built-in tool set (permission-key table in
+ * docs/agents.mdx + the imports in src/tool/registry.ts).
+ *
+ * `parseMcpToolName` needs this. opencode's MCP naming is
+ * `<sanitized-server>_<sanitized-tool>` with no delimiter, so its
+ * anonymous-MCP fallback tier would swallow any underscored built-in the
+ * moment a single MCP server is configured. `apply_patch` is the only
+ * built-in that contains an underscore — and it maps to write_file, so
+ * misclassifying it would route core file edits through the
+ * permitted_tools.mcp allowlist instead of permitted_tools.opencode.
+ */
+export const OPENCODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
+  'read', 'write', 'edit', 'apply_patch', 'glob', 'grep', 'list', 'bash',
+  'task', 'todowrite', 'todoread', 'webfetch', 'websearch', 'lsp', 'skill',
+  'question',
+]);
+
 export interface OpenCodeAdapterOptions { nativeToolMapping?: Record<string, string> }`.
 
 **opencode event shape** (from `packages/plugin/src/index.ts`): the binding layer receives `input = { tool, sessionID, callID }` and `output = { args }` as two separate objects. The adapter is fed a **merged** object of the shape `{ tool, sessionID, callID, args, cwd? }` so it matches the single-payload `parseInput` contract.
@@ -3477,6 +3495,16 @@ describe('parseMcpToolName — opencode', () => {
     assert.equal(parseMcpToolName('bash', 'opencode', ['github']).isMcp, false);
   });
 
+  it('never misclassifies apply_patch, the one underscored built-in', () => {
+    // Regression guard: without the built-in check this falls into the
+    // anonymous-MCP tier, and a permitted_tools.mcp allowlist would then
+    // gate (and deny) opencode's core file-editing tool.
+    const r = parseMcpToolName('apply_patch', 'opencode', ['github']);
+    assert.equal(r.isMcp, false);
+    // Also true when a server name happens to prefix it.
+    assert.equal(parseMcpToolName('apply_patch', 'opencode', ['apply']).isMcp, false);
+  });
+
   it('leaves other platforms untouched', () => {
     const r = parseMcpToolName('mcp__github__create_issue', 'claude-code');
     assert.equal(r.isMcp, true);
@@ -3518,6 +3546,11 @@ export function parseMcpToolName(
   if (platform === 'opencode') {
     if (!knownServers || knownServers.length === 0) return { isMcp: false };
     if (!name.includes('_')) return { isMcp: false };
+    // A built-in is never an MCP call, however it is spelled. Without
+    // this, `apply_patch` — the one underscored built-in — reaches the
+    // anonymous-MCP fallback below as soon as any server is configured,
+    // and a permitted_tools.mcp allowlist would then deny core file edits.
+    if (OPENCODE_BUILTIN_TOOLS.has(name)) return { isMcp: false };
 
     const matches = knownServers
       .filter(s => name.startsWith(`${s}_`) && name.length > s.length + 1)
