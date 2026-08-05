@@ -65,17 +65,31 @@ concept or does not expose it; those gaps are architectural, not bugs.
 | Deny / confirm-denied orphan span | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
 | `gen_ai.tool.call.id` | ✓ | ✓ | ✓ | ✓ | ✓ (`toolCallId`) | ✓ (`callID`) |
-| Token usage on the turn span | ✓ (transcript) | ✓ (transcript) | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
+| Token usage on the turn span | ✓ (transcript) | **— (parser is Claude-Code-schema-only)** | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
 | `nio.turn.user_prompt` | ✓ | ✓ | ✓ | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
 | `nio.turn.assistant_reply` | — | — | — | ✓ (`llm_output`) | ✓ (`message_end`) | — |
 | `nio.tool.duration_ms` / `nio.tool.run_id` | — | — | — | ✓ | — | — |
-| Interactive `confirm` (`guard.confirm_action: ask`) | ✓ | — | — | — | ✓ real `ctx.ui.confirm` dialog | ✓ via `permission.ask` |
+| Interactive `confirm` (`guard.confirm_action: ask`) | ✓ `permissionDecision: 'ask'` | ~ same payload emitted, host support unverified | **— falls back to _deny_** | — (folds to allow) | ✓ real `ctx.ui.confirm` dialog | ✓ via `permission.ask` |
 | Human-typed shell audited (`lifecycle_type: user_bash`) | — | — | — | — | ✓ (audit only, never blocked) | — |
 | All four metric instruments | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Audit log (local JSONL + OTLP logs) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
-Two honest caveats:
+Four honest caveats:
 
+- **Codex turn spans carry no token usage.** `parseTranscriptUsage` only
+  counts transcript entries whose `type` is `"assistant"` and reads the
+  Claude Code field names (`message.usage.input_tokens`,
+  `cache_creation_input_tokens`, `cache_read_input_tokens`). Codex's
+  transcript JSONL uses different event types and a different shape, so
+  the parser matches nothing and returns null. A codex-specific parser is
+  phase-2 work.
+- **`guard.confirm_action: ask` has no single fallback.** Claude Code,
+  Pi, and opencode each reach a real prompt. Codex emits the same
+  `permissionDecision: 'ask'` payload as Claude Code (it shares
+  `guard-hook.ts`), but the repo does not establish that the Codex host
+  honours it. OpenClaw folds `ask` to **allow**; Hermes folds it to
+  **deny** — it has no confirmation channel, so `hook-cli.ts` returns
+  `decision: 'block'` plus a stderr note. Do not assume "else allow".
 - **Pi emits no `task:execute` spans.** Pi has no subagent concept at
   all, so there is nothing to open a task span for. An empty task-span
   set on Pi is correct behaviour, not a dropped signal.
@@ -191,7 +205,7 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw) · `message_end` (Pi) | OpenClaw + Pi |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
-**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally. **Pi**: `message_end` carries `message.usage` once per assistant message; accumulated the same way. **opencode**: `message.updated` carries a *cumulative snapshot* republished on every change to the same message, so the binding tracks last-seen totals per message id and accumulates only the delta — otherwise a re-publish would compound the turn's totals.
+**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Codex**: none today — `parseTranscriptUsage` matches only Claude-Code-shaped transcript entries (`type: "assistant"` plus `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`), and Codex's transcript JSONL uses different event types and a different shape, so it returns null and the turn span carries no `gen_ai.usage.*`. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally. **Pi**: `message_end` carries `message.usage` once per assistant message; accumulated the same way. **opencode**: `message.updated` carries a *cumulative snapshot* republished on every change to the same message, so the binding tracks last-seen totals per message id and accumulates only the delta — otherwise a re-publish would compound the turn's totals.
 
 ### Span: `execute_tool <name>` (tool span)
 

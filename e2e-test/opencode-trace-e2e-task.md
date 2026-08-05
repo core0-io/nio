@@ -59,13 +59,19 @@ bash plugins/opencode/setup.sh --opencode-home "$OC_HOME"
 find "$OC_HOME" -maxdepth 2 | sort
 ```
 
-Expect exactly:
+Expect exactly these 15 lines (`find` prints the directories themselves
+too, so they are listed here — anything extra, or anything missing, is a
+failure):
 
 ```text
+$OC_HOME
+$OC_HOME/commands
 $OC_HOME/commands/nio.md
+$OC_HOME/plugins
 $OC_HOME/plugins/.nio-esm-sentinel
 $OC_HOME/plugins/nio.js
 $OC_HOME/plugins/package.json
+$OC_HOME/skills
 $OC_HOME/skills/nio
 $OC_HOME/skills/nio-action
 $OC_HOME/skills/nio-config
@@ -103,7 +109,8 @@ OC_HOME_B="$(mktemp -d)/opencode"
 mkdir -p "$OC_HOME_B/plugins"
 : > "$OC_HOME_B/plugins/some-other-plugin.js"
 bash plugins/opencode/setup.sh --opencode-home "$OC_HOME_B" | grep -A3 "WARN"
-ls "$OC_HOME_B/plugins"                    # → no package.json, no .nio-esm-sentinel
+ls -a "$OC_HOME_B/plugins"                 # → no package.json, no .nio-esm-sentinel
+                                           #   (must be `ls -a`: the marker is a dotfile)
 ```
 
 Branch B must print the warning telling the user to declare ESM
@@ -409,7 +416,8 @@ absent.
 
 ```bash
 bash plugins/opencode/setup.sh --opencode-home "$OC_HOME_B" --uninstall
-ls "$OC_HOME_B/plugins"    # → some-other-plugin.js still there
+ls -a "$OC_HOME_B/plugins"    # → some-other-plugin.js still there,
+                              #   and still no package.json / .nio-esm-sentinel
 ```
 
 ```bash
