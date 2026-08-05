@@ -115,8 +115,10 @@ export function registerOpenClawPlugin(
       };
       const toolName = e.toolName || 'unknown';
       const spanKey = e.toolCallId || toolName;
-      const extra = e.runId ? nioToolRunIdAttribute(e.runId) : undefined;
-      const r = await rt.onPreTool(sid(ctx, e), spanKey, toolName, e.params ?? {}, event, extra);
+      const r = await rt.onPreTool(sid(ctx, e), spanKey, toolName, e.params ?? {}, event, {
+        toolCallId: e.toolCallId,
+        extraPreAttrs: e.runId ? nioToolRunIdAttribute(e.runId) : undefined,
+      });
       // OpenClaw has no interactive channel: a provisional 'ask' means
       // confirm_action was 'ask', which folds to allow here.
       if (r.block) return { block: true, blockReason: r.reason };
@@ -142,14 +144,18 @@ export function registerOpenClawPlugin(
   api.on('subagent_spawning', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string };
-      await rt.onSubagentStart(sid(ctx, e), e.subagentId || e.runId || 'unknown');
+      await rt.onSubagentStart(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
+        subagent_id: e.subagentId, run_id: e.runId,
+      });
     } catch { /* non-critical */ }
   });
 
   api.on('subagent_ended', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string };
-      await rt.onSubagentEnd(sid(ctx, e), e.subagentId || e.runId || 'unknown');
+      await rt.onSubagentEnd(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
+        subagent_id: e.subagentId, run_id: e.runId,
+      });
     } catch { /* non-critical */ }
   });
 
