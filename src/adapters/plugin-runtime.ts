@@ -124,9 +124,16 @@ export class InProcessPluginRuntime {
   protected readonly sessionState = new Map<string, CollectorState>();
 
   /**
-   * Per-session conversation events, cleared with the rest of the turn
-   * state. Streaming platforms (OpenClaw, opencode) have no session file
-   * to read back, so these events ARE the conversation.
+   * Per-TURN conversation events. Streaming platforms (OpenClaw,
+   * opencode) have no session file to read back, so these events ARE the
+   * conversation.
+   *
+   * Cleared on every exit from `flushSessionTurn` — including the exit
+   * taken when the turn produced no state at all — and again at
+   * `onSessionStart`, so a recycled session id starts empty. Anything
+   * left behind is replayed by the next turn as ITS chat spans; see the
+   * try/finally in `flushSessionTurn` for why no timestamp filter can
+   * make up for a missed clear.
    */
   private readonly conversationEvents = new Map<string, unknown[]>();
 

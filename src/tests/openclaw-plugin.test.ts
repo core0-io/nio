@@ -228,7 +228,10 @@ describe('OpenClaw plugin — characterization', () => {
       // Turn close now ALSO reconstructs a chat span from the
       // accumulated llm_output event, so a bare `spans.length === 1` no
       // longer describes this path. What it pinned still holds: exactly
-      // one turn root, carrying the prompt and the usage.
+      // one turn root, carrying the prompt and the usage — plus the
+      // total, kept explicitly, because per-kind counts alone would let
+      // a third kind of span slip in unnoticed.
+      assert.equal(spans.length, 2, 'exactly one turn root and one chat span — nothing else');
       const turnRoots = spans.filter((s) => s.name.startsWith('invoke_agent'));
       assert.equal(turnRoots.length, 1);
       assert.equal(turnRoots[0]!.attributes['nio.turn.user_prompt'], 'hello there');

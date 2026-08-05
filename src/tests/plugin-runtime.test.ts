@@ -590,6 +590,52 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     }
   });
 
+  it('a recycled session id does not replay the previous session\'s events (I2)', async () => {
+    // The other clearing site: `onSessionStart`. No turn boundary runs
+    // between the two sessions here, so this pins that delete alone.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+
+      rt.recordConversationEvent('s-recycled', llmOutput('old-a'));
+      rt.recordConversationEvent('s-recycled', llmOutput('old-b'));
+      rt.recordConversationEvent('s-recycled', llmOutput('old-c'));
+
+      // Same id, brand new session.
+      rt.onSessionStart('s-recycled');
+      rt.onUserPrompt('s-recycled', 'fresh session');
+      rt.recordConversationEvent('s-recycled', llmOutput('new-a'));
+      await rt.onTurnEnd('s-recycled');
+
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'a new session under a reused id must not inherit the old session\'s calls',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('caps accumulated events at 200 per session, dropping the oldest (M7)', async () => {
+    // The cap is what stops a long-running host's per-session array from
+    // growing without bound. Nothing pinned the number, so it could be
+    // raised (leak restored) or lowered (chat spans silently lost)
+    // without a single test noticing.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+      for (let i = 0; i < 250; i++) rt.recordConversationEvent('s-cap', llmOutput(`c-${i}`));
+      rt.onUserPrompt('s-cap', 'go');
+      await rt.onTurnEnd('s-cap');
+
+      assert.equal(
+        chatSpans(tracer).length, 200,
+        'exactly the last 200 events survive the cap',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
 });
 
 describe('registerPiExtension', () => {
