@@ -323,17 +323,38 @@ function formatHermesGuardOutput(
   };
 }
 
-// How long writeAndExit() waits for the stdout write callback before
-// giving up and exiting anyway. Exists only to cover a closed/broken
-// pipe (the callback would otherwise never fire, reintroducing the
-// exact hang this function was added to prevent). The trade-off this
-// buys: a payload larger than the OS pipe buffer (64KB on macOS) paired
-// with a slow consumer on the other end could still be truncated if the
-// write hasn't drained by the time this backstop fires. In practice
-// Hermes payloads (a JSON decision + reason string) never approach that
-// size, so this is a theoretical risk kept short (not removed) — the
-// alternative, no backstop at all, is the worse failure mode.
-const WRITE_CALLBACK_BACKSTOP_MS = 2000;
+// How long the stdout write may make NO progress before writeAndExit()
+// gives up and exits anyway.
+//
+// The previous version of this was a flat 2s wall-clock deadline, and its
+// own comment called the truncation risk "theoretical". It is not.
+// Measured: a deny whose reason comes from a Phase 6 `external_analyser`
+// endpoint returning a long `reason` produces a 300KB stdout payload
+// (a supported, fully-configured code path), and a consumer that stalls
+// for 3s makes the hook exit at ~2.2s having delivered exactly 131072
+// bytes — one pipe buffer. Hermes then gets truncated JSON, its
+// `_parse_response` hits a JSONDecodeError and returns None, and a
+// `{"decision":"block"}` silently degrades to no-action. A truncated
+// deny is an ALLOWED dangerous action, which is worse than any hang.
+//
+// So the deadline is now measured against *progress*, not wall clock: as
+// long as bytes keep leaving the buffer the write is allowed to take as
+// long as it needs, and only a genuinely stuck stream trips the backstop.
+// A closed pipe — the one case the flat timer actually existed for — is
+// handled deterministically by the 'error' listener instead of by a
+// timer, so this is a true last resort.
+//
+// 10s is chosen against Hermes's own bound: `shell_hooks.py::_spawn` runs
+// us under `subprocess.run(..., timeout=spec.timeout)` with
+// DEFAULT_TIMEOUT_SECONDS = 60, so the host kills a truly wedged hook
+// long before this matters. (That same `subprocess.run(capture_output=
+// True)` drains both pipes concurrently, which is why the real Hermes is
+// never the stalled consumer this bounds.)
+const WRITE_STALL_TIMEOUT_MS = 10_000;
+
+// How often the drain is sampled. Cheap and unref'd, so it never keeps
+// the process alive on its own; it exists only to notice progress.
+const WRITE_POLL_MS = 250;
 
 /**
  * Write the Hermes response and exit.
@@ -346,10 +367,36 @@ const WRITE_CALLBACK_BACKSTOP_MS = 2000;
  * first — stdout is a pipe here, so write() is not synchronous.
  */
 function writeAndExit(payload: string): void {
-  process.stdout.write(payload, () => process.exit(0));
-  // Backstop: if the callback never fires (closed pipe), don't inherit
-  // the very hang this function exists to prevent.
-  setTimeout(() => process.exit(0), WRITE_CALLBACK_BACKSTOP_MS).unref();
+  let exited = false;
+  const finish = (): void => {
+    if (exited) return;
+    exited = true;
+    process.exit(0);
+  };
+
+  // Closed/broken pipe (EPIPE). This is the case the old flat timer was
+  // standing in for, and the stream reports it directly — no guessing
+  // from elapsed time. It also has to be handled: with no 'error'
+  // listener an EPIPE is an uncaught exception, which exits non-zero and
+  // makes Hermes log a spurious hook failure.
+  process.stdout.on('error', finish);
+  process.stdout.write(payload, finish);
+
+  // Progress-aware backstop.
+  let lastPending = process.stdout.writableLength;
+  let lastProgressMs = Date.now();
+  setInterval(() => {
+    const pending = process.stdout.writableLength;
+    // Nothing buffered: everything is with the OS and the write callback
+    // owns the exit from here.
+    if (pending === 0) return;
+    if (pending !== lastPending) {
+      lastPending = pending;
+      lastProgressMs = Date.now();
+      return;
+    }
+    if (Date.now() - lastProgressMs >= WRITE_STALL_TIMEOUT_MS) finish();
+  }, WRITE_POLL_MS).unref();
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
