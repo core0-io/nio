@@ -103,6 +103,17 @@ function discoverSources(home: string): SourceDescriptor[] {
     parse: (data) => extractFromMcpServers(data, ['mcp', 'servers']),
   });
 
+  // Known coverage gap, symmetric with the Pi note below: opencode also
+  // reads a PROJECT-level `opencode.json` (and `.opencode/opencode.json`)
+  // from the working directory upward, which `discoverSources` cannot see
+  // because it is home-scoped. Servers declared only there yield zero
+  // entries here. Unlike Pi, opencode's anonymous tier does not rescue
+  // them: `parseMcpToolName`'s opencode branch bails on
+  // `knownServers.length === 0`, so those flattened `<server>_<tool>`
+  // names stay UNCATEGORIZED_TOOL and `permitted_tools.mcp` allowlist
+  // mode never applies to them. Not fixed here because making the
+  // registry cwd-aware would change its cache key and its contract for
+  // every platform.
   const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
   sources.push({
     path: join(ocRoot, 'opencode', 'opencode.json'),

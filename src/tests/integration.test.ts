@@ -1582,6 +1582,9 @@ describe('Integration: MCP config & persistence write protection (groups X, Y)',
     '/Users/test/.pi/agent/settings.json',
     '/Users/test/.opencode/opencode.json',
     '/Users/test/.config/opencode/opencode.json',
+    // opencode's user-level plugin auto-load directory: writing here is a
+    // code-execution persistence channel, not merely a config edit.
+    '/Users/test/.config/opencode/plugins/evil.js',
   ]) {
     it(`X: write to MCP config (${path.split('/').slice(-2).join('/')}) is denied`, async () => {
       ctx = createTestContext('balanced');

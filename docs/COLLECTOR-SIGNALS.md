@@ -55,8 +55,10 @@ Claude Code, Codex, and Hermes have to bridge span lifecycle across short-lived 
 
 ## Per-platform signal coverage
 
-What each host can actually supply. "—" means the platform has no such
-concept or does not expose it; those gaps are architectural, not bugs.
+What each host can actually supply. "✓" means fully supplied; "—" means
+the platform has no such concept or does not expose it (those gaps are
+architectural, not bugs); "~" means partially supplied or supplied but
+unverified — the cell says which.
 
 | Signal | Claude Code | Codex | Hermes | OpenClaw | Pi | opencode |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -96,11 +98,35 @@ Four honest caveats:
 - **opencode's `tool.execute.after` does not fire for a tool that
   throws.** Those tool spans are therefore not closed precisely at
   completion time; they are *reclaimed* by the `session.idle` flush,
-  which force-closes any pending spans before emitting the turn root. The
-  span still lands in the trace with the right parent, but its end
-  timestamp is the turn flush rather than the tool's real finish, and it
-  carries **no `gen_ai.tool.call.result`** — that attribute is the
-  discriminator between a normally closed span and a reclaimed one.
+  which force-closes any pending spans before emitting the turn root.
+  The span still lands in the trace with the right parent, but a
+  reclaimed span is **degraded in three ways**, and on opencode this is
+  the normal path for every failing tool call — not a rare edge:
+  1. Its end timestamp is the turn flush, not the tool's real finish.
+  2. It carries **no `gen_ai.tool.call.result`**.
+  3. It carries **no `nio.guard.*` attributes at all** — no
+     `nio.guard.decision`, no `nio.guard.risk_level` /
+     `nio.guard.risk_score` / `nio.guard.risk_tags`, no
+     `nio.guard.eval_ms`. `onPreTool` parks those in
+     `state.pending_guard_attrs` and only `onPostTool` drains them onto
+     the span (via `takePendingGuardAttrs`); `flushSessionTurn` calls
+     `recordPostToolUse` directly with empty attrs, bypassing the drain.
+  4. It is recorded **`status=OK` regardless of the tool's outcome** —
+     `flushSessionTurn` passes `error: null`, so a span for a tool that
+     threw is indistinguishable, by status, from one that succeeded.
+
+  Practical consequence: **do not build a guard dashboard on tool-span
+  attributes alone on opencode**, and do not read span status as a tool
+  success rate there. The guard signal itself is *not* lost — it is
+  emitted on the pre-side, before and independently of any span close:
+  the audit log (`~/.nio/audit.jsonl` plus the OTLP logs export) is
+  written by `evaluateHook` during `onPreTool`, and the `guard_decision`
+  metric is recorded by `onPreTool` immediately after it. Both are
+  complete and correct for reclaimed calls. Join on
+  `gen_ai.tool.call.id` / session id to recover the decision for a
+  reclaimed span. Closing the gap on the span itself (draining the
+  parked guard attrs and propagating the error status in
+  `flushSessionTurn`) is tracked as follow-up work.
 
 ## Naming conventions
 
@@ -261,7 +287,7 @@ One per subagent dispatch. Opens at `TaskCreated` (Claude Code, Teammates / clou
 
 Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a `PreToolUse` in process A and the matching `PostToolUse` in process B can't share an OTEL `Span` object. Those platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw, Pi, and opencode load Nio in-process and stay resident, so the equivalent state lives in an in-memory `Map<sessionId, CollectorState>` owned by `InProcessPluginRuntime` instead. Every platform routes through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.
 
-**opencode's reclaim path.** opencode does not fire `tool.execute.after` when the tool itself throws, so a pending span would otherwise leak. The `session.idle` handler doubles as the safety net: `onTurnEnd` force-closes every leftover pending span before emitting the turn root. Such a span is *reclaimed*, not closed precisely — its end timestamp is the turn flush and it carries no `gen_ai.tool.call.result`.
+**opencode's reclaim path.** opencode does not fire `tool.execute.after` when the tool itself throws, so a pending span would otherwise leak. The `session.idle` handler doubles as the safety net: `onTurnEnd` force-closes every leftover pending span before emitting the turn root. Such a span is *reclaimed*, not closed precisely: its end timestamp is the turn flush, it carries no `gen_ai.tool.call.result`, it carries **no `nio.guard.*` attributes** (the parked attrs are drained only by `onPostTool`, which never ran), and it is recorded **`status=OK` even though the tool threw**. The audit log and the `guard_decision` metric are unaffected — both are emitted pre-side by `onPreTool`. See [Per-platform signal coverage](#per-platform-signal-coverage) for the full caveat.
 
 ---
 

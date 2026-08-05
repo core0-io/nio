@@ -180,14 +180,16 @@ export function parseMcpToolName(
       return { isMcp: true, local: name };
     }
 
-    if (!knownServers || knownServers.length === 0) return { isMcp: false };
     if (PI_BUILTIN_TOOLS.has(name)) return { isMcp: false };
 
     // toolPrefix: "mcp" → `mcp__<server>_<tool>`.
     const body = name.startsWith('mcp__') ? name.slice(5) : name;
     if (!body.includes('_')) return { isMcp: false };
 
-    const matches = knownServers
+    // An absent/empty registry is NOT an early return: it only means
+    // nothing can be *attributed*, so attribution is skipped and the
+    // anonymous tier below still gets its chance.
+    const matches = (knownServers ?? [])
       .filter(s => body.startsWith(`${s}_`) && body.length > s.length + 1)
       .sort((a, b) => b.length - a.length);
 
@@ -198,7 +200,22 @@ export function parseMcpToolName(
     // Only the explicitly-prefixed form is safe to claim anonymously: a
     // bare `<something>_<something>` we cannot attribute is far more
     // likely to be an unmapped native tool than an MCP call.
+    //
+    // This check must stay reachable with an EMPTY registry — it used to
+    // sit behind a `knownServers.length === 0` early return, which made
+    // it dead code for exactly the users who need it most.
+    // pi-mcp-adapter reads its server map from five probe paths that
+    // mcp-registry.ts deliberately does not register as `source: 'pi'`
+    // (`~/.config/mcp/mcp.json`, `~/.agents/**`, project-relative ones).
+    // A user on one of those has an EMPTY registry, and that file's own
+    // comment promises such servers' "tools reach the anonymous fallback
+    // tier and are gateable by full name" — which only holds if
+    // `mcp__<server>_<tool>` is claimed before we give up for lack of a
+    // registry.
     if (name.startsWith('mcp__')) return { isMcp: true, local: name };
+
+    // Unprefixed `<server>_<tool>` needs the registry to attribute, and
+    // without one there is nothing to distinguish it from a native tool.
     return { isMcp: false };
   }
 

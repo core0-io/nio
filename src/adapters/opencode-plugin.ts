@@ -172,6 +172,12 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       async 'tool.execute.after'(hookInput, hookOutput) {
         try {
           verdictByCall.delete(hookInput.callID);
+          // `error: null` is unconditional because opencode does not
+          // deliver this hook at all when the tool throws — reaching here
+          // IS the success signal. If a future opencode starts firing
+          // tool.execute.after on failure too, this line would silently
+          // record every failure as a success and must be changed to read
+          // the error off the hook payload.
           await rt.onPostTool(
             hookInput.sessionID, hookInput.callID, hookInput.tool,
             { result: hookOutput?.output, error: null },
@@ -206,12 +212,19 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
           // letting the call proceed toward opencode's own permission
           // system. Route that flag onto opencode's real interactive
           // channel — force an actual ask rather than silently trusting
-          // whatever opencode's own heuristics decided for `status` —
-          // and honour a `confirm_action: deny` policy by denying
-          // outright instead of asking.
+          // whatever opencode's own heuristics decided for `status`.
+          //
+          // There is no `confirm_action: deny` arm here, and there must
+          // not be: reaching this line requires verdict === 'ask', which
+          // InProcessPluginRuntime only ever produces when
+          // `confirm_action` is itself 'ask'. Under `deny` the runtime
+          // folds to 'confirm_denied' and tool.execute.before already
+          // threw; under 'allow' it folds to 'confirm_allowed' and the
+          // parked verdict is 'allow'. So 'ask' is the only reachable
+          // verdict and 'ask' is the only correct status.
           const verdict = hookInput.callID ? verdictByCall.get(hookInput.callID) : undefined;
           if (verdict === 'ask') {
-            hookOutput.status = config.guard?.confirm_action === 'deny' ? 'deny' : 'ask';
+            hookOutput.status = 'ask';
           }
         } catch { /* non-critical */ }
       },
@@ -238,8 +251,18 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               // A sub-agent's OWN session going idle means the sub-agent
               // is done — close the task span opened under the parent
               // via onSubagentEnd instead of treating this as a turn end
-              // for the child (the child never accumulates its own turn
-              // state; only the parent does).
+              // for the child.
+              //
+              // KNOWN GAP (deferred, not a claim of correctness): the
+              // child DOES accumulate its own turn state. Tools run
+              // inside a sub-agent arrive at tool.execute.before with
+              // hookInput.sessionID set to the CHILD id, so onPreTool
+              // creates a CollectorState under that key. Returning here
+              // skips onTurnEnd for the child, so that state is only
+              // released by dispose()'s disposeAllSessions() at plugin
+              // teardown — the child's tool spans are flushed late,
+              // under a turn root emitted at shutdown. Flushing the
+              // child here is follow-up work.
               const parentId = subagentParentByChild.get(sessionId);
               if (parentId) {
                 subagentParentByChild.delete(sessionId);
@@ -319,6 +342,17 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
           // Last-resort flush for every session still holding state.
           await rt.disposeAllSessions();
         } catch { /* non-critical */ }
+        // Drop the binding-local maps too. None of them is self-pruning
+        // in every case: `verdictByCall` is only deleted in
+        // tool.execute.after, which opencode skips both for a call we
+        // denied (we threw) and for a tool that threw, so it retains one
+        // entry per failed/denied call; `lastUsageByMessageId` is never
+        // pruned at all; `subagentParentByChild` leaks an entry whenever
+        // a sub-agent session never goes idle. Bounded per process, but
+        // there is no reason to hold them past teardown.
+        verdictByCall.clear();
+        lastUsageByMessageId.clear();
+        subagentParentByChild.clear();
       },
     };
   };

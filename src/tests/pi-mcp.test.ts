@@ -86,6 +86,21 @@ describe('parseMcpToolName — pi (direct tools, directTools: true)', () => {
     assert.equal(parseMcpToolName('xcodebuild_list_sims', 'pi').isMcp, false);
   });
 
+  it('empty registry still claims the explicit `mcp__` form anonymously', () => {
+    // pi-mcp-adapter also probes ~/.config/mcp/mcp.json and ~/.agents/**,
+    // which mcp-registry.ts deliberately does not register as `source:
+    // 'pi'`. A user configured only there has an EMPTY registry, and
+    // mcp-registry.ts's own comment promises those servers' tools "reach
+    // the anonymous fallback tier and are gateable by full name" — which
+    // only holds if the `mcp__` claim runs BEFORE the registry bail-out.
+    for (const servers of [[], undefined]) {
+      const r = parseMcpToolName('mcp__weather_forecast', 'pi', servers);
+      assert.equal(r.isMcp, true);
+      assert.equal(r.server, undefined);
+      assert.equal(r.local, 'mcp__weather_forecast');
+    }
+  });
+
   it('built-ins are never MCP, even with a registry configured', () => {
     for (const name of PI_BUILTIN_TOOLS) {
       assert.equal(parseMcpToolName(name, 'pi', ['xcodebuild']).isMcp, false, name);
