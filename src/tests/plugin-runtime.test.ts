@@ -410,13 +410,67 @@ describe('registerPiExtension', () => {
     assert.equal(out, undefined);
   });
 
-  it('user_bash never blocks', async () => {
+  it('user_bash never blocks AND never consults the guard', async () => {
+    // Asserting only "returns undefined" would pass for a binding that ran
+    // Phase 0-6 and threw the verdict away. Prove the orchestrator was
+    // never consulted.
     const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    let evaluated = false;
     const pi = fakePi();
-    registerPiExtension(pi as never);
-    const handler = pi.handlers.get('user_bash')!;
-    const out = await handler({ command: 'rm -rf /', cwd: '/tmp' }, fakeCtx(true));
+    registerPiExtension(pi as never, {
+      tracerProvider: null,
+      meterProvider: null,
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            evaluated = true;
+            return {
+              decision: 'deny', risk_level: 'high', scores: { final: 1 },
+              findings: [], explanation: 'x', phase_stopped: 1, diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+    const out = await pi.handlers.get('user_bash')!(
+      { command: 'rm -rf /', cwd: '/tmp' }, fakeCtx(true),
+    );
     assert.equal(out, undefined);
+    assert.equal(evaluated, false, 'user_bash must not run Phase 0-6');
+  });
+
+  it('a refusal survives a telemetry failure', async () => {
+    // The blanket catch must not convert a human "no" into an allow. Inject
+    // a tracer provider whose getTracer throws, so resolveConfirm blows up
+    // AFTER the user has already declined.
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const explodingProvider = {
+      getTracer() { throw new Error('boom'); },
+      async forceFlush() {},
+      async shutdown() {},
+    };
+    const pi = fakePi();
+    registerPiExtension(pi as never, {
+      confirmAction: 'ask',
+      tracerProvider: explodingProvider as never,
+      meterProvider: null,
+      nioFactory: () => ({
+        orchestrator: {
+          async evaluate() {
+            return {
+              decision: 'confirm', risk_level: 'high', scores: { final: 0.9 },
+              findings: [{ rule_id: 'TEST_RULE' }], explanation: 'risky',
+              phase_stopped: 2, diagnostics: [],
+            };
+          },
+        },
+      }) as never,
+    });
+    const out = await pi.handlers.get('tool_call')!(
+      { toolName: 'bash', toolCallId: 'c1', input: { command: 'rm -rf /' } },
+      fakeCtx(true, false),   // hasUI true, user answers "no"
+    ) as { block?: boolean };
+    assert.equal(out?.block, true, 'a refused action must stay blocked');
   });
 });
 
@@ -610,6 +664,41 @@ describe('registerPiExtension — block path and confirm dialog', () => {
       assert.equal(spans.length, 2);
       assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], undefined);
       assert.equal(spans[1]!.attributes['gen_ai.tool.call.id'], 'call-77');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('reads tool parameters from `input` (Pi\'s key), not `params`', async () => {
+    // stubNioVerdict ignores whatever params it's handed, so nothing above
+    // this pins the actual event key the binding reads. The only place the
+    // real params show up is the span's tool-call-arguments attribute.
+    const tracer = makeInMemoryTracer();
+    try {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, {
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      const { ctx } = fakeCtx(true, true);
+
+      await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'echo unique-marker-123' } }, ctx,
+      );
+      await pi.handlers.get('tool_result')!(
+        { toolName: 'bash', toolCallId: 'c1', content: 'unique-marker-123' }, ctx,
+      );
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      const args = spans[0]!.attributes['gen_ai.tool.call.arguments'];
+      assert.equal(typeof args, 'string');
+      assert.ok(
+        (args as string).includes('unique-marker-123'),
+        `expected the recorded arguments to carry the command, got: ${args}`,
+      );
     } finally {
       await tracer.shutdown();
     }
