@@ -129,5 +129,5 @@ for (const entry of ['hook-cli', 'nio-cli']) {
 writeEsmSentinel(HERMES_SCRIPTS);
 
 console.log(
-  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw + Codex skill), ${hermesOutputs} Hermes output(s), ${pi.outputs.length} Pi output(s)`,
+  `  Built ${openclaw.outputs.length} OpenClaw output(s), ${cc.outputs.length} Claude Code output(s) (mirrored to OpenClaw + Codex + Pi skill), ${hermesOutputs} Hermes output(s), ${pi.outputs.length} Pi output(s)`,
 );

@@ -36,7 +36,9 @@ while [ $# -gt 0 ]; do
     -h|--help)
       echo "Usage: $(basename "$0") [--pi-home <path>] [--config <path>] [--reset-to-defaults] [--uninstall]"
       echo ""
-      echo "  --pi-home <path>      Path to the pi agent dir. Defaults to \$HOME/.pi/agent."
+      echo "  --pi-home <path>      Path to the pi agent dir. Exported as"
+      echo "                        PI_CODING_AGENT_DIR so the pi CLI honours it."
+      echo "                        Defaults to \$PI_CODING_AGENT_DIR, then \$HOME/.pi/agent."
       echo "  --config <path>       Apply an operator-provided ~/.nio/config.yaml."
       echo "                        Runs /nio doctor against the file and aborts the"
       echo "                        install if any probe fails."
@@ -61,7 +63,25 @@ if [ "$UNINSTALL" -eq 1 ] && [ -n "$NIO_CONFIG" ]; then
   echo "  ERROR: --config and --uninstall are mutually exclusive." >&2; exit 1
 fi
 
-PI_HOME="${PI_HOME_ARG:-$HOME/.pi/agent}"
+# Resolution order mirrors plugins/openclaw/setup.sh:
+#   --pi-home > $PI_CODING_AGENT_DIR > $HOME/.pi/agent
+# PI_CODING_AGENT_DIR is Pi's own documented override for its config
+# directory (docs/environment-variables.md).
+if [ -n "$PI_HOME_ARG" ]; then
+  PI_HOME="$PI_HOME_ARG"
+elif [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+  PI_HOME="$PI_CODING_AGENT_DIR"
+else
+  PI_HOME="$HOME/.pi/agent"
+fi
+
+# CRITICAL: export it so the `pi` CLI we shell out to below writes into the
+# home we resolved, not the user's real one. Without this, `pi install`
+# silently ignores --pi-home and edits ~/.pi/agent/settings.json — that is
+# not hypothetical, it happened during development. Same shape as
+# OpenClaw's `export OPENCLAW_STATE_DIR`.
+export PI_CODING_AGENT_DIR="$PI_HOME"
+
 SETTINGS="$PI_HOME/settings.json"
 EXT_DIR="$PI_HOME/extensions/nio"
 SKILLS_DIR="$PI_HOME/skills"
