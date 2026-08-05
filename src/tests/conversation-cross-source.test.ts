@@ -189,6 +189,17 @@ describe('conversation cross-source parity (Claude Code / Codex / Hermes)', () =
     // regardless of what the underlying model actually exposes.
     assert.equal(claudeCode[0].blocks[0].fidelity, 'full');
     assert.equal(codex[0].blocks[0].fidelity, 'summary');
+
+    // Hermes is a forwarding layer, not a model: HERMES_PAYLOAD above
+    // deliberately uses Anthropic-shaped `content[]` blocks (not the
+    // codex_reasoning_items shape covered by conversation-hermes.test.ts),
+    // so the same deployment fronting a different backend must report
+    // 'full' here — the fidelity comes from what the message shape says
+    // about the underlying provider, not from "this is Hermes". Without
+    // this assertion, hermes-source.ts's Anthropic branch has zero
+    // fidelity-value coverage anywhere in the suite (see module doc's
+    // two-branch fidelity rule in hermes-source.ts).
+    assert.equal(hermes[0].blocks[0].fidelity, 'full');
   });
 
   it('does not require callId or timestamps to agree across sources', () => {
