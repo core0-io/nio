@@ -1080,6 +1080,7 @@ audit-only user_bash recording, and the shared /nio sub-command router."
 **Files:**
 - Modify: `src/adapters/openclaw-plugin.ts`
 - Modify: `src/adapters/index.ts`
+- Create: `src/tests/openclaw-plugin.test.ts` (characterization test — written and green BEFORE the refactor)
 
 **Interfaces:**
 - Consumes: everything produced by Tasks 1–3.
@@ -1091,10 +1092,278 @@ audit-only user_bash recording, and the shared /nio sub-command router."
 
 ```bash
 pnpm run build && pnpm test 2>&1 | tee /tmp/nio-baseline-before.txt
-grep -c "^# pass" /tmp/nio-baseline-before.txt
+grep -cE "^# (pass|fail)" /tmp/nio-baseline-before.txt
 ```
 
 Record the pass/fail counts. Do not proceed if the tree is not already green.
+
+**This baseline is nearly worthless on its own, and you must understand why
+before continuing:** `registerOpenClawPlugin` has *zero* unit-test coverage
+today. Every existing test that mentions OpenClaw targets `OpenClawAdapter`
+or the `/nio` dispatcher, never the plugin registration. A refactor could
+rename the block-reason key, drop a span, or swap an event name and the
+whole suite would stay green. Steps 1a-1c fix that BEFORE you touch the
+implementation.
+
+- [ ] **Step 1a: Make the CURRENT plugin injectable (minimal edit)**
+
+In `src/adapters/openclaw-plugin.ts`, extend the options type and use the
+values — nothing else changes yet:
+
+```ts
+export interface OpenClawPluginOptions {
+  /** Protection level (strict/balanced/permissive) */
+  level?: string;
+  /** Custom Nio instance factory */
+  nioFactory?: () => NioInstance;
+  /**
+   * Test seam: inject pre-built OTEL providers instead of deriving them
+   * from collector config. `undefined` builds from config (production);
+   * `null` disables. Mirrors PluginRuntimeOptions so the characterization
+   * test keeps working across the refactor.
+   */
+  tracerProvider?: ReturnType<typeof createTracerProvider>;
+  meterProvider?: ReturnType<typeof createMeterProvider>;
+}
+```
+
+and at the provider construction site:
+
+```ts
+  const tracerProvider = options.tracerProvider !== undefined
+    ? options.tracerProvider
+    : createTracerProvider(collectorConfig, 'openclaw', resourceAgentName);
+  const meterProvider = options.meterProvider !== undefined
+    ? options.meterProvider
+    : createMeterProvider(collectorConfig, 'openclaw', resourceAgentName);
+```
+
+- [ ] **Step 1b: Write the characterization test against the CURRENT code**
+
+Create `src/tests/openclaw-plugin.test.ts`. This test pins the behaviour the
+refactor must preserve. Write it now, against the un-refactored plugin, and
+get it green — that is what makes it a characterization test rather than a
+restatement of the new code.
+
+```ts
+// Copyright 2026 core0-io
+// SPDX-License-Identifier: Apache-2.0
+
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
+import { makeInMemoryTracer } from './helpers/tracer.js';
+
+/** Minimal stand-in for OpenClaw's plugin register API. */
+function fakeApi() {
+  const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<unknown>>();
+  const tools: Array<{ name: string }> = [];
+  return {
+    handlers,
+    tools,
+    on(name: string, fn: (e: unknown, ctx: unknown) => Promise<unknown>) {
+      handlers.set(name, fn);
+    },
+    registerTool(def: { name: string }) { tools.push(def); },
+  };
+}
+
+function stubNio(verdict: 'allow' | 'deny') {
+  return () => ({
+    orchestrator: {
+      async evaluate() {
+        return {
+          decision: verdict,
+          risk_level: verdict === 'allow' ? 'low' : 'high',
+          scores: { final: verdict === 'allow' ? 0 : 0.9 },
+          findings: verdict === 'allow' ? [] : [{ rule_id: 'TEST_RULE' }],
+          explanation: 'characterization verdict',
+          phase_stopped: 2,
+          diagnostics: [],
+        };
+      },
+    },
+  }) as never;
+}
+
+const CTX = { sessionKey: 'oc-session-1' };
+
+describe('OpenClaw plugin — characterization', () => {
+  it('subscribes to every event the integration relies on', () => {
+    const api = fakeApi();
+    registerOpenClawPlugin(api as never, {
+      nioFactory: stubNio('allow'), tracerProvider: null, meterProvider: null,
+    });
+    for (const name of [
+      'before_tool_call', 'after_tool_call', 'subagent_spawning', 'subagent_ended',
+      'before_agent_reply', 'llm_output', 'session_start', 'session_end', 'agent_end',
+    ]) {
+      assert.ok(api.handlers.has(name), `missing handler: ${name}`);
+    }
+    assert.deepEqual(api.tools.map(t => t.name), ['nio_command']);
+  });
+
+  it('allows a benign call and returns undefined', async () => {
+    const api = fakeApi();
+    registerOpenClawPlugin(api as never, {
+      nioFactory: stubNio('allow'), tracerProvider: null, meterProvider: null,
+    });
+    const out = await api.handlers.get('before_tool_call')!(
+      { toolName: 'exec', params: { command: 'ls' }, toolCallId: 'c1' }, CTX,
+    );
+    assert.equal(out, undefined);
+  });
+
+  it('blocks with { block, blockReason } — NOT { reason }', async () => {
+    // OpenClaw reads `blockReason`. Renaming this key silently disables
+    // blocking on the whole platform, so pin it explicitly.
+    const api = fakeApi();
+    registerOpenClawPlugin(api as never, {
+      nioFactory: stubNio('deny'), tracerProvider: null, meterProvider: null,
+    });
+    const out = await api.handlers.get('before_tool_call')!(
+      { toolName: 'exec', params: { command: 'rm -rf /' }, toolCallId: 'c1' }, CTX,
+    ) as { block?: boolean; blockReason?: string; reason?: string };
+
+    assert.equal(out.block, true);
+    assert.equal(typeof out.blockReason, 'string');
+    assert.ok(out.blockReason!.length > 0);
+    assert.equal(out.reason, undefined, 'must not switch to the Pi-style `reason` key');
+  });
+
+  it('fails open: a malformed event never blocks', async () => {
+    const api = fakeApi();
+    registerOpenClawPlugin(api as never, {
+      nioFactory: stubNio('deny'), tracerProvider: null, meterProvider: null,
+    });
+    const out = await api.handlers.get('before_tool_call')!(null, null);
+    assert.equal(out, undefined);
+  });
+
+  it('emits one tool span carrying the guard decision', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      await api.handlers.get('before_tool_call')!(
+        { toolName: 'exec', params: { command: 'ls' }, toolCallId: 'c1' }, CTX,
+      );
+      assert.equal(tracer.finished().length, 0);
+
+      await api.handlers.get('after_tool_call')!(
+        { toolName: 'exec', toolCallId: 'c1', result: 'ok' }, CTX,
+      );
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      assert.equal(spans[0]!.attributes['nio.guard.decision'], 'allow');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('emits the orphan span when a call is blocked', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('deny'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      await api.handlers.get('before_tool_call')!(
+        { toolName: 'exec', params: { command: 'rm -rf /' }, toolCallId: 'c1' }, CTX,
+      );
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1, 'after_tool_call never fires for a blocked call');
+      assert.equal(spans[0]!.attributes['nio.guard.decision'], 'deny');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('agent_end emits the turn root span with prompt and usage', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      await api.handlers.get('before_agent_reply')!({ cleanedBody: 'hello there' }, CTX);
+      await api.handlers.get('llm_output')!(
+        { assistantTexts: ['hi'], usage: { input: 10, output: 5 } }, CTX,
+      );
+      await api.handlers.get('agent_end')!({}, CTX);
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1);
+      assert.equal(spans[0]!.attributes['nio.turn.user_prompt'], 'hello there');
+      assert.equal(spans[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('subagent_spawning + subagent_ended emit one task span', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const api = fakeApi();
+      registerOpenClawPlugin(api as never, {
+        nioFactory: stubNio('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      await api.handlers.get('subagent_spawning')!({ subagentId: 'sub-1' }, CTX);
+      assert.equal(tracer.finished().length, 0);
+      await api.handlers.get('subagent_ended')!({ subagentId: 'sub-1' }, CTX);
+      assert.equal(tracer.finished().length, 1);
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('the nio_command tool returns dispatcher text', async () => {
+    const api = fakeApi();
+    registerOpenClawPlugin(api as never, {
+      nioFactory: stubNio('allow'), tracerProvider: null, meterProvider: null,
+    });
+    const tool = api.tools[0] as unknown as {
+      execute(id: string, p: Record<string, string>): Promise<{ content: Array<{ text: string }> }>;
+    };
+    const out = await tool.execute('id-1', {
+      command: '', commandName: 'nio', skillName: 'nio',
+    });
+    assert.equal(typeof out.content[0]!.text, 'string');
+    assert.ok(out.content[0]!.text.length > 0);
+  });
+});
+```
+
+- [ ] **Step 1c: Prove the characterization test is green BEFORE the refactor**
+
+Run: `pnpm run build && node --import ./dist/tests/helpers/isolate-nio-home.js --test dist/tests/openclaw-plugin.test.js`
+Expected: PASS against the un-refactored plugin. If any test fails here, the
+test encodes an assumption the current code does not hold — fix the TEST,
+not the plugin. Commit this step separately:
+
+```bash
+git add src/adapters/openclaw-plugin.ts src/tests/openclaw-plugin.test.ts
+git commit -m "test(openclaw): characterize plugin behaviour before the runtime port
+
+registerOpenClawPlugin had no unit coverage, so the upcoming refactor had
+nothing to regress against. Pins the event subscriptions, the
+{ block, blockReason } contract, fail-open on malformed events, the tool
+and turn span shapes, sub-agent span pairing, and the nio_command tool.
+
+Also adds tracerProvider/meterProvider injection to OpenClawPluginOptions,
+mirroring PluginRuntimeOptions, so the same test keeps working after the
+port."
+```
 
 - [ ] **Step 2: Rewrite `openclaw-plugin.ts` to delegate**
 
@@ -1260,17 +1529,35 @@ export {
 
 - [ ] **Step 5: Verify behaviour is unchanged**
 
+The characterization test from Step 1b is the real gate. It must pass
+**without a single edit** — if you find yourself changing an assertion to
+make it green, you have changed OpenClaw's behaviour and must fix the
+implementation instead.
+
 ```bash
-pnpm run build && pnpm test 2>&1 | tee /tmp/nio-baseline-after.txt
+pnpm run build
+node --import ./dist/tests/helpers/isolate-nio-home.js --test dist/tests/openclaw-plugin.test.js
+git diff --stat HEAD -- src/tests/openclaw-plugin.test.ts   # must be empty
+pnpm test 2>&1 | tee /tmp/nio-baseline-after.txt
 diff <(grep -E "^# (pass|fail|tests)" /tmp/nio-baseline-before.txt) \
      <(grep -E "^# (pass|fail|tests)" /tmp/nio-baseline-after.txt)
+pnpm typecheck
 ```
 
-Expected: `diff` produces no output. Also run `pnpm typecheck` — expected clean.
+Expected: characterization test green and untouched, the pass/fail counts
+differing only by the tests you added, and `pnpm typecheck` clean.
 
-- [ ] **Step 6: Manual e2e regression**
+- [ ] **Step 6: Manual e2e regression (human-run, not automatable here)**
 
-Follow `e2e-test/openclaw-trace-e2e-task.md` end to end in a sandbox (`NIO_HOME=$(mktemp -d)`). Confirm the emitted span tree shape — turn root span with tool spans as children, `nio.guard.*` attributes present on allow and deny spans alike — matches what the document describes. Do not proceed to Phase B if it does not.
+`e2e-test/openclaw-trace-e2e-task.md` needs a live OpenClaw gateway and a
+reachable OTLP collector, neither of which exists in this environment. Do
+NOT fake it and do NOT mark it done.
+
+Instead: confirm the characterization test covers the span-shape claims
+that document makes (turn root span with tool spans beneath it,
+`nio.guard.*` present on both allow and deny spans), and state plainly in
+your report that the live-gateway run remains outstanding and who has to
+run it. The coordinator surfaces it to the human partner.
 
 - [ ] **Step 7: Commit**
 
