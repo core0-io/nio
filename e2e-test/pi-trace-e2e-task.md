@@ -352,26 +352,35 @@ Verify:
 /nio doctor
 ```
 
-Under **### Platform Integrations**, the Pi block must print the install
-line plus **four** MCP lines (`src/adapters/openclaw-dispatch.ts` — the
-shared doctor implementation, despite its name):
+Under **### Platform Integrations**, the Pi block prints the install line
+plus an MCP note whose shape depends on whether an MCP adapter is present
+(`src/adapters/openclaw-dispatch.ts` — the shared doctor implementation,
+despite its name).
+
+**No MCP adapter registered** — a neutral three-line note, and nothing
+that reads as a recommendation to install one:
 
 ```text
 - ✓ pi: extension registered
-    note: Pi core has no MCP; the pi-mcp-adapter package adds it and Nio gates those calls.
+    note: Pi core has no MCP, and Nio does not need one. If you add a third-party MCP
+          adapter, Nio detects it and gates those calls via permitted_tools.mcp /
+          blocked_tools.mcp — re-run /nio doctor then for the naming details.
+```
+
+**`pi-mcp-adapter` registered in the sandbox's `settings.json`** — the
+four detail lines appear, because only now are they actionable:
+
+```text
+- ✓ pi: extension registered
+    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.
     MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.
     Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).
     Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.
 ```
 
-If `pi-mcp-adapter` is registered in the sandbox's `settings.json`, the
-first note line instead reads:
-
-```text
-    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.
-```
-
-The other three lines are unconditional.
+Verify the branch that matches your machine. Nio never installs, requires,
+or checks for an MCP adapter as a prerequisite — if the no-adapter branch
+names a package to install, that is a defect.
 
 > Note the doctor probes the **real** `~/.pi/agent` (it derives paths
 > from `$HOME`), so the install line reflects your real install state,

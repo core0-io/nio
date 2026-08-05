@@ -640,12 +640,20 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   out.push(piRegistered
     ? '- ✓ pi: extension registered'
     : '- · pi: not installed (run plugins/pi/setup.sh to enable)');
-  out.push(piMcpAdapter
-    ? '    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.'
-    : '    note: Pi core has no MCP; the pi-mcp-adapter package adds it and Nio gates those calls.');
-  out.push('    MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.');
-  out.push('    Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).');
-  out.push('    Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.');
+  // Nio neither installs nor requires an MCP adapter for Pi. The naming and
+  // config details are only actionable once one is actually present, so they
+  // stay inside the detected branch — printing them unconditionally reads as
+  // a recommendation to install something.
+  if (piMcpAdapter) {
+    out.push('    note: pi-mcp-adapter detected — MCP calls are gated via permitted_tools.mcp / blocked_tools.mcp.');
+    out.push('    MCP names: proxy tool `mcp`, or direct tools `<server>_<tool>` / `mcp__<server>_<tool>`.');
+    out.push('    Servers are read from $PI_CODING_AGENT_DIR/mcp.json (else ~/.pi/agent/mcp.json).');
+    out.push('    Caveat: pi-mcp-adapter `toolPrefix: "none"` emits bare tool names Nio cannot identify as MCP.');
+  } else {
+    out.push('    note: Pi core has no MCP, and Nio does not need one. If you add a third-party MCP');
+    out.push('          adapter, Nio detects it and gates those calls via permitted_tools.mcp /');
+    out.push('          blocked_tools.mcp — re-run /nio doctor then for the naming details.');
+  }
 
   // opencode — plugin + slash command are copied into the config dir.
   const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
