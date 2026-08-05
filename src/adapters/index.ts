@@ -19,6 +19,13 @@ export {
   type PiExtensionApi,
 } from './pi-plugin.js';
 export {
+  createNioPlugin,
+  NioPlugin,
+  NioBlockedError,
+  type OpenCodePlugin,
+  type OpenCodePluginOptions,
+} from './opencode-plugin.js';
+export {
   InProcessPluginRuntime,
   type PluginRuntimeOptions,
   type PreToolResult,
