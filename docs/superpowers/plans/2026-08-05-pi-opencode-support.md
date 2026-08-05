@@ -407,7 +407,8 @@ telemetry logic of their own."
 - Produces:
   - `type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask'`
   - `interface PreToolResult { block: boolean; reason?: string; decision: GuardDecisionTag }`
-  - `onPreTool(sessionId: string, spanKey: string, toolName: string, params: Record<string, unknown>, rawEvent: unknown, extraPreAttrs?: Record<string, unknown>): Promise<PreToolResult>`
+  - `onPreTool(sessionId: string, spanKey: string, toolName: string, params: Record<string, unknown>, rawEvent: unknown, opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> }): Promise<PreToolResult>`
+    - `spanKey` correlates pre and post and may fall back to the tool name. `opts.toolCallId` is the platform's REAL call id or `undefined` — never a fallback. Keeping them separate matters: `genAiToolCallInputAttributes` omits `gen_ai.tool.call.id` when the id is falsy, and feeding it `spanKey` would fabricate a non-unique id (`"exec"`) on platforms whose events sometimes lack one, silently mis-grouping calls in the backend.
   - `onPostTool(sessionId: string, spanKey: string, toolName: string, outcome: { result?: unknown; error?: string | null; durationMs?: number }): Promise<void>`
   - `resolveConfirm(sessionId: string, spanKey: string, decision: GuardDecisionTag, reason: string | undefined, confirmed: boolean): Promise<PreToolResult>` — used by Pi after an interactive confirm dialog.
   - `PluginRuntimeOptions` gains optional `tracerProvider` / `meterProvider` overrides (see Task 1) so tests can inject `makeInMemoryTracer()` and exercise the span wiring.
@@ -660,13 +661,16 @@ Add these members to the class:
     toolName: string,
     params: Record<string, unknown>,
     rawEvent: unknown,
-    extraPreAttrs?: Record<string, unknown>,
+    opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
     if (this.tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       const preAttrs: Record<string, unknown> = {
-        ...genAiToolCallInputAttributes(params, spanKey),
-        ...(extraPreAttrs ?? {}),
+        // Pass the REAL call id, never spanKey — see the note on the
+        // signature. A falsy id makes the builder omit the attribute,
+        // which is the honest outcome.
+        ...genAiToolCallInputAttributes(params, opts?.toolCallId),
+        ...(opts?.extraPreAttrs ?? {}),
       };
       state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
       this.sessionState.set(sessionId, state);
@@ -706,10 +710,18 @@ Add these members to the class:
               : 'confirm_allowed'
           : 'allow';
 
+    // `ask` is a provisional state for the caller, never a final span
+    // tag: the documented taxonomy is {allow, deny, confirm_allowed,
+    // confirm_denied}. A platform with an interactive channel overwrites
+    // this via resolveConfirm; one without simply lets the tool run,
+    // which is exactly `confirm_allowed`.
+    const spanDecision: GuardDecisionTag =
+      decision === 'ask' ? 'confirm_allowed' : decision;
+
     const guardAttrs: Record<string, unknown> = {
       ...nioGuardAttributes(
-        decision,
-        result.riskLevel || (decision === 'allow' ? 'low' : 'unknown'),
+        spanDecision,
+        result.riskLevel || (spanDecision === 'allow' ? 'low' : 'unknown'),
         result.riskScore ?? 0,
         result.riskTags,
         result.phaseStopped,
@@ -852,7 +864,7 @@ post-side event never fires for a blocked call."
 
 **Interfaces:**
 - Consumes: `recordUserPrompt(state, prompt)`, `recordAssistantReply(state, reply)`, `accumulateGenAiUsage(state, delta)`, `recordPreTaskToolUse(state, taskId, summary)`, `recordPostTaskToolUse(provider, state, taskId, cwd)` from `../scripts/lib/traces-collector.js`; `recordTurn(provider)` from `../scripts/lib/metrics-collector.js`; `dispatchNioCommand(raw, { orchestrator, scanner })` from `./openclaw-dispatch.js`.
-- Produces: `onUserPrompt(sessionId, text): void`, `onAssistantReply(sessionId, text): void`, `onLlmUsage(sessionId, usage): void`, `onSubagentStart(sessionId, taskId): Promise<void>`, `onSubagentEnd(sessionId, taskId): Promise<void>`, `onUserBash(sessionId, command, cwd): void`, `dispatchCommand(rawArgs: string): Promise<string>`.
+- Produces: `onUserPrompt(sessionId, text): void`, `onAssistantReply(sessionId, text): void`, `onLlmUsage(sessionId, usage): void`, `onSubagentStart(sessionId, taskId, auditDetails?): Promise<void>`, `onSubagentEnd(sessionId, taskId, auditDetails?): Promise<void>`, `onUserBash(sessionId, command, cwd): void`, `dispatchCommand(rawArgs: string): Promise<string>`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1009,9 +1021,19 @@ Add these methods to the class:
     this.sessionState.set(sessionId, state);
   }
 
-  /** Sub-agent / Task span open. */
-  async onSubagentStart(sessionId: string, taskId: string): Promise<void> {
-    this.writeLifecycle(sessionId, 'subagent_spawning', { subagent_id: taskId });
+  /**
+   * Sub-agent / Task span open.
+   *
+   * `auditDetails` lets the binding preserve its platform's own audit
+   * payload verbatim (OpenClaw records both `subagent_id` and `run_id`);
+   * omit it and the taskId is recorded on its own.
+   */
+  async onSubagentStart(
+    sessionId: string,
+    taskId: string,
+    auditDetails?: Record<string, unknown>,
+  ): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_spawning', auditDetails ?? { subagent_id: taskId });
     if (this.tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       state = recordPreTaskToolUse(state, taskId, '');
@@ -1020,9 +1042,13 @@ Add these methods to the class:
     if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCreated');
   }
 
-  /** Sub-agent / Task span close. */
-  async onSubagentEnd(sessionId: string, taskId: string): Promise<void> {
-    this.writeLifecycle(sessionId, 'subagent_ended', { subagent_id: taskId });
+  /** Sub-agent / Task span close. See `onSubagentStart` for `auditDetails`. */
+  async onSubagentEnd(
+    sessionId: string,
+    taskId: string,
+    auditDetails?: Record<string, unknown>,
+  ): Promise<void> {
+    this.writeLifecycle(sessionId, 'subagent_ended', auditDetails ?? { subagent_id: taskId });
     if (this.tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
@@ -1399,8 +1425,10 @@ export function registerOpenClawPlugin(
       };
       const toolName = e.toolName || 'unknown';
       const spanKey = e.toolCallId || toolName;
-      const extra = e.runId ? nioToolRunIdAttribute(e.runId) : undefined;
-      const r = await rt.onPreTool(sid(ctx, e), spanKey, toolName, e.params ?? {}, event, extra);
+      const r = await rt.onPreTool(sid(ctx, e), spanKey, toolName, e.params ?? {}, event, {
+        toolCallId: e.toolCallId,
+        extraPreAttrs: e.runId ? nioToolRunIdAttribute(e.runId) : undefined,
+      });
       // OpenClaw has no interactive channel: a provisional 'ask' means
       // confirm_action was 'ask', which folds to allow here.
       if (r.block) return { block: true, blockReason: r.reason };
@@ -1426,14 +1454,18 @@ export function registerOpenClawPlugin(
   api.on('subagent_spawning', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string };
-      await rt.onSubagentStart(sid(ctx, e), e.subagentId || e.runId || 'unknown');
+      await rt.onSubagentStart(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
+        subagent_id: e.subagentId, run_id: e.runId,
+      });
     } catch { /* non-critical */ }
   });
 
   api.on('subagent_ended', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { subagentId?: string; runId?: string };
-      await rt.onSubagentEnd(sid(ctx, e), e.subagentId || e.runId || 'unknown');
+      await rt.onSubagentEnd(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
+        subagent_id: e.subagentId, run_id: e.runId,
+      });
     } catch { /* non-critical */ }
   });
 
@@ -2147,7 +2179,7 @@ export function registerPiExtension(
 
       const r = await rt.onPreTool(sessionId, spanKey, toolName, params, {
         ...e, sessionId, cwd: c.cwd,
-      });
+      }, { toolCallId: e.toolCallId });
 
       if (r.block) return { block: true, reason: r.reason };
 
@@ -3598,6 +3630,7 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
           };
           const r = await rt.onPreTool(
             hookInput.sessionID, hookInput.callID, hookInput.tool, args, merged,
+            { toolCallId: hookInput.callID },
           );
           verdictByCall.set(
             hookInput.callID,
