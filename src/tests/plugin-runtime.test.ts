@@ -242,3 +242,110 @@ describe('InProcessPluginRuntime span wiring', () => {
     }
   });
 });
+
+describe('InProcessPluginRuntime auxiliary signals', () => {
+  // Tracing explicitly OFF. Do not rely on the harness's empty NIO_HOME
+  // producing a null provider — state that implicitly is how Task 2's
+  // span wiring went uncovered.
+  function makeRuntime() {
+    return new InProcessPluginRuntime({
+      platform: 'test-platform',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: null,
+      meterProvider: null,
+    });
+  }
+
+  it('onUserPrompt does not create state when tracing is off', () => {
+    // Prompt capture is a tracing-only concern and must short-circuit.
+    const rt = makeRuntime();
+    rt.onUserPrompt('s2', 'hello');
+    assert.equal(rt.hasSessionState('s2'), false);
+  });
+
+  it('onLlmUsage always accumulates, even with tracing off', () => {
+    // Unlike prompt capture, usage accumulation feeds metrics as well as
+    // spans, so it creates turn state unconditionally.
+    const rt = makeRuntime();
+    rt.onLlmUsage('s2', { input: 10 });
+    assert.equal(rt.hasSessionState('s2'), true);
+  });
+
+  it('onLlmUsage tolerates an empty usage object', () => {
+    const rt = makeRuntime();
+    rt.onLlmUsage('s2', {});
+    assert.equal(rt.hasSessionState('s2'), true);
+  });
+
+  it('onUserBash writes an audit row without throwing', () => {
+    const rt = makeRuntime();
+    rt.onUserBash('s2', 'ls -la', '/tmp');
+  });
+
+  it('onSubagentStart/End are safe when no state exists', async () => {
+    const rt = makeRuntime();
+    await rt.onSubagentStart('s3', 'task-1');
+    await rt.onSubagentEnd('s3', 'task-1');
+  });
+
+  it('dispatchCommand routes an empty arg string to the config handler', async () => {
+    const rt = makeRuntime();
+    const out = await rt.dispatchCommand('');
+    assert.equal(typeof out, 'string');
+    assert.ok(out.length > 0);
+  });
+});
+
+// Same lesson as Task 2: with a null provider none of the turn-state
+// plumbing runs. These drive a real in-memory tracer so the prompt /
+// reply / usage attributes and the sub-agent span can actually fail.
+describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
+  function tracedRuntime(tracer: ReturnType<typeof makeInMemoryTracer>) {
+    return new InProcessPluginRuntime({
+      platform: 'test-platform',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: tracer.provider,
+      meterProvider: null,
+    });
+  }
+
+  it('carries prompt, reply, and token usage onto the turn root span', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = tracedRuntime(tracer);
+      rt.onUserPrompt('s1', 'why is the build red?');
+      rt.onAssistantReply('s1', 'a lint rule changed');
+      rt.onLlmUsage('s1', { input: 120, output: 45, cacheRead: 30, cacheWrite: 10 });
+      rt.onLlmUsage('s1', { input: 80 });   // must accumulate, not overwrite
+
+      await rt.onTurnEnd('s1');
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 1, 'exactly one turn root span');
+      const attrs = spans[0]!.attributes;
+      assert.equal(attrs['nio.turn.user_prompt'], 'why is the build red?');
+      assert.equal(attrs['nio.turn.assistant_reply'], 'a lint rule changed');
+      assert.equal(attrs['gen_ai.usage.input_tokens'], 200);   // 120 + 80
+      assert.equal(attrs['gen_ai.usage.output_tokens'], 45);
+      assert.equal(attrs['gen_ai.usage.cache_read.input_tokens'], 30);
+      assert.equal(attrs['gen_ai.usage.cache_creation.input_tokens'], 10);
+      assert.equal(rt.hasSessionState('s1'), false, 'state dropped after the flush');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('emits a sub-agent span between onSubagentStart and onSubagentEnd', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = tracedRuntime(tracer);
+      await rt.onSubagentStart('s1', 'task-1');
+      assert.equal(tracer.finished().length, 0, 'nothing emitted while the sub-agent runs');
+
+      await rt.onSubagentEnd('s1', 'task-1');
+      assert.equal(tracer.finished().length, 1, 'sub-agent span emitted on end');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});
