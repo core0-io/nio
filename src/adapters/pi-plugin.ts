@@ -55,6 +55,12 @@ export interface PiExtensionApi {
 
 export interface PiPluginOptions {
   level?: string;
+  /**
+   * Override `guard.confirm_action` for this registration. Lets a test
+   * reach the `decision === 'ask'` branch without writing a scratch
+   * config.yaml.
+   */
+  confirmAction?: 'allow' | 'deny' | 'ask';
   nioFactory?: () => NioInstance;
   /**
    * Test seam: inject pre-built OTEL providers instead of deriving them
@@ -89,6 +95,7 @@ export function registerPiExtension(
     platform: 'pi',
     adapter,
     level: options.level,
+    confirmAction: options.confirmAction,
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
@@ -99,6 +106,13 @@ export function registerPiExtension(
 
   // ---- Guard: tool_call can block -----------------------------------------
   pi.on('tool_call', async (event: unknown, ctx: unknown) => {
+    // Set the moment we learn the action must not run — either the guard
+    // denied it, or the human declined the confirmation dialog. Declared
+    // OUTSIDE the try on purpose: failing open is right for a Nio internal
+    // error, but it must never turn a refusal we already hold into a green
+    // light. Telemetry work happens after the answer is known, so without
+    // this a throw in resolveConfirm would run a tool the user just refused.
+    let denial: { block: true; reason?: string } | null = null;
     try {
       const e = event as {
         toolName?: string; toolCallId?: string; input?: Record<string, unknown>;
@@ -113,31 +127,42 @@ export function registerPiExtension(
         ...e, sessionId, cwd: c.cwd,
       }, { toolCallId: e.toolCallId });
 
-      if (r.block) return { block: true, reason: r.reason };
+      if (r.block) {
+        denial = { block: true, reason: r.reason };
+        return denial;
+      }
 
       // Provisional 'ask' means guard.confirm_action === 'ask'. Pi is the
       // only platform with a real user channel, so actually ask.
       if (r.decision === 'ask') {
         if (!c.hasUI) {
-          // Print / json mode: no channel to ask through. Fall back to the
-          // two-state semantics every other platform uses.
-          const folded = await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, true);
-          return folded.block ? { block: true, reason: folded.reason } : undefined;
+          // Print / json mode: no channel to ask through. Resolve the
+          // provisional attrs to confirm_allowed and let it run, matching
+          // the two-state fold every other platform uses. resolveConfirm
+          // with `true` cannot block, so there is nothing to branch on.
+          await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, true);
+          return undefined;
         }
         const ok = await c.ui.confirm(
           'Nio: confirm this action?',
           r.reason || 'This action was flagged as risky.',
           { timeout: CONFIRM_TIMEOUT_MS },
         );
-        // A timeout returns false — treated as "denied", so the agent never
-        // hangs waiting for an absent user.
+        // Pi's confirm() returns false on timeout (documented in
+        // extensions.md), so an absent human reads as a refusal instead of
+        // hanging the agent forever.
+        if (!ok) {
+          denial = { block: true, reason: r.reason || 'Denied by user (Nio)' };
+        }
         const resolved = await rt.resolveConfirm(sessionId, spanKey, 'ask', r.reason, ok);
         if (resolved.block) return { block: true, reason: resolved.reason };
+        if (denial) return denial;
       }
 
       return undefined;
     } catch {
-      return undefined; // fail open
+      // Fail open on a Nio failure — but honour a refusal already given.
+      return denial ?? undefined;
     }
   });
 
