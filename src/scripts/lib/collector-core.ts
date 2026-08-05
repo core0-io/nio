@@ -56,6 +56,8 @@ import {
   genAiToolCallInputAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
+  startSessionTrace,
+  emitSessionSpan,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform } from './conversation/factory.js';
@@ -513,11 +515,32 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (event === 'SessionEnd') {
+        // Session span goes out last, after the turn it might still be
+        // closing has had its chance to save — reload rather than reuse
+        // `prev`/`next` so this sees whichever of them actually landed.
+        if (tracerProvider) {
+          const sessionState = loadState(logsConfig) ?? prev;
+          if (sessionState?.session_trace_id && sessionState?.session_span_id) {
+            await emitSessionSpan(tracerProvider, sessionState);
+            saveState(logsConfig, {
+              ...sessionState,
+              session_trace_id: undefined,
+              session_span_id: undefined,
+              session_start_ms: undefined,
+            });
+          }
+        }
         forgetSession(sessionId, logsConfig);
       }
 
     } else if (event === 'SessionStart') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
+
+      if (tracerProvider) {
+        const prev = loadState(logsConfig);
+        const state = startSessionTrace(prev, sessionId);
+        saveState(logsConfig, state);
+      }
 
     } else if (isKnownHookEvent(event)) {
       // Future hook events that are typed but have no specific handling

@@ -36,7 +36,7 @@ export {};
 
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { trace, TraceFlags, ROOT_CONTEXT, SpanStatusCode } from '@opentelemetry/api';
+import { trace, TraceFlags, ROOT_CONTEXT, SpanStatusCode, type Link } from '@opentelemetry/api';
 import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
@@ -417,6 +417,25 @@ export function ensureTurn(
       }
     : { pending_spans: {}, pending_guard_attrs: {}, deferred_spans: [] };
 
+  // Session identity (session_trace_id/session_span_id/session_start_ms)
+  // is minted once at SessionStart and lives for the whole session, not
+  // just one turn — but this function's "start new turn" branch below
+  // builds its return value from scratch, so without this it would be
+  // silently dropped on every single turn (including the very first:
+  // SessionStart writes it onto a state whose turn_trace_id is still
+  // '', so turn 1 always takes this branch). Only carried forward when
+  // `prev` genuinely IS this session's state (same id, or the sentinel-
+  // promotion case where it's the same session under its prior alias) —
+  // a real cross-session mismatch must NOT leak one session's trace
+  // link into another's turns.
+  const carrySessionTrace = prev && (prev.session_id === sessionId || prevWasSentinel)
+    ? {
+        ...(prev.session_trace_id !== undefined ? { session_trace_id: prev.session_trace_id } : {}),
+        ...(prev.session_span_id !== undefined ? { session_span_id: prev.session_span_id } : {}),
+        ...(prev.session_start_ms !== undefined ? { session_start_ms: prev.session_start_ms } : {}),
+      }
+    : {};
+
   const turnNumber = (prev?.session_id === sessionId ? prev.turn_number : 0) + 1;
   return {
     session_id: sessionId,
@@ -429,6 +448,50 @@ export function ensureTurn(
     ...carryPending,
     pending_task_spans: {},
     turn_attributes: {},
+    ...carrySessionTrace,
+  };
+}
+
+/**
+ * Mint session-level trace/span ids at `SessionStart`. Pure — caller
+ * persists the returned state.
+ *
+ * The session is deliberately NOT a span tree that wraps every turn (see
+ * the module's session-link design note near `endTurn`) — just an id
+ * pair minted here, held in state, and later emitted as its own root
+ * span by `emitSessionSpan` at `SessionEnd`. Every turn root links to it.
+ *
+ * When `prev` belongs to a DIFFERENT session (or there is no `prev`),
+ * this starts from a clean turn-state skeleton rather than layering
+ * fresh session ids onto stale turn/pending data — otherwise a crashed
+ * session's leftover `turn_trace_id` could outlive it and get mistaken
+ * for an active turn under the new session id by `ensureTurn`'s no-op
+ * check (`prev.session_id === sessionId && prev.turn_trace_id`).
+ */
+export function startSessionTrace(
+  prev: CollectorState | null,
+  sessionId: string,
+): CollectorState {
+  const sessionChanged = prev !== null && prev.session_id !== sessionId;
+  const base: CollectorState = !prev || sessionChanged
+    ? {
+        session_id: sessionId,
+        turn_number: 0,
+        turn_trace_id: '',
+        turn_start_ms: 0,
+        pending_spans: {},
+        pending_task_spans: {},
+        pending_guard_attrs: {},
+        turn_attributes: {},
+        deferred_spans: [],
+      }
+    : prev;
+
+  return {
+    ...base,
+    session_trace_id: freshTraceId(),
+    session_span_id: randomSpanId(),
+    session_start_ms: Date.now(),
   };
 }
 
@@ -882,6 +945,20 @@ export async function endTurn(
   // trace.getTracer() reads from the other and gets a no-op tracer.
   // Going through the provider directly side-steps the global path.
   const tracer = provider.getTracer('nio-collector', '1.0.0');
+  // Link the turn root back to the session span, when a session trace
+  // was minted for it (SessionStart ran). Missing session fields — a
+  // platform that never fires SessionStart, or a state file predating
+  // this feature — degrade to no link rather than an error; the turn
+  // still exports on its own.
+  const sessionLinks: Link[] = state.session_trace_id && state.session_span_id
+    ? [{
+        context: {
+          traceId: state.session_trace_id,
+          spanId: state.session_span_id,
+          traceFlags: TraceFlags.SAMPLED,
+        },
+      }]
+    : [];
   const span = tracer.startSpan(
     'invoke_agent UserPromptSubmit',
     {
@@ -892,6 +969,7 @@ export async function endTurn(
         ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(state.turn_attributes ?? {}),
       } as Record<string, string | number | boolean>,
+      ...(sessionLinks.length > 0 ? { links: sessionLinks } : {}),
     },
     rootCtx,
   );
@@ -920,6 +998,12 @@ export async function endTurn(
     pending_guard_attrs: {},
     turn_attributes: {},
     deferred_spans: [],
+    // Session identity outlives the turn — carried forward so the NEXT
+    // turn's root can still link back to it. Without this, endTurn would
+    // silently sever every turn after the first from its session.
+    ...(state.session_trace_id !== undefined ? { session_trace_id: state.session_trace_id } : {}),
+    ...(state.session_span_id !== undefined ? { session_span_id: state.session_span_id } : {}),
+    ...(state.session_start_ms !== undefined ? { session_start_ms: state.session_start_ms } : {}),
   };
 }
 
@@ -955,4 +1039,51 @@ function emitChatSpan(
   );
   (span.spanContext() as { spanId: string }).spanId = chatSpanId;
   span.end(call.endMs);
+}
+
+// ---------------------------------------------------------------------------
+// Session span (Task 4)
+// ---------------------------------------------------------------------------
+
+
+/**
+ * Emit the session's own root span at `SessionEnd`, using the trace/span
+ * ids minted by `startSessionTrace` at `SessionStart`. A no-op — not an
+ * error — when those fields are missing (platform never fired
+ * SessionStart, or the state predates this feature): the caller decides
+ * whether to persist any state change, this function only exports.
+ */
+export async function emitSessionSpan(
+  provider: NodeTracerProvider,
+  state: CollectorState,
+): Promise<void> {
+  const traceId = state.session_trace_id;
+  const spanId = state.session_span_id;
+  if (!traceId || !spanId) return;
+
+  const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId,
+    spanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+
+  // provider.getTracer, not the global — see emitDeferredSpan.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
+  const span = tracer.startSpan(
+    'session',
+    {
+      startTime: state.session_start_ms ?? Date.now(),
+      attributes: genAiInvokeAgentAttributes(state.session_id, {
+        'gen_ai.operation.name': 'session',
+      }) as Record<string, string | number | boolean>,
+    },
+    rootCtx,
+  );
+  (span.spanContext() as { spanId: string }).spanId = spanId;
+  (span as unknown as { parentSpanContext?: unknown }).parentSpanContext = undefined;
+  (span as unknown as { parentSpanId?: string }).parentSpanId = undefined;
+  span.end();
+
+  await provider.forceFlush();
 }
