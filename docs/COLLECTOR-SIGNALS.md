@@ -394,6 +394,40 @@ next time a *different* session starts on the same machine. If Codex
 ever adds a session-boundary hook, wire it to `collector-hook.js` with
 `event: 'SessionEnd'` and this paragraph goes away.
 
+**OpenClaw: no session layer at all.** Unlike the other three platforms,
+OpenClaw's `session_start` handler in `src/adapters/openclaw-plugin.ts`
+never calls `startSessionTrace` — no `session_trace_id` / `session_span_id`
+is ever minted, so no `session` root span is ever emitted and no OpenClaw
+turn root ever carries a session link. This is not a bug being tracked;
+OpenClaw's session boundary is a long-lived daemon lifecycle rather than a
+per-process hook pair, and wiring it up was out of scope for the session
+span work. `gen_ai.conversation.id` / `session.id` are still present on
+every OpenClaw turn span regardless, so session-level aggregation by id
+still works — only the dedicated `session` root span and its link are
+absent.
+
+**Known gap · a hard crash on Claude Code can leave a dangling session
+link.** Once a session starts, its turn roots link to
+`(session_trace_id, session_span_id)` immediately (Claude Code and Codex
+both mint these at `SessionStart`), but the `session` span itself is only
+emitted at `SessionEnd`. If the host process is killed before `SessionEnd`
+fires — a hard crash, not a normal exit — the `session` span never goes
+out, exactly like the Codex case above, except here it's contingent on a
+crash rather than guaranteed. The orphaned-tree recovery in
+`hasOrphanedDeferredTree` / `recoverDeferredTree` does not cover this: it
+only replays `state.deferred_spans` (parked tool/turn spans), not
+`session_trace_id` / `session_span_id`, so a crash with no in-flight tool
+activity leaves nothing for it to recover. The result is a turn span
+whose session link points at a span id that was never exported — a
+dangling link, not a dangling *trace*: the turn's own trace is complete on
+its own, and `session.id` / `gen_ai.conversation.id` are already present
+directly on every turn span, so nothing that queries or aggregates by
+session id needs the `session` span to have gone out. This was previously
+assessed as impossible on Claude Code/Codex because the session link
+wasn't wired there at all (see the C1 fix referenced above) — that premise
+no longer holds now that it is wired, so this paragraph replaces that
+earlier assumption rather than leaving it stale.
+
 ### Span: `execute_tool <name>` (tool span)
 
 One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).
