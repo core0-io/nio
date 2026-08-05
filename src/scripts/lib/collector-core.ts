@@ -58,6 +58,8 @@ import {
   takePendingGuardAttrs,
   startSessionTrace,
   emitSessionSpan,
+  hasOrphanedDeferredTree,
+  recoverDeferredTree,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform } from './conversation/factory.js';
@@ -370,6 +372,23 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   };
 
   try {
+    // Crash recovery (lazy, any event): deferring tool-span emission to
+    // end-of-turn means a killed process can now lose the WHOLE tree
+    // (root + every closed tool span), not just the root as before. The
+    // data survives on disk, though — so before doing anything else,
+    // check whether the state we're about to build on top of is carrying
+    // a tree nobody will ever flush (wrong session, or its turn already
+    // closed) and flush it now, tagged incomplete. This one check covers
+    // both "some other event arrives first" and "SessionStart is the
+    // first thing to arrive" — SessionStart is just another event here.
+    if (tracerProvider) {
+      const stale = loadState(logsConfig);
+      if (hasOrphanedDeferredTree(stale, sessionId)) {
+        const recovered = await recoverDeferredTree(tracerProvider, stale!);
+        saveState(logsConfig, recovered);
+      }
+    }
+
     if (event === 'UserPromptSubmit') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 

@@ -1042,9 +1042,8 @@ function emitChatSpan(
 }
 
 // ---------------------------------------------------------------------------
-// Session span (Task 4)
+// Session span (Task 4) + crash recovery (Task 5)
 // ---------------------------------------------------------------------------
-
 
 /**
  * Emit the session's own root span at `SessionEnd`, using the trace/span
@@ -1086,4 +1085,108 @@ export async function emitSessionSpan(
   span.end();
 
   await provider.forceFlush();
+}
+
+/**
+ * Detects a deferred-span tree left behind by a process that was killed
+ * before it ever reached `Stop`/`SubagentStop`/`SessionEnd`.
+ *
+ * Deferral moved the crash blast radius: before it, a killed process
+ * only cost the turn's root span (every tool span had already gone out
+ * individually). Now the whole tree — root AND every finished tool span —
+ * sits unflushed in `state.deferred_spans` until endTurn runs. If that
+ * never happens, all of it would silently vanish.
+ *
+ * True when the loaded state carries a non-empty `deferred_spans` that
+ * the CURRENT event's turn cannot own — either because the incoming
+ * event belongs to a different session, or because the persisted turn
+ * was already closed (`turn_trace_id` empty) while deferred_spans
+ * somehow survived. Mirrors `ensureTurn`'s own "is this still the active
+ * turn" check (`prev.session_id === sessionId && prev.turn_trace_id`) —
+ * this is its negation, gated on deferred_spans actually having
+ * something to lose.
+ */
+export function hasOrphanedDeferredTree(
+  state: CollectorState | null,
+  incomingSessionId: string,
+): boolean {
+  if (!state) return false;
+  if (!state.deferred_spans || state.deferred_spans.length === 0) return false;
+  return state.session_id !== incomingSessionId || !state.turn_trace_id;
+}
+
+/**
+ * Flush a crash-orphaned deferred-span tree.
+ *
+ * Every span in `state.deferred_spans` is emitted as a direct child of a
+ * synthetic turn root (no chat-call attribution attempt — the
+ * conversation source for a dead turn may no longer be reconstructable,
+ * and guessing is worse than a flat tree). The root is tagged
+ * `nio.turn.incomplete: true` so the backend can tell a real turn close
+ * from a forced one apart.
+ *
+ * Reuses `state.turn_trace_id` as the trace id when one exists — this is
+ * load-bearing, not cosmetic: content log records for this turn's tool
+ * calls were already emitted (by the logs signal, as they happened) tagged
+ * with that same trace id. Minting a fresh id here would orphan those log
+ * records from the spans being recovered. Only mints a fresh id when
+ * `turn_trace_id` is itself empty (the state has nothing valid to reuse —
+ * see `hasOrphanedDeferredTree`'s second trigger condition).
+ *
+ * Idempotent: returns `deferred_spans: []`, so calling this twice on the
+ * (now-empty) result is a no-op on the second call.
+ */
+export async function recoverDeferredTree(
+  provider: NodeTracerProvider,
+  state: CollectorState,
+): Promise<CollectorState> {
+  const deferred = state.deferred_spans ?? [];
+  if (deferred.length === 0) return state;
+
+  const traceId = state.turn_trace_id || freshTraceId();
+  const turnSpanId = traceId.slice(0, 16);
+
+  const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId,
+    spanId: turnSpanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+
+  // provider.getTracer, not the global — see emitDeferredSpan.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
+  const rootSpan = tracer.startSpan(
+    'invoke_agent UserPromptSubmit',
+    {
+      startTime: state.turn_start_ms || Date.now(),
+      attributes: {
+        ...genAiInvokeAgentAttributes(state.session_id),
+        'nio.turn_number': state.turn_number,
+        'nio.turn.incomplete': true,
+        ...(state.turn_attributes ?? {}),
+      } as Record<string, string | number | boolean>,
+    },
+    rootCtx,
+  );
+  (rootSpan.spanContext() as { spanId: string }).spanId = turnSpanId;
+  (rootSpan as unknown as { parentSpanContext?: unknown }).parentSpanContext = undefined;
+  (rootSpan as unknown as { parentSpanId?: string }).parentSpanId = undefined;
+  rootSpan.end();
+
+  for (const span of deferred) {
+    emitDeferredSpan(provider, traceId, turnSpanId, span);
+  }
+
+  await provider.forceFlush();
+
+  return {
+    ...state,
+    turn_trace_id: '',
+    turn_start_ms: 0,
+    pending_spans: {},
+    pending_task_spans: {},
+    pending_guard_attrs: {},
+    turn_attributes: {},
+    deferred_spans: [],
+  };
 }
