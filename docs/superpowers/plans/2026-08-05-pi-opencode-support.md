@@ -2899,6 +2899,8 @@ settings.json path entry when the pi CLI is absent."
 - Create: `src/adapters/opencode.ts`
 - Create: `src/tests/fixtures/opencode/tool-execute-before-bash.json`
 - Create: `src/tests/fixtures/opencode/tool-execute-before-write.json`
+- Create: `src/tests/fixtures/opencode/tool-execute-before-edit.json`
+- Create: `src/tests/fixtures/opencode/tool-execute-before-apply-patch.json`
 - Create: `src/tests/fixtures/opencode/tool-execute-after-bash.json`
 - Create: `src/tests/fixtures/opencode/README.md`
 - Modify: `src/tests/adapter.test.ts`
@@ -2910,7 +2912,24 @@ settings.json path entry when the pi CLI is absent."
 
 **Interfaces:**
 - Consumes: `HookAdapter`, `HookInput`.
-- Produces: `export class OpenCodeAdapter implements HookAdapter` with `readonly name = 'opencode'`, and `export interface OpenCodeAdapterOptions { nativeToolMapping?: Record<string, string> }`.
+- Produces: `export class OpenCodeAdapter implements HookAdapter` with `readonly name = 'opencode'`, and `/**
+ * Pull the first file target out of an apply_patch payload. opencode
+ * marks each file in the patch body with `*** Add File: <path>`,
+ * `*** Update File: <path>` or `*** Delete File: <path>`
+ * (packages/opencode/src/patch.ts:76-87). Returns null when the payload
+ * carries no marker, so the caller can fall back to an empty path
+ * rather than inventing one.
+ */
+function firstPatchTarget(patchText: string | undefined): string | null {
+  if (!patchText) return null;
+  for (const line of patchText.split('\n')) {
+    const m = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/.exec(line.trim());
+    if (m) return m[1]!.trim();
+  }
+  return null;
+}
+
+export interface OpenCodeAdapterOptions { nativeToolMapping?: Record<string, string> }`.
 
 **opencode event shape** (from `packages/plugin/src/index.ts`): the binding layer receives `input = { tool, sessionID, callID }` and `output = { args }` as two separate objects. The adapter is fed a **merged** object of the shape `{ tool, sessionID, callID, args, cwd? }` so it matches the single-payload `parseInput` contract.
 
@@ -2935,6 +2954,31 @@ settings.json path entry when the pi CLI is absent."
   "sessionID": "ses_7c1f2a9b",
   "callID": "call_4d2f",
   "args": { "filePath": "/tmp/demo.txt", "content": "hello" }
+}
+```
+
+`src/tests/fixtures/opencode/tool-execute-before-edit.json`:
+
+```json
+{
+  "tool": "edit",
+  "sessionID": "ses_7c1f2a9b",
+  "callID": "call_4d30",
+  "args": { "filePath": "/tmp/demo.txt", "oldString": "hello", "newString": "goodbye" }
+}
+```
+
+`src/tests/fixtures/opencode/tool-execute-before-apply-patch.json` — note there is
+no `filePath`; the target lives in the marker line:
+
+```json
+{
+  "tool": "apply_patch",
+  "sessionID": "ses_7c1f2a9b",
+  "callID": "call_4d31",
+  "args": {
+    "patchText": "*** Begin Patch\n*** Update File: src/server.ts\n@@\n-const port = 3000\n+const port = 8080\n*** End Patch"
+  }
 }
 ```
 
@@ -3048,6 +3092,66 @@ describe('OpenCodeAdapter', () => {
       assert.equal(env.action.type, 'write_file');
       assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
       assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
+    });
+
+    it('reads the edit tool body from newString', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-edit.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'goodbye');
+    });
+
+    it('extracts the apply_patch target from the patch marker line', () => {
+      // apply_patch has no filePath field at all — the target is a
+      // `*** Update File:` marker inside patchText. Without extraction
+      // both path and content_preview would be empty.
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-apply-patch.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, 'src/server.ts');
+      assert.match(
+        (env.action.data as { content_preview: string }).content_preview,
+        /port = 8080/,
+      );
+    });
+
+    it('builds a read_file envelope from filePath', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'read', args: { filePath: '/etc/passwd' } }),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'read_file');
+      assert.equal((env.action.data as { path: string }).path, '/etc/passwd');
+    });
+
+    it('builds network_request envelopes for webfetch (url) and websearch (query)', () => {
+      const fetched = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'webfetch', args: { url: 'https://example.test/x' } }),
+      );
+      assert.ok(fetched);
+      assert.equal(fetched.action.type, 'network_request');
+      assert.equal((fetched.action.data as { url: string }).url, 'https://example.test/x');
+
+      const searched = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'websearch', args: { query: 'how to exfiltrate' } }),
+      );
+      assert.ok(searched);
+      assert.equal((searched.action.data as { url: string }).url, 'how to exfiltrate');
+    });
+
+    it('returns null for an unmapped tool', () => {
+      assert.equal(adapter.buildEnvelope(adapter.parseInput({ tool: 'glob', args: {} })), null);
+    });
+
+    it('honours a config-provided native_tool_mapping', () => {
+      const custom = new OpenCodeAdapter({ nativeToolMapping: { question: 'network_request' } });
+      assert.equal(custom.mapToolToActionType('question'), 'network_request');
+      assert.equal(custom.mapToolToActionType('bash'), null);
     });
 
     it('carries the opencode session id into the envelope context', () => {
@@ -3183,14 +3287,23 @@ export class OpenCodeAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        // opencode uses camelCase `filePath`; write carries `content`,
-        // edit carries `newString`, apply_patch carries `patch`.
+        // opencode uses camelCase `filePath`. The three writers differ:
+        //   write       → { filePath, content }
+        //   edit        → { filePath, newString }
+        //   apply_patch → { patchText }   ← NO filePath at all
+        // apply_patch's targets are marker lines inside the patch text
+        // (packages/opencode/src/tool/apply_patch.ts declares a single
+        // `patchText` field; packages/opencode/src/patch.ts parses the
+        // `*** Add|Update|Delete File:` markers). Without extracting
+        // them, every apply_patch call would reach the audit log with an
+        // empty path and give Phase 3 nothing to scan.
+        const patchText = input.toolInput.patchText as string | undefined;
         const content =
           (input.toolInput.content as string) ||
           (input.toolInput.newString as string) ||
-          (input.toolInput.patch as string) || '';
+          patchText || '';
         const data: FileOperationData = {
-          path: (input.toolInput.filePath as string) || '',
+          path: (input.toolInput.filePath as string) || firstPatchTarget(patchText) || '',
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
