@@ -6,21 +6,21 @@ Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (log
 
 ## Architecture
 
-The four host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
+The six host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event; OpenClaw, Pi, and opencode load Nio in-process and stay resident — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
 
 ```text
-   ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
-   │ Claude Code │     │     Hermes     │     │   OpenClaw    │
-   │             │     │                │     │               │
-   │ per-hook    │     │ per-hook spawn │     │ single daemon │
-   │ spawn       │     │ (node hook-cli)│     │ process       │
-   └──────┬──────┘     └────────┬───────┘     └───────┬───────┘
+   ┌─────────────┐     ┌────────────────┐     ┌────────────────────┐
+   │ Claude Code │     │     Hermes     │     │  OpenClaw · Pi ·   │
+   │   · Codex   │     │                │     │      opencode      │
+   │ per-hook    │     │ per-hook spawn │     │ in-process plugin  │
+   │ spawn       │     │ (node hook-cli)│     │    (resident)      │
+   └──────┬──────┘     └────────┬───────┘     └─────────┬──────────┘
           │                     │                     │
           ▼                     ▼                     ▼
    ┌──────────────────────────────────────┐   ┌──────────────┐
    │   on-disk state cache                │   │ in-memory    │
    │   bridges span lifecycle across      │   │ Map<sessionId│
-   │   short-lived hook processes         │   │  ,State>     │
+   │   short-lived hook processes         │   │ ,CollectorS.>│
    └──────────────────┬───────────────────┘   └──────┬───────┘
                       │                              │
                       └──────────────┬───────────────┘
@@ -51,7 +51,42 @@ The four host platforms each have their own runtime model — Claude Code, Codex
                     (OTLP)    (OTLP)    (OTLP + local audit log)
 ```
 
-Claude Code and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
+Claude Code, Codex, and Hermes have to bridge span lifecycle across short-lived hook processes — a `PreToolUse` in process A and the matching `PostToolUse` in process B share state via an on-disk cache. The in-process platforms (OpenClaw, Pi, opencode) hold the same state in memory, in the `Map<sessionId, CollectorState>` owned by `InProcessPluginRuntime`. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.
+
+## Per-platform signal coverage
+
+What each host can actually supply. "—" means the platform has no such
+concept or does not expose it; those gaps are architectural, not bugs.
+
+| Signal | Claude Code | Codex | Hermes | OpenClaw | Pi | opencode |
+| --- | --- | --- | --- | --- | --- | --- |
+| Turn root span `invoke_agent UserPromptSubmit` | ✓ | ✓ | ✓ | ✓ | ✓ (`agent_end`) | ✓ (`session.idle`) |
+| Tool span `execute_tool <name>` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Deny / confirm-denied orphan span | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
+| `gen_ai.tool.call.id` | ✓ | ✓ | ✓ | ✓ | ✓ (`toolCallId`) | ✓ (`callID`) |
+| Token usage on the turn span | ✓ (transcript) | ✓ (transcript) | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
+| `nio.turn.user_prompt` | ✓ | ✓ | ✓ | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
+| `nio.turn.assistant_reply` | — | — | — | ✓ (`llm_output`) | ✓ (`message_end`) | — |
+| `nio.tool.duration_ms` / `nio.tool.run_id` | — | — | — | ✓ | — | — |
+| Interactive `confirm` (`guard.confirm_action: ask`) | ✓ | — | — | — | ✓ real `ctx.ui.confirm` dialog | ✓ via `permission.ask` |
+| Human-typed shell audited (`lifecycle_type: user_bash`) | — | — | — | — | ✓ (audit only, never blocked) | — |
+| All four metric instruments | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Audit log (local JSONL + OTLP logs) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+Two honest caveats:
+
+- **Pi emits no `task:execute` spans.** Pi has no subagent concept at
+  all, so there is nothing to open a task span for. An empty task-span
+  set on Pi is correct behaviour, not a dropped signal.
+- **opencode's `tool.execute.after` does not fire for a tool that
+  throws.** Those tool spans are therefore not closed precisely at
+  completion time; they are *reclaimed* by the `session.idle` flush,
+  which force-closes any pending spans before emitting the turn root. The
+  span still lands in the trace with the right parent, but its end
+  timestamp is the turn flush rather than the tool's real finish, and it
+  carries **no `gen_ai.tool.call.result`** — that attribute is the
+  discriminator between a normally closed span and a reclaimed one.
 
 ## Naming conventions
 
@@ -73,8 +108,8 @@ columns.
 
 | Attribute | Value | Notes |
 | --- | --- | --- |
-| `service.name` | `nio-<platform>` | One per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw`. Backends like SigNoz / Jaeger split these into independent services in their main selector. |
-| `nio.platform` | `<platform>` | Raw value of the platform tag (`claude-code` / `codex` / `hermes` / `openclaw`). Provided as a separate attr so users who don't want to parse `service.name` can filter on it directly. |
+| `service.name` | `nio-<platform>` | One per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw`, `nio-pi`, `nio-opencode`. Backends like SigNoz / Jaeger split these into independent services in their main selector. |
+| `nio.platform` | `<platform>` | Raw value of the platform tag (`claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode`). Provided as a separate attr so users who don't want to parse `service.name` can filter on it directly. |
 | `gen_ai.agent.name` | `<configured value>` | Only set when the operator configures [`agent_name`](configuration.html#agent_name) in `~/.nio/config.yaml`. Absent on the resource when unset. The turn span carries the same key as a span-level attribute with a platform-default fallback for unconfigured users (see the turn-span attribute table below). |
 
 > **Behaviour change in v2.4.2.** Earlier releases set `service.name=nio` for every platform and put `nio.platform` only on individual spans. Existing dashboards / alerts filtered on `service.name="nio"` will not match new data — re-target to `service.name=nio-*` (wildcard) or filter on `nio.platform` instead. Historical traces / logs / metrics keep their original `service.name=nio`.
@@ -100,7 +135,7 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 | --- | --- | --- | --- |
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …); same key as the tool-span attribute | PreToolUse · PostToolUse · guard decision | all |
 | `nio.event` | Hook event firing this counter — `PreToolUse` / `PostToolUse` / `TaskCreated` / `TaskCompleted` | PreToolUse · PostToolUse · TaskCreated · TaskCompleted | all |
-| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | every metric | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | every metric | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
 
@@ -149,14 +184,14 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `gen_ai.usage.output_tokens` | Output tokens generated across the turn | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-creation input tokens | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.cache_read.input_tokens` | Cache-read input tokens | Stop · SubagentStop · SessionEnd | all |
-| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | turn close | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | turn close | all |
 | `nio.turn_number` | Per-session counter, starts at 1 | turn close | all |
 | `nio.cwd` | Working dir at turn start | turn close (when set) | all |
 | `nio.turn.user_prompt` | First user message of the turn, redacted, ≤2 KB | UserPromptSubmit | all |
-| `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw-native) | OpenClaw only |
+| `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw) · `message_end` (Pi) | OpenClaw + Pi |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
-**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
+**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally. **Pi**: `message_end` carries `message.usage` once per assistant message; accumulated the same way. **opencode**: `message.updated` carries a *cumulative snapshot* republished on every change to the same message, so the binding tracks last-seen totals per message id and accumulates only the delta — otherwise a re-publish would compound the turn's totals.
 
 ### Span: `execute_tool <name>` (tool span)
 
@@ -167,14 +202,14 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.operation.name` | Constant `execute_tool` | PostToolUse | all |
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
-| `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw) | PreToolUse · PostToolUse | all |
+| `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw / Pi, `callID` on opencode) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
 | `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
 | `nio.tool_summary` | One-line summary derived from tool input | PostToolUse | all |
-| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | PostToolUse | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | PostToolUse | all |
 | `nio.turn_number` | Parent turn's number | PostToolUse | all |
 | `nio.cwd` | Working dir at hook fire | PostToolUse (when set) | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm_allowed` / `confirm_denied` | PreToolUse | all |
@@ -187,11 +222,13 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied; `OK` otherwise.
 
-**Deny / confirm-denied spans.** When the guard blocks a tool, `PostToolUse` never fires — so the span is emitted synchronously by the same process that ran the guard (the `guard-hook.ts` PreToolUse on Claude Code / Codex; the `hook-cli.ts` `pre_tool_call` branch on Hermes; the `before_tool_call` handler in the OpenClaw plugin). Span name is the same `execute_tool <tool>` as the allow path — the discrimination is on `nio.guard.decision` + ERROR status + the reason in the exception message. Wall-clock starts at the real `evalStartMs` so the span duration reflects the guard window, and `nio.guard.eval_ms` carries the same value as an explicit attribute for filtering.
+**Deny / confirm-denied spans.** When the guard blocks a tool, `PostToolUse` never fires — so the span is emitted synchronously by the same process that ran the guard (the `guard-hook.ts` PreToolUse on Claude Code / Codex; the `hook-cli.ts` `pre_tool_call` branch on Hermes; `InProcessPluginRuntime.onPreTool`'s block path for OpenClaw / Pi / opencode, reached from `before_tool_call` / `tool_call` / `tool.execute.before` respectively — and, on Pi, also from `resolveConfirm` when the human declines the dialog). Span name is the same `execute_tool <tool>` as the allow path — the discrimination is on `nio.guard.decision` + ERROR status + the reason in the exception message. Wall-clock starts at the real `evalStartMs` so the span duration reflects the guard window, and `nio.guard.eval_ms` carries the same value as an explicit attribute for filtering.
 
 ### Span: `task:execute` (task span)
 
-One per subagent dispatch. Opens at `TaskCreated` (Claude Code, Teammates / cloud-agent flows) or `subagent_spawning` (OpenClaw); closes at the matching completion event.
+One per subagent dispatch. Opens at `TaskCreated` (Claude Code, Teammates / cloud-agent flows), `subagent_spawning` (OpenClaw), or `session.created` carrying a `parentID` (opencode); closes at the matching completion event — for opencode, the *child* session's own `session.idle`, routed back to the parent through a child→parent map.
+
+**Pi emits no task spans at all**: Pi has no subagent concept, so there is nothing to open one for.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
@@ -208,7 +245,9 @@ One per subagent dispatch. Opens at `TaskCreated` (Claude Code, Teammates / clou
 
 ### Trace state lifecycle
 
-Claude Code and Hermes spawn a fresh node process per hook event, so a `PreToolUse` in process A and the matching `PostToolUse` in process B can't share an OTEL `Span` object. Both platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw runs as a single daemon, so the equivalent state lives in an in-memory `Map<sessionId, State>` instead. All three platforms route through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.
+Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a `PreToolUse` in process A and the matching `PostToolUse` in process B can't share an OTEL `Span` object. Those platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw, Pi, and opencode load Nio in-process and stay resident, so the equivalent state lives in an in-memory `Map<sessionId, CollectorState>` owned by `InProcessPluginRuntime` instead. Every platform routes through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.
+
+**opencode's reclaim path.** opencode does not fire `tool.execute.after` when the tool itself throws, so a pending span would otherwise leak. The `session.idle` handler doubles as the safety net: `onTurnEnd` force-closes every leftover pending span before emitting the turn root. Such a span is *reclaimed*, not closed precisely — its end timestamp is the turn flush and it carries no `gen_ai.tool.call.result`.
 
 ---
 
@@ -224,7 +263,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | --- | --- | --- |
 | `event` | `"guard"` | discriminator |
 | `timestamp` | string | ISO-8601 |
-| `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` |
+| `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` |
 | `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
 | `cwd` | string? | working dir |
@@ -267,8 +306,10 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 | `platform` | string | host |
 | `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
 | `session_id` | string? | host session id |
-| `lifecycle_type` | string | `subagent_spawning` / `subagent_ended` / `agent_end` / `session_start` / `session_end` |
-| `details` | `Record<string, unknown>?` | platform-specific (e.g. OpenClaw: `{subagent_id, run_id}`) |
+| `lifecycle_type` | string | `subagent_spawning` / `subagent_ended` / `agent_end` / `session_start` / `session_end` / `user_bash` |
+| `details` | `Record<string, unknown>?` | platform-specific (e.g. OpenClaw: `{subagent_id, run_id}`; Pi `user_bash`: `{command, cwd, actor: "user"}`) |
+
+> **`user_bash` — Pi only, audit-only.** Pi fires a `user_bash` event when the *human* types a `!`-prefixed shell command. Nio guards agent actions, not human keystrokes, so this path writes a lifecycle entry (`lifecycle_type: "user_bash"`, `details.actor: "user"`) and **never** runs Phase 0-6 and **never** blocks. There is no `event: "guard"` row for it.
 
 #### `event: "config_error"` — config load failure
 
@@ -318,7 +359,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |
 | `nio.task_id` | Task id from the dispatch event | TaskCreated · TaskCompleted | Claude Code + OpenClaw |
 | `nio.task_summary` | Derived from task input | TaskCreated | Claude Code + OpenClaw |
-| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` | every audit entry | all |
+| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | every audit entry | all |
 | `gen_ai.agent.name` | User-configured [`agent_name`](configuration.html#agent_name) from `~/.nio/config.yaml`; only emitted when set | every audit entry (when configured) | all |
 | `nio.cwd` | Working dir at hook fire | every audit entry with cwd | all |
 | `nio.event` | Discriminator — hook event name vs guard / lifecycle / scan / config_error | every audit entry | all |

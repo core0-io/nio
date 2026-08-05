@@ -3,7 +3,7 @@
 </h1>
 <p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, Codex CLI, OpenClaw, and Hermes. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, Codex CLI, OpenClaw, Hermes, Pi, and opencode. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
 
 <p align="center">
   <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
@@ -13,7 +13,7 @@
 
 ## At a glance
 
-- **What it does:** Nio hooks into your agent platform (Claude Code, Codex CLI, OpenClaw, Hermes) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
+- **What it does:** Nio hooks into your agent platform (Claude Code, Codex CLI, OpenClaw, Hermes, Pi, opencode) and evaluates each tool call through a **Phase 0–6** pipeline **before** it runs — allow, deny, or confirm — with an optional OTEL collector and local audit log.
 - **Config:** Policy lives in **`~/.nio/config.yaml`** (or **`$NIO_HOME/config.yaml`**). Audit events append to **`~/.nio/audit.jsonl`** by default.
 
 ### Architecture at a glance
@@ -57,7 +57,7 @@ Hook events feed the **Collector** (OTEL + local audit) and the **Guard** (real-
 curl -fsSL https://core0-io.github.io/nio/install.sh | bash
 ```
 
-Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.4.3`, restrict to one platform with `--platform NAME`, or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
+Auto-detects which agent CLIs you have installed (`~/.claude`, `~/.codex`, `~/.openclaw`, `~/.hermes`, `~/.pi/agent`, `~/.config/opencode`) and configures Nio for each. Pin a release with `NIO_VERSION=v2.4.3`, restrict to one platform with `--platform NAME` (`claude-code` · `codex` · `openclaw` · `hermes` · `pi` · `opencode`), or uninstall with `--uninstall`. See **[the install page](https://core0-io.github.io/nio/docs/install.html)** for per-platform tabs, prerequisites, and verify steps.
 
 **Onboarding with a shared config.** If someone handed you a pre-configured `nio.yaml` (e.g. an org-wide `external_analyser` + collector setup), pass it at install time:
 
@@ -69,7 +69,7 @@ Nio runs `/nio doctor` against the file before touching disk — the install abo
 
 ### 2. Configure and run
 
-Nio isn't a daemon — it loads as a plugin inside your agent host (Claude Code, Codex CLI, OpenClaw, or Hermes). Edit **`~/.nio/config.yaml`** (override the directory with **`NIO_HOME`**), then **restart your agent host** so the plugin re-reads the policy: Nio builds the guard once at plugin registration and never reloads in-process. Confirm decisions in **`~/.nio/audit.jsonl`** or your OTEL backend.
+Nio isn't a daemon — it loads as a plugin inside your agent host (Claude Code, Codex CLI, OpenClaw, Hermes, Pi, or opencode). Edit **`~/.nio/config.yaml`** (override the directory with **`NIO_HOME`**), then **restart your agent host** so the plugin re-reads the policy: Nio builds the guard once at plugin registration and never reloads in-process. Confirm decisions in **`~/.nio/audit.jsonl`** or your OTEL backend.
 
 Per-platform verify and restart commands are in each tab's *Verify* section on the [install page](https://core0-io.github.io/nio/docs/install.html).
 
@@ -93,7 +93,9 @@ curl -fsSL https://core0-io.github.io/nio/install.sh | bash -s -- --config /path
 
 ## Architecture
 
-High-level layout: **[Architecture at a glance](#architecture-at-a-glance)** (top of this README). Nio integrates as a **Claude Code / OpenClaw / Hermes** plugin with two subsystems behind the hook events.
+High-level layout: **[Architecture at a glance](#architecture-at-a-glance)** (top of this README). Nio integrates as a **Claude Code / Codex / OpenClaw / Hermes / Pi / opencode** plugin with two subsystems behind the hook events.
+
+Two integration models sit under that: Claude Code and Codex spawn a short-lived hook subprocess per event, while OpenClaw, Pi, and opencode load Nio **in-process** on the shared `InProcessPluginRuntime`. Both models converge on the same guard pipeline, the same span/metric/audit schema, and the same `/nio` surface — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#in-process-plugin-runtime-openclaw--pi--opencode).
 
 ### Collector
 
@@ -127,7 +129,7 @@ Phase 6 connects Nio's pre-execution gate to an external risk-scoring service of
 
 ## Compatibility
 
-Nio provides full hook-based execution assurance for Claude Code, Codex CLI, OpenClaw, and Hermes today; skill-only scan/action flows work on several other CLIs. Full hook support for additional agent frameworks is in progress.
+Nio provides full hook-based execution assurance for Claude Code, Codex CLI, OpenClaw, Hermes, Pi, and opencode today; skill-only scan/action flows work on several other CLIs. Full hook support for additional agent frameworks is in progress.
 
 | Platform | Support | Features |
 |----------|---------|----------|
@@ -135,9 +137,16 @@ Nio provides full hook-based execution assurance for Claude Code, Codex CLI, Ope
 | **Codex CLI** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install.html#tab=codex) |
 | **OpenClaw** | Full | Plugin hooks + OTEL collector — see [install guide](docs/install.html#tab=openclaw) |
 | **Hermes Agent** | Full | Shell-hook integration + `/nio` command-dispatch — see [install guide](docs/install.html#tab=hermes) |
+| **Pi** | Full | In-process extension + OTEL collector; `/nio` slash command bypasses the LLM; the only host where a `confirm` verdict opens a real interactive dialog |
+| **opencode** | Full | In-process plugin + OTEL collector; `/nio` routes through the plugin-registered `nio_command` tool |
 | **Gemini CLI** | Skill | Scan/action commands |
 | **Cursor** | Skill | Scan/action commands |
 | **GitHub Copilot** | Skill | Scan/action commands |
+
+Per-platform notes:
+
+- **Pi** — `bash plugins/pi/setup.sh` (add `--pi-home <path>` to target a non-default agent dir; the script exports `PI_CODING_AGENT_DIR` so the `pi` CLI honours it). The release zip is itself a valid pi package, so the installer prefers `pi install` and falls back to copying the bundle into `~/.pi/agent/extensions/nio/` when the CLI isn't on PATH. Pi core ships no MCP, but the third-party `pi-mcp-adapter` package adds it and Nio gates those calls — run `/nio doctor` for the naming shapes and the one caveat (`toolPrefix: "none"` emits bare names Nio cannot identify as MCP).
+- **opencode** — `bash plugins/opencode/setup.sh` (add `--opencode-home <path>`; defaults to `$XDG_CONFIG_HOME/opencode`, then `~/.config/opencode`). Install copies `plugins/nio.js`, `commands/nio.md`, and the skills. Because opencode's `plugins/` directory is shared with other plugins, the installer writes the `{"type": "module"}` ESM sentinel there **only** when no sibling plugin and no `package.json` already exist — and records a `.nio-esm-sentinel` marker so `--uninstall` removes only a sentinel Nio itself wrote. If siblings are present the install prints a warning and leaves the directory's module format untouched; declare ESM yourself if opencode then fails to load `nio.js`.
 
 ## Documentation
 
@@ -153,6 +162,17 @@ cd nio && pnpm install && pnpm run build
 pnpm test                                # run the test suite
 ./setup.sh                               # install the local build into your agent CLIs
 ./setup.sh --config /path/to/nio.yaml    # …and apply an operator config (doctor-gated)
+```
+
+Or install one platform at a time:
+
+```bash
+bash plugins/claude-code/setup.sh
+bash plugins/codex/setup.sh
+bash plugins/openclaw/setup.sh
+bash plugins/hermes/setup.sh
+bash plugins/pi/setup.sh
+bash plugins/opencode/setup.sh
 ```
 
 The release zips ship with everything pre-built, so end users don't need Node/pnpm installed — only contributors hacking on Nio do.
