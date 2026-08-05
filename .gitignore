@@ -56,3 +56,6 @@ releases/
 
 # Subagent-driven-development scratch workspace
 .superpowers/
+
+# Superpowers plans and design specs — working documents, not shipped docs
+docs/superpowers/
