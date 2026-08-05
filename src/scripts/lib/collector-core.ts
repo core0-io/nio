@@ -165,6 +165,31 @@ export function spanKey(input: HookStdinPayload): string {
   return `${name}:${summary}`;
 }
 
+/**
+ * Pick a pending-span key that is free right now.
+ *
+ * `spanKey`'s composite fallback (`name:summary`) collides when two
+ * identical calls are in flight at once — the second PRE overwrites the
+ * first's pending entry, and the first POST then closes the second's
+ * span. Suffixing keeps concurrent calls apart.
+ *
+ * A real `tool_use_id` is unique by construction, so it is returned
+ * untouched: a collision there would mean the host reused an id, and
+ * silently renaming it would hide that bug rather than surface it.
+ */
+export function allocateSpanKey(
+  state: CollectorState,
+  input: HookStdinPayload,
+): string {
+  const base = spanKey(input);
+  if (input.tool_use_id) return base;
+  if (!state.pending_spans[base]) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base}#${n}`;
+    if (!state.pending_spans[candidate]) return candidate;
+  }
+}
+
 /** Resolve the actual key that has a pending entry — primary spanKey
  * first, composite-fallback second. Handles the Hermes asymmetry
  * where pre's tool_use_id is empty (composite key saved) but post
@@ -256,11 +281,11 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
       const summary = toolSummary(toolName, toolInput);
-      const key = spanKey(input);
 
       if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
+        const key = allocateSpanKey(state, input);
         state = recordPreToolUse(
           state, key, toolName, summary,
           genAiToolCallInputAttributes(toolInput, input.tool_use_id),
