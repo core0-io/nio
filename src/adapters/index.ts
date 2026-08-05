@@ -13,6 +13,11 @@ export {
   type OpenClawPluginOptions,
 } from './openclaw-plugin.js';
 export {
+  registerPiExtension,
+  type PiPluginOptions,
+  type PiExtensionApi,
+} from './pi-plugin.js';
+export {
   InProcessPluginRuntime,
   type PluginRuntimeOptions,
   type PreToolResult,

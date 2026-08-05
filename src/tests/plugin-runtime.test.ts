@@ -3,6 +3,9 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { InProcessPluginRuntime, type PreToolResult } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { ensureTurn } from '../scripts/lib/traces-collector.js';
@@ -344,6 +347,269 @@ describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
 
       await rt.onSubagentEnd('s1', 'task-1');
       assert.equal(tracer.finished().length, 1, 'sub-agent span emitted on end');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});
+
+describe('registerPiExtension', () => {
+  /** Minimal stand-in for Pi's ExtensionAPI. */
+  function fakePi() {
+    const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<unknown>>();
+    const commands: string[] = [];
+    return {
+      handlers,
+      commands,
+      on(name: string, fn: (e: unknown, ctx: unknown) => Promise<unknown>) {
+        handlers.set(name, fn);
+      },
+      registerCommand(name: string) { commands.push(name); },
+      registerTool() { /* unused */ },
+    };
+  }
+
+  function fakeCtx(hasUI: boolean, confirmAnswer = true) {
+    return {
+      hasUI,
+      cwd: '/tmp',
+      ui: {
+        async confirm() { return confirmAnswer; },
+        notify() { /* no-op */ },
+      },
+      sessionManager: { getSessionId: () => 'pi-session-1' },
+    };
+  }
+
+  it('subscribes to every event Nio needs', async () => {
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const pi = fakePi();
+    registerPiExtension(pi as never);
+    for (const name of [
+      'tool_call', 'tool_result', 'input', 'session_start', 'session_shutdown',
+      'agent_end', 'message_end', 'user_bash', 'resources_discover',
+    ]) {
+      assert.ok(pi.handlers.has(name), `missing handler: ${name}`);
+    }
+  });
+
+  it('registers the /nio command', async () => {
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const pi = fakePi();
+    registerPiExtension(pi as never);
+    assert.ok(pi.commands.includes('nio'));
+  });
+
+  it('tool_call fails open when the handler throws internally', async () => {
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const pi = fakePi();
+    registerPiExtension(pi as never);
+    const handler = pi.handlers.get('tool_call')!;
+    // A ctx with no sessionManager makes the internal session-id lookup throw.
+    const out = await handler({ toolName: 'bash', input: { command: 'ls' } }, null);
+    assert.equal(out, undefined);
+  });
+
+  it('user_bash never blocks', async () => {
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const pi = fakePi();
+    registerPiExtension(pi as never);
+    const handler = pi.handlers.get('user_bash')!;
+    const out = await handler({ command: 'rm -rf /', cwd: '/tmp' }, fakeCtx(true));
+    assert.equal(out, undefined);
+  });
+});
+
+// The four tests above only prove the handlers exist and don't throw —
+// none of them actually drives a real deny/confirm verdict through, so
+// none can catch the platform-specific bugs the brief calls out by name
+// (reason vs blockReason, a skipped/ignored confirm answer, hasUI=false
+// prompting anyway, a fabricated toolCallId). These tests inject a
+// controlled orchestrator verdict (and, where needed, an in-memory
+// tracer) so those specific regressions actually turn a test red.
+describe('registerPiExtension — block path and confirm dialog', () => {
+  function fakePi() {
+    const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<unknown>>();
+    const commands: string[] = [];
+    return {
+      handlers,
+      commands,
+      on(name: string, fn: (e: unknown, ctx: unknown) => Promise<unknown>) {
+        handlers.set(name, fn);
+      },
+      registerCommand(name: string) { commands.push(name); },
+      registerTool() { /* unused */ },
+    };
+  }
+
+  /** ctx.ui.confirm as a spy: records whether/how it was called. */
+  function fakeCtx(hasUI: boolean, confirmAnswer: boolean) {
+    const confirmCalls: Array<{ title: string; message: string; timeout?: number }> = [];
+    return {
+      confirmCalls,
+      ctx: {
+        hasUI,
+        cwd: '/tmp',
+        ui: {
+          async confirm(title: string, message: string, opts?: { timeout?: number }) {
+            confirmCalls.push({ title, message, timeout: opts?.timeout });
+            return confirmAnswer;
+          },
+          notify() { /* no-op */ },
+        },
+        sessionManager: { getSessionId: () => 'pi-session-1' },
+      },
+    };
+  }
+
+  function stubNioVerdict(verdict: 'allow' | 'deny' | 'confirm') {
+    return () => ({
+      orchestrator: {
+        async evaluate() {
+          return {
+            decision: verdict,
+            risk_level: verdict === 'allow' ? 'low' : 'high',
+            scores: { final: verdict === 'allow' ? 0 : 0.9 },
+            findings: verdict === 'allow' ? [] : [{ rule_id: 'TEST_RULE' }],
+            explanation: 'test verdict',
+            phase_stopped: 2,
+            diagnostics: [],
+          };
+        },
+      },
+    }) as never;
+  }
+
+  /** Isolate NIO_HOME to a fresh tmpdir for the duration of `fn`, then
+   *  restore whatever isolate-nio-home.js had already pinned it to.
+   *  Never touches the real `~/.nio`. */
+  async function withIsolatedNioHome<T>(
+    fn: () => Promise<T>,
+    configYaml?: string,
+  ): Promise<T> {
+    const prev = process.env.NIO_HOME;
+    const nioHome = mkdtempSync(join(tmpdir(), 'nio-pi-plugin-test-'));
+    process.env.NIO_HOME = nioHome;
+    if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+    try {
+      return await fn();
+    } finally {
+      process.env.NIO_HOME = prev;
+    }
+  }
+
+  it('blocks with { block, reason } — NOT { blockReason }', async () => {
+    // Pi reads `reason`. Silently renaming this key (e.g. copy-pasting
+    // OpenClaw's `blockReason`) would disable blocking on this platform
+    // while every existing assertion above kept passing, so pin it.
+    const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+    const pi = fakePi();
+    registerPiExtension(pi as never, { nioFactory: stubNioVerdict('deny') });
+    const { ctx } = fakeCtx(true, true);
+    const out = await pi.handlers.get('tool_call')!(
+      { toolName: 'bash', toolCallId: 'c1', input: { command: 'rm -rf /' } }, ctx,
+    ) as { block?: boolean; reason?: string; blockReason?: string };
+
+    assert.equal(out.block, true);
+    assert.equal(typeof out.reason, 'string');
+    assert.ok(out.reason!.length > 0);
+    assert.equal(out.blockReason, undefined, 'must not switch to the OpenClaw-style `blockReason` key');
+  });
+
+  it('a "no" answer through ctx.ui.confirm blocks the call', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      const { ctx, confirmCalls } = fakeCtx(true, false);
+      const out = await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      ) as { block?: boolean; reason?: string };
+
+      assert.equal(confirmCalls.length, 1, 'ctx.ui.confirm must actually be invoked');
+      assert.equal(out.block, true);
+      assert.equal(typeof out.reason, 'string');
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('a "yes" answer through ctx.ui.confirm allows the call', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      const { ctx, confirmCalls } = fakeCtx(true, true);
+      const out = await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      );
+
+      assert.equal(confirmCalls.length, 1, 'ctx.ui.confirm must actually be invoked');
+      assert.equal(out, undefined, 'a "yes" answer must not block');
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('always passes a timeout to ctx.ui.confirm so it can never hang', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      const { ctx, confirmCalls } = fakeCtx(true, true);
+      await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      );
+      assert.equal(confirmCalls.length, 1);
+      assert.equal(typeof confirmCalls[0]!.timeout, 'number');
+      assert.ok(confirmCalls[0]!.timeout! > 0);
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('ctx.hasUI === false never calls ctx.ui.confirm and folds instead of hanging', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      // hasUI: false — print/json mode. If the answer were true here it
+      // would prove the implementation prompted anyway.
+      const { ctx, confirmCalls } = fakeCtx(false, true);
+      const out = await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      );
+
+      assert.equal(confirmCalls.length, 0, 'no UI channel — must not attempt to prompt');
+      // Falls back to the same two-state semantics every other platform
+      // uses (folds "ask" to allow), so the agent is never left hanging.
+      assert.equal(out, undefined);
+    }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('forwards the real toolCallId onto the span, never the fallback spanKey', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, {
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      const { ctx } = fakeCtx(true, true);
+
+      // No toolCallId on the event → must NOT fabricate one from the tool
+      // name (spanKey falls back to toolName internally).
+      await pi.handlers.get('tool_call')!({ toolName: 'bash', input: { command: 'ls' } }, ctx);
+      await pi.handlers.get('tool_result')!({ toolName: 'bash', content: 'ok' }, ctx);
+
+      // Real toolCallId on the event → carried through verbatim.
+      await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'call-77', input: { command: 'ls' } }, ctx,
+      );
+      await pi.handlers.get('tool_result')!(
+        { toolName: 'bash', toolCallId: 'call-77', content: 'ok' }, ctx,
+      );
+
+      const spans = tracer.finished();
+      assert.equal(spans.length, 2);
+      assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], undefined);
+      assert.equal(spans[1]!.attributes['gen_ai.tool.call.id'], 'call-77');
     } finally {
       await tracer.shutdown();
     }
