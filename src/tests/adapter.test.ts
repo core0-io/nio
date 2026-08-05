@@ -893,6 +893,66 @@ describe('OpenCodeAdapter', () => {
       assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
     });
 
+    it('reads the edit tool body from newString', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-edit.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'goodbye');
+    });
+
+    it('extracts the apply_patch target from the patch marker line', () => {
+      // apply_patch has no filePath field at all — the target is a
+      // `*** Update File:` marker inside patchText. Without extraction
+      // both path and content_preview would be empty.
+      const env = adapter.buildEnvelope(
+        adapter.parseInput(ocFixture('tool-execute-before-apply-patch.json')),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, 'src/server.ts');
+      assert.match(
+        (env.action.data as { content_preview: string }).content_preview,
+        /port = 8080/,
+      );
+    });
+
+    it('builds a read_file envelope from filePath', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'read', args: { filePath: '/etc/passwd' } }),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'read_file');
+      assert.equal((env.action.data as { path: string }).path, '/etc/passwd');
+    });
+
+    it('builds network_request envelopes for webfetch (url) and websearch (query)', () => {
+      const fetched = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'webfetch', args: { url: 'https://example.test/x' } }),
+      );
+      assert.ok(fetched);
+      assert.equal(fetched.action.type, 'network_request');
+      assert.equal((fetched.action.data as { url: string }).url, 'https://example.test/x');
+
+      const searched = adapter.buildEnvelope(
+        adapter.parseInput({ tool: 'websearch', args: { query: 'how to exfiltrate' } }),
+      );
+      assert.ok(searched);
+      assert.equal((searched.action.data as { url: string }).url, 'how to exfiltrate');
+    });
+
+    it('returns null for an unmapped tool', () => {
+      assert.equal(adapter.buildEnvelope(adapter.parseInput({ tool: 'glob', args: {} })), null);
+    });
+
+    it('honours a config-provided native_tool_mapping', () => {
+      const custom = new OpenCodeAdapter({ nativeToolMapping: { question: 'network_request' } });
+      assert.equal(custom.mapToolToActionType('question'), 'network_request');
+      assert.equal(custom.mapToolToActionType('bash'), null);
+    });
+
     it('carries the opencode session id into the envelope context', () => {
       const env = adapter.buildEnvelope(
         adapter.parseInput(ocFixture('tool-execute-before-bash.json')),
