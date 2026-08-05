@@ -81,6 +81,24 @@ describe('codex source', () => {
     );
   });
 
+  it('maps all of last_token_usage, not just reasoning_output_tokens', () => {
+    // codex-rs's TokenUsage struct (verified against a live Codex CLI
+    // session) carries input_tokens/output_tokens/cached_input_tokens/
+    // cache_write_input_tokens/reasoning_output_tokens/total_tokens.
+    // Only reasoning used to be mapped, leaving input/output/cache
+    // token attributes empty on every Codex chat span.
+    const calls = createCodexSource(FIXTURE).callsSince(0);
+    const withUsage = calls.find((c) => c.usage?.reasoning === 40);
+    assert.ok(withUsage, 'fixture must contain the call closed by token_count');
+    assert.deepEqual(withUsage!.usage, {
+      input: 500,
+      output: 80,
+      cacheRead: 100,
+      cacheWrite: 15,
+      reasoning: 40,
+    });
+  });
+
   it('marks timing as exact (task_complete carries real start/end)', () => {
     const calls = createCodexSource(FIXTURE).callsSince(0);
     assert.ok(calls.length > 0);

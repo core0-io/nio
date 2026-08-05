@@ -80,10 +80,18 @@ type RawResponseItemPayload =
   | { type?: string };
 
 interface RawTokenCountInfo {
-  // Field name mirrors codex-rs's TokenUsage struct (input_tokens,
-  // cached_input_tokens, output_tokens, reasoning_output_tokens,
-  // total_tokens); only the reasoning figure is consumed here.
-  last_token_usage?: { reasoning_output_tokens?: number };
+  // Mirrors codex-rs's TokenUsage struct. Verified against a live Codex
+  // CLI session: last_token_usage carries
+  // ['cache_write_input_tokens', 'cached_input_tokens', 'input_tokens',
+  // 'output_tokens', 'reasoning_output_tokens', 'total_tokens'].
+  // total_tokens has no home in ChatCall.usage and is dropped.
+  last_token_usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cached_input_tokens?: number;
+    cache_write_input_tokens?: number;
+    reasoning_output_tokens?: number;
+  };
 }
 
 interface RawTokenCountPayload {
@@ -269,11 +277,17 @@ export function createCodexSource(rolloutPath: string): ConversationSource {
           switch (payload.type) {
             case 'token_count': {
               const tc = payload as RawTokenCountPayload;
-              const reasoning = tc.info?.last_token_usage?.reasoning_output_tokens;
+              const usage = tc.info?.last_token_usage;
               const c = current();
               if (c) {
-                if (typeof reasoning === 'number') {
-                  c.usage = { ...c.usage, reasoning };
+                if (usage) {
+                  const mapped: NonNullable<ChatCall['usage']> = { ...c.usage };
+                  if (typeof usage.input_tokens === 'number') mapped.input = usage.input_tokens;
+                  if (typeof usage.output_tokens === 'number') mapped.output = usage.output_tokens;
+                  if (typeof usage.cached_input_tokens === 'number') mapped.cacheRead = usage.cached_input_tokens;
+                  if (typeof usage.cache_write_input_tokens === 'number') mapped.cacheWrite = usage.cache_write_input_tokens;
+                  if (typeof usage.reasoning_output_tokens === 'number') mapped.reasoning = usage.reasoning_output_tokens;
+                  c.usage = mapped;
                 }
                 c.endMs = ms;
               }
