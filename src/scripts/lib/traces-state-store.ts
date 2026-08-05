@@ -23,7 +23,10 @@ export {};
  * automatically.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync,
+} from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
@@ -127,12 +130,30 @@ export function loadState(logsConfig?: CollectorLogsConfig): CollectorState | nu
   }
 }
 
-/** Persist state. Creates the parent directory if missing. */
+/** Persist state atomically. Creates the parent directory if missing. */
 export function saveState(logsConfig: CollectorLogsConfig | undefined, state: CollectorState): void {
   const path = statePath(logsConfig);
   const dir = dirname(path);
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(path, JSON.stringify(state, null, 2), 'utf-8');
+  // Write-then-rename: a single PreToolUse fires both guard-hook and
+  // collector-hook as separate processes, and both write this file —
+  // exactly the concurrent-writer shape that made monitor-store.ts's
+  // truncating write unsafe there (see saveMonitorStore). A truncating
+  // write here lets a reader observe half a JSON document mid-write;
+  // JSON.parse throws, loadState's catch returns null, and the caller
+  // (ensureTurn) treats that as "no turn in progress" and starts a new
+  // one — silently discarding this turn's already-finished deferred
+  // tool spans, not just the pending one. Rename is atomic within a
+  // filesystem, so a reader always sees either the old state or the new
+  // one, never a torn write.
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf-8');
+    renameSync(tmp, path);
+  } catch (err) {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
 }

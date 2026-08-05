@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import {
@@ -120,6 +120,35 @@ describe('saveState ↔ loadState', () => {
 
     saveState(cfg, sample({ turn_number: 2 }));
     assert.equal(loadState(cfg)!.turn_number, 2);
+  });
+});
+
+// ── saveState atomicity ─────────────────────────────────────────────────
+
+describe('saveState atomicity', () => {
+  it('leaves no temp file behind on success', () => {
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+    saveState(cfg, sample());
+    const stray = readdirSync(dir).filter(f => f !== 'traces-state-store.json' && f !== 'audit.jsonl');
+    assert.deepEqual(stray, [], `unexpected leftovers: ${stray.join(',')}`);
+  });
+
+  it('leaves no .tmp- residue when the rename step fails', () => {
+    // Mirrors monitor-store-durability.test.ts's approach: pre-create the
+    // state file's target path as a directory. The tmp write still
+    // succeeds (the parent dir is writable), but renameSync(tmp, path)
+    // then fails with EISDIR/ENOTEMPTY — after the tmp file already
+    // exists on disk — which is exactly the failure shape unlinkSync
+    // exists to clean up after.
+    const dir = freshDir();
+    const cfg: CollectorLogsConfig = { path: join(dir, 'audit.jsonl') };
+    mkdirSync(statePath(cfg));
+
+    assert.throws(() => saveState(cfg, sample()));
+
+    const stray = readdirSync(dir).filter(f => f.includes('.tmp-'));
+    assert.deepEqual(stray, [], `unexpected temp residue after failed rename: ${stray.join(',')}`);
   });
 });
 
