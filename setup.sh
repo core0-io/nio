@@ -3,12 +3,13 @@ set -euo pipefail
 
 # Nio — All-in-one setup
 # Detects platform and runs the appropriate plugin setup script(s).
-# Supports: Claude Code, Codex, OpenClaw, Hermes
+# Supports: Claude Code, Codex, OpenClaw, Hermes, Pi, opencode
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # ---- Partition args between sub-scripts ----
-# --cc-home → claude-code; --openclaw-home → openclaw; --hermes-home → hermes.
+# --cc-home → claude-code; --openclaw-home → openclaw; --hermes-home → hermes;
+# --pi-home → pi; --opencode-home → opencode.
 # Everything else (--uninstall, --reset-to-defaults, --dry-run, --yes, etc.) goes
 # to whichever sub-scripts accept it (each ignores unknown flags where safe).
 UNINSTALL=0
@@ -16,11 +17,15 @@ CC_HOME_ARG=""
 CODEX_HOME_ARG=""
 OPENCLAW_HOME_ARG=""
 HERMES_HOME_ARG=""
+PI_HOME_ARG=""
+OCODE_HOME_ARG=""
 CONFIG_FILE_ARG=""
 CC_ARGS=()
 CODEX_ARGS=()
 OC_ARGS=()
 HERMES_ARGS=()
+PI_ARGS=()
+OCODE_ARGS=()
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +35,8 @@ while [ $# -gt 0 ]; do
       CODEX_ARGS+=("--uninstall")
       OC_ARGS+=("--uninstall")
       HERMES_ARGS+=("--uninstall")
+      PI_ARGS+=("--uninstall")
+      OCODE_ARGS+=("--uninstall")
       shift ;;
     --cc-home)
       CC_HOME_ARG="${2:-}"
@@ -61,6 +68,22 @@ while [ $# -gt 0 ]; do
     --hermes-home=*)
       HERMES_HOME_ARG="${1#*=}"
       shift ;;
+    --pi-home)
+      PI_HOME_ARG="${2:-}"
+      PI_ARGS+=("--pi-home" "${2:-}")
+      shift 2 ;;
+    --pi-home=*)
+      PI_HOME_ARG="${1#*=}"
+      PI_ARGS+=("$1")
+      shift ;;
+    --opencode-home)
+      OCODE_HOME_ARG="${2:-}"
+      OCODE_ARGS+=("--opencode-home" "${2:-}")
+      shift 2 ;;
+    --opencode-home=*)
+      OCODE_HOME_ARG="${1#*=}"
+      OCODE_ARGS+=("$1")
+      shift ;;
     --config)
       CONFIG_FILE_ARG="${2:-}"
       shift 2 ;;
@@ -71,7 +94,7 @@ while [ $# -gt 0 ]; do
       HERMES_ARGS+=("--accept-hooks")
       shift ;;
     -h|--help)
-      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--accept-hermes-hook] [--config <path>] [--reset-to-defaults] [--uninstall]"
+      echo "Usage: $(basename "$0") [--cc-home <path>] [--codex-home <path>] [--openclaw-home <path>] [--hermes-home <path>] [--pi-home <path>] [--opencode-home <path>] [--accept-hermes-hook] [--config <path>] [--reset-to-defaults] [--uninstall]"
       echo ""
       echo "  --cc-home <path>        Path to .claude directory."
       echo "                          Defaults to \$CLAUDE_CONFIG_DIR, then \$HOME/.claude."
@@ -82,6 +105,11 @@ while [ $# -gt 0 ]; do
       echo "  --hermes-home <path>    Path to .hermes directory (holds config.yaml)."
       echo "                          Defaults to \$HOME/.hermes; HERMES_CONFIG_PATH"
       echo "                          overrides the exact config file location."
+      echo "  --pi-home <path>        Path to the pi agent dir."
+      echo "                          Defaults to \$PI_CODING_AGENT_DIR, then \$HOME/.pi/agent."
+      echo "  --opencode-home <path>  Path to the opencode config dir."
+      echo "                          Defaults to \$XDG_CONFIG_HOME/opencode,"
+      echo "                          then \$HOME/.config/opencode."
       echo "  --accept-hermes-hook    Pre-approve the Nio hook in Hermes's allowlist"
       echo "                          non-interactively. Only approves this exact"
       echo "                          command; other future shell hooks still need"
@@ -102,6 +130,8 @@ while [ $# -gt 0 ]; do
       CODEX_ARGS+=("$1")
       OC_ARGS+=("$1")
       HERMES_ARGS+=("$1")
+      PI_ARGS+=("$1")
+      OCODE_ARGS+=("$1")
       shift ;;
   esac
 done
@@ -119,6 +149,8 @@ if [ -n "$NIO_CONFIG" ]; then
   CODEX_ARGS+=("--config" "$NIO_CONFIG")
   OC_ARGS+=("--config" "$NIO_CONFIG")
   HERMES_ARGS+=("--config" "$NIO_CONFIG")
+  PI_ARGS+=("--config" "$NIO_CONFIG")
+  OCODE_ARGS+=("--config" "$NIO_CONFIG")
 fi
 
 # Resolve detection paths: --flag > env var > $HOME default
@@ -157,6 +189,24 @@ else
   HERMES_HOME="$HOME/.hermes"
 fi
 
+# Pi honours PI_CODING_AGENT_DIR as its own config-dir override.
+if [ -n "$PI_HOME_ARG" ]; then
+  PI_HOME="$PI_HOME_ARG"
+elif [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+  PI_HOME="$PI_CODING_AGENT_DIR"
+else
+  PI_HOME="$HOME/.pi/agent"
+fi
+
+# opencode follows the XDG convention for its config dir.
+if [ -n "$OCODE_HOME_ARG" ]; then
+  OCODE_HOME="$OCODE_HOME_ARG"
+elif [ -n "${XDG_CONFIG_HOME:-}" ]; then
+  OCODE_HOME="$XDG_CONFIG_HOME/opencode"
+else
+  OCODE_HOME="$HOME/.config/opencode"
+fi
+
 echo ""
 echo "  Nio — Execution Assurance for AI Agents"
 echo "  ============================================="
@@ -172,6 +222,8 @@ if [ "$UNINSTALL" -eq 1 ]; then
     HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
       bash "$SCRIPT_DIR/plugins/hermes/setup.sh" "${HERMES_ARGS[@]+"${HERMES_ARGS[@]}"}"
   fi
+  [ -f "$SCRIPT_DIR/plugins/pi/setup.sh" ] && [ -d "$PI_HOME" ] && bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
+  [ -f "$SCRIPT_DIR/plugins/opencode/setup.sh" ] && [ -d "$OCODE_HOME" ] && bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"
   echo ""
   echo "  Nio has been uninstalled from all platforms."
   echo ""
@@ -213,6 +265,22 @@ if [ -d "$HERMES_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
   INSTALLED=1
 fi
 
+# ---- Pi ----
+if [ -d "$PI_HOME" ] || command -v pi >/dev/null 2>&1 || [ "${INSTALL_ALL:-}" = "1" ]; then
+  echo "  Detected: Pi ($PI_HOME)"
+  echo ""
+  bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
+  INSTALLED=1
+fi
+
+# ---- opencode ----
+if [ -d "$OCODE_HOME" ] || command -v opencode >/dev/null 2>&1 || [ "${INSTALL_ALL:-}" = "1" ]; then
+  echo "  Detected: opencode ($OCODE_HOME)"
+  echo ""
+  bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"
+  INSTALLED=1
+fi
+
 # ---- No platform detected ----
 if [ "$INSTALLED" -eq 0 ]; then
   echo "  No supported platform detected."
@@ -222,18 +290,24 @@ if [ "$INSTALLED" -eq 0 ]; then
   echo "    - Codex        $CODEX_HOME_DIR"
   echo "    - OpenClaw     $OPENCLAW_HOME"
   echo "    - Hermes       $HERMES_HOME"
+  echo "    - Pi           $PI_HOME (or a 'pi' binary on PATH)"
+  echo "    - opencode     $OCODE_HOME (or an 'opencode' binary on PATH)"
   echo ""
-  echo "  If your install lives elsewhere, pass --cc-home / --codex-home / --openclaw-home / --hermes-home:"
+  echo "  If your install lives elsewhere, pass --cc-home / --codex-home / --openclaw-home / --hermes-home / --pi-home / --opencode-home:"
   echo "    ./setup.sh --cc-home /path/to/.claude"
   echo "    ./setup.sh --codex-home /path/to/.codex"
   echo "    ./setup.sh --openclaw-home /path/to/.openclaw"
   echo "    ./setup.sh --hermes-home /path/to/.hermes"
+  echo "    ./setup.sh --pi-home /path/to/.pi/agent"
+  echo "    ./setup.sh --opencode-home /path/to/.config/opencode"
   echo ""
   echo "  Or install for a specific platform directly:"
   echo "    plugins/claude-code/setup.sh"
   echo "    plugins/codex/setup.sh"
   echo "    plugins/openclaw/setup.sh"
   echo "    plugins/hermes/setup.sh"
+  echo "    plugins/pi/setup.sh"
+  echo "    plugins/opencode/setup.sh"
   echo ""
   echo "  To force install for all platforms:"
   echo "    INSTALL_ALL=1 ./setup.sh"

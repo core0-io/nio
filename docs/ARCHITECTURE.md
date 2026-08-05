@@ -218,7 +218,8 @@ Detection is a strict regex on the command shape
 any shell metacharacter in the command disqualifies the match.
 
 `permitted_tools` and `blocked_tools` are keyed by platform (`claude_code`,
-`codex`, `openclaw`, `hermes`) with one reserved cross-platform key `mcp`.
+`codex`, `openclaw`, `hermes`, `pi`, `opencode`) with one reserved
+cross-platform key `mcp`.
 Incoming MCP tool names are parsed into `{server?, local}`:
 
 - Claude Code / Codex: `mcp__<server>__<tool>` (double underscore).
@@ -229,6 +230,31 @@ Incoming MCP tool names are parsed into `{server?, local}`:
   tool split, so the full tool name is kept as the local name and `server` is
   unset — list it verbatim in `permitted_tools.mcp` (e.g.
   `mcp_config_db_get_current_config`), no prefix stripping.
+- opencode: `<sanitize(server)>_<sanitize(tool)>` where
+  `sanitize = s.replace(/[^a-zA-Z0-9_-]/g, "_")` — there is no fixed
+  delimiter, so the parser works in two tiers: longest matching server
+  prefix from the registry, else keep the **full** tool name as `local`
+  with `server` unset (same convention as Hermes's flattened form). With
+  no MCP servers configured nothing is treated as MCP. opencode's sixteen
+  built-in tool names short-circuit the fallback tier so `apply_patch` —
+  the one underscored built-in — is never mis-gated as an MCP call.
+- Pi: **Pi core has no MCP.** The third-party `pi-mcp-adapter` package
+  supplies it and is the de-facto default for Pi users, in two shapes.
+  (1) Default: a single proxy tool literally named `mcp`, carrying its
+  target in the `tool` parameter and optionally the server in `server` —
+  this is the one branch that reads `tool_input` rather than the tool
+  name. Adapter modes that carry no target (`connect` / `describe` /
+  `search` / `action`) are still MCP surface and are gated under the bare
+  name `mcp`. (2) Opt-in `directTools: true`: one Pi tool per MCP tool,
+  named `<server>_<tool>` (`toolPrefix: "server"` / `"short"`) or
+  `mcp__<server>_<tool>` (`toolPrefix: "mcp"`), matched against servers
+  read from `$PI_CODING_AGENT_DIR/mcp.json` (else `~/.pi/agent/mcp.json`).
+  Unlike opencode, an unattributable `<something>_<something>` is **not**
+  claimed as anonymous MCP — on Pi that form coexists with arbitrary
+  native tools from other extensions, so only the unambiguous `mcp__`
+  marker is trusted. `toolPrefix: "none"` emits bare tool names that are
+  byte-identical to native calls; those are **not detectable** and Nio
+  does not guess — `/nio doctor` says so explicitly.
 
 Allowlist entries match either bare (`HassTurnOn` — any server, plus Hermes's
 single-underscore form when listed verbatim) or server-qualified
@@ -399,7 +425,20 @@ Default weights:
 The `guard.confirm_action` config controls what happens when the decision is "confirm":
 - `allow` (default) — let the action through, record in audit log
 - `deny` — block the action (same as deny)
-- `ask` — use platform-native confirm if available (Claude Code), else fall back to allow (OpenClaw)
+- `ask` — use platform-native confirm if available, else fall back to allow
+
+Only two hosts can actually ask. **Pi** is the one with a first-class
+interactive channel: the `tool_call` handler opens a real
+`ctx.ui.confirm` dialog with a 60 s timeout, and because Pi's `confirm()`
+returns `false` on timeout an absent human reads as a refusal instead of
+hanging the agent. In print mode (`pi -p`, `ctx.hasUI === false`) there is
+no channel, so it folds back to the two-state behaviour without
+prompting. **opencode** has no dialog of its own to open from a plugin,
+but it does have a native permission system: an `ask` verdict is parked
+by `callID` in `tool.execute.before` and re-applied in `permission.ask`,
+forcing a real prompt (or an outright `deny` when
+`guard.confirm_action: deny`) instead of silently trusting opencode's own
+heuristics. Everywhere else `ask` folds to allow.
 
 ---
 
@@ -641,18 +680,57 @@ For the full per-signal schema (every metric instrument, every span attribute, e
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
-│ OpenClaw (in-process daemon plugin)                                 │
+│ OpenClaw · Pi · opencode (in-process plugins)                       │
 │                                                                     │
-│   openclaw-plugin.ts                                                │
+│   InProcessPluginRuntime  (src/adapters/plugin-runtime.ts)          │
 │     ├─ MeterProvider → all metrics (tool use + turn + decision)     │
-│     └─ TracerProvider → all traces via traces-collector pure        │
-│        functions (same as Claude Code / Hermes), with per-session   │
-│        Map<sessionId, CollectorState> held in memory.               │
-│         └─ No state file needed — same process across events        │
+│     ├─ TracerProvider → all traces via traces-collector pure        │
+│     │  functions (same as Claude Code / Hermes), with per-session   │
+│     │  Map<sessionId, CollectorState> held in memory.               │
+│     │   └─ No state file needed — same process across events        │
+│     └─ platform bindings translate host events into its methods:    │
+│          openclaw-plugin.ts · pi-plugin.ts · opencode-plugin.ts     │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-All three platforms feed the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for Claude Code / Hermes, memory for OpenClaw).
+Every platform feeds the same `traces-collector` pure-function API and the same `writeAuditLog` audit-log writer. Span names and attribute keys are unified; the only difference is the persistence substrate for cross-event state (disk for Claude Code / Codex / Hermes, memory for OpenClaw / Pi / opencode).
+
+### In-process plugin runtime (OpenClaw · Pi · opencode)
+
+Nio has **two** integration models.
+
+- **Subprocess hook model — Claude Code, Codex, Hermes.** The host spawns a fresh `node` process per hook event (`guard-hook.ts` / `collector-hook.ts` / `hook-cli.ts`). Nothing survives between events in memory, so a `PreToolUse` in process A and its matching `PostToolUse` in process B bridge state through the on-disk `traces-state-store.json`. Blocking is done by writing a decision to stdout in the host's hook protocol.
+- **In-process plugin model — OpenClaw, Pi, opencode.** Nio is loaded as a JS module inside the agent process and stays resident, so per-session state lives in an in-memory `Map<sessionId, CollectorState>`. Blocking is done by returning or throwing from a hook the host awaits.
+
+The platform-agnostic half of the in-process model lives in one class, [`InProcessPluginRuntime`](../src/adapters/plugin-runtime.ts). It owns:
+
+- config loading and the protection-level / `confirm_action` resolution;
+- construction of all three OTEL providers (tracer / meter / logger) from `collector.*`, with injectable overrides so tests can drive the traced paths with an in-memory tracer;
+- per-session `CollectorState` and turn lifecycle (`onSessionStart` / `onUserPrompt` / `onPreTool` / `onPostTool` / `onLlmUsage` / `onAssistantReply` / `onTurnEnd` / `onSessionEnd` / `disposeAllSessions`);
+- the guard call itself (`evaluateHook`) and the guard-decision → span-attribute translation (`nio.guard.*` + `nio.guard.eval_ms`);
+- **orphan-span compensation on the block path** — when the guard denies, the host never fires its post-side event, so the runtime closes the `execute_tool` span itself with ERROR status and the recorded reason. It uses a *safe* close: the decision to block is already final, so a telemetry failure while emitting the span must never cost the caller its deny;
+- `resolveConfirm`, for hosts that can actually prompt (Pi), which overwrites the provisional `confirm_allowed` attrs with the real `confirm_allowed` / `confirm_denied` outcome;
+- sub-agent task spans (`onSubagentStart` / `onSubagentEnd`) for hosts that have sub-agents;
+- the shared `/nio` sub-command router (`dispatchCommand` → `dispatchNioCommand`).
+
+The bindings hold **no telemetry logic of their own** — each is a thin translation from its host's event shapes:
+
+| | OpenClaw | Pi | opencode |
+|---|---|---|---|
+| Binding | `openclaw-plugin.ts` | `pi-plugin.ts` | `opencode-plugin.ts` |
+| Block mechanism | hook return value | `{ block: true, reason }` from `tool_call` | `throw NioBlockedError` from `tool.execute.before` |
+| Post-side event | `after_tool_call` | `tool_result` | `tool.execute.after` |
+| Turn end | `agent_end` | `agent_end` | `session.idle` |
+| `/nio` route | `command-dispatch: tool` → `nio_command` | `pi.registerCommand` (bypasses the LLM) | `commands/nio.md` → `nio_command` tool (goes through the model) |
+| Interactive confirm | no | **yes** — `ctx.ui.confirm` | via `permission.ask` re-forcing a prompt |
+| Sub-agent spans | yes (`subagent_spawning`) | **no — Pi has no subagent concept** | yes (`session.created` with `parentID`) |
+
+Two host quirks are worth calling out because they shape the runtime's contract:
+
+- **opencode skips `tool.execute.after` when the tool itself throws.** The pending span would leak, so the `session.idle` branch doubles as a safety net: `onTurnEnd` force-closes any leftover pending spans before emitting the turn root. Those spans are therefore *reclaimed* rather than closed precisely, and they carry no `gen_ai.tool.call.result`.
+- **opencode invokes plugin hooks through `Effect.promise(...)`**, which turns any rejection into an Effect *defect* rather than a typed error. Every handler in `opencode-plugin.ts` therefore needs total catch coverage; `NioBlockedError` is the single intentional escape.
+
+Despite its name, [`openclaw-dispatch.ts`](../src/adapters/openclaw-dispatch.ts) is the **shared** implementation of the `/nio` sub-command router and of `/nio doctor` for every in-process platform — the Pi and opencode install probes live there, not in an OpenClaw-only file.
 
 ### Metrics
 
@@ -675,7 +753,7 @@ record, and metric data point that provider emits:
 
 | Attribute | Value |
 | --- | --- |
-| `service.name` | `nio-<platform>` — one independent service per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw` |
+| `service.name` | `nio-<platform>` — one independent service per agent runtime: `nio-claude-code`, `nio-codex`, `nio-hermes`, `nio-openclaw`, `nio-pi`, `nio-opencode` |
 | `nio.platform` | Raw platform string, same value as the suffix of `service.name` (offered separately so backends that don't expose `service.name` as a queryable attribute still have a filter handle) |
 | `gen_ai.agent.name` | Operator-set [`agent_name`](configuration.html#agent_name) from `~/.nio/config.yaml`; **absent on the resource when unconfigured** (turn span carries a platform-default fallback as a span attribute instead) |
 
@@ -711,7 +789,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `gen_ai.usage.cache_creation.input_tokens` | Tokens written to prompt cache |
 | `gen_ai.usage.cache_read.input_tokens` | Tokens read from prompt cache |
 | `nio.turn_number` | Auto-incrementing per session |
-| `nio.platform` | `claude-code`, `codex`, `openclaw`, or `hermes` |
+| `nio.platform` | `claude-code`, `codex`, `openclaw`, `hermes`, `pi`, or `opencode` |
 | `nio.cwd` | Working directory when the turn started |
 | `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
@@ -720,6 +798,8 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
 - **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
 - **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
+- **Pi**: `message_end` carries `message.usage` (`input` / `output` / `cacheRead` / `cacheWrite`) once per assistant message; accumulated the same way as OpenClaw.
+- **opencode**: `message.updated` carries cumulative `info.tokens`, but it is a **snapshot** republished on every change to the same message rather than a one-shot event. The binding keys the last-seen totals by message id and feeds only the delta into `onLlmUsage`, so a re-publish cannot compound the turn's totals. Messages without an id are skipped rather than risk inflating them.
 
 **Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
 
@@ -727,7 +807,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 
 ### Trace state and span lifecycle
 
-All three platforms route trace span construction through the same pure
+All platforms route trace span construction through the same pure
 functions in [src/scripts/lib/traces-collector.ts](../src/scripts/lib/traces-collector.ts)
 (`ensureTurn` / `recordPreToolUse` / `recordPostToolUse` /
 `recordPreTaskToolUse` / `recordPostTaskToolUse` / `setTurnAttributes` /
@@ -745,13 +825,16 @@ across platforms; what differs is only **where the per-session
   3. `Stop` / `SubagentStop` → `endTurn` emits the turn root span
      (whose span ID was pre-derived as `traceId.slice(0, 16)` so child
      spans could parent to it before it existed)
-- **OpenClaw (in-process daemon)** — state lives in a per-session
-  in-memory `Map<sessionId, CollectorState>` inside
-  [openclaw-plugin.ts](../src/adapters/openclaw-plugin.ts). No on-disk
+- **OpenClaw / Pi / opencode (in-process)** — state lives in a per-session
+  in-memory `Map<sessionId, CollectorState>` owned by
+  [InProcessPluginRuntime](../src/adapters/plugin-runtime.ts). No on-disk
   bridging; otherwise identical lifecycle (the same pure-function calls
-  are used at the same lifecycle points).
+  are used at the same lifecycle points). Turn roots close at `agent_end`
+  (OpenClaw, Pi) or `session.idle` (opencode); opencode additionally
+  relies on that flush to reclaim spans for tools that threw and so never
+  reached `tool.execute.after`.
 
-State file location (Claude Code / Hermes only): derived from
+State file location (Claude Code / Codex / Hermes only): derived from
 `collector.logs.path` (sits in the same directory as `audit.jsonl`);
 falls back to `${NIO_HOME ?? ~/.nio}/`.
 
@@ -759,7 +842,7 @@ falls back to `${NIO_HOME ?? ~/.nio}/`.
 
 The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Hermes; not user-facing observability data.
+Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Codex / Hermes; not user-facing observability data.
 
 ---
 
@@ -836,6 +919,12 @@ src/
 │   ├── codex.ts                      # Codex CLI adapter (5/6 events, Bash-only native)
 │   ├── openclaw.ts                   # OpenClaw adapter
 │   ├── openclaw-plugin.ts            # OpenClaw plugin registration
+│   ├── openclaw-dispatch.ts          # SHARED /nio sub-command router + doctor
+│   ├── plugin-runtime.ts             # InProcessPluginRuntime (OpenClaw + Pi + opencode)
+│   ├── pi.ts                         # Pi adapter
+│   ├── pi-plugin.ts                  # Pi extension registration (blocking tool_call, /nio command)
+│   ├── opencode.ts                   # opencode adapter
+│   ├── opencode-plugin.ts            # opencode plugin factory (NioBlockedError block path)
 │   ├── hermes.ts                     # Hermes adapter (shell-hook JSON protocol)
 │   ├── self-invocation.ts            # Nio self-call short-circuit detector
 │   ├── config-schema.ts              # Zod config schema
@@ -886,10 +975,10 @@ The same `SKILL.md` file behaves very differently depending on the host. Two dis
 
 nio ships **one umbrella skill** (`nio`, invoked as `/nio <subcommand>`) plus **six focused single-purpose skills** — `nio-scan`, `nio-action`, `nio-report`, `nio-config`, `nio-doctor`, `nio-external-score`. The umbrella is the full reference and routes subcommands; the focused skills each carry a sharp `description` so a plain-language request (e.g. "what's my nio score") routes straight to the right capability instead of matching the broad umbrella and re-routing.
 
-Focused skills exist **only on the LLM-driven hosts — Claude Code and Codex** (where invocation = the model reading `SKILL.md` and running a bundled script). Tool-dispatch (OpenClaw) and shell-hook (Hermes) route the single `nio_command` / `nio-cli.js` surface and have **no per-skill registration**, so they keep the unified `/nio` only.
+Focused skills exist **only on the LLM-driven hosts — Claude Code, Codex, Pi, and opencode** (where invocation = the model reading `SKILL.md` and running a bundled script). Tool-dispatch (OpenClaw) and shell-hook (Hermes) route the single `nio_command` / `nio-cli.js` surface and have **no per-skill registration**, so they keep the unified `/nio` only. Note that Pi's and opencode's *unified* `/nio` is a real command route (`pi.registerCommand` and `commands/nio.md` → `nio_command` respectively); the focused `nio-*` skills are the separate, passive natural-language surface on those hosts.
 
 Mechanics:
-- Sources live under `plugins/shared/skills/<name>/` — the umbrella `nio/` and the focused `nio-*/` side by side; `sync-shared.js` copies the umbrella to all skill plugins and the focused skills to Claude Code + Codex only.
+- Sources live under `plugins/shared/skills/<name>/` — the umbrella `nio/` and the focused `nio-*/` side by side; `sync-shared.js` copies the umbrella to all skill plugins and the focused skills to Claude Code, Codex, Pi, and opencode.
 - Focused skills are pure LLM-driven: no `command-dispatch` / `command-tool` frontmatter. Script-running ones (`nio-action`, `nio-config`, `nio-doctor`, `nio-external-score`) **sibling-reference** the umbrella's bundled scripts via `../nio/scripts/<cli>.js` rather than duplicating the multi-MB bundle.
 - Rule docs are owned by their capability: `SCAN-RULES.md` in `nio-scan/`, `ACTION-POLICIES.md` in `nio-action/`; the umbrella borrows a copy of each (its `SKILL.md` links them).
 - `doctor-cli.js` (bundled) lets `/nio-doctor` — and the unified `/nio doctor` — run standalone on Claude Code / Codex.
