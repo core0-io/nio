@@ -149,7 +149,12 @@ Four honest caveats:
   > **session id + `gen_ai.tool.name` + timestamp**: audit rows carry
   > `session_id` (exported as `gen_ai.conversation.id` / `session.id`)
   > and `tool_name`, and the tool span's enclosing turn span carries the
-  > same `gen_ai.conversation.id`. Since the span now carries
+  > same `gen_ai.conversation.id`. **Join on the span's START timestamp,
+  > not its end** — for exactly the reclaimed spans this note is about,
+  > the end timestamp is the turn flush (see the degradation list
+  > above), which can be arbitrarily far from the audit row; the start
+  > timestamp is still the real `onPreTool` moment, the same instant
+  > that wrote the row. Since the span now carries
   > `nio.guard.*` directly, you normally only need this join to reach
   > the full finding list and per-phase scores, which live in the audit
   > row alone.

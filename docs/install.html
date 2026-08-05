@@ -385,6 +385,10 @@
 
         <h2>Manual install or from source</h2>
         <p>The one-liner is just orchestration: it downloads the per-platform release zip, runs its <code>setup.sh</code>, and cleans up. To install a release manually, grab a zip from the <a href="https://github.com/core0-io/nio/releases">Releases page</a>, extract it (<code>unzip</code>, or <code>python3 -m zipfile -e</code> if <code>unzip</code> isn't installed), then <code>cd</code> into the directory and run <code>./setup.sh</code> — or <code>./setup.sh --config /path/to/nio.yaml</code> to apply an operator-provided config in the same step (doctor-gated). To install from a local checkout for development, see the <a href="https://github.com/core0-io/nio#development">Development</a> section in the README.</p>
+        <div class="callout">
+          <div class="title"><code>./setup.sh</code> auto-detects more loosely than <code>install.sh</code></div>
+          <p>The two use deliberately different rules. The curl one-liner (<code>install.sh</code>) needs <em>both</em> the config directory and the CLI on <code>PATH</code>; a dir-only match is skipped with a notice, and you force it with <code>--platform NAME</code>. The top-level <code>./setup.sh</code> in a checkout or unzipped release needs only the <em>config directory</em> — it installs even when the CLI isn't on <code>PATH</code> (it just prints the same notice), and any explicit <code>--&lt;platform&gt;-home</code> flag always wins. The reasoning: <code>install.sh</code> runs unattended against a machine it knows nothing about, so it errs toward doing nothing; <code>./setup.sh</code> is run deliberately, and the stricter rule would refuse to install for people whose CLI lives behind an alias, a wrapper, or a not-yet-sourced <code>~/.profile</code>. Neither script ever creates a config directory speculatively, so an unrelated binary on <code>PATH</code> can't trigger an install on its own.</p>
+        </div>
 
       </div>
 

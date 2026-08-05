@@ -267,10 +267,16 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               // cannot cost the parent its task-span close, and no
               // recordTurnMetric(): a sub-agent's internal turn is not a
               // user-facing turn and must not inflate nio.turn.count.
+              //
+              // flushTurnSpans, not onTurnEnd: the flush is all we want
+              // here. onTurnEnd would also write an `agent_end` audit
+              // row for the child, which reads as a *user* turn end to
+              // anyone querying the log. The sub-agent's own lifecycle
+              // is recorded on the parent by onSubagentEnd below.
               const parentId = subagentParentByChild.get(sessionId);
               if (parentId) {
                 subagentParentByChild.delete(sessionId);
-                try { await rt.onTurnEnd(sessionId); } catch { /* non-critical */ }
+                try { await rt.flushTurnSpans(sessionId); } catch { /* non-critical */ }
                 await rt.onSubagentEnd(parentId, sessionId);
                 return;
               }

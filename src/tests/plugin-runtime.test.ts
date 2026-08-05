@@ -3,7 +3,7 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { InProcessPluginRuntime, type PreToolResult } from '../adapters/plugin-runtime.js';
@@ -1316,6 +1316,69 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     } finally {
       await tracer.shutdown();
     }
+  });
+
+  it('the child-session flush writes NO agent_end audit row (A2 side effect)', async () => {
+    // A2's flush originally went through the public `onTurnEnd` (the
+    // only reachable entry point, since `flushSessionTurn` is
+    // protected), which writes an `agent_end` lifecycle row. Read
+    // straight out of audit.jsonl, `agent_end` for a sub-agent child
+    // session is indistinguishable from a *user* turn ending. The
+    // sub-agent's lifecycle belongs to the parent's
+    // subagent_spawning / subagent_ended pair; the child's flush is
+    // bookkeeping and must stay silent.
+    await withIsolatedNioHome(async () => {
+      const nioHome = process.env.NIO_HOME!;
+      const tracer = makeInMemoryTracer();
+      try {
+        const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          nioFactory: stubNioVerdict('allow'),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+        })(pluginInput as never);
+
+        await hooks.event!({
+          event: { type: 'session.created', properties: { info: { id: 'sub-4', parentID: 'parent-4' } } },
+        } as never);
+        await hooks['tool.execute.before']!(
+          { tool: 'bash', sessionID: 'sub-4', callID: 'c-sub4' } as never,
+          { args: { command: 'ls' } } as never,
+        );
+        await hooks['tool.execute.after']!(
+          { tool: 'bash', sessionID: 'sub-4', callID: 'c-sub4', args: { command: 'ls' } } as never,
+          { title: 'ls', output: 'ok', metadata: {} } as never,
+        );
+        await hooks.event!(
+          { event: { type: 'session.idle', properties: { sessionID: 'sub-4' } } } as never,
+        );
+
+        // The flush still happened — that is the A2 behaviour.
+        assert.ok(
+          tracer.finished().some(s => s.name.startsWith('invoke_agent')),
+          'the child\'s turn root is still emitted',
+        );
+
+        const auditPath = join(nioHome, 'audit.jsonl');
+        const rows = existsSync(auditPath)
+          ? readFileSync(auditPath, 'utf-8')
+              .split('\n')
+              .filter(l => l.trim().length > 0)
+              .map(l => JSON.parse(l) as { lifecycle_type?: string; session_id?: string })
+          : [];
+        assert.equal(
+          rows.filter(r => r.lifecycle_type === 'agent_end').length,
+          0,
+          'a sub-agent child\'s idle must not log agent_end',
+        );
+        assert.ok(
+          rows.some(r => r.lifecycle_type === 'subagent_ended' && r.session_id === 'parent-4'),
+          'the sub-agent lifecycle is still recorded, on the PARENT',
+        );
+      } finally {
+        await tracer.shutdown();
+      }
+    });
   });
 
   it('message.updated snapshots do not compound — the turn span carries the final count, not the sum (I5)', async () => {

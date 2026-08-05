@@ -194,14 +194,31 @@ fi
 
 echo "[1/3] Registering extension..."
 if command -v pi >/dev/null 2>&1; then
-  # Strip any prior CLI-less fallback registration first. A user who
+  # Order matters: register FIRST, clean up the old fallback install
+  # only once that succeeded.
+  #
+  # `pi install` records the package path in settings.json's `packages`
+  # array; it does not copy anything into $EXT_DIR, so tearing $EXT_DIR
+  # down afterwards cannot damage what it just registered. Doing the
+  # teardown first — as this used to — meant a failing `pi install`
+  # tripped `set -e` with the fallback files already deleted AND their
+  # settings.json entries already stripped: no registration, no files,
+  # a machine that had a working Nio a second ago and now has none.
+  # With the teardown last, a failure leaves the previous fallback
+  # install fully intact and still registered.
+  if ! pi install "$SCRIPT_DIR"; then
+    echo "  ERROR: 'pi install' failed. Nothing was changed — any previous" >&2
+    echo "         Nio install is still registered and still in place." >&2
+    exit 1
+  fi
+  # Now strip any prior CLI-less fallback registration. A user who
   # installed before the `pi` CLI was on PATH has the extension path (and
-  # possibly the skills path) appended to settings.json; `pi install`
-  # adds a SECOND, package-based registration on top of it. Nio would
-  # then load twice — double guard evaluation, duplicate audit rows and
-  # duplicate spans per tool call. Idempotent: a no-op on a first-time
-  # CLI install, since settings_edit's `strip` just filters entries that
-  # aren't there.
+  # possibly the skills path) appended to settings.json; the `pi install`
+  # above added a SECOND, package-based registration on top of it. Nio
+  # would then load twice — double guard evaluation, duplicate audit rows
+  # and duplicate spans per tool call. Idempotent: a no-op on a
+  # first-time CLI install, since settings_edit's `strip` just filters
+  # entries that aren't there.
   #
   # settings_strip_ours removes the generic `<pi-home>/skills` entry only
   # when $SKILLS_RECEIPT proves Nio added it. Without that guard, a user
@@ -211,7 +228,6 @@ if command -v pi >/dev/null 2>&1; then
   # The fallback copy is now unregistered; drop it (and its receipt) so a
   # later re-run doesn't strip an entry that is no longer Nio's.
   rm -rf "$EXT_DIR" 2>/dev/null || true
-  pi install "$SCRIPT_DIR"
   echo "  OK: Registered as a pi package"
 else
   echo "  WARN: 'pi' CLI not found — falling back to a direct install."
