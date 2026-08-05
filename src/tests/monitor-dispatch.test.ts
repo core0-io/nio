@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 import { dispatchNioCommand, type DispatchDeps } from '../adapters/openclaw-dispatch.js';
 import type { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { SkillScanner } from '../scanner/index.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const NIO_CLI = join(HERE, '..', '..', 'plugins', 'hermes', 'scripts', 'nio-cli.js');
@@ -52,7 +53,7 @@ const DEPS: DispatchDeps = {
 // realpath: on macOS tmpdir() is under /var, a symlink to /private/var.
 // A pending arm records process.cwd(), which POSIX reports resolved.
 function freshHome(): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-dispatch-')));
+  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-dispatch-'))));
 }
 
 function storeAt(home: string): Record<string, unknown> {

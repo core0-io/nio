@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — see hook-cli.test.ts for the same resolution.
@@ -36,7 +37,7 @@ const GUARD = join(SCRIPTS, 'guard-hook.js');
 const EXEC_TIMEOUT_MS = 45000;
 
 function freshHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-')));
   // Point at a closed port. The state-file-existence assertions below
   // are the actual judge of whether the gate leaked (saveState() and
   // tracerProvider creation are strictly co-conditioned on
@@ -128,7 +129,7 @@ describe('monitor gate end-to-end', () => {
   });
 
   it('monitor_all_sessions captures without arming', () => {
-    const home = mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-all-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-all-')));
     writeFileSync(join(home, 'config.yaml'),
       'collector:\n  endpoint: "http://127.0.0.1:19999"\n  monitor_all_sessions: true\n',
       'utf-8');
@@ -268,7 +269,7 @@ function findAttr(span: OtlpSpan, key: string): unknown {
 
 describe('guard-hook deny path: MCP dimension on the one-shot span', () => {
   it('a denied mcp__<server>__<tool> call carries gen_ai.tool.type / nio.mcp.server / nio.mcp.tool', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-mcp-deny-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-e2e-mcp-deny-')));
     const sink = await startTraceSink();
     try {
       writeFileSync(join(home, 'config.yaml'), [

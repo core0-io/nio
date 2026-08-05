@@ -9,6 +9,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — see hook-cli.test.ts for the same resolution.
@@ -18,7 +19,7 @@ const CLI = join(
 );
 
 function freshHome(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-monitor-hermes-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-hermes-')));
 }
 
 // Same reasoning and value as hermes-exit.test.ts's EXIT_TIMEOUT_MS (kept

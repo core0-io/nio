@@ -9,9 +9,10 @@ import { join } from 'node:path';
 import { forgetSession } from '../scripts/lib/monitor-check.js';
 import { saveMonitorStore, loadMonitorStore, monitorStorePath } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshHome(): { home: string; logsConfig: CollectorLogsConfig } {
-  const home = mkdtempSync(join(tmpdir(), 'nio-monitor-life-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-life-')));
   return { home, logsConfig: { path: join(home, 'audit.jsonl') } as CollectorLogsConfig };
 }
 

@@ -13,9 +13,10 @@ import {
   type MonitorStore,
 } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-monitor-store-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-store-')));
 }
 
 describe('monitorStorePath', () => {

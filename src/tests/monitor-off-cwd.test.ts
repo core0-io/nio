@@ -49,6 +49,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
@@ -90,7 +91,7 @@ function runWithSession(
  * unresolved fixture path would never match what it stamps.
  */
 function freshHome(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), prefix))));
 }
 
 function logsConfigFor(home: string): CollectorLogsConfig {

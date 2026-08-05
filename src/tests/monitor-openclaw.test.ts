@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 /** Minimal OpenClaw register API stand-in — captures handlers by name. */
 function makeFakeApi() {
@@ -86,7 +87,7 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
   async function withPlugin(
     body: (handlers: Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>, logsConfig: CollectorLogsConfig) => Promise<void>,
   ): Promise<void> {
-    const home = mkdtempSync(join(tmpdir(), 'nio-monitor-oc-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-oc-')));
     writeFileSync(
       join(home, 'config.yaml'),
       `collector:\n  endpoint: "http://127.0.0.1:${port}"\n`,

@@ -26,6 +26,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — same resolution as monitor-cli.test.ts / hook-cli.test.ts.
@@ -81,7 +82,7 @@ function startSink(): Promise<Sink> {
  * off the developer's real ~/.claude/skills.
  */
 function fakeHomeWithSkill(skillName: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-scanner-home-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-scanner-home-')));
   const skillDir = join(home, '.claude', 'skills', skillName);
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
@@ -108,7 +109,7 @@ function fakeHomeWithSkill(skillName: string): string {
 
 /** A fresh NIO_HOME whose config points telemetry at `sinkUrl`. */
 function nioHomeFor(sinkUrl: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-scanner-nio-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-scanner-nio-')));
   writeFileSync(join(home, 'config.yaml'), `collector:\n  endpoint: "${sinkUrl}"\n`, 'utf-8');
   return home;
 }

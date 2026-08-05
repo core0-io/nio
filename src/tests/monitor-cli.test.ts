@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, writeFileSync, existsSync, realpathSync } fr
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Resolve path to the built monitor-cli.js. Test file lives in
 // dist/tests/ at runtime. Scripts are bundled by bun (not tsc) into
@@ -40,7 +41,7 @@ function freshHome(): string {
   // its cwd via process.cwd(), which returns the OS-canonicalized path
   // (/private/var/...) per POSIX getcwd() semantics — so an unresolved
   // /var/... fixture path would never match what the child observes.
-  return realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-cli-')));
+  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-cli-'))));
 }
 
 function storeAt(home: string): Record<string, unknown> {

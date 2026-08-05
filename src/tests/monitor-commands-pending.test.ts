@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { saveMonitorStore, loadMonitorStore } from '../scripts/lib/monitor-store.js';
 import { runMonitorCommand } from '../scripts/lib/monitor-commands.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // runMonitorCommand(command, {cwd}) resolves logsConfig via loadLogsConfig()
 // and the session id via resolveSessionId() — both read the environment,
@@ -27,7 +28,7 @@ function withEnv<T>(home: string, sessionId: string | null, fn: () => T): T {
 }
 
 function fresh(): { home: string; logsConfig: CollectorLogsConfig } {
-  const home = mkdtempSync(join(tmpdir(), 'nio-cmd-pending-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cmd-pending-')));
   return { home, logsConfig: { path: join(home, 'audit.jsonl') } as CollectorLogsConfig };
 }
 

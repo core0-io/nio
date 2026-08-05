@@ -40,6 +40,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
@@ -88,7 +89,7 @@ function startSink(): Promise<Sink> {
 
 /** A fresh NIO_HOME whose config points telemetry at `sinkUrl`. */
 function nioHomeFor(sinkUrl: string): string {
-  const home = realpathSync(mkdtempSync(join(tmpdir(), 'nio-guard-gate-')));
+  const home = trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-guard-gate-'))));
   writeFileSync(join(home, 'config.yaml'), `collector:\n  endpoint: "${sinkUrl}"\n`, 'utf-8');
   return home;
 }

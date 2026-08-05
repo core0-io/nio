@@ -11,9 +11,10 @@ import { join } from 'node:path';
 import { isSessionMonitored, UNTRUSTED_SESSION_IDS } from '../scripts/lib/monitor-check.js';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshHome(): { home: string; logsConfig: CollectorLogsConfig } {
-  const home = mkdtempSync(join(tmpdir(), 'nio-monitor-int-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-int-')));
   return { home, logsConfig: { path: join(home, 'audit.jsonl') } as CollectorLogsConfig };
 }
 

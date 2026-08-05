@@ -9,9 +9,10 @@ import { join } from 'node:path';
 import { saveMonitorStore, loadMonitorStore } from '../scripts/lib/monitor-store.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshDir(): { dir: string; logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-store-dur-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-store-dur-')));
   return { dir, logsConfig: { path: join(dir, 'audit.jsonl') } as CollectorLogsConfig };
 }
 

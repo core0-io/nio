@@ -38,6 +38,7 @@ import { join } from 'node:path';
 import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function makeFakeApi() {
   const handlers = new Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>();
@@ -77,7 +78,7 @@ describe('openclaw providers are created lazily, not at registration', () => {
   afterHook(async () => { await new Promise<void>((r) => sink.close(() => r())); });
 
   it('reads the collector endpoint at first monitored use, not at registration', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'nio-monitor-oc-lazy-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-oc-lazy-')));
     const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
 
     // 1. A config with NO collector endpoint at registration time.
@@ -137,7 +138,7 @@ describe('openclaw providers are created lazily, not at registration', () => {
     // weaken the gate. The providers get built by the armed call, then a
     // second, unarmed session in the same registration must still add
     // zero trace requests.
-    const home = mkdtempSync(join(tmpdir(), 'nio-monitor-oc-lazy2-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-oc-lazy2-')));
     const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
     writeFileSync(
       join(home, 'config.yaml'),
