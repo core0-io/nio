@@ -347,6 +347,26 @@ Turns are joined to it by **span link**, not parent/child: a session
 outlives any single trace, and nesting hours of turns under one root span
 makes every backend's trace view unusable.
 
+**Codex: the session span never goes out.** `startSessionTrace` runs and
+mints `session_trace_id`/`session_span_id` on every Codex `SessionStart`
+(as of the C1 wiring fix, Codex's `hooks.json` routes `SessionStart` to
+`collector-hook.js` alongside `scanner-hook.js`), so turn roots on Codex
+do carry a session link like every other platform. But the span itself
+is only ever emitted by the `SessionEnd` branch in
+`collector-core.ts`'s `dispatchCollectorEvent`, and Codex has no
+`SessionEnd`-equivalent hook event (see `src/adapters/codex.ts`'s module
+doc). There is also no crash-flush path for it: the orphaned-tree
+recovery in `hasOrphanedDeferredTree` / `recoverDeferredTree` covers
+`turn_trace_id` + `deferred_spans` only, not `session_trace_id` /
+`session_span_id` — a session that starts on Codex simply never gets its
+`session` root span exported, on a clean exit or a crash alike. The
+session ids still exist in `traces-state-store.json` for as long as the
+session runs (and turn-root links to them remain intact), and are
+silently discarded by `startSessionTrace`'s `sessionChanged` branch the
+next time a *different* session starts on the same machine. If Codex
+ever adds a session-boundary hook, wire it to `collector-hook.js` with
+`event: 'SessionEnd'` and this paragraph goes away.
+
 ### Span: `execute_tool <name>` (tool span)
 
 One per tool invocation. Span name is literally `execute_tool ${toolName || 'unknown'}`. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).
