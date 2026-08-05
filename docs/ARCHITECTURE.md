@@ -718,7 +718,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 
 **Token usage collection** differs by platform:
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
-- **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
+- **Hermes**: no usage on turn spans. `post_llm_call` supplies no transcript path (confirmed by live capture), and `hermesToCollectorInput` does not extract one, so `parseTranscriptUsage` never runs. Hermes does expose `assistant_response` and `conversation_history` in the same payload — both currently unread; see the Phase 4 content pipeline.
 - **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
 
 **Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)

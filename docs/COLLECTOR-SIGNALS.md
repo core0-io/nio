@@ -270,7 +270,7 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw-native) | OpenClaw only |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
-**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
+**Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Hermes**: no usage. The `post_llm_call` payload carries no transcript path (verified by live capture — `extra` holds only `user_message`, `assistant_response`, `conversation_history`, `model`, `platform`), so there is nothing for `parseTranscriptUsage` to read. Token usage on Hermes turn spans is a known gap, not a payload-dependent behaviour. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally.
 
 ### Span: `execute_tool <name>` (tool span)
 
