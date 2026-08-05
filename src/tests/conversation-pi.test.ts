@@ -23,6 +23,7 @@ const PI_FIXTURES = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'pi');
 const FIXTURE = join(PI_FIXTURES, 'session.jsonl');
 const MALFORMED_FIXTURE = join(PI_FIXTURES, 'session-malformed-lines.jsonl');
 const OPENAI_FIXTURE = join(PI_FIXTURES, 'session-openai.jsonl');
+const IMAGE_ONLY_FIXTURE = join(PI_FIXTURES, 'session-image-only.jsonl');
 
 // session.jsonl holds exactly two assistant entries (m2, m4). The user
 // entry (m1) and the toolResult entry (m3) must not produce calls.
@@ -152,6 +153,23 @@ describe('pi-source', () => {
       'There is one file.',
       'the assistant entry after the malformed lines survives',
     );
+  });
+
+  it('drops an assistant entry whose blocks were all discarded (image-only)', () => {
+    // `blocksFrom` deliberately discards `image` blocks, so an assistant
+    // entry made only of them survives every earlier guard and arrives at
+    // the `blocks.length === 0` check with an empty array. Without that
+    // check it would become a chat span asserting `nio.content.blocks: 0`
+    // — a call the model never made, on a turn that has no evidence of
+    // one. `opencode-source`'s identical guard is covered by
+    // conversation-opencode.test.ts; this is the Pi half of the same
+    // invariant, which was the asymmetry.
+    const calls = createPiSource(IMAGE_ONLY_FIXTURE).callsSince(0);
+    assert.equal(
+      calls.length, 1,
+      'only the entry with a real text block may produce a call',
+    );
+    assert.equal(calls[0].callId, 'i3', 'and it is the text entry, not the image-only one');
   });
 
   it('ignores non-message entry types', () => {

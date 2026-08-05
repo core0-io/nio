@@ -181,6 +181,68 @@ describe('opencode-source', () => {
     assert.ok(blockOrderIsSane(calls[0]));
   });
 
+  // Unlike every other ConversationSource, this one is NOT reading
+  // `JSON.parse` output: the module doc says so explicitly, and the
+  // binding hands over the live SDK objects opencode published. A
+  // property read on one of those is a call into host code, so a getter
+  // or a Proxy trap can throw where a parsed record never could — and
+  // `callsSince` runs inside a host-blocking hook. `serialiseInput`
+  // already guarded the one place that stringifies; the bare reads
+  // (`info.role`, `part.id`, `p.type`, …) did not, and a throwing getter
+  // on `e.info` or a hostile Proxy part took the whole turn's
+  // reconstruction with it.
+  //
+  // The surviving good call is what makes this discriminating: a source
+  // that simply returned `[]` on any throw would satisfy "does not
+  // throw" while still losing everything.
+  it('survives host objects whose property reads throw, keeping the calls around them', () => {
+    const throwingInfo = {
+      kind: 'message',
+      get info(): never { throw new Error('host getter exploded'); },
+    };
+    const hostileProxyPart = {
+      kind: 'part',
+      part: new Proxy({}, {
+        get(): never { throw new Error('proxy trap exploded'); },
+      }),
+    };
+    // A part that accumulates cleanly but blows up when the call is
+    // built — this one gets past the first loop and into `callFrom`.
+    const lateThrowingPart = {
+      kind: 'part',
+      part: {
+        id: 'prt_late', messageID: 'msg_late',
+        get type(): never { throw new Error('late getter exploded'); },
+      },
+    };
+    const lateMessage = {
+      kind: 'message',
+      info: {
+        id: 'msg_late', sessionID: 'sess_1', role: 'assistant',
+        modelID: 'claude-sonnet-4-5', providerID: 'anthropic',
+        time: { created: 1785060002000, completed: 1785060004000 },
+      },
+    };
+
+    const events: unknown[] = [
+      throwingInfo,
+      hostileProxyPart,
+      lateMessage,
+      lateThrowingPart,
+      EVENTS[0], EVENTS[1], EVENTS[2], EVENTS[3],
+    ];
+
+    let calls: ReturnType<ReturnType<typeof createOpenCodeSource>['callsSince']> = [];
+    assert.doesNotThrow(() => { calls = createOpenCodeSource(events).callsSince(0); });
+    assert.equal(
+      calls.length, 1,
+      'the healthy message must still produce its call — msg_late contributes none because its ' +
+        'only part threw while its blocks were being read',
+    );
+    assert.equal(calls[0].callId, 'msg_1');
+    assert.deepEqual(calls[0].blocks.map((b) => b.type), ['thinking', 'text', 'tool_use']);
+  });
+
   // `message.updated` is a SNAPSHOT: opencode republishes the whole
   // assistant message on every change. Appending instead of replacing
   // gives one call per republish and N× the tokens — the same N(N+1)/2

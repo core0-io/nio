@@ -929,6 +929,16 @@ export class InProcessPluginRuntime {
         // Park by default so `endTurn` can nest this span under the chat
         // call that issued it — nothing at THIS moment knows which call
         // that was. `eagerToolSpans` opts a platform out; see its doc.
+        //
+        // Deliberately UNCAPPED, unlike `conversationEvents`. The two are
+        // not comparable: `deferred_spans` is bounded by the number of
+        // tool calls in one open turn and is emptied at every turn close,
+        // whereas the event store accumulates snapshot traffic the host
+        // republishes without limit. Measured at 5000 tool calls in a
+        // single turn (far past any real one): ~3.5 MB, ~740 B/span,
+        // because `redactAndTruncate` has already capped each attribute
+        // at 2048 B. A cap here would buy nothing and would silently drop
+        // spans that are about to be exported anyway.
         const r = this.opts.eagerToolSpans
           ? await recordPostToolUse(
               tracerProvider,
@@ -1065,7 +1075,24 @@ export class InProcessPluginRuntime {
    *
    * Gated like every other export: `monitored` is computed by the caller
    * for this event, and no provider is resolved (let alone built) for an
-   * unarmed session.
+   * unarmed session. The `!monitored` check below is belt-and-braces and
+   * currently unreachable — both call sites already sit inside
+   * `if (tracerProvider)`, and a tracer provider is only resolved when
+   * `monitored`. It is kept because the day content stops being routed
+   * through the trace path is the day it becomes the only gate.
+   *
+   * KNOWN COUPLING, measured rather than assumed: on this family the
+   * whole content pipeline hangs off the TRACE provider, so a config with
+   * `collector.traces.enabled: false` and `logs.enabled: true` puts no
+   * conversation content on the wire at all. Not just these two records —
+   * `flushSessionTurnInner` returns at its `!tracerProvider` check before
+   * it ever builds a `createContentSink`, so the assistant's words and
+   * the `tool_use` blocks go too. (Probe: 7 content-carrying records with
+   * a tracer provider, 0 without; the audit/guard log records are
+   * unaffected either way.) Ungating only these two would recover two of
+   * the four records and stamp them with a `span_id` for a span that is
+   * never emitted, which is a worse artefact than the omission. Decoupling
+   * content from traces properly is a design change, not a patch here.
    */
   private emitToolContent(
     kind: 'input' | 'output',

@@ -1324,6 +1324,66 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     });
   });
 
+  it('opencode puts a tool RESULT on the logs signal, keyed to the span it belongs to', async () => {
+    // The result half of the in-process family's tool content. It rests
+    // on `emitToolContent('output', …)` at `onPostTool`, and no
+    // `ContentBlock` on any platform carries a tool result — so if that
+    // one call site regresses, tool output simply stops existing and no
+    // structural assertion anywhere notices. It was pinned by a single
+    // Pi case ('pi with an ephemeral session … degrades to the flat turn
+    // → tool shape'); this is the opencode half, and it also pins the
+    // join, which the ephemeral-session case cannot (it has no chat span
+    // and no tool_use block to disambiguate against).
+    await withCaptureOnHome('nio-content-oc-output-', async () => {
+      const tracer = makeInMemoryTracer();
+      const logger = makeInMemoryLogger();
+      try {
+        const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+        const hooks = await createNioPlugin({
+          nioFactory: stubNioAllow(),
+          tracerProvider: tracer.provider,
+          meterProvider: null,
+          loggerProvider: logger.provider,
+        })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+        const sessionID = 'oc-output-content';
+        await hooks.event!({ event: { type: 'session.created', properties: { info: { id: sessionID } } } });
+        await hooks['tool.execute.before']!(
+          { tool: 'bash', sessionID, callID: 'call_out' } as never,
+          { args: { command: 'cat unique-output-marker.txt' } } as never,
+        );
+        await hooks['tool.execute.after']!(
+          { tool: 'bash', sessionID, callID: 'call_out', args: {} } as never,
+          { title: 'cat', output: 'UNIQUE-RESULT-MARKER', metadata: {} } as never,
+        );
+        await hooks.event!({ event: { type: 'session.idle', properties: { sessionID } } });
+
+        const outputs = byContentType(logger.emitted(), 'tool_output');
+        assert.equal(outputs.length, 1, 'the tool result must reach the logs signal exactly once');
+        assert.ok(
+          String(outputs[0]!.body).includes('UNIQUE-RESULT-MARKER'),
+          `expected the real result text, got: ${String(outputs[0]!.body)}`,
+        );
+        assert.equal(
+          attr(outputs[0]!, 'gen_ai.tool.call.id'), 'call_out',
+          'and it must name the opencode callID, not an internal span key',
+        );
+        const tool = tracer.finished().find((s) => s.name.startsWith('execute_tool'));
+        assert.ok(tool, 'the tool span itself must have been exported at turn close');
+        assert.equal(
+          outputs[0]!.spanContext!.spanId,
+          tool!.spanContext().spanId,
+          'the record must join back to the span the backend receives — the tool span is PARKED ' +
+            'until turn close on this family, so the id minted at PreToolUse has to survive the ' +
+            'trip through deferred_spans',
+        );
+      } finally {
+        await tracer.shutdown();
+        await logger.shutdown();
+      }
+    });
+  });
+
   it('the in-process runtime emits tool_input on a call the guard DENIED, which has no post side', async () => {
     // The other half of the tool-content wiring, and the case the
     // `tool_use` block cannot cover on any platform: a denied call never

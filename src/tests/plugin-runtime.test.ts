@@ -716,6 +716,76 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
   });
 });
 
+// ── The transcript path is PER SESSION, not per turn ──────────────────
+//
+// The mirror image of the block above. `conversationEvents` is dropped at
+// every turn boundary; `transcriptPaths` deliberately survives it, because
+// the replay platforms (Pi) re-read the same session file on every turn
+// scoped by `callsSince(turn_start_ms)`. That makes `onSessionEnd` the
+// only turn-independent place the path stops being ours — and the only
+// thing standing between a torn-down session and a later turn under the
+// same id replaying its file.
+describe('InProcessPluginRuntime transcript-path lifecycle', () => {
+  const chatSpans = (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    tracer.finished().filter(s => s.name.startsWith('chat'));
+
+  it('onSessionEnd stops the session file being ours to replay (M1)', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'pi',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-transcript-life-')));
+      const sessionFile = join(dir, 'session.jsonl');
+      // Stamped in the future so `callsSince(turn_start_ms)` accepts it
+      // on BOTH turns — otherwise turn 2 would drop the entry on the
+      // timestamp alone and the assertion would hold for the wrong
+      // reason, i.e. pass even with the delete removed.
+      const future = Date.now() + 60_000;
+      writeFileSync(
+        sessionFile,
+        JSON.stringify({
+          type: 'message', id: 'm1', parentId: null,
+          timestamp: new Date(future).toISOString(),
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'placeholder reply' }],
+            provider: 'anthropic', model: 'pi-transcript-model',
+            stopReason: 'endTurn', timestamp: future,
+          },
+        }) + '\n',
+        'utf-8',
+      );
+
+      rt.setTranscriptPath('s-file', sessionFile);
+      rt.onUserPrompt('s-file', 'first turn');
+      await rt.onSessionEnd('s-file');
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'sanity: the session file really was readable and really did produce a chat span',
+      );
+
+      // Same id, no `session_start` in between — a host that recycles ids
+      // without re-announcing them, which is exactly the case
+      // onSessionStart\'s own delete cannot cover.
+      rt.onUserPrompt('s-file', 'turn after teardown');
+      await rt.onTurnEnd('s-file');
+
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'no new chat span: the ended session\'s transcript must no longer be ours to replay',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});
+
 describe('registerPiExtension', () => {
   /** Minimal stand-in for Pi's ExtensionAPI. */
   function fakePi() {
