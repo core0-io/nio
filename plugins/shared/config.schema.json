@@ -62,7 +62,7 @@
         "extra_allowlist": { "type": "array", "items": { "type": "string" }, "default": [], "description": "Additional safe command prefixes injected into Phase 1 allowlist." },
         "permitted_tools": {
           "type": "object",
-          "description": "Phase 0 strict allowlist, keyed by platform (`claude_code`, `openclaw`, `hermes`, `codex`, ...) or the reserved `mcp` key for cross-platform MCP tool names. When a list is non-empty, ONLY listed tools pass on that platform. MCP entries accept bare local names or `server__tool` form.",
+          "description": "Phase 0 strict allowlist, keyed by platform (`claude_code`, `openclaw`, `hermes`, `codex`, `pi`, ...) or the reserved `mcp` key for cross-platform MCP tool names. When a list is non-empty, ONLY listed tools pass on that platform. MCP entries accept bare local names or `server__tool` form.",
           "additionalProperties": { "type": "array", "items": { "type": "string" } },
           "default": {}
         },
