@@ -16,7 +16,8 @@ export {};
  * `${NIO_HOME ?? ~/.nio}/monitored-sessions.json`.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync, unlinkSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
@@ -75,41 +76,74 @@ export function monitorStorePath(logsConfig?: CollectorLogsConfig): string {
   return join(dir, STORE_FILE_NAME);
 }
 
+function normalizeStore(parsed: Partial<MonitorStore>): MonitorStore {
+  // Normalize sessions: must be a plain object with valid entries only
+  let sessions: Record<string, MonitoredSession> = {};
+  if (isPlainObject(parsed.sessions)) {
+    const s = parsed.sessions as Record<string, unknown>;
+    for (const [key, entry] of Object.entries(s)) {
+      if (isValidSession(entry)) {
+        sessions[key] = entry;
+      }
+    }
+  }
+
+  const store: MonitorStore = { sessions };
+
+  // Normalize pending_arm: must be valid or omitted entirely
+  if (isValidPendingArm(parsed.pending_arm)) {
+    store.pending_arm = parsed.pending_arm;
+  }
+
+  return store;
+}
+
 /**
  * Load the store. Returns an empty store when the file is missing or
  * corrupt — a broken store must never enable telemetry that the user
  * did not ask for, and must never crash the hook.
  */
 export function loadMonitorStore(logsConfig?: CollectorLogsConfig): MonitorStore {
+  const path = monitorStorePath(logsConfig);
+
+  let raw: string;
   try {
-    const raw = readFileSync(monitorStorePath(logsConfig), 'utf-8');
-    const parsed = JSON.parse(raw) as Partial<MonitorStore>;
-
-    // Normalize sessions: must be a plain object with valid entries only
-    let sessions: Record<string, MonitoredSession> = {};
-    if (isPlainObject(parsed.sessions)) {
-      const s = parsed.sessions as Record<string, unknown>;
-      for (const [key, entry] of Object.entries(s)) {
-        if (isValidSession(entry)) {
-          sessions[key] = entry;
-        }
-      }
-    }
-
-    const store: MonitorStore = { sessions };
-
-    // Normalize pending_arm: must be valid or omitted entirely
-    if (isValidPendingArm(parsed.pending_arm)) {
-      store.pending_arm = parsed.pending_arm;
-    }
-
-    return store;
+    raw = readFileSync(path, 'utf-8');
   } catch {
+    // Absent store is the normal default state (the overwhelming
+    // majority of users have never armed a session) — not a fault.
+    return { sessions: {} };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as Partial<MonitorStore>;
+    return normalizeStore(parsed);
+  } catch (err) {
+    // A store that exists but cannot be parsed silently disables capture
+    // for every session — the user sees "I armed it but no data" with no
+    // clue why. Surface it. `/nio-monitor on` overwrites the bad file, so
+    // this is self-healing once noticed.
+    //
+    // Dynamic import, not awaited: this function sits on the hook's
+    // synchronous gating hot path and must never turn async, and
+    // diagnostics reporting must never be able to throw back into it.
+    void import('../../adapters/diagnostics.js')
+      .then(({ reportDiagnostic }) => {
+        reportDiagnostic({
+          severity: 'warning',
+          source: 'collector',
+          kind: 'monitor_store_corrupt',
+          message: '[nio] monitored-sessions.json is unreadable; no session will be captured',
+          detail: err instanceof Error ? err.message : String(err),
+          hint: 'Run /nio-monitor on to rewrite it, or delete the file.',
+        });
+      })
+      .catch(() => { /* diagnostics must never break the gate */ });
     return { sessions: {} };
   }
 }
 
-/** Persist the store. Creates the parent directory if missing. */
+/** Persist the store atomically. Creates the parent directory if missing. */
 export function saveMonitorStore(
   logsConfig: CollectorLogsConfig | undefined,
   store: MonitorStore,
@@ -119,5 +153,18 @@ export function saveMonitorStore(
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
-  writeFileSync(path, JSON.stringify(store, null, 2), 'utf-8');
+  // Write-then-rename: several processes touch this file concurrently
+  // (guard-hook and collector-hook both fire on one PreToolUse, and
+  // `/nio-monitor off` can race a hook's expiry sweep). A truncating
+  // write would let a reader observe half a JSON document; rename is
+  // atomic within a filesystem, so a reader sees either the old store
+  // or the new one.
+  const tmp = `${path}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
+  try {
+    writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+    renameSync(tmp, path);
+  } catch (err) {
+    try { if (existsSync(tmp)) unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
 }
