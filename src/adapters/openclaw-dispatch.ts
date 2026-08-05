@@ -634,6 +634,19 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
     : '- · pi: not installed (run plugins/pi/setup.sh to enable)');
   out.push('    note: Pi has no MCP support — the Phase 0 MCP gate is inactive there.');
 
+  // opencode — plugin + slash command are copied into the config dir.
+  const ocRoot = process.env.XDG_CONFIG_HOME || join(home, '.config');
+  const ocPlugin = existsSync(join(ocRoot, 'opencode', 'plugins', 'nio.js'));
+  const ocCommand = existsSync(join(ocRoot, 'opencode', 'commands', 'nio.md'));
+  if (ocPlugin && ocCommand) {
+    out.push('- ✓ opencode: plugin + /nio command installed');
+  } else if (ocPlugin || ocCommand) {
+    out.push(`- ~ opencode: partial install (plugin: ${ocPlugin ? 'yes' : 'no'}, command: ${ocCommand ? 'yes' : 'no'})`);
+    out.push('    hint: re-run plugins/opencode/setup.sh to repair.');
+  } else {
+    out.push('- · opencode: not installed (run plugins/opencode/setup.sh to enable)');
+  }
+
   return { ok, report: out.join('\n') };
 }
 

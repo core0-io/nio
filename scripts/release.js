@@ -11,6 +11,7 @@
  *   node scripts/release.js openclaw      # OpenClaw plugin zip
  *   node scripts/release.js hermes        # Hermes plugin zip
  *   node scripts/release.js pi            # Pi package zip
+ *   node scripts/release.js opencode      # opencode plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
  *
  * Output: releases/nio-{target}-v{version}.zip
@@ -23,6 +24,7 @@
  *                     scripts/hook-cli.js (self-contained single-file
  *                     bundle built by scripts/build.js)
  *   pi.zip          → package.json, extensions/, skills/, setup.sh, ...
+ *   opencode.zip    → plugins/, commands/, skills/, setup.sh, ...
  *
  * The all zip preserves the multi-plugin structure:
  *   all.zip → plugins/claude-code/, plugins/codex/, plugins/openclaw/,
@@ -42,8 +44,8 @@ const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf-8'));
 const version = pkg.version;
 
 const target = process.argv[2];
-if (!target || !['claude-code', 'codex', 'openclaw', 'hermes', 'pi', 'all'].includes(target)) {
-  console.error('Usage: node scripts/release.js <claude-code|codex|openclaw|hermes|pi|all>');
+if (!target || !['claude-code', 'codex', 'openclaw', 'hermes', 'pi', 'opencode', 'all'].includes(target)) {
+  console.error('Usage: node scripts/release.js <claude-code|codex|openclaw|hermes|pi|opencode|all>');
   process.exit(1);
 }
 
@@ -78,7 +80,7 @@ function zipFromRoot(outName, files) {
 }
 
 const targets = target === 'all'
-  ? ['claude-code', 'codex', 'openclaw', 'hermes', 'pi', 'all']
+  ? ['claude-code', 'codex', 'openclaw', 'hermes', 'pi', 'opencode', 'all']
   : [target];
 
 for (const t of targets) {
@@ -104,6 +106,10 @@ for (const t of targets) {
 
     case 'pi':
       zipFromDir(name, 'plugins/pi');
+      break;
+
+    case 'opencode':
+      zipFromDir(name, 'plugins/opencode');
       break;
 
     case 'all':

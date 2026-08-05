@@ -1,0 +1,521 @@
+---
+name: nio
+description: Nio — AI agent execution assurance. Use for evaluating action safety before execution, scanning code for execution risks, reviewing the agent execution audit log, and querying the current risk scores returned by configured external scoring endpoints (e.g. "what's my Nio score", "check my external/guardrail endpoint scores", "show the current risk scores from my scoring services").
+compatibility: Requires Node.js 18+.
+metadata:
+  author: core0-io
+  version: "2.5.1"
+user-invocable: true
+command-dispatch: tool
+command-tool: nio_command
+command-arg-mode: raw
+argument-hint: "[scan|action|report|config|doctor|external-score|reset] [args...]"
+---
+
+# Nio — AI Agent Execution Assurance Framework
+
+You are an execution assurance evaluator powered by the Nio framework. Route the user's request based on the first argument.
+
+## Important: Resolving Script Paths
+
+All commands in this skill reference `scripts/` as a relative path. You **MUST** resolve this to the absolute path of this skill's directory before running any command, and invoke the script with a **single** `node` command — no shell chaining.
+
+1. This SKILL.md file's parent directory **is** the skill directory. Do **not** guess a hard-coded location (`~/.openclaw/skills/nio`, `~/.claude/...` etc. are not reliable) — derive the absolute path from where you actually loaded this file.
+2. If this file is at `/path/to/nio/SKILL.md`, scripts are at `/path/to/nio/scripts/`.
+3. Whenever the instructions below say `node scripts/X`, invoke `node <absolute-skill-dir>/scripts/X` instead — with the real absolute path substituted.
+4. **Do not** prepend `cd <dir> && ...`, and do not use `;`, `&&`, `|`, `||`, `$(...)`, or backtick subshells in the command. Some hosts (OpenClaw and others) preflight-reject compound interpreter invocations. The command you issue must be the single form `node <absolute-path>.js [args...]`.
+
+Example (the path below is a placeholder — substitute the real location of this SKILL.md's directory):
+
+```bash
+node /absolute/path/to/skill/scripts/action-cli.js decide --type exec_command --command "ls"
+```
+
+## Command Routing
+
+Parse `$ARGUMENTS` to determine the subcommand:
+
+- **`scan <path>`** — Scan a skill or codebase for execution risks
+- **`action <description>`** — Evaluate whether a runtime action is safe to execute
+- **`report`** — View recent agent execution events from the audit log
+- **`config [show|<level>]`** — View or set protection level
+- **`external-score`** — Query all enabled external scoring endpoints and list their current scores
+- **`reset`** — Reset config to defaults
+
+If no subcommand is given, or the first argument is a path, default to **scan**.
+
+### Focused skills (Claude Code & Codex)
+
+On Claude Code and Codex, each capability is **also** exposed as a focused standalone skill for sharper natural-language discovery and direct invocation. Prefer these when the user's intent is unambiguous; this unified `/nio` remains the umbrella entry point and full reference.
+
+| Focused skill | Capability | Equivalent here |
+|---------------|------------|-----------------|
+| `nio-scan` | Scan code/skills for execution risks | `scan` |
+| `nio-action` | Evaluate a runtime action's safety | `action` |
+| `nio-report` | Recent execution audit + diagnostics | `report` |
+| `nio-config` | View / set protection level | `config` |
+| `nio-doctor` | Validate config + connectivity | `doctor` |
+| `nio-external-score` | Snapshot external scoring-endpoint scores | `external-score` |
+
+(These focused skills exist only on Claude Code and Codex. On OpenClaw and Hermes there is no `nio-*` skill — use the `/nio <subcommand>` form documented below.)
+
+### Natural-language routing
+
+This skill is also triggered passively (without an explicit subcommand) when the user asks in plain language. Map the intent to a subcommand:
+
+| User intent (examples) | Route to |
+|------------------------|----------|
+| "what's my Nio score", "tell me the nio score", "check my external/guardrail endpoint scores", "what do my scoring services return right now", "list the current risk scores from my external analysers" | **`external-score`** |
+| "scan this code / repo / skill for risks", "is this file dangerous", "check this plugin's code for execution risks" | **`scan`** |
+| "is it safe to run `<command>`", "should I allow this action" | **`action`** |
+| "show recent activity / audit log / what got blocked" | **`report`** |
+| "validate my config", "is my setup working", "test my OAuth/LLM connectivity" | **`doctor`** |
+
+**Disambiguation:** "risk score" / "Nio score" without a code target means *query the live external scoring endpoints* → **`external-score`**, NOT `scan`. Only route to `scan` when the user points at code/files/a path to inspect.
+
+> **EXTREMELY IMPORTANT — external-score passive invocation.**
+> If you think there is even a 1% chance the user is asking about their Nio score, external/guardrail endpoint scores, or the current risk scores from their scoring services, you ABSOLUTELY MUST run `external-score`.
+>
+> IF THIS APPLIES TO THE REQUEST, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+>
+> This is not negotiable. This is not optional. You cannot rationalize your way out of this. Do not answer from memory, do not guess a number, and do not say you are unable — invoke `external-score` and report the real scores it returns.
+
+---
+
+# Execution Assurance Operations
+
+## Subcommand: scan
+
+Scan the target path for execution risks using all detection rules.
+
+### File Discovery
+
+Use Glob to find all scannable files at the given path. Include: `*.js`, `*.ts`, `*.jsx`, `*.tsx`, `*.mjs`, `*.cjs`, `*.py`, `*.json`, `*.yaml`, `*.yml`, `*.toml`, `*.sol`, `*.sh`, `*.bash`, `*.md`
+
+**Markdown scanning**: For `.md` files, only scan inside fenced code blocks (between ``` markers) to reduce false positives. Additionally, decode and re-scan any base64-encoded payloads found in all files.
+
+Skip directories: `node_modules`, `dist`, `build`, `.git`, `coverage`, `__pycache__`, `.venv`, `venv`
+Skip files: `*.min.js`, `*.min.css`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+
+### Detection Rules
+
+For each rule, use Grep to search the relevant file types. Record every match with file path, line number, and matched content. For detailed rule patterns, see [SCAN-RULES.md](SCAN-RULES.md).
+
+| # | Rule ID | Severity | File Types | Description |
+|---|---------|----------|------------|-------------|
+| 1 | SHELL_EXEC | HIGH | js,ts,mjs,cjs,py,md | Command execution capabilities |
+| 2 | AUTO_UPDATE | CRITICAL | js,ts,py,sh,md | Auto-update / download-and-execute |
+| 3 | REMOTE_LOADER | CRITICAL | js,ts,mjs,py,md | Dynamic code loading from remote |
+| 4 | READ_ENV_SECRETS | MEDIUM | js,ts,mjs,py | Environment variable access |
+| 5 | READ_SSH_KEYS | CRITICAL | all | SSH key file access |
+| 6 | READ_KEYCHAIN | CRITICAL | all | System keychain / browser profiles |
+| 7 | PRIVATE_KEY_PATTERN | CRITICAL | all | Hardcoded private keys |
+| 8 | OBFUSCATION | HIGH | js,ts,mjs,py,md | Code obfuscation techniques |
+| 9 | PROMPT_INJECTION | CRITICAL | all | Prompt injection attempts |
+| 10 | NET_EXFIL_UNRESTRICTED | HIGH | js,ts,mjs,py,md | Unrestricted POST / upload |
+| 11 | WEBHOOK_EXFIL | CRITICAL | all | Webhook exfiltration domains |
+| 12 | TROJAN_DISTRIBUTION | CRITICAL | md | Trojanized binary download + password + execute |
+| 13 | SUSPICIOUS_PASTE_URL | HIGH | all | URLs to paste sites (pastebin, glot.io, etc.) |
+| 14 | SUSPICIOUS_IP | MEDIUM | all | Hardcoded public IPv4 addresses |
+| 15 | SOCIAL_ENGINEERING | MEDIUM | md | Pressure language + execution instructions |
+
+### Risk Level Calculation
+
+- Any **CRITICAL** finding -> Overall **CRITICAL**
+- Else any **HIGH** finding -> Overall **HIGH**
+- Else any **MEDIUM** finding -> Overall **MEDIUM**
+- Else -> **LOW**
+
+### Output Format
+
+```
+## Nio Execution Risk Scan Report
+
+**Target**: <scanned path>
+**Risk Level**: CRITICAL | HIGH | MEDIUM | LOW
+**Files Scanned**: <count>
+**Total Findings**: <count>
+
+### Findings
+
+| # | Risk Tag | Severity | File:Line | Evidence |
+|---|----------|----------|-----------|----------|
+| 1 | TAG_NAME | critical | path/file.ts:42 | `matched content` |
+
+### Summary
+<Human-readable summary of key risks, impact, and recommendations>
+```
+
+---
+
+## Subcommand: action
+
+Evaluate whether a proposed runtime action should be allowed, denied, or require confirmation. For detailed policies and detector rules, see [ACTION-POLICIES.md](ACTION-POLICIES.md).
+
+### Supported Action Types
+
+- `network_request` — HTTP/HTTPS requests
+- `exec_command` — Shell command execution
+- `read_file` / `write_file` — File system operations
+- `secret_access` — Environment variable access
+
+### Decision Framework
+
+Parse the user's action description and apply the appropriate detector:
+
+**Network Requests**: Check domain against webhook list and high-risk TLDs, check body for secrets
+**Command Execution**: Check against dangerous/sensitive/system/network command lists, detect shell injection
+**Secret Access**: Classify secret type and apply priority-based risk levels
+
+### Default Policies
+
+| Scenario | Decision |
+|----------|----------|
+| Private key exfiltration | **DENY** (always) |
+| API secret exfiltration | CONFIRM |
+| Command execution | **DENY** (default) |
+| Untrusted domain | CONFIRM |
+| Body contains secret | **DENY** |
+
+### Action CLI (`action-cli.js`)
+
+For structured decisions, use Nio's bundled `action-cli.js` (in this skill's `scripts/` directory). It returns JSON.
+
+```
+node scripts/action-cli.js decide --type exec_command --command "<cmd>"
+```
+
+Parse the JSON output: if `decision` is `deny`, recommend **DENY** with the returned evidence. Combine with policy-based checks (webhook domains, secret scanning, etc.).
+
+### Output Format
+
+```
+## Nio Action Evaluation
+
+**Action**: <action type and description>
+**Decision**: ALLOW | DENY | CONFIRM
+**Risk Level**: low | medium | high | critical
+**Risk Tags**: [TAG1, TAG2, ...]
+
+### Evidence
+- <description of each risk factor found>
+
+### Recommendation
+<What should happen and why — allow the action to proceed, block it, or escalate for human confirmation>
+```
+
+---
+
+---
+
+## Subcommand: config
+
+View or update the Nio configuration.
+
+### Routing
+
+| Input | Action |
+|-------|--------|
+| `config` or `config show` | Run `node scripts/config-cli.js show` |
+| `config <level>` (strict/balanced/permissive) | Read `~/.nio/config.yaml`, update only the `guard.level` field (preserve all other settings), write back, confirm to user |
+| `config import <path>` | Read the YAML at `<path>`, validate it against the schema, run the full `/nio doctor` probe suite against it, and — only if every check passes — replace `~/.nio/config.yaml`. The previous file is preserved as `config.yaml.bak.<ISO-stamp>`. If doctor reports any `✗`, the import is rejected and the live config is not touched. Use this to apply an operator-provided config in one shot instead of copy-pasting. **Also available at install time** as `./setup.sh --config <path>` (or via the curl one-liner with `--config`) — same doctor-gate path. |
+
+### Config File
+
+All configuration is stored in `~/.nio/config.yaml` (or `$NIO_HOME/config.yaml`).
+A template with all options is available at `config.default.yaml` in the plugin directory.
+
+Two top-level sections: `guard` (evaluation settings) and `collector` (telemetry settings).
+
+```json
+{
+  "agent_name": "",
+  "guard": {
+    "protection_level": "balanced",
+    "confirm_action": "allow",
+    "file_scan_rules": {},
+    "action_guard_rules": {},
+    "llm_analyser": { "enabled": false, "api_key": "" },
+    "external_analyser": [],
+    "allowed_commands": [],
+    "permitted_tools": {},
+    "blocked_tools": {},
+    "mcp_servers": {},
+    "native_tool_mapping": {
+      "claude_code": { "Bash": "exec_command", "Write": "write_file", "Edit": "write_file", "WebFetch": "network_request", "WebSearch": "network_request" },
+      "openclaw": { "exec": "exec_command", "write": "write_file", "web_fetch": "network_request", "browser": "network_request" }
+    },
+    "scoring_weights": {}
+  },
+  "collector": {
+    "endpoint": "",
+    "api_key": "",
+    "headers": {},
+    "timeout": 5000,
+    "protocol": "http",
+    "metrics": { "enabled": true, "local": true, "log": "", "max_size_mb": 100 },
+    "traces": { "enabled": true },
+    "logs": { "enabled": true, "local": true, "path": "", "max_size_mb": 100 }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `agent_name` | string | `""` | Telemetry identity alias. When non-empty, becomes the `gen_ai.agent.name` Resource attribute (shared across all signals) and surfaces as `agent_name` in `~/.nio/audit.jsonl`. Empty / unset falls back to the underlying `nio.platform` value. |
+| `guard.protection_level` | string | `"balanced"` | Protection level: `strict`, `balanced`, or `permissive` |
+| `guard.confirm_action` | string | `"allow"` | Confirm fallback: `allow` (let through + audit log), `deny` (block), or `ask` (platform confirm if available, else allow) |
+| `guard.file_scan_rules` | object | `{}` | Extra scan patterns (Phase 3 + scan command) |
+| `guard.action_guard_rules` | object | `{}` | Extra guard patterns (Phase 2 runtime analysis) |
+| `guard.llm_analyser.enabled` | boolean | `true` | Enable/disable Phase 5 LLM analysis |
+| `guard.llm_analyser.api_key` | string | `""` | Anthropic API key for Phase 5 LLM analysis |
+| `guard.external_analyser` | array | `[]` | Phase 6 external scoring endpoints. Each entry: `{ name, endpoint, weight?, timeout?, enabled?, auth? }`. All enabled entries run concurrently; their scores are weighted into the final aggregate per `entry.weight` (default 1.0). |
+| `guard.external_analyser[].name` | string | (required) | Unique identifier surfaced in `scores.external`, `phase_timings.external`, and audit logs. |
+| `guard.external_analyser[].endpoint` | string | (required) | HTTPS URL of the scoring endpoint. nio always issues GET; encode any context the endpoint needs in the URL itself (e.g. `?agent-name=X`). |
+| `guard.external_analyser[].headers` | object | — | Optional custom request headers (e.g. `X-Tenant-Id`). Merged over nio defaults; user entries override (including `Authorization`). |
+| `guard.external_analyser[].weight` | number | `1.0` | Aggregation weight; participates in `final_score = Σ(wi·si)/Σ(wi)`. |
+| `guard.external_analyser[].timeout` | number | `3000` | Per-request timeout (ms). |
+| `guard.external_analyser[].enabled` | boolean | `true` | Set false to skip this endpoint without removing config. |
+| `guard.external_analyser[].auth.type` | string | — | `bearer` (static API key) or `oauth` (OAuth2 `client_credentials` grant). Omit `auth` entirely for unauthenticated endpoints. |
+| `guard.external_analyser[].auth.api_key` | string | — | `bearer` only — sent as `Authorization: Bearer <api_key>`. |
+| `guard.external_analyser[].auth.oauth_url` | string | — | `oauth` only — base URL; runtime appends `/token`. |
+| `guard.external_analyser[].auth.client_id` | string | — | `oauth` only — **required**. Pre-register the OAuth client with the provider and paste its `client_id` here. |
+| `guard.external_analyser[].auth.client_secret` | string | — | `oauth` only — **required**. The corresponding `client_secret` from the provider. |
+
+**OAuth token caching:** Endpoints with `auth.type=oauth` cache the access_token to `~/.nio/oauth-cache/<host>-<fingerprint>.json` (mode 0600). Multiple endpoints sharing the same OAuth identity (`oauth_url + client_id + client_secret`) share the cache and the in-process `OAuthAuthStrategy` instance — the `/token` POST fires only once even when N endpoints fire concurrently. When the cached token nears expiry, nio simply requests a fresh one (`client_credentials` grant has no refresh_token; one POST replaces it).
+
+**Endpoint response contract:** Every scoring endpoint must return a JSON body of this exact shape:
+
+```json
+{ "score": 0.42, "reason": "..." }
+```
+
+- `score` — required, finite number, clamped to `[0, 1]`
+- `reason` — optional string
+
+Anything else (wrong field name, nested score, score as a string, JSON array, non-JSON body) is rejected with an `external_analyser / response_invalid` diagnostic that includes a preview of what was actually returned. nio does **not** support custom field names or nested paths — wrap non-conformant services with a thin adapter on your side. Run `/nio doctor` to verify your endpoint conforms before triggering a hook.
+
+| `guard.allowed_commands` | string[] | `[]` | Command prefixes that bypass the guard pipeline |
+| `guard.permitted_tools` | object | `{}` | Phase 0 strict allowlist. When non-empty for a namespace, ONLY listed tools pass on that platform. Keys are platform names (`claude_code`, `openclaw`, `hermes`, ...) or the reserved `mcp` key — a cross-platform list applied to MCP tools. MCP entries accept either a bare local name (`HassTurnOn`) or server-qualified form (`hass__HassTurnOn`); matching is case-insensitive. |
+| `guard.blocked_tools` | object | `{}` | Phase 0 denylist. Same structure as `permitted_tools`; the `mcp` key covers MCP tools on every platform in one place. Takes precedence over `permitted_tools`. |
+| `guard.mcp_servers` | object | `{}` | Manual MCP server registry. Keyed by server name; each value lists the URLs / sockets / binaries / CLI packages that identify the server, so indirect-invocation detectors can route a shell command back to a server name and re-apply `permitted_tools.mcp` / `blocked_tools.mcp`. Auto-discovered servers from `~/.claude.json` etc. don't need to be declared here. |
+| `guard.native_tool_mapping` | object | *(see above)* | Native tool → action type mapping, per platform. Classification table (NOT a third allow/deny list) that decides which Phase 1-6 rule set runs for each platform-native tool. Tools absent from the map skip Phase 1-6 (auto-allow, log only). MCP tools are dynamic and not categorised here. |
+| `collector.endpoint` | string | `""` | OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs) |
+| `collector.api_key` | string | `""` | Bearer token for collector auth |
+| `collector.headers` | object | `{}` | Extra request headers sent to the OTLP endpoint; values are stringified |
+| `collector.protocol` | string | `"http"` | OTLP transport: `http` (port 4318) or `grpc` (port 4317) |
+| `collector.metrics.enabled` | boolean | `true` | Enable OTEL metrics export (no local file) |
+| `collector.traces.enabled` | boolean | `true` | Enable OTEL traces export |
+| `collector.logs.enabled` | boolean | `true` | Enable OTEL audit log export |
+| `collector.logs.local` | boolean | `true` | Write audit log + hook events + collector trace state to local JSONL |
+| `collector.logs.path` | string | `"~/.nio/audit.jsonl"` | Audit log file path; the cross-process trace state file sits alongside it |
+| `collector.logs.max_size_mb` | number | `100` | Rotate local audit log when exceeded |
+
+Set `NIO_HOME` environment variable to change the config directory (default: `~/.nio`).
+
+### Protection Levels
+
+| Level | allow | confirm | deny | Behaviour |
+|-------|-------|---------|------|----------|
+| `strict` | 0 – 0.5 | — | 0.5 – 1.0 | Block all risky actions — every dangerous or suspicious command is denied |
+| `balanced` (default) | 0 – 0.5 | 0.5 – 0.8 | 0.8 – 1.0 | Block dangerous, confirm risky — good for daily use |
+| `permissive` | 0 – 0.9 | — | 0.9 – 1.0 | Only block critical threats — for users who want minimal friction |
+
+**Per-phase short-circuit.** Any single phase (2 / 3 / 4 / 5, or any single Phase 6 endpoint) whose score crosses the active level's deny threshold short-circuits the pipeline with `deny` — downstream phases are skipped and the weighted average is bypassed. A single high score is not diluted by quieter sibling phases or endpoints. Concretely, at `balanced` a single Phase 6 endpoint returning `0.89` will deny even if its siblings returned `0.07` and `0.09` (which would have averaged to `0.35`). See [`docs/phases/scoring.html`](https://core0.io/nio/docs/phases/scoring.html#short-circuit) for worked examples.
+
+---
+
+## Protection Boundary
+
+Nio's detection layer is positioned as **"catches every common misuse
+and known bypass"** — not a hard isolation primitive. Phase 0 inspects
+direct MCP tool calls *and* indirect ones routed through Bash content
+(mcporter, curl/wget/httpie, language-runtime one-liners, stdio pipes,
+package runners, …) by mapping each channel back to a registered server
+via the MCP endpoint registry (auto-discovered from Claude Code, Claude
+Desktop, Hermes, OpenClaw configs). The full capture model — 16 unwrap
+stages + 16 detectors + the registry — is documented at
+[Phase 0 — Tool Gate · MCP Tool Routing](../../../../docs/phases/phase-0-tool-gate.html#mcp-routing).
+
+Residual gaps are unavoidable at the shell-pattern layer:
+self-launching an off-registry MCP binary, network calls inside a
+freshly compiled binary, brand-new protocols, DNS rebinding. For
+high-assurance deployments, pair Nio with OS-level isolation
+(`sandbox-exec` on macOS, seccomp / Bubblewrap on Linux, `--network
+none` containers).
+
+---
+
+## Subcommand: reset
+
+Reset `~/.nio/config.yaml` to factory defaults (from `config.default.yaml`).
+
+Run:
+```bash
+node scripts/config-cli.js reset
+```
+
+---
+
+# Reporting
+
+## Subcommand: report
+
+Display recent agent execution events from the Nio audit log.
+
+**This subcommand uses the Read tool only — there is no script to run.** Do not attempt to invoke `node scripts/report.js`, `report-cli.js`, `reporter.js`, or any other script for this subcommand. None exist. The only action is: read `~/.nio/audit.jsonl` with the Read tool, parse each line as JSON, and format the output as shown below.
+
+### Log Location
+
+The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with an `event` discriminator field:
+
+**Guard entry** (`event: "guard"`) — one per tool call evaluation:
+
+```json
+{"event":"guard","timestamp":"...","platform":"claude-code","session_id":"...","tool_name":"Bash","action_type":"exec_command","tool_input_summary":"rm -rf /","decision":"deny","risk_level":"critical","risk_score":0.95,"risk_tags":["DANGEROUS_COMMAND"],"phase_stopped":2,"scores":{"runtime":0.95,"final":0.95},"phases":{"runtime":{"score":0.95,"finding_count":1,"duration_ms":2}},"top_findings":[{"rule_id":"DANGEROUS_COMMAND","severity":"critical","category":"execution","title":"Destructive command","confidence":1.0}],"explanation":"...","initiating_skill":"some-skill","event_type":"pre"}
+```
+
+**Scan entry** (`event: "session_scan"`) — from session-start skill scanning:
+
+```json
+{"event":"session_scan","timestamp":"...","platform":"claude-code","skill_name":"some-skill","risk_level":"high","risk_tags":["SHELL_EXEC"],"finding_count":3}
+```
+
+**Lifecycle entry** (`event: "lifecycle"`) — subagent/agent lifecycle (OpenClaw only):
+
+```json
+{"event":"lifecycle","timestamp":"...","platform":"openclaw","session_id":"...","lifecycle_type":"subagent_spawning"}
+```
+
+**Diagnostic entry** (`event: "diagnostic"`) — config / OAuth / LLM / external / collector / scanner failure:
+
+```json
+{"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"token_failed","component":"scoring.example.com","message":"client_credentials grant failed at https://scoring.example.com/oauth/token","detail":"HTTP 401 Unauthorized","config_path":"guard.external_analyser[*].auth","hint":"Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor."}
+```
+
+`source` values: `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`. Common `kind` values:
+
+| Source | Kind | Severity | Meaning |
+|--------|------|----------|---------|
+| `config` | `schema_invalid` | error | Zod validation failed |
+| `config` | `yaml_parse_failed` | error | YAML syntax error |
+| `oauth` | `token_failed` | error | `client_credentials` grant at `/token` rejected; usually wrong `client_id` / `client_secret` |
+| `oauth` | `cache_write_failed` | warning | Couldn't persist token to ~/.nio/oauth-cache/ |
+| `llm` | `api_key_missing` | error | `enabled: true` with empty `api_key` |
+| `llm` | `api_call_failed` | error | Anthropic API call returned an error |
+| `external_analyser` | `auth_failed` | error | `auth` configured but `getAuthHeader()` returned null |
+| `external_analyser` | `http_error` | error | Scoring endpoint returned non-2xx |
+| `external_analyser` | `timeout` | error | Request exceeded `timeout` |
+| `external_analyser` | `network_error` | error | DNS / connection refused / etc. |
+| `collector` | `otlp_export_failed` | warning | OTLP exporter could not deliver telemetry (connection refused, auth rejected, bad protocol/URL); `component` is the signal (`traces` / `metrics` / `logs`) |
+| `collector` | `otlp_flush_failed` | warning | `forceFlush()` rejected while draining a signal before the hook subprocess exits; `component` is the signal |
+| `collector` | `collector_core_error` | warning | collector-core threw while processing a hook event |
+| `scanner` | `file_read_failed` | warning | File walker couldn't read a file |
+
+Aggregate by `(source, kind, component, config_path)` and surface a Diagnostics summary section below the decisions table.
+
+Old-format lines (without `event` field) are also valid — treat them as guard entries with `event_type: "pre"`.
+
+### How to Display
+
+1. Read `~/.nio/audit.jsonl` using the Read tool
+2. Parse each line as JSON
+3. Filter by `event` type — show guard entries in the main table, scan entries in a separate section
+4. Format as a table showing recent events (last 50 by default)
+5. If any events have `initiating_skill`, add a "Skill Activity" section grouping events by skill
+
+### Output Format
+
+```
+## Nio Execution Report
+
+**Events**: <total count>
+**Blocked**: <deny count>
+**Confirmed**: <confirm count>
+
+### Recent Events
+
+| Time | Tool | Type | Decision | Risk | Score | Phase | Top Finding | Skill |
+|------|------|------|----------|------|-------|-------|-------------|-------|
+| 14:30 | Bash | exec | DENY | critical | 0.95 | 2 | DANGEROUS_COMMAND | some-skill |
+| 14:28 | Write | write | ASK | high | 0.65 | 4 | OBFUSCATION | — |
+
+### Pipeline Stats
+
+If enough events exist, show per-phase statistics:
+
+| Phase | Invocations | Avg Score | Avg Duration |
+|-------|-------------|-----------|--------------|
+| Runtime (2) | 45 | 0.12 | 2ms |
+| Static (3) | 20 | 0.08 | 18ms |
+| Behavioural (4) | 12 | 0.15 | 85ms |
+
+### Skill Activity
+
+If any events were triggered by skills, group them here:
+
+| Skill | Events | Blocked | Risk Tags |
+|-------|--------|---------|-----------|
+| some-skill | 5 | 2 | DANGEROUS_COMMAND, EXFIL_RISK |
+
+### Summary
+<Brief analysis of agent execution behaviour and any patterns of concern>
+```
+
+If the log file doesn't exist, inform the user that no execution events have been recorded yet, and suggest they enable hooks via `./setup.sh` or by adding the plugin.
+
+## Subcommand: doctor
+
+Validate the current configuration end-to-end. Doctor catches issues *before* they cause silent failures during real tool calls.
+
+What doctor checks:
+
+1. **Configuration** — re-runs Zod schema validation against the live `~/.nio/config.yaml`. Flags any field with a path + message (e.g. `guard.external_analyser[2].auth.client_secret: required field is empty`).
+2. **External analysers** — for each entry with `auth.type: oauth`, performs a real `client_credentials` grant POST against `{oauth_url}/token`. ✓ when a token is acquired; ✗ with the underlying HTTP status when the flow fails. Bearer-auth entries are listed but cannot be validated without firing an actual scoring request.
+3. **LLM analyser** — flags `guard.llm_analyser.enabled=true` paired with an empty `api_key` (otherwise Phase 5 silently skips, which is a common misconfig).
+
+Collector reachability is intentionally **not** probed — its config correctness is covered by the schema check above, and OTLP gateways commonly require routing headers (e.g. `x-event-pipeline-id`) that a bare reachability probe wouldn't include, producing misleading 401/403 reports. Export failures surface at runtime via the `collector / otlp_export_failed` diagnostic.
+
+Use doctor when:
+- You changed `~/.nio/config.yaml` and want to confirm it loaded.
+- A Bash/Write tool call appeared to be evaluated but you don't see an expected `external_analyser` score in the report — doctor will tell you which endpoint is broken.
+- You rotated an OAuth `client_secret` or LLM `api_key` and want to confirm credentials are working.
+
+To run it, invoke the bundled CLI (resolve `scripts/` to this skill directory's absolute path per the rules at the top of this file, and issue a **single** `node` command):
+
+```bash
+node scripts/doctor-cli.js
+```
+
+Print its stdout verbatim. Output is a markdown checklist with ✓ / ✗ per check and an inline `hint:` line pointing at the specific config path to fix. Doctor itself never writes a diagnostic to the audit log — its own probes use a scoped collector that's discarded after the command returns.
+
+## Subcommand: external-score
+
+Query every **enabled** Phase 6 external scoring endpoint (`guard.external_analyser`) and list each one's current score. This is a focused snapshot — unlike `doctor`, it does not run config-schema or LLM checks. Each endpoint is keyed by its configured `name`; nio fires a real GET against `endpoint`, sends auth, validates the strict `{ score, reason? }` response contract, and reports the live score on success or the error on failure.
+
+**Disabled entries (`enabled: false`) are skipped entirely** — they are neither probed nor listed. The probe uses a silent collector, so this command never writes to the audit log.
+
+To run it, invoke the bundled CLI (resolve `scripts/` to this skill directory's absolute path per the rules at the top of this file, and issue a **single** `node` command):
+
+```bash
+node scripts/external-score-cli.js
+```
+
+Print its stdout verbatim — it is already formatted markdown. Do not reformat or re-probe the endpoints yourself.
+
+### Output Format
+
+```
+## Nio External Scores
+
+2 enabled endpoint(s) queried.
+
+- [0.42] — guardrail (https://score.example.com)
+- [0.1] — reputation (https://rep.example.com)
+- [✗] — legacy (https://old.example.com): HTTP 401 Unauthorized
+```
+
+Successful rows lead with the score, then the endpoint `name` and URL — nothing else. Only failed rows carry an explanation (the error reason).
+
+If no endpoints are configured (or all are disabled), the command returns a short note explaining that and pointing at `guard.external_analyser`.
+
