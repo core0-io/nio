@@ -150,6 +150,28 @@ describe('resolveMonitorGate — pending arm claiming', () => {
     });
     assert.equal(r.monitored, false);
   });
+
+  it('still claims a pending arm exactly at PENDING_ARM_TTL_MS (age === TTL is not expired)', () => {
+    // The expiry check is a strict `>`, so an age exactly equal to the
+    // TTL must NOT be treated as expired. Only PENDING_ARM_TTL_MS + 1
+    // (covered above) is. Without this case, flipping `>` to `>=` in
+    // resolveMonitorGate would pass every existing test.
+    const store: MonitorStore = {
+      sessions: {},
+      pending_arm: { at: NOW - PENDING_ARM_TTL_MS, cwd: '/work' },
+    };
+    const r = resolveMonitorGate({
+      store,
+      sessionId: 'sess-new',
+      cwd: '/work',
+      monitorAllSessions: false,
+      nowMs: NOW,
+    });
+    assert.equal(r.monitored, true);
+    assert.equal(r.changed, true);
+    assert.equal(r.store.sessions['sess-new']?.cwd, '/work');
+    assert.equal('pending_arm' in r.store, false);
+  });
 });
 
 describe('resolveMonitorGate — expiry GC', () => {
@@ -187,6 +209,25 @@ describe('resolveMonitorGate — expiry GC', () => {
     assert.equal(r.changed, true);
     assert.equal('sess-old' in r.store.sessions, false);
     assert.equal('sess-live' in r.store.sessions, true);
+  });
+
+  it('keeps a session exactly at SESSION_TTL_MS armed (age === TTL is not expired)', () => {
+    // Same strict-`>` boundary as the pending-arm case above, pinned for
+    // the session GC path: a session whose age exactly equals the TTL
+    // must survive. Only SESSION_TTL_MS + 1 (covered above) is dropped.
+    const store: MonitorStore = {
+      sessions: { 'sess-boundary': { armed_at: NOW - SESSION_TTL_MS, cwd: '/work' } },
+    };
+    const r = resolveMonitorGate({
+      store,
+      sessionId: 'sess-boundary',
+      cwd: '/work',
+      monitorAllSessions: false,
+      nowMs: NOW,
+    });
+    assert.equal(r.monitored, true);
+    assert.equal(r.changed, false);
+    assert.equal('sess-boundary' in r.store.sessions, true);
   });
 });
 
