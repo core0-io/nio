@@ -62,7 +62,7 @@
 
 **Interfaces:**
 - Consumes: `loadConfig()` from `./common.js`; `loadCollectorConfig()` from `../scripts/lib/config-loader.js`; `createTracerProvider(config, platform, agentName)`, `createMeterProvider(...)`, `createLoggerProvider(...)`; `ensureTurn(prev, sessionId)`, `endTurn(provider, state, cwd)`, `recordCacheHitRate(state)`, `recordPostToolUse(provider, state, spanKey, cwd, attrs, error)`, `recordPostTaskToolUse(provider, state, taskId, cwd)`; `writeAuditLog(entry, opts)`; `ActionOrchestrator`; `SkillScanner`.
-- Produces: `class InProcessPluginRuntime` with constructor `(opts: PluginRuntimeOptions)` and methods `onSessionStart(sessionId): void`, `onSessionEnd(sessionId): Promise<void>`, `onTurnEnd(sessionId): Promise<void>`, plus the getters `get orchestrator(): ActionOrchestrator` and `get scanner(): SkillScanner`. Later tasks add `onPreTool`, `onPostTool`, `onUserPrompt`, `onAssistantReply`, `onLlmUsage`, `onSubagentStart`, `onSubagentEnd`, `onUserBash`, `dispatchCommand`.
+- Produces: `class InProcessPluginRuntime` with constructor `(opts: PluginRuntimeOptions)` and methods `onSessionStart(sessionId): void`, `onSessionEnd(sessionId): Promise<void>`, `onTurnEnd(sessionId): Promise<void>`, plus the getters `get orchestrator(): ActionOrchestrator` and `get scanner(): SkillScanner`, and the test seam `_setSessionStateForTests(sessionId: string, state: CollectorState): void`. Later tasks add `onPreTool`, `onPostTool`, `onUserPrompt`, `onAssistantReply`, `onLlmUsage`, `onSubagentStart`, `onSubagentEnd`, `onUserBash`, `dispatchCommand`.
 - `PluginRuntimeOptions` = `{ platform: string; adapter: HookAdapter; level?: string; nioFactory?: () => NioInstance }`.
 
 - [ ] **Step 1: Write the failing test**
@@ -77,6 +77,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { InProcessPluginRuntime } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
+import { ensureTurn } from '../scripts/lib/traces-collector.js';
 
 describe('InProcessPluginRuntime', () => {
   function makeRuntime() {
@@ -95,9 +96,22 @@ describe('InProcessPluginRuntime', () => {
     assert.equal(rt.orchestrator, rt.orchestrator);
   });
 
-  it('onSessionStart clears any prior state for that session id', async () => {
+  it('onSessionStart clears state left over from a previous session', () => {
+    // The real regression this guards: turn numbering leaking across a
+    // session boundary. Seed state first, or the assertion passes against
+    // an empty method body.
     const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
     rt.onSessionStart('s1');
+    assert.equal(rt.hasSessionState('s1'), false);
+  });
+
+  it('onSessionEnd flushes and drops the session state', async () => {
+    const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
+    assert.equal(rt.hasSessionState('s1'), true);
+    await rt.onSessionEnd('s1');
     assert.equal(rt.hasSessionState('s1'), false);
   });
 
@@ -107,9 +121,12 @@ describe('InProcessPluginRuntime', () => {
     assert.equal(rt.hasSessionState('never-seen'), false);
   });
 
-  it('onTurnEnd is idempotent', async () => {
+  it('onTurnEnd drops the state and is idempotent', async () => {
     const rt = makeRuntime();
+    rt._setSessionStateForTests('s1', ensureTurn(null, 's1'));
     await rt.onTurnEnd('s1');
+    assert.equal(rt.hasSessionState('s1'), false);
+    // Second call must not throw on the now-absent state.
     await rt.onTurnEnd('s1');
     assert.equal(rt.hasSessionState('s1'), false);
   });
@@ -265,6 +282,20 @@ export class InProcessPluginRuntime {
     return this.sessionState.has(sessionId);
   }
 
+  /**
+   * Test seam: seed collector state for a session directly.
+   *
+   * Production code populates state through `onPreTool` / `onLlmUsage`,
+   * which arrive in later tasks. Without this, the session-lifecycle
+   * tests can only assert that state fails to materialise out of thin
+   * air — they would pass against an empty method body. Named after the
+   * existing `_setDiagnosticsAuditPathForTests` convention in
+   * src/adapters/diagnostics.ts.
+   */
+  _setSessionStateForTests(sessionId: string, state: CollectorState): void {
+    this.sessionState.set(sessionId, state);
+  }
+
   /** Hard session boundary — drop stale turn numbering, write audit row. */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
@@ -334,7 +365,7 @@ export class InProcessPluginRuntime {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pnpm run build && node --import ./dist/tests/helpers/isolate-nio-home.js --test dist/tests/plugin-runtime.test.js`
-Expected: PASS — 5 tests.
+Expected: PASS — all tests in the file green.
 
 - [ ] **Step 5: Commit**
 
