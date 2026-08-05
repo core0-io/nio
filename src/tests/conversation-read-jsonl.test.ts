@@ -13,9 +13,10 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readJsonlTail, linesFromTailBuffer } from '../scripts/lib/conversation/read-jsonl.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function tmpFile(name: string, content: string): { dir: string; path: string } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-read-jsonl-test-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-read-jsonl-test-')));
   const path = join(dir, name);
   writeFileSync(path, content);
   return { dir, path };
@@ -97,7 +98,7 @@ describe('readJsonlTail', () => {
   });
 
   it('returns an empty array (never throws) when the path is a directory', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'nio-read-jsonl-test-dir-'));
+    const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-read-jsonl-test-dir-')));
     try {
       mkdirSync(join(dir, 'unused'));
       assert.deepEqual(readJsonlTail(dir), []);

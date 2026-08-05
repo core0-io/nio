@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync, chmodSync, existsSync }
 import { tmpdir, platform as osPlatform } from 'node:os';
 import { join } from 'node:path';
 import { dumpPayload } from '../scripts/lib/payload-dump.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const ENV_VAR = 'NIO_DUMP_PAYLOAD';
 let prevEnv: string | undefined;
@@ -42,7 +43,7 @@ after(() => {
 });
 
 function freshDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), prefix)));
   cleanupDirs.push(dir);
   return dir;
 }

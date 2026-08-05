@@ -8,13 +8,14 @@ import {
   clearMCPRegistryCache,
 } from '../adapters/mcp-registry.js';
 import type { NioConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 let HOME: string;
 
 const emptyConfig = (): NioConfig => ({});
 
 beforeEach(() => {
-  HOME = mkdtempSync(join(tmpdir(), 'nio-mcp-registry-'));
+  HOME = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-mcp-registry-')));
   clearMCPRegistryCache();
 });
 

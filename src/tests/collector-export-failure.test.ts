@@ -19,6 +19,7 @@ import { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import { createLoggerProvider, emitAuditLog } from '../scripts/lib/logs-collector.js';
 import type { CollectorConfig } from '../scripts/lib/config-loader.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const unreachable: CollectorConfig = {
   endpoint: 'http://127.0.0.1:1',
@@ -36,7 +37,7 @@ let auditDir: string;
 let auditPath: string;
 
 before(() => {
-  auditDir = mkdtempSync(join(tmpdir(), 'nio-export-fail-test-'));
+  auditDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-export-fail-test-')));
   auditPath = join(auditDir, 'audit.jsonl');
   _setDiagnosticsAuditPathForTests(auditPath);
 });

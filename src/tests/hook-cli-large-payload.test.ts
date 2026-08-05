@@ -38,6 +38,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
@@ -136,7 +137,7 @@ describe('hook-cli large payload vs. a stalled stdout consumer', () => {
   it('delivers the whole deny payload instead of one pipe buffer', async () => {
     const scorer = await startScoreServer();
     try {
-      const home = mkdtempSync(join(tmpdir(), 'nio-hook-cli-big-'));
+      const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-hook-cli-big-')));
       writeFileSync(join(home, 'config.yaml'), `guard:
   protection_level: balanced
   confirm_action: deny

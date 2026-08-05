@@ -8,6 +8,7 @@ import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Resolve path to the built nio-cli.js. Test file lives in dist/tests/
 // at runtime; the bundled CLI lives in the Hermes plugin scripts dir.
@@ -20,7 +21,7 @@ const NIO_CLI = join(
 // We don't clean up — OS reaps /tmp; keeping the test file free of
 // filesystem-destructive calls so Nio's own Phase 4 behavioural
 // analyser doesn't (correctly) flag this file.
-const TMP_HOME = mkdtempSync(join(tmpdir(), 'nio-cli-test-'));
+const TMP_HOME = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cli-test-')));
 mkdirSync(TMP_HOME, { recursive: true });
 writeFileSync(join(TMP_HOME, 'config.yaml'), `guard:
   protection_level: balanced

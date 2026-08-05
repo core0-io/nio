@@ -21,6 +21,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Resolve path to the built hook-cli.js. Test file lives in
 // dist/tests/ at runtime. Scripts are bundled by bun (not tsc) into
@@ -39,7 +40,7 @@ const HOOK_CLI = join(
 );
 
 // Isolated NIO_HOME so tests don't touch the developer's ~/.nio.
-const TMP_HOME = mkdtempSync(join(tmpdir(), 'nio-hook-cli-test-'));
+const TMP_HOME = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-hook-cli-test-')));
 mkdirSync(TMP_HOME, { recursive: true });
 writeFileSync(join(TMP_HOME, 'config.yaml'), `guard:
   protection_level: balanced
@@ -159,7 +160,7 @@ describe('hook-cli --platform hermes: ask maps through confirm_action', () => {
   // (and would be caught by the assertion).
 
   function writeConfigWith(confirmAction: 'allow' | 'deny' | 'ask'): string {
-    const home = mkdtempSync(join(tmpdir(), 'nio-hook-cli-confirm-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-hook-cli-confirm-')));
     writeFileSync(join(home, 'config.yaml'), `guard:
   protection_level: balanced
   confirm_action: ${confirmAction}

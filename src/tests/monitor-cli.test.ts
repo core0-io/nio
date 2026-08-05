@@ -41,7 +41,7 @@ function freshHome(): string {
   // its cwd via process.cwd(), which returns the OS-canonicalized path
   // (/private/var/...) per POSIX getcwd() semantics — so an unresolved
   // /var/... fixture path would never match what the child observes.
-  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-cli-'))));
+  return trackTempDir(realpathSync(trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-cli-')))));
 }
 
 function storeAt(home: string): Record<string, unknown> {

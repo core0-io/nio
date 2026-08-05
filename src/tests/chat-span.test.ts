@@ -13,6 +13,7 @@ import type { ChatCall, ContentBlock } from '../scripts/lib/conversation/types.j
 import type { DeferredSpan } from '../scripts/lib/traces-state-store.js';
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // ── Builders ────────────────────────────────────────────────────────────
 
@@ -276,7 +277,7 @@ const baseConfig: ResolvedMetricsConfig = {
 };
 
 function freshFixture(): { dir: string; logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-chat-span-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-chat-span-')));
   return {
     dir,
     logsConfig: { enabled: true, local: true, path: join(dir, 'audit.jsonl'), max_size_mb: 100 },

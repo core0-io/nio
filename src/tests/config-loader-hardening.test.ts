@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 /**
  * Runs `fn` with NIO_HOME set to `nioHome` (or unset when undefined) AND
@@ -22,7 +23,7 @@ import { join } from 'node:path';
 function withEnv<T>(nioHome: string | undefined, fn: (fakeHome: string) => T): T {
   const prevNioHome = process.env['NIO_HOME'];
   const prevHome = process.env['HOME'];
-  const fakeHome = mkdtempSync(join(tmpdir(), 'nio-fake-home-'));
+  const fakeHome = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-fake-home-')));
   process.env['HOME'] = fakeHome;
   if (nioHome === undefined) delete process.env['NIO_HOME'];
   else process.env['NIO_HOME'] = nioHome;
@@ -68,15 +69,15 @@ describe('NIO_HOME empty-string handling', () => {
 
 describe('readRawConfig caching', () => {
   it('reflects a config written before first read', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'nio-cfg-cache-'));
+    const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cfg-cache-')));
     writeFileSync(join(dir, 'config.yaml'), 'collector:\n  monitor_all_sessions: true\n', 'utf-8');
     const { loadMonitorAllSessions } = await import('../scripts/lib/config-loader.js');
     assert.equal(withEnv(dir, () => loadMonitorAllSessions()), true);
   });
 
   it('does not leak one NIO_HOME cached value into another', async () => {
-    const a = mkdtempSync(join(tmpdir(), 'nio-cfg-a-'));
-    const b = mkdtempSync(join(tmpdir(), 'nio-cfg-b-'));
+    const a = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cfg-a-')));
+    const b = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cfg-b-')));
     writeFileSync(join(a, 'config.yaml'), 'collector:\n  monitor_all_sessions: true\n', 'utf-8');
     writeFileSync(join(b, 'config.yaml'), 'collector:\n  monitor_all_sessions: false\n', 'utf-8');
     const { loadMonitorAllSessions } = await import('../scripts/lib/config-loader.js');

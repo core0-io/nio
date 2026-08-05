@@ -4,6 +4,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { trackTempDir } from './tmp-dirs.js';
 
 /**
  * Point `NIO_HOME` at a fresh tmpdir for the duration of `fn`, optionally
@@ -31,7 +32,7 @@ import { join } from 'node:path';
  * the same file.
  */
 export function withNioHome<T>(yaml: string | null, fn: () => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-test-home-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-test-home-')));
   if (yaml !== null) writeFileSync(join(dir, 'config.yaml'), yaml, 'utf-8');
   const previous = process.env['NIO_HOME'];
   process.env['NIO_HOME'] = dir;

@@ -11,12 +11,13 @@ import {
   truncateContent,
 } from '../scripts/lib/content/truncate.js';
 import { loadContentLimits } from '../scripts/lib/config-loader.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // loadContentLimits reads from $NIO_HOME/config.yaml. Each test installs a
 // fresh tmpdir into NIO_HOME, writes a config, and restores afterwards —
 // same pattern as config-loader.test.ts.
 function withNioHome<T>(yamlBody: string, fn: () => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-content-truncate-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-truncate-')));
   writeFileSync(join(dir, 'config.yaml'), yamlBody);
   const previous = process.env['NIO_HOME'];
   process.env['NIO_HOME'] = dir;

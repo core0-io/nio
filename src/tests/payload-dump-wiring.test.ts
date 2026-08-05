@@ -24,6 +24,7 @@ import { mkdtempSync, rmSync, writeFileSync, readdirSync, readFileSync, existsSy
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = join(HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts');
@@ -40,7 +41,7 @@ after(() => {
 });
 
 function freshDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), prefix)));
   cleanupDirs.push(dir);
   return dir;
 }

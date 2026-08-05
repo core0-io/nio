@@ -89,7 +89,7 @@ function startSink(): Promise<Sink> {
 
 /** A fresh NIO_HOME whose config points telemetry at `sinkUrl`. */
 function nioHomeFor(sinkUrl: string): string {
-  const home = trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-guard-gate-'))));
+  const home = trackTempDir(realpathSync(trackTempDir(mkdtempSync(join(tmpdir(), 'nio-guard-gate-')))));
   writeFileSync(join(home, 'config.yaml'), `collector:\n  endpoint: "${sinkUrl}"\n`, 'utf-8');
   return home;
 }

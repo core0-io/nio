@@ -49,6 +49,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — same resolution as monitor-hermes.test.ts.
@@ -60,7 +61,7 @@ const CLI = join(
 const HOOK_TIMEOUT_MS = 45000;
 
 function freshHome(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-hermes-empty-sess-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-hermes-empty-sess-')));
 }
 
 interface Sink {

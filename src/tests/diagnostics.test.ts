@@ -14,6 +14,7 @@ import {
   _setDiagnosticsAuditPathForTests,
   type Diagnostic,
 } from '../adapters/diagnostics.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Each test run gets a fresh tmpdir for the audit log so concurrent test
 // files / repeated runs don't bleed state.
@@ -21,7 +22,7 @@ let auditDir: string;
 let auditPath: string;
 
 before(() => {
-  auditDir = mkdtempSync(join(tmpdir(), 'nio-diagnostics-test-'));
+  auditDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-diagnostics-test-')));
   auditPath = join(auditDir, 'audit.jsonl');
   _setDiagnosticsAuditPathForTests(auditPath);
 });

@@ -14,6 +14,7 @@ import type { GuardRulesConfig } from '../../core/analysers/runtime/index.js';
 import type { PhaseWeights } from '../../core/scoring.js';
 import type { ProtectionLevel } from '../../core/action-decision.js';
 import type { MCPRegistry } from '../../adapters/mcp-registry.js';
+import { trackTempDir } from './tmp-dirs.js';
 
 /**
  * Create an isolated test context with injectable config level.
@@ -39,7 +40,7 @@ export function createTestContext(levelOrOpts: string | TestContextOptions = 'ba
     ? { level: levelOrOpts }
     : levelOrOpts;
 
-  const tempDir = mkdtempSync(join(tmpdir(), 'nio-integ-'));
+  const tempDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-integ-')));
   // Create an isolated ActionOrchestrator — no external services, no loadConfig() side effects
   const nio = {
     orchestrator: new ActionOrchestrator({

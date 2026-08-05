@@ -24,9 +24,10 @@ import { loadState } from '../scripts/lib/traces-state-store.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshFixture(): { logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-session-trace-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-session-trace-')));
   const auditPath = join(dir, 'audit.jsonl');
   return { logsConfig: { enabled: true, local: true, path: auditPath, max_size_mb: 100 } };
 }

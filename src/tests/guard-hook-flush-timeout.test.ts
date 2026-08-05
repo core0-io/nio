@@ -39,6 +39,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — same resolution as monitor-guard-hook.test.ts.
@@ -70,7 +71,7 @@ interface RunResult { code: number | null; elapsedMs: number; stdout: string; st
  * code path it exists to pin.
  */
 function nioHome(): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-guard-flush-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-guard-flush-')));
   writeFileSync(join(home, 'config.yaml'), `guard:
   protection_level: balanced
   confirm_action: allow

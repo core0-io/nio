@@ -33,6 +33,7 @@ import { statePath } from '../scripts/lib/traces-state-store.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const baseConfig: ResolvedMetricsConfig = {
   endpoint: '',
@@ -46,7 +47,7 @@ const baseConfig: ResolvedMetricsConfig = {
 };
 
 function freshFixture(): { dir: string; logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-content-wiring-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-wiring-')));
   return {
     dir,
     logsConfig: { enabled: true, local: true, path: join(dir, 'audit.jsonl'), max_size_mb: 100 },
@@ -279,7 +280,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
   it('truncates by the configured per-kind byte limit and flags it on the record', async () => {
     // loadContentLimits reads $NIO_HOME/config.yaml; the loader caches by
     // resolved path, so a fresh home is a fresh read.
-    const home = mkdtempSync(join(tmpdir(), 'nio-content-limits-home-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-limits-home-')));
     writeFileSync(
       join(home, 'config.yaml'),
       ['collector:', '  content_limits:', '    thinking: 64', ''].join('\n'),
@@ -824,7 +825,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     // plugin keeps itself. Exercised through the real plugin against a
     // loopback OTLP sink — the provider it builds exports to the wire,
     // which is the only place its output is observable.
-    const home = mkdtempSync(join(tmpdir(), 'nio-content-oc-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-oc-')));
     const received: Array<{ url: string; body: string }> = [];
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];
@@ -917,7 +918,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     // To close it, openclaw-source.ts has to reconstruct tool_use; until
     // then, deferring here would only trade crash-resilience and prompt
     // visibility for nothing.
-    const home = mkdtempSync(join(tmpdir(), 'nio-content-oc-sib-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-oc-sib-')));
     const received: Array<{ url: string; body: string }> = [];
     const server = createServer((req, res) => {
       const chunks: Buffer[] = [];

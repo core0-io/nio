@@ -53,7 +53,7 @@ const DEPS: DispatchDeps = {
 // realpath: on macOS tmpdir() is under /var, a symlink to /private/var.
 // A pending arm records process.cwd(), which POSIX reports resolved.
 function freshHome(): string {
-  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), 'nio-monitor-dispatch-'))));
+  return trackTempDir(realpathSync(trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-dispatch-')))));
 }
 
 function storeAt(home: string): Record<string, unknown> {

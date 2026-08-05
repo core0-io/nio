@@ -40,6 +40,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
@@ -110,7 +111,7 @@ function runWithStalledStderr(home: string, envelope: unknown): Promise<RunResul
 
 describe('hook-cli waits for stderr before exiting', () => {
   it('delivers the whole diagnostics block, not one pipe buffer', async () => {
-    const home = mkdtempSync(join(tmpdir(), 'nio-hook-cli-stderr-'));
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-hook-cli-stderr-')));
     // Port 59999 is expected to refuse/ignore the connection — the point
     // is the failed request's diagnostic, not a response. `timeout: 500`
     // keeps the failure quick.

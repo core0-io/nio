@@ -31,6 +31,7 @@ import { dump as yamlDump } from 'js-yaml';
 import { dispatchNioCommand } from '../adapters/openclaw-dispatch.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 import { _resetOAuthRegistryForTests } from '../core/analysers/external/auth.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 interface MockScorerOpts {
   status?: number;
@@ -61,7 +62,7 @@ let originalNioHome: string | undefined;
 
 before(() => {
   originalNioHome = process.env.NIO_HOME;
-  nioHome = mkdtempSync(join(tmpdir(), 'nio-import-test-'));
+  nioHome = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-import-test-')));
   process.env.NIO_HOME = nioHome;
   mkdirSync(nioHome, { recursive: true });
   _setDiagnosticsAuditPathForTests(join(nioHome, 'audit.jsonl'));

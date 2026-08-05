@@ -13,6 +13,7 @@ import {
   reportFlushFailure,
 } from '../scripts/lib/exporter-diagnostics.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Mirror the diagnostics tests: point the diagnostics audit-log writer at a
 // temp file so we can assert on what landed in audit.jsonl.
@@ -20,7 +21,7 @@ let auditDir: string;
 let auditPath: string;
 
 before(() => {
-  auditDir = mkdtempSync(join(tmpdir(), 'nio-exporter-diag-test-'));
+  auditDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-exporter-diag-test-')));
   auditPath = join(auditDir, 'audit.jsonl');
   _setDiagnosticsAuditPathForTests(auditPath);
 });

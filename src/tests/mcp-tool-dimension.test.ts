@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseMcpToolName, dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 describe('parseMcpToolName', () => {
   it('splits a well-formed mcp tool name', () => {
@@ -36,7 +37,7 @@ describe('parseMcpToolName', () => {
 // ── Wiring: MCP dimension lands on the exported execute_tool span ──────
 
 function freshFixture(): { logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-mcp-dimension-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-mcp-dimension-')));
   const auditPath = join(dir, 'audit.jsonl');
   return {
     logsConfig: { enabled: true, local: true, path: auditPath, max_size_mb: 100 },

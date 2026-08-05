@@ -51,6 +51,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
 // dist/scripts/ — same resolution as monitor-scanner-hook.test.ts.
@@ -80,7 +81,7 @@ const EXIT_BOUND_MS = 15000;
  * monitor-scanner-hook.test.ts's helper of the same shape.
  */
 function fakeHomeWithSkill(skillName: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-scanner-shutdown-home-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-scanner-shutdown-home-')));
   const skillDir = join(home, '.claude', 'skills', skillName);
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(
@@ -104,7 +105,7 @@ function fakeHomeWithSkill(skillName: string): string {
 
 /** A fresh NIO_HOME whose config points telemetry at an unroutable endpoint. */
 function nioHomeFor(endpoint: string): string {
-  const home = mkdtempSync(join(tmpdir(), 'nio-scanner-shutdown-nio-'));
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-scanner-shutdown-nio-')));
   writeFileSync(join(home, 'config.yaml'), `collector:\n  endpoint: "${endpoint}"\n`, 'utf-8');
   return home;
 }

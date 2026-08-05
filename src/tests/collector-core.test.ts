@@ -14,13 +14,14 @@ import {
 } from '../scripts/lib/collector-core.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import type { MeterProvider } from '@opentelemetry/sdk-metrics';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Each test gets its own tmpdir + audit file; we never delete — OS reaps
 // /tmp. Keeps the test file free of fs-destructive calls that Nio's own
 // Phase 4 behavioural analyser would (correctly) flag.
 
 function freshFixture(): { auditPath: string; logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-collector-core-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-collector-core-')));
   const auditPath = join(dir, 'audit.jsonl');
   return {
     auditPath,

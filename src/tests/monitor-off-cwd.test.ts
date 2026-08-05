@@ -91,7 +91,7 @@ function runWithSession(
  * unresolved fixture path would never match what it stamps.
  */
 function freshHome(prefix: string): string {
-  return trackTempDir(realpathSync(mkdtempSync(join(tmpdir(), prefix))));
+  return trackTempDir(realpathSync(trackTempDir(mkdtempSync(join(tmpdir(), prefix)))));
 }
 
 function logsConfigFor(home: string): CollectorLogsConfig {
