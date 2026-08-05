@@ -125,6 +125,17 @@ function discoverSources(home: string): SourceDescriptor[] {
   // out of reach because `discoverSources` is home-scoped. Servers
   // declared only in those five files are a known coverage gap: their
   // tools reach the anonymous fallback tier and are gateable by full name.
+  //
+  // Also a known gap: this source is parsed with strict `JSON.parse`
+  // (below, via loadFromSource / desc.format: 'json'), same as every
+  // other source in this file, while pi-mcp-adapter's own loader tolerates
+  // comments and trailing commas (JSONC). A `~/.pi/agent/mcp.json` using
+  // either therefore yields zero `pi` registry entries here — its direct-
+  // tool names (`<server>_<tool>`) then have no server to attribute
+  // against and regress to `UNCATEGORIZED_TOOL` rather than being gated.
+  // Not fixed: adding a JSONC parser for one source only would be
+  // inconsistent with the rest of this file, and a strict-parse failure
+  // already fails open (zero entries, no throw) rather than blocking.
   const piAgentDir = process.env.PI_CODING_AGENT_DIR
     ? expandHome(process.env.PI_CODING_AGENT_DIR, home)
     : join(home, '.pi', 'agent');

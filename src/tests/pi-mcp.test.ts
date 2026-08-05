@@ -92,7 +92,15 @@ describe('parseMcpToolName — pi (direct tools, directTools: true)', () => {
     }
   });
 
-  it('built-in short-circuit runs before attribution (server "gr" would otherwise prefix-match "grep")', () => {
+  it('a built-in name is never claimed as MCP even when a server prefix-matches it', () => {
+    // NOTE: this does NOT prove the PI_BUILTIN_TOOLS.has(name) guard at
+    // hook-engine.ts runs before attribution — it can't, because "grep"
+    // contains no underscore and is already rejected by the earlier
+    // `!body.includes('_')` check regardless of that guard. The
+    // PI_BUILTIN_TOOLS guard is unreachable-by-construction defensive code
+    // today (see the doc comment on PI_BUILTIN_TOOLS in pi.ts: none of the
+    // seven built-ins contains an underscore), kept for a future built-in
+    // that does. This test only pins the observable outcome.
     const r = parseMcpToolName('grep', 'pi', ['gr']);
     assert.equal(r.isMcp, false);
   });

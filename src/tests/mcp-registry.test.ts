@@ -10,16 +10,35 @@ import {
 import type { NioConfig } from '../adapters/config-schema.js';
 
 let HOME: string;
+let originalXdgConfigHome: string | undefined;
+let originalPiCodingAgentDir: string | undefined;
 
 const emptyConfig = (): NioConfig => ({});
 
+// `discoverSources` reads XDG_CONFIG_HOME (opencode source) and
+// PI_CODING_AGENT_DIR (pi source) unconditionally, on every `describe`
+// block in this file, not just the ones that exercise those sources.
+// Clearing them only inside the blocks that test them would still leave
+// every OTHER block reading the developer's real environment (and, via
+// PI_CODING_AGENT_DIR, a real user path) whenever those vars happen to be
+// set — a flake source and a violation of test isolation. Clear both here
+// file-wide and restore per-test; restore an originally-unset var by
+// deleting it, never by assigning the literal string "undefined".
 beforeEach(() => {
   HOME = mkdtempSync(join(tmpdir(), 'nio-mcp-registry-'));
+  originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
+  delete process.env.XDG_CONFIG_HOME;
+  originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
   clearMCPRegistryCache();
 });
 
 afterEach(() => {
   rmSync(HOME, { recursive: true, force: true });
+  if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
+  else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
+  if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
   clearMCPRegistryCache();
 });
 
@@ -284,17 +303,7 @@ describe('loadMCPRegistry: caching & invalidation', () => {
 });
 
 describe('loadMCPRegistry: ~/.config/opencode/opencode.json', () => {
-  let originalXdgConfigHome: string | undefined;
-
-  beforeEach(() => {
-    originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
-    delete process.env.XDG_CONFIG_HOME;
-  });
-
-  afterEach(() => {
-    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME;
-    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome;
-  });
+  // XDG_CONFIG_HOME is cleared/restored by the file-level beforeEach/afterEach.
 
   it('parses local and remote opencode MCP servers and skips disabled ones', () => {
     mkdirSync(join(HOME, '.config', 'opencode'), { recursive: true });
@@ -334,19 +343,7 @@ describe('loadMCPRegistry: enabled:false applies to every source, not just openc
 });
 
 describe('loadMCPRegistry: ~/.pi/agent/mcp.json (pi-mcp-adapter)', () => {
-  let originalPiCodingAgentDir: string | undefined;
-
-  beforeEach(() => {
-    originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
-    delete process.env.PI_CODING_AGENT_DIR;
-  });
-
-  afterEach(() => {
-    // Restore an originally-unset var by deleting it, never by assigning
-    // the string "undefined".
-    if (originalPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = originalPiCodingAgentDir;
-  });
+  // PI_CODING_AGENT_DIR is cleared/restored by the file-level beforeEach/afterEach.
 
   it('parses a mcpServers map with source "pi"', () => {
     mkdirSync(join(HOME, '.pi', 'agent'), { recursive: true });

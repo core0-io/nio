@@ -617,9 +617,10 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
   const piBundle = join(piAgent, 'extensions', 'nio', 'index.js');
   let piRegistered = existsSync(piBundle);
   let piMcpAdapter = false;
-  if (!piRegistered && existsSync(join(piAgent, 'settings.json'))) {
+  const piSettingsPath = join(piAgent, 'settings.json');
+  if (existsSync(piSettingsPath)) {
     try {
-      const s = JSON.parse(readFileSync(join(piAgent, 'settings.json'), 'utf-8')) as {
+      const s = JSON.parse(readFileSync(piSettingsPath, 'utf-8')) as {
         extensions?: unknown[]; packages?: unknown[];
       };
       const mentionsSubstring = (arr: unknown[] | undefined, needle: string): boolean =>
@@ -628,7 +629,10 @@ async function runDoctor(configOverride?: NioConfig): Promise<DoctorOutcome> {
           return typeof v === 'string' && v.includes(needle);
         });
       const mentionsNio = (arr: unknown[] | undefined): boolean => mentionsSubstring(arr, 'nio');
-      piRegistered = mentionsNio(s.extensions) || mentionsNio(s.packages);
+      // `piRegistered` may already be true from the bundle-path check above;
+      // settings.json registration is an independent OR, not a replacement,
+      // so a bundle install doesn't mask a settings.json entry or vice versa.
+      piRegistered = piRegistered || mentionsNio(s.extensions) || mentionsNio(s.packages);
       piMcpAdapter = mentionsSubstring(s.extensions, 'pi-mcp-adapter')
         || mentionsSubstring(s.packages, 'pi-mcp-adapter');
     } catch { /* unreadable settings — treat as not registered */ }
