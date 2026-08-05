@@ -395,6 +395,35 @@ const WRITE_STALL_TIMEOUT_MS = 10_000;
 // the process alive on its own; it exists only to notice progress.
 const WRITE_POLL_MS = 250;
 
+// Payload chunk size for the stdout write.
+//
+// The payload is written in chunks so that "did anything leave the
+// buffer?" is ANSWERABLE. `writableLength` cannot answer it:
+//
+//  - it counts bytes belonging to writes that have not COMPLETED, and
+//    libuv treats one `write(payload)` as a single request however many
+//    partial writev()s it takes. Measured: a 450 000-byte single write to
+//    a consumer draining 8KB/450ms reported `writableLength=450000` on
+//    all 29 samples over 14.5s, then dropped straight to 0 at the end;
+//  - chunking alone does not fix it either, because with backpressure the
+//    queue simply stays FULL — same measurement, chunked: `pending=65536`
+//    on 24 consecutive samples while the write offset climbed from
+//    212 992 to 409 600. A constant queue depth is not the same thing as
+//    no progress, but `pending !== lastPending` cannot tell them apart.
+//
+// So the progress signal is the per-chunk write CALLBACK: node invokes it
+// when that chunk's request completes, i.e. when those bytes have actually
+// been handed to the OS. One completed chunk = real progress, and the
+// backstop only fires when no chunk has completed for
+// WRITE_STALL_TIMEOUT_MS. That makes the effective "wedged" threshold
+// WRITE_CHUNK_BYTES / WRITE_STALL_TIMEOUT_MS ≈ 1.6 KB/s — anything slower
+// than that is treated as stuck, anything faster is waited out.
+//
+// Before this, the backstop was a flat 10s wall clock in all but name:
+// a 450KB deny payload to a healthy 18KB/s consumer came out cut to
+// 180 224 bytes at 10 301ms.
+const WRITE_CHUNK_BYTES = 16 * 1024;
+
 /**
  * Write the Hermes response and exit once BOTH stdio streams have
  * drained.
@@ -447,24 +476,60 @@ function writeAndExit(payload: string): void {
   // makes Hermes log a spurious hook failure.
   process.stdout.on('error', finish);
   process.stderr.on('error', finish);
-  process.stdout.write(payload, () => {
-    stdoutHandedOff = true;
-    finishIfDrained();
-  });
+
+  // Progress, stamped by whatever actually moved bytes: a completed
+  // stdout chunk, or a change in stderr's queue depth.
+  let lastProgressMs = Date.now();
+  const noteProgress = (): void => { lastProgressMs = Date.now(); };
+
+  // Chunked, backpressure-respecting write — see WRITE_CHUNK_BYTES.
+  const buf = Buffer.from(payload, 'utf-8');
+  let offset = 0;
+  const pump = (): void => {
+    if (exited) return;
+    while (offset < buf.length) {
+      const end = Math.min(offset + WRITE_CHUNK_BYTES, buf.length);
+      const chunk = buf.subarray(offset, end);
+      offset = end;
+      const last = offset >= buf.length;
+      const ok = process.stdout.write(chunk, last ? () => {
+        stdoutHandedOff = true;
+        noteProgress();
+        finishIfDrained();
+      } : noteProgress);
+      if (last) return;
+      if (!ok) {
+        // Buffer full: resume from the same offset once it has drained.
+        process.stdout.once('drain', pump);
+        return;
+      }
+    }
+  };
+  if (buf.length === 0) {
+    process.stdout.write('', () => {
+      stdoutHandedOff = true;
+      finishIfDrained();
+    });
+  } else {
+    pump();
+  }
 
   // Progress-aware backstop, and also the thing that re-checks stderr
   // after stdout's callback has already fired.
-  let lastPending = process.stdout.writableLength + process.stderr.writableLength;
-  let lastProgressMs = Date.now();
+  let lastPending = process.stderr.writableLength;
   setInterval(() => {
-    const pending = process.stdout.writableLength + process.stderr.writableLength;
+    const stderrPending = process.stderr.writableLength;
+    // stderr's call sites are spread across main() and the diagnostics
+    // helpers, so there is no callback to hook there — a change in its
+    // queue depth is the only signal available, and it is a sound one
+    // because nothing enqueues more stderr once writeAndExit is reached.
+    if (stderrPending !== lastPending) {
+      lastPending = stderrPending;
+      noteProgress();
+    }
+    const pending = process.stdout.writableLength + stderrPending;
     if (pending === 0) {
       finishIfDrained();
-      return;
-    }
-    if (pending !== lastPending) {
-      lastPending = pending;
-      lastProgressMs = Date.now();
       return;
     }
     if (Date.now() - lastProgressMs >= WRITE_STALL_TIMEOUT_MS) finish();
