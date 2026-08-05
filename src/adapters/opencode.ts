@@ -36,6 +36,23 @@ export interface OpenCodeAdapterOptions {
 }
 
 /**
+ * Pull the first file target out of an apply_patch payload. opencode
+ * marks each file in the patch body with `*** Add File: <path>`,
+ * `*** Update File: <path>` or `*** Delete File: <path>`
+ * (packages/opencode/src/patch.ts:76-87). Returns null when the payload
+ * carries no marker, so the caller can fall back to an empty path
+ * rather than inventing one.
+ */
+function firstPatchTarget(patchText: string | undefined): string | null {
+  if (!patchText) return null;
+  for (const line of patchText.split('\n')) {
+    const m = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/.exec(line.trim());
+    if (m) return m[1]!.trim();
+  }
+  return null;
+}
+
+/**
  * opencode plugin adapter.
  *
  * Bridges opencode's `tool.execute.before` / `tool.execute.after` hooks
@@ -110,14 +127,23 @@ export class OpenCodeAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        // opencode uses camelCase `filePath`; write carries `content`,
-        // edit carries `newString`, apply_patch carries `patch`.
+        // opencode uses camelCase `filePath`. The three writers differ:
+        //   write       → { filePath, content }
+        //   edit        → { filePath, newString }
+        //   apply_patch → { patchText }   ← NO filePath at all
+        // apply_patch's targets are marker lines inside the patch text
+        // (packages/opencode/src/tool/apply_patch.ts declares a single
+        // `patchText` field; packages/opencode/src/patch.ts parses the
+        // `*** Add|Update|Delete File:` markers). Without extracting
+        // them, every apply_patch call would reach the audit log with an
+        // empty path and give Phase 3 nothing to scan.
+        const patchText = input.toolInput.patchText as string | undefined;
         const content =
           (input.toolInput.content as string) ||
           (input.toolInput.newString as string) ||
-          (input.toolInput.patch as string) || '';
+          patchText || '';
         const data: FileOperationData = {
-          path: (input.toolInput.filePath as string) || '',
+          path: (input.toolInput.filePath as string) || firstPatchTarget(patchText) || '',
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;

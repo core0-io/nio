@@ -1,0 +1,8 @@
+{
+  "tool": "apply_patch",
+  "sessionID": "ses_7c1f2a9b",
+  "callID": "call_4d31",
+  "args": {
+    "patchText": "*** Begin Patch\n*** Update File: src/server.ts\n@@\n-const port = 3000\n+const port = 8080\n*** End Patch"
+  }
+}

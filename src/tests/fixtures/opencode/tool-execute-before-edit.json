@@ -1,0 +1,6 @@
+{
+  "tool": "edit",
+  "sessionID": "ses_7c1f2a9b",
+  "callID": "call_4d30",
+  "args": { "filePath": "/tmp/demo.txt", "oldString": "hello", "newString": "goodbye" }
+}
