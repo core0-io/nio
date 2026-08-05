@@ -44,6 +44,36 @@ function readEntries(path: string): Array<Record<string, unknown>> {
   return readFileSync(path, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
+/**
+ * Close the turn so the deferred tool spans are exported.
+ *
+ * Tool spans are held in `deferred_spans` until end of turn — they can
+ * only be nested under the LLM call that issued them, and that is not
+ * knowable at PostToolUse time. Every assertion about an exported tool
+ * span therefore has to run a turn boundary first.
+ */
+async function flushTurn(
+  sessionId: string,
+  platform: string,
+  logsConfig: CollectorLogsConfig,
+  tracerProvider: unknown,
+): Promise<void> {
+  await dispatchCollectorEvent({
+    event: 'Stop',
+    input: { session_id: sessionId },
+    platform,
+    config: baseConfig,
+    meterProvider: null,
+    tracerProvider: tracerProvider as never,
+    logsConfig,
+  });
+}
+
+/** Exported tool spans only — drops the turn root emitted by `flushTurn`. */
+function toolSpans<T extends { name: string }>(spans: readonly T[]): T[] {
+  return spans.filter((s) => s.name.startsWith('execute_tool '));
+}
+
 // ── toolSummary — cross-platform tool-name recognition ────────────────
 
 describe('collector-core: toolSummary', () => {
@@ -360,7 +390,10 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    assert.equal(tracer.finished().length, 0, 'the tool span waits for the turn to end');
+    await flushTurn(sessionId, 'claude-code', logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1, 'exactly one tool span exported');
     const attrs = spans[0]!.attributes as Record<string, unknown>;
     assert.equal(attrs['nio.guard.decision'], 'allow');
@@ -423,7 +456,9 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1, 'one execute_tool span should be emitted via composite fallback');
     assert.equal(spans[0]!.name, 'execute_tool terminal');
 
@@ -674,14 +709,18 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const spans = tracer.finished();
+    const mid2 = loadState(logsConfig);
+    assert.deepEqual(mid2!.pending_spans, {}, 'pending_spans must drain empty — no leaked #N entry');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 2, 'both concurrent calls must produce a span (regression: 2nd used to vanish)');
 
     const starts = spans.map(spanStartMs).sort((a, b) => a - b);
     assert.ok(starts[1]! > starts[0]!, 'the two spans must carry distinct start times — one per pre entry, none reused');
 
     const after = loadState(logsConfig);
-    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty — no leaked #N entry');
+    assert.deepEqual(after!.deferred_spans, [], 'deferred_spans must drain empty at end of turn');
   });
 
   it('LIFO completion: the later-processed post is not dropped, and no start time is reused across the two spans', async () => {
@@ -711,16 +750,17 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
     });
 
-    const spans = tracer.finished();
+    const mid = loadState(logsConfig);
+    assert.deepEqual(mid!.pending_spans, {}, 'pending_spans must drain empty even under out-of-order completion');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 2,
       'out-of-order completion must not drop the later-processed post (regression: old code returned durationMs:null for it)');
 
     const starts = spans.map(spanStartMs).sort((a, b) => a - b);
     assert.notEqual(starts[0], starts[1],
       'the second-processed post must not be matched onto the same start time already consumed by the first');
-
-    const after = loadState(logsConfig);
-    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty even under out-of-order completion');
   });
 
   it('three concurrent same-signature calls all resolve to distinct spans in FIFO order', async () => {
@@ -751,13 +791,14 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
       });
     }
 
-    const spans = tracer.finished();
+    const after = loadState(logsConfig);
+    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty for three concurrent calls too');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 3, 'all three concurrent calls must each produce a span');
 
     const starts = spans.map(spanStartMs);
     assert.equal(new Set(starts).size, 3, 'all three spans must carry distinct start times');
-
-    const after = loadState(logsConfig);
-    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty for three concurrent calls too');
   });
 });

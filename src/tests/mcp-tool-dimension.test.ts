@@ -54,6 +54,31 @@ const baseConfig: ResolvedMetricsConfig = {
   logs_enabled: true,
 };
 
+/**
+ * Close the turn so the deferred tool span is exported. Tool spans are
+ * held back until end of turn — see `deferPostToolUse`.
+ */
+async function flushTurn(
+  sessionId: string,
+  logsConfig: CollectorLogsConfig,
+  tracerProvider: unknown,
+): Promise<void> {
+  await dispatchCollectorEvent({
+    event: 'Stop',
+    input: { session_id: sessionId },
+    platform: 'claude-code',
+    config: baseConfig,
+    meterProvider: null,
+    tracerProvider: tracerProvider as never,
+    logsConfig,
+  });
+}
+
+/** Exported tool spans only — drops the turn root emitted by `flushTurn`. */
+function toolSpans<T extends { name: string }>(spans: readonly T[]): T[] {
+  return spans.filter((s) => s.name.startsWith('execute_tool '));
+}
+
 describe('MCP tool dimension on execute_tool span', () => {
   it('tags an mcp__<server>__<tool> call with gen_ai.tool.type=mcp and nio.mcp.server', async () => {
     const { makeInMemoryTracer } = await import('./helpers/tracer.js');
@@ -93,7 +118,9 @@ describe('MCP tool dimension on execute_tool span', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    await flushTurn(sessionId, logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1);
     assert.equal(spans[0]!.attributes['gen_ai.tool.type'], 'mcp');
     assert.equal(spans[0]!.attributes['nio.mcp.server'], 'github');
@@ -138,7 +165,9 @@ describe('MCP tool dimension on execute_tool span', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    await flushTurn(sessionId, logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1);
     assert.equal(spans[0]!.attributes['gen_ai.tool.type'], undefined);
     assert.equal(spans[0]!.attributes['nio.mcp.server'], undefined);

@@ -575,8 +575,16 @@ describe('recordPostToolUse — deny/block path', () => {
     assert.equal(span.status.code, SpanStatusCode.ERROR, 'span status must be ERROR on deny path');
     assert.equal(span.status.message, errorReason, 'span status message must be the block reason');
 
-    // State housekeeping: pending span should be drained
+    // State housekeeping: pending span should be drained, and nothing
+    // should be left parked for the end-of-turn flush — the deny path
+    // emits now, on purpose. A security event that only becomes visible
+    // when the turn closes is not visible when it matters.
     assert.equal(nextState.pending_spans['tc-block-1'], undefined, 'pending span should be removed after post');
+    assert.deepEqual(
+      nextState.deferred_spans ?? [],
+      [],
+      'the deny path must not leave a duplicate span queued for endTurn',
+    );
     assert.ok(durationMs !== null && durationMs >= 0, 'durationMs should be non-null and non-negative');
 
     await shutdown();

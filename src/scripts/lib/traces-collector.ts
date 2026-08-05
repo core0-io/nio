@@ -15,8 +15,23 @@ export {};
  * Trace hierarchy (OTel GenAI semantic conventions):
  *
  *   Trace: "invoke_agent UserPromptSubmit" — one trace per conversation turn
- *     └─ Span: "execute_tool <name>" — one span per tool call (pre→post)
+ *     └─ Span: "chat <model>" — one span per LLM call
+ *          └─ Span: "execute_tool <name>" — the tools that call issued
+ *     └─ Span: "execute_tool <name>" — tools that could not be attributed
  *     └─ Span: "task:execute" — one span per task lifecycle
+ *
+ * Why tool spans are deferred
+ * ---------------------------
+ * A tool span can only be nested under the LLM call that issued it, and
+ * that attribution is unknown at PostToolUse time — it comes from the
+ * conversation source once the turn is over. So finished tool spans park
+ * in `state.deferred_spans` (`deferPostToolUse`) and the whole tree is
+ * emitted together in `endTurn`.
+ *
+ * The one exception is the guard's block path: `recordPostToolUse` keeps
+ * the old immediate-emit behaviour. A denied action is a security event,
+ * and making it wait tens of seconds for the turn to end before it
+ * becomes visible is not an acceptable trade for a nicer tree.
  */
 
 import { readFileSync } from 'node:fs';
@@ -30,10 +45,14 @@ import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/expor
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
-import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
+import type {
+  CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan,
+} from './traces-state-store.js';
+import type { ChatCall } from './conversation/types.js';
+import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
-export type { CollectorState, PendingToolSpan, PendingTaskSpan };
+export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
@@ -386,12 +405,17 @@ export function ensureTurn(
   // pending_task_spans + turn_attributes are NOT migrated — they're
   // genuinely turn-scoped and shouldn't outlive a session change.
   const prevWasSentinel = prev && (prev.session_id === '' || prev.session_id === 'unknown');
+  // deferred_spans rides along for the same reason pending_spans does:
+  // a tool that closed while the session was still a sentinel has its
+  // finished span parked here, and dropping it on promotion would lose
+  // the span outright (nothing emits it — the emit happens at endTurn).
   const carryPending = prevWasSentinel
     ? {
         pending_spans: prev.pending_spans ?? {},
         pending_guard_attrs: prev.pending_guard_attrs ?? {},
+        deferred_spans: prev.deferred_spans ?? [],
       }
-    : { pending_spans: {}, pending_guard_attrs: {} };
+    : { pending_spans: {}, pending_guard_attrs: {}, deferred_spans: [] };
 
   const turnNumber = (prev?.session_id === sessionId ? prev.turn_number : 0) + 1;
   return {
@@ -501,29 +525,78 @@ export interface PostSpanResult {
 }
 
 /**
- * Closes the pending tool span and emits it as a child of the current
- * turn. Returns the next state (with the pending entry removed) and the
- * duration in ms. If no matching pre-span existed, returns durationMs:
- * null and the state unchanged.
+ * Closes the pending tool span and parks it in `deferred_spans` for the
+ * end-of-turn flush. Returns the next state (with the pending entry
+ * removed, the deferred entry appended) and the duration in ms. If no
+ * matching pre-span existed, returns durationMs: null and the state
+ * unchanged.
+ *
+ * Nothing is emitted here — see the module doc for why attribution
+ * forces the wait.
  */
-export async function recordPostToolUse(
-  provider: NodeTracerProvider,
+export function deferPostToolUse(
   state: CollectorState,
   spanKey: string,
   cwd: string | null,
   postAttributes?: Record<string, unknown>,
   error?: string | null,
-): Promise<PostSpanResult> {
+): PostSpanResult {
   const pending = state.pending_spans[spanKey];
   if (!pending) return { state, durationMs: null };
 
   const endMs = Date.now();
   const startMs = pending.start_ms;
 
-  const traceId = state.turn_trace_id;
+  const toolCallId =
+    (pending.attributes?.['gen_ai.tool.call.id'] as string | undefined) ??
+    undefined;
+
+  const deferred: DeferredSpan = {
+    kind: 'tool',
+    name: `execute_tool ${pending.tool_name || 'unknown'}`,
+    span_id: pending.span_id,
+    start_ms: startMs,
+    end_ms: endMs,
+    attributes: {
+      ...genAiToolAttributes(pending.tool_name, toolCallId),
+      'nio.tool_summary': pending.tool_summary,
+      'nio.turn_number': state.turn_number,
+      ...(cwd ? { 'nio.cwd': cwd } : {}),
+      ...(pending.attributes ?? {}),
+      ...(postAttributes ?? {}),
+    },
+    ...(error ? { error } : {}),
+    ...(toolCallId ? { tool_use_id: toolCallId } : {}),
+  };
+
+  const { [spanKey]: _removed, ...remaining } = state.pending_spans;
+  void _removed;
+  return {
+    state: {
+      ...state,
+      pending_spans: remaining,
+      deferred_spans: [...(state.deferred_spans ?? []), deferred],
+    },
+    durationMs: endMs - startMs,
+  };
+}
+
+/**
+ * Emit one finished span under `parentSpanId`.
+ *
+ * The span's own id is forced to the id minted at PreToolUse so content
+ * log records — which were emitted while the tool was still running and
+ * carry that id — join back to the span the backend receives.
+ */
+function emitDeferredSpan(
+  provider: NodeTracerProvider,
+  traceId: string,
+  parentSpanId: string,
+  deferred: DeferredSpan,
+): void {
   const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
     traceId,
-    spanId: traceId.slice(0, 16),  // synthetic parent representing the turn
+    spanId: parentSpanId,
     traceFlags: TraceFlags.SAMPLED,
     isRemote: true,
   });
@@ -536,37 +609,64 @@ export async function recordPostToolUse(
   // trace.getTracer() reads from the other and gets a no-op tracer.
   // Going through the provider directly side-steps the global path.
   const tracer = provider.getTracer('nio-collector', '1.0.0');
-  const toolCallId =
-    (pending.attributes?.['gen_ai.tool.call.id'] as string | undefined) ??
-    undefined;
   const span = tracer.startSpan(
-    `execute_tool ${pending.tool_name || 'unknown'}`,
+    deferred.name,
     {
-      startTime: startMs,
-      attributes: {
-        ...genAiToolAttributes(pending.tool_name, toolCallId),
-        'nio.tool_summary': pending.tool_summary,
-        'nio.turn_number': state.turn_number,
-        ...(cwd ? { 'nio.cwd': cwd } : {}),
-        ...(pending.attributes ?? {}),
-        ...(postAttributes ?? {}),
-      } as Record<string, string | number | boolean>,
+      startTime: deferred.start_ms,
+      attributes: deferred.attributes as Record<string, string | number | boolean>,
     },
     parentCtx,
   );
-  if (error) {
-    span.setStatus({ code: SpanStatusCode.ERROR, message: error });
-    span.recordException(error);
+  if (deferred.span_id) {
+    (span.spanContext() as { spanId: string }).spanId = deferred.span_id;
   }
-  span.end(endMs);
+  if (deferred.error) {
+    span.setStatus({ code: SpanStatusCode.ERROR, message: deferred.error });
+    span.recordException(deferred.error);
+  }
+  span.end(deferred.end_ms);
+}
+
+/**
+ * Close a pending tool span and emit it immediately, as a direct child
+ * of the turn.
+ *
+ * Thin wrapper over `deferPostToolUse` + a single-span flush, kept for
+ * the callers that cannot wait for the end of turn:
+ *
+ *  - the guard's block path (guard-hook / hook-cli / openclaw-plugin):
+ *    PostToolUse will never fire for a denied call, and a security event
+ *    that only surfaces once the turn closes is not observable when it
+ *    matters.
+ *  - OpenClaw's eager per-tool export and its end-of-session sweep of
+ *    leftover pending spans.
+ *
+ * Behaviourally identical to the pre-deferral implementation: the span
+ * goes out now, `deferred_spans` is left exactly as it was found.
+ */
+export async function recordPostToolUse(
+  provider: NodeTracerProvider,
+  state: CollectorState,
+  spanKey: string,
+  cwd: string | null,
+  postAttributes?: Record<string, unknown>,
+  error?: string | null,
+): Promise<PostSpanResult> {
+  const result = deferPostToolUse(state, spanKey, cwd, postAttributes, error);
+  if (result.durationMs === null) return result;
+
+  const queued = result.state.deferred_spans ?? [];
+  const deferred = queued[queued.length - 1]!;
+  const traceId = result.state.turn_trace_id;
+  // Synthetic parent representing the turn — the same id endTurn forces
+  // onto the turn's own span.
+  emitDeferredSpan(provider, traceId, traceId.slice(0, 16), deferred);
 
   await provider.forceFlush();
 
-  const { [spanKey]: _removed, ...remaining } = state.pending_spans;
-  void _removed;
   return {
-    state: { ...state, pending_spans: remaining },
-    durationMs: endMs - startMs,
+    state: { ...result.state, deferred_spans: queued.slice(0, -1) },
+    durationMs: result.durationMs,
   };
 }
 
@@ -708,17 +808,25 @@ export function parseTranscriptUsage(
 // ---------------------------------------------------------------------------
 
 /**
- * Emits the root span for the full turn duration, then returns a fresh
- * state with the turn marker cleared so the next user message starts a
- * new turn. Returns null if the input state has no active turn — caller
- * should persist nothing in that case (treat as a no-op for idempotency
- * across concurrent Stop/SubagentStop hooks).
+ * Emits the turn's whole span tree — chat spans, the tool spans nested
+ * under them, the tool spans that could not be attributed, and finally
+ * the turn root — then returns a fresh state with the turn marker
+ * cleared so the next user message starts a new turn. Returns null if
+ * the input state has no active turn — caller should persist nothing in
+ * that case (treat as a no-op for idempotency across concurrent
+ * Stop/SubagentStop hooks).
+ *
+ * `calls` are the LLM calls the conversation source reconstructed for
+ * this turn. Omitted or empty (unrecognised platform, unreadable session
+ * file, a streaming source with nothing gathered) degrades cleanly to
+ * the pre-chat-layer shape: every deferred span hangs off the turn.
  */
 export async function endTurn(
   provider: NodeTracerProvider,
   state: CollectorState,
   cwd: string | null,
   transcriptPath?: string | null,
+  calls?: ChatCall[],
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
@@ -740,15 +848,31 @@ export async function endTurn(
 
   const endMs = Date.now();
   const traceId = state.turn_trace_id;
+  const turnSpanId = traceId.slice(0, 16);
 
   // Build a remote parent context with the turn's trace ID so the root span
   // sits at the top of the trace.
   const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
     traceId,
-    spanId: traceId.slice(0, 16),
+    spanId: turnSpanId,
     traceFlags: TraceFlags.SAMPLED,
     isRemote: true,
   });
+
+  // Chat spans first, then the tools beneath each of them, then the
+  // tools nobody could claim, then the turn root. Order matters only for
+  // readability of the exporter's output — every parent link is by id,
+  // not by emission order.
+  const tree = buildSpanTree(calls ?? [], state.deferred_spans ?? []);
+  for (const node of tree.chats) {
+    emitChatSpan(provider, traceId, turnSpanId, node.span_id, node.call);
+    for (const tool of node.tools) {
+      emitDeferredSpan(provider, traceId, node.span_id, tool);
+    }
+  }
+  for (const orphan of tree.orphans) {
+    emitDeferredSpan(provider, traceId, turnSpanId, orphan);
+  }
 
   // Use provider.getTracer instead of trace.getTracer(global) so that
   // bundled hook scripts emit spans correctly. Bun's hook-cli bundle
@@ -795,5 +919,40 @@ export async function endTurn(
     pending_task_spans: {},
     pending_guard_attrs: {},
     turn_attributes: {},
+    deferred_spans: [],
   };
+}
+
+/**
+ * Emit one `chat` span under the turn.
+ *
+ * Its span id is the one `buildSpanTree` minted, so the tool spans that
+ * name it as their parent land underneath it.
+ */
+function emitChatSpan(
+  provider: NodeTracerProvider,
+  traceId: string,
+  turnSpanId: string,
+  chatSpanId: string,
+  call: ChatCall,
+): void {
+  const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId,
+    spanId: turnSpanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+
+  // provider.getTracer, not the global — see emitDeferredSpan.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
+  const span = tracer.startSpan(
+    chatSpanName(call),
+    {
+      startTime: call.startMs,
+      attributes: chatSpanAttributes(call) as Record<string, string | number | boolean>,
+    },
+    parentCtx,
+  );
+  (span.spanContext() as { spanId: string }).spanId = chatSpanId;
+  span.end(call.endMs);
 }

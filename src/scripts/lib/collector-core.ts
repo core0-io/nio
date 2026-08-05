@@ -48,7 +48,7 @@ import { forgetSession } from './monitor-check.js';
 import {
   ensureTurn,
   recordPreToolUse,
-  recordPostToolUse,
+  deferPostToolUse,
   recordPreTaskToolUse,
   recordPostTaskToolUse,
   endTurn,
@@ -58,6 +58,8 @@ import {
   takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
+import { createSourceForPlatform } from './conversation/factory.js';
+import type { ChatCall } from './conversation/types.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -268,6 +270,44 @@ function resolveSpanKey(
   return primary;
 }
 
+/**
+ * Reconstruct this turn's LLM calls so `endTurn` can nest each tool span
+ * under the call that issued it.
+ *
+ * Returns undefined — never throws — whenever the calls can't be had:
+ * a platform with no `ConversationSource`, a source whose input is
+ * missing (no transcript path), or an unreadable session file. The
+ * caller then emits the pre-chat-layer `turn → tool` shape, which is a
+ * degraded trace rather than a broken one.
+ *
+ * Only the replay platforms (Claude Code, Codex) can be served from
+ * here: their calls come from a session file this process can open.
+ * The streaming platforms hand their conversation data to a different
+ * entry point (Hermes's `post_llm_call` payload, OpenClaw's event
+ * array), neither of which reaches a Stop/SessionEnd hook payload.
+ */
+async function resolveTurnCalls(
+  platform: string,
+  transcriptPath: string | null,
+  turnStartMs: number,
+): Promise<ChatCall[] | undefined> {
+  try {
+    const source = createSourceForPlatform(platform, { transcriptPath });
+    if (!source) return undefined;
+    return source.callsSince(turnStartMs);
+  } catch (err) {
+    const { reportDiagnostic } = await import('../../adapters/diagnostics.js');
+    reportDiagnostic({
+      severity: 'warning',
+      source: 'collector',
+      kind: 'conversation_source_error',
+      message: '[nio] could not reconstruct the turn\'s LLM calls; tool spans will hang off the turn',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
 const KNOWN_HOOK_EVENTS: ReadonlySet<HookEventName> = new Set<HookEventName>([
   'UserPromptSubmit',
   'PreToolUse',
@@ -383,8 +423,11 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const mcpAttrs = mcp
           ? { 'gen_ai.tool.type': 'mcp', 'nio.mcp.server': mcp.server, 'nio.mcp.tool': mcp.tool }
           : {};
-        const result = await recordPostToolUse(
-          tracerProvider, state, key, cwd,
+        // Parked, not emitted: the span can only be nested under the
+        // LLM call that issued it, and that is not knowable until the
+        // turn ends. endTurn emits the whole tree.
+        const result = deferPostToolUse(
+          state, key, cwd,
           {
             ...drained.attrs,
             ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
@@ -460,7 +503,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       const hasActiveTurn = Boolean(prev?.turn_trace_id);
 
       if (hasActiveTurn && tracerProvider) {
-        const next = await endTurn(tracerProvider, prev!, cwd, transcriptPath);
+        const calls = await resolveTurnCalls(platform, transcriptPath, prev!.turn_start_ms);
+        const next = await endTurn(tracerProvider, prev!, cwd, transcriptPath, calls);
         if (next) saveState(logsConfig, next);
       }
 
