@@ -188,6 +188,11 @@ export function registerOpenClawPlugin(
       rt.dumpEvent('llm_output', { event, ctx });
       const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const sessionId = sid(ctx);
+      // Kept for the end-of-turn chat-span reconstruction. OpenClaw has
+      // no session file and no whole-conversation payload, so this event
+      // stream is the only record of which LLM call happened when.
+      // `createOpenClawSource` reads a `{ hook, event }` envelope.
+      rt.recordConversationEvent(sessionId, { hook: 'llm_output', event });
       if (e.usage) {
         rt.onLlmUsage(sessionId, {
           input: e.usage['input'], output: e.usage['output'],

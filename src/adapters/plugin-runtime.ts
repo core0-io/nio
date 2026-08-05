@@ -23,7 +23,10 @@ import type { AuditLifecycleEntry } from './audit-types.js';
 import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
-import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
+import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
+import type { ChatCall } from '../scripts/lib/conversation/types.js';
+import { createContentSink } from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
@@ -95,6 +98,12 @@ export interface PluginRuntimeOptions {
   loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
+/**
+ * Oldest conversation events are dropped past this many per session.
+ * See `recordConversationEvent`.
+ */
+const MAX_CONVERSATION_EVENTS = 200;
+
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
 
 export interface PreToolResult {
@@ -113,6 +122,13 @@ export class InProcessPluginRuntime {
   readonly confirmAction: 'allow' | 'deny' | 'ask';
 
   protected readonly sessionState = new Map<string, CollectorState>();
+
+  /**
+   * Per-session conversation events, cleared with the rest of the turn
+   * state. Streaming platforms (OpenClaw, opencode) have no session file
+   * to read back, so these events ARE the conversation.
+   */
+  private readonly conversationEvents = new Map<string, unknown[]>();
 
   private readonly opts: PluginRuntimeOptions;
   private nio: NioInstance | null = null;
@@ -336,9 +352,51 @@ export class InProcessPluginRuntime {
     this.sessionState.set(sessionId, state);
   }
 
+  /**
+   * Accumulate one platform conversation event.
+   *
+   * Streaming platforms (OpenClaw, opencode) have no session file to
+   * read back and no whole-conversation payload, so the only way to know
+   * which LLM call issued which tool call is to keep the events as they
+   * arrive. Replay platforms (Pi) leave this untouched and override
+   * `conversationInputFor` to supply a transcript path instead.
+   *
+   * Accumulates regardless of monitor state, deliberately: a session
+   * armed mid-turn should still produce a coherent turn rather than half
+   * of one. Only the export at turn close is gated — and an unmonitored
+   * turn's events are dropped there rather than exported, so nothing
+   * accumulated while unarmed can leak later.
+   */
+  recordConversationEvent(sessionId: string, event: unknown): void {
+    const list = this.conversationEvents.get(sessionId) ?? [];
+    list.push(event);
+    // Hard cap. These are long-running hosts, and an unbounded
+    // per-session array is a memory leak with extra steps. A turn with
+    // more calls than this loses its earliest chat spans — the tool
+    // spans that would have named them fall back to hanging off the turn
+    // root, the same degraded shape as having no source at all, which is
+    // a better failure than growing without bound.
+    if (list.length > MAX_CONVERSATION_EVENTS) {
+      list.splice(0, list.length - MAX_CONVERSATION_EVENTS);
+    }
+    this.conversationEvents.set(sessionId, list);
+  }
+
+  /**
+   * Where this platform's conversation comes from. Replay platforms
+   * override to return a transcript path; the default is the streaming
+   * shape.
+   */
+  protected conversationInputFor(sessionId: string): SourceInput {
+    return { events: this.conversationEvents.get(sessionId) ?? [] };
+  }
+
   /** Hard session boundary — drop stale turn numbering, write audit row. */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
+    // A recycled session id must not inherit the previous session's
+    // calls — they would be replayed as this session's chat spans.
+    this.conversationEvents.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -442,6 +500,7 @@ export class InProcessPluginRuntime {
     const tracerProvider = monitored ? this.getTracerProvider() : null;
     if (!tracerProvider) {
       this.sessionState.delete(sessionId);
+      this.conversationEvents.delete(sessionId);
       return;
     }
     let state = this.sessionState.get(sessionId);
@@ -481,9 +540,33 @@ export class InProcessPluginRuntime {
       state = r.state;
     }
 
-    await endTurn(tracerProvider, state, process.cwd());
+    // Reconstruct this turn's LLM calls from whatever the platform
+    // handed us, so tool spans can nest under the call that issued them
+    // and the assistant's own words reach the logs signal. A source that
+    // yields nothing (no events seen, malformed events, a platform with
+    // no source yet) degrades to the flat `turn → tool` shape rather
+    // than failing the flush.
+    let calls: ChatCall[] | undefined;
+    try {
+      const source = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId));
+      calls = source?.callsSince(state.turn_start_ms);
+    } catch {
+      calls = undefined;
+    }
+
+    // No provider (logs disabled) → no sink → structure only, no
+    // content. The monitor gate is already applied: `monitored` guards
+    // every provider resolution in this method.
+    const loggerProvider = this.getLoggerProvider();
+    const contentSink = loggerProvider
+      ? createContentSink(loggerProvider, loadContentLimits())
+      : undefined;
+
+    await endTurn(tracerProvider, state, process.cwd(), null, calls, contentSink);
     this.sessionState.delete(sessionId);
+    this.conversationEvents.delete(sessionId);
     await tracerProvider.forceFlush();
+    if (loggerProvider) await loggerProvider.forceFlush();
   }
 
   /**
