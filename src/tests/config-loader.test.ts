@@ -2,9 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 import {
   type CollectorConfig,
@@ -12,23 +9,11 @@ import {
   loadCollectorConfig,
   loadLogsConfig,
 } from '../scripts/lib/config-loader.js';
+import { withNioHome } from './helpers/with-nio-home.js';
 
 // loadCollectorConfig / loadLogsConfig read from $NIO_HOME/config.yaml.
 // Each test installs a fresh tmpdir into NIO_HOME, writes a config, and
-// restores afterwards.
-
-function withNioHome<T>(yamlBody: string, fn: () => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-config-loader-'));
-  writeFileSync(join(dir, 'config.yaml'), yamlBody);
-  const previous = process.env['NIO_HOME'];
-  process.env['NIO_HOME'] = dir;
-  try {
-    return fn();
-  } finally {
-    if (previous === undefined) delete process.env['NIO_HOME'];
-    else process.env['NIO_HOME'] = previous;
-  }
-}
+// restores + cleans up afterwards — see helpers/with-nio-home.ts.
 
 // ── loadCollectorConfig ─────────────────────────────────────────────────
 
