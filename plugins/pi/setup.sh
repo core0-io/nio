@@ -86,6 +86,19 @@ SETTINGS="$PI_HOME/settings.json"
 EXT_DIR="$PI_HOME/extensions/nio"
 SKILLS_DIR="$PI_HOME/skills"
 
+# Ownership receipt for the `skills` registration.
+#
+# `$EXT_DIR/index.js` is unambiguously Nio's — no one else writes that
+# path. `$SKILLS_DIR` is NOT: it is the generic `<pi-home>/skills`
+# directory, and a user may well have registered it in settings.json for
+# their own skills long before Nio existed. So Nio may only ever remove
+# that entry if Nio is the one who added it.
+#
+# This file records exactly that. It is written by the CLI-less fallback
+# install, and only when the entry was not already present. Its absence
+# means "not ours — leave it alone".
+SKILLS_RECEIPT="$EXT_DIR/.nio-registered-skills-dir"
+
 echo ""
 echo "  Nio — Pi Extension Setup"
 echo "  ============================================="
@@ -106,8 +119,12 @@ fi
 # exact value, not substring — the skills entry is a plain directory path
 # with no "nio" in it), then re-adds them on install, so re-running never
 # duplicates.
+#
+# An EMPTY `skills_path` means "do not touch the `skills` array at all".
+# Callers pass "" whenever Nio has no receipt proving it added the
+# generic `<pi-home>/skills` registration itself — see $SKILLS_RECEIPT.
 settings_edit() {
-  local mode="$1" ext_path="$2" skills_path="$3"
+  local mode="$1" ext_path="$2" skills_path="${3:-}"
   node -e '
     const fs = require("fs"), path = require("path");
     const [file, mode, extPath, skillsPath] = process.argv.slice(1);
@@ -119,16 +136,40 @@ settings_edit() {
         return s !== value;
       });
     cfg.extensions = strip(cfg.extensions, extPath);
-    cfg.skills = strip(cfg.skills, skillsPath);
+    if (skillsPath) cfg.skills = strip(cfg.skills, skillsPath);
     if (mode === "install") {
       cfg.extensions.push(extPath);
-      cfg.skills.push(skillsPath);
+      if (skillsPath) cfg.skills.push(skillsPath);
     }
     if (cfg.extensions.length === 0) delete cfg.extensions;
-    if (cfg.skills.length === 0) delete cfg.skills;
+    if (Array.isArray(cfg.skills) && cfg.skills.length === 0) delete cfg.skills;
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, JSON.stringify(cfg, null, 2) + "\n");
   ' "$SETTINGS" "$mode" "$ext_path" "$skills_path"
+}
+
+# Exit 0 when $SKILLS_DIR is already listed in settings.json's `skills`.
+skills_dir_registered() {
+  node -e '
+    const fs = require("fs");
+    const [file, value] = process.argv.slice(1);
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(file, "utf8")); } catch {}
+    const arr = Array.isArray(cfg.skills) ? cfg.skills : [];
+    const hit = arr.some((e) => (typeof e === "string" ? e : e && e.source) === value);
+    process.exit(hit ? 0 : 1);
+  ' "$SETTINGS" "$SKILLS_DIR"
+}
+
+# Strip Nio's registrations from settings.json, removing the generic
+# skills entry ONLY when the receipt says Nio added it.
+settings_strip_ours() {
+  [ -f "$SETTINGS" ] || return 0
+  if [ -f "$SKILLS_RECEIPT" ]; then
+    settings_edit uninstall "$EXT_DIR/index.js" "$SKILLS_DIR"
+  else
+    settings_edit uninstall "$EXT_DIR/index.js" ""
+  fi
 }
 
 if [ "$UNINSTALL" -eq 1 ]; then
@@ -136,7 +177,9 @@ if [ "$UNINSTALL" -eq 1 ]; then
   if command -v pi >/dev/null 2>&1; then
     pi remove "$SCRIPT_DIR" >/dev/null 2>&1 && echo "  Removed pi package" || true
   fi
-  [ -f "$SETTINGS" ] && settings_edit uninstall "$EXT_DIR/index.js" "$SKILLS_DIR" && echo "  Cleaned settings.json" || true
+  if [ -f "$SETTINGS" ]; then
+    settings_strip_ours && echo "  Cleaned settings.json" || true
+  fi
   rm -rf "$EXT_DIR" 2>/dev/null && echo "  Removed extension" || true
   rm -rf "${SKILLS_DIR:?}/nio" 2>/dev/null && echo "  Removed skill" || true
   for s in nio-scan nio-action nio-report nio-config nio-doctor nio-external-score; do
@@ -152,17 +195,34 @@ fi
 echo "[1/3] Registering extension..."
 if command -v pi >/dev/null 2>&1; then
   # Strip any prior CLI-less fallback registration first. A user who
-  # installed before the `pi` CLI was on PATH has the extension path and
-  # the skills path appended to settings.json; `pi install` adds a
-  # SECOND, package-based registration on top of it. Nio would then load
-  # twice — double guard evaluation, duplicate audit rows and duplicate
-  # spans per tool call. Idempotent: a no-op on a first-time CLI install,
-  # since settings_edit's `strip` just filters entries that aren't there.
-  [ -f "$SETTINGS" ] && settings_edit uninstall "$EXT_DIR/index.js" "$SKILLS_DIR" || true
+  # installed before the `pi` CLI was on PATH has the extension path (and
+  # possibly the skills path) appended to settings.json; `pi install`
+  # adds a SECOND, package-based registration on top of it. Nio would
+  # then load twice — double guard evaluation, duplicate audit rows and
+  # duplicate spans per tool call. Idempotent: a no-op on a first-time
+  # CLI install, since settings_edit's `strip` just filters entries that
+  # aren't there.
+  #
+  # settings_strip_ours removes the generic `<pi-home>/skills` entry only
+  # when $SKILLS_RECEIPT proves Nio added it. Without that guard, a user
+  # who had registered that directory for their OWN skills would silently
+  # lose the registration just by running Nio's setup.
+  settings_strip_ours
+  # The fallback copy is now unregistered; drop it (and its receipt) so a
+  # later re-run doesn't strip an entry that is no longer Nio's.
+  rm -rf "$EXT_DIR" 2>/dev/null || true
   pi install "$SCRIPT_DIR"
   echo "  OK: Registered as a pi package"
 else
   echo "  WARN: 'pi' CLI not found — falling back to a direct install."
+  # Decide ownership of the generic skills registration BEFORE wiping
+  # $EXT_DIR (which is where the receipt lives). Nio owns it if it
+  # already owned it, or if nothing has registered it yet.
+  if [ -f "$SKILLS_RECEIPT" ] || ! skills_dir_registered; then
+    NIO_OWNS_SKILLS=1
+  else
+    NIO_OWNS_SKILLS=0
+  fi
   rm -rf "$EXT_DIR"
   mkdir -p "$EXT_DIR"
   cp "$SCRIPT_DIR/extensions/nio/index.js" "$EXT_DIR/index.js"
@@ -174,6 +234,7 @@ else
     fi
   done
   settings_edit install "$EXT_DIR/index.js" "$SKILLS_DIR"
+  [ "$NIO_OWNS_SKILLS" -eq 1 ] && : > "$SKILLS_RECEIPT" || true
   echo "  OK: Extension installed to $EXT_DIR"
 fi
 
