@@ -216,14 +216,23 @@ echo ""
 if [ "$UNINSTALL" -eq 1 ]; then
   echo "  Uninstalling Nio (all platforms)..."
   [ -f "$SCRIPT_DIR/plugins/claude-code/setup.sh" ] && bash "$SCRIPT_DIR/plugins/claude-code/setup.sh" "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
-  [ -f "$SCRIPT_DIR/plugins/codex/setup.sh" ] && [ -d "$CODEX_HOME_DIR" ] && bash "$SCRIPT_DIR/plugins/codex/setup.sh" "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"
+  # Same "an explicit --<platform>-home is never silently skipped" rule
+  # as the install path below: a user who names a platform gets it
+  # uninstalled even if the default detection heuristic wouldn't match.
+  if [ -f "$SCRIPT_DIR/plugins/codex/setup.sh" ] && { [ -n "$CODEX_HOME_ARG" ] || [ -d "$CODEX_HOME_DIR" ]; }; then
+    bash "$SCRIPT_DIR/plugins/codex/setup.sh" "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"
+  fi
   [ -f "$SCRIPT_DIR/plugins/openclaw/setup.sh" ] && bash "$SCRIPT_DIR/plugins/openclaw/setup.sh" "${OC_ARGS[@]+"${OC_ARGS[@]}"}"
-  if [ -f "$SCRIPT_DIR/plugins/hermes/setup.sh" ] && [ -f "$HERMES_HOME/config.yaml" ]; then
+  if [ -f "$SCRIPT_DIR/plugins/hermes/setup.sh" ] && { [ -n "$HERMES_HOME_ARG" ] || [ -f "$HERMES_HOME/config.yaml" ]; }; then
     HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
       bash "$SCRIPT_DIR/plugins/hermes/setup.sh" "${HERMES_ARGS[@]+"${HERMES_ARGS[@]}"}"
   fi
-  [ -f "$SCRIPT_DIR/plugins/pi/setup.sh" ] && [ -d "$PI_HOME" ] && bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
-  [ -f "$SCRIPT_DIR/plugins/opencode/setup.sh" ] && [ -d "$OCODE_HOME" ] && bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"
+  if [ -f "$SCRIPT_DIR/plugins/pi/setup.sh" ] && { [ -n "$PI_HOME_ARG" ] || [ -d "$PI_HOME" ]; }; then
+    bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
+  fi
+  if [ -f "$SCRIPT_DIR/plugins/opencode/setup.sh" ] && { [ -n "$OCODE_HOME_ARG" ] || [ -d "$OCODE_HOME" ]; }; then
+    bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"
+  fi
   echo ""
   echo "  Nio has been uninstalled from all platforms."
   echo ""
@@ -232,33 +241,74 @@ fi
 
 INSTALLED=0
 
+# ---- Platform selection ----
+# ONE rule, applied identically to all six platforms. Earlier revisions
+# used `dir only` for four of them and `dir AND binary` for Pi/opencode,
+# which meant `--pi-home <path>` could be passed and then silently
+# ignored because the `pi` binary wasn't on PATH.
+#
+#   1. INSTALL_ALL=1                    → install.
+#   2. --<platform>-home passed         → install. The user named this
+#      platform explicitly; it must never be silently skipped, whatever
+#      auto-detection would have concluded.
+#   3. the platform's config dir exists → install. If the CLI is not on
+#      PATH we print the same kind of notice install.sh prints, but we
+#      still install: the config dir is the signal this script has
+#      always acted on, and narrowing it to "dir AND binary" would stop
+#      installing for users of already-shipped platforms whose CLI lives
+#      outside PATH (aliases, wrappers, a not-yet-sourced ~/.profile).
+#      install.sh can afford the stricter rule because it is the
+#      unattended curl one-liner; ./setup.sh is run deliberately, from a
+#      checkout or an unzipped release, against a machine the user knows.
+#   4. otherwise                        → skip.
+#
+# Nothing here creates a config dir speculatively: with no dir and no
+# explicit flag the platform is skipped, so an unrelated binary named
+# `pi` on PATH can never cause an install.
+want_platform() {
+  local name="$1" dir="$2" bin="$3" forced="$4" flag="$5"
+  if [ "${INSTALL_ALL:-}" = "1" ]; then
+    echo "  Forced (INSTALL_ALL=1): $name ($dir)"
+    return 0
+  fi
+  if [ -n "$forced" ]; then
+    echo "  Requested via $flag: $name ($dir)"
+    return 0
+  fi
+  if [ -d "$dir" ]; then
+    echo "  Detected: $name ($dir)"
+    if ! command -v "$bin" >/dev/null 2>&1; then
+      echo "  NOTE: '$bin' isn't on PATH — installing anyway because $dir is present."
+      echo "        If that directory is a leftover, run: $(basename "$0") --uninstall"
+    fi
+    return 0
+  fi
+  return 1
+}
+
 # ---- Claude Code ----
-if [ -d "$CC_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: Claude Code ($CC_HOME)"
+if want_platform "Claude Code" "$CC_HOME" claude "$CC_HOME_ARG" "--cc-home"; then
   echo ""
   bash "$SCRIPT_DIR/plugins/claude-code/setup.sh" "${CC_ARGS[@]+"${CC_ARGS[@]}"}"
   INSTALLED=1
 fi
 
 # ---- Codex ----
-if [ -d "$CODEX_HOME_DIR" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: Codex ($CODEX_HOME_DIR)"
+if want_platform "Codex" "$CODEX_HOME_DIR" codex "$CODEX_HOME_ARG" "--codex-home"; then
   echo ""
   bash "$SCRIPT_DIR/plugins/codex/setup.sh" "${CODEX_ARGS[@]+"${CODEX_ARGS[@]}"}"
   INSTALLED=1
 fi
 
 # ---- OpenClaw / ClawHub ----
-if [ -d "$OPENCLAW_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: OpenClaw ($OPENCLAW_HOME)"
+if want_platform "OpenClaw" "$OPENCLAW_HOME" openclaw "$OPENCLAW_HOME_ARG" "--openclaw-home"; then
   echo ""
   bash "$SCRIPT_DIR/plugins/openclaw/setup.sh" "${OC_ARGS[@]+"${OC_ARGS[@]}"}"
   INSTALLED=1
 fi
 
 # ---- Hermes ----
-if [ -d "$HERMES_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: Hermes ($HERMES_HOME)"
+if want_platform "Hermes" "$HERMES_HOME" hermes "$HERMES_HOME_ARG" "--hermes-home"; then
   echo ""
   HERMES_CONFIG_PATH="$HERMES_HOME/config.yaml" \
     bash "$SCRIPT_DIR/plugins/hermes/setup.sh" "${HERMES_ARGS[@]+"${HERMES_ARGS[@]}"}"
@@ -266,21 +316,14 @@ if [ -d "$HERMES_HOME" ] || [ "${INSTALL_ALL:-}" = "1" ]; then
 fi
 
 # ---- Pi ----
-# Config dir AND binary, matching install.sh's detect_platform. `pi` is a
-# generic enough command name that an unrelated binary on PATH would
-# otherwise be enough to make this script create and populate ~/.pi/agent
-# for an agent the user does not have.
-if { [ -d "$PI_HOME" ] && command -v pi >/dev/null 2>&1; } || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: Pi ($PI_HOME)"
+if want_platform "Pi" "$PI_HOME" pi "$PI_HOME_ARG" "--pi-home"; then
   echo ""
   bash "$SCRIPT_DIR/plugins/pi/setup.sh" "${PI_ARGS[@]+"${PI_ARGS[@]}"}"
   INSTALLED=1
 fi
 
 # ---- opencode ----
-# Config dir AND binary — same predicate as install.sh's detect_platform.
-if { [ -d "$OCODE_HOME" ] && command -v opencode >/dev/null 2>&1; } || [ "${INSTALL_ALL:-}" = "1" ]; then
-  echo "  Detected: opencode ($OCODE_HOME)"
+if want_platform "opencode" "$OCODE_HOME" opencode "$OCODE_HOME_ARG" "--opencode-home"; then
   echo ""
   bash "$SCRIPT_DIR/plugins/opencode/setup.sh" "${OCODE_ARGS[@]+"${OCODE_ARGS[@]}"}"
   INSTALLED=1
@@ -290,15 +333,16 @@ fi
 if [ "$INSTALLED" -eq 0 ]; then
   echo "  No supported platform detected."
   echo ""
-  echo "  Looked for:"
+  echo "  Looked for these config directories:"
   echo "    - Claude Code  $CC_HOME"
   echo "    - Codex        $CODEX_HOME_DIR"
   echo "    - OpenClaw     $OPENCLAW_HOME"
   echo "    - Hermes       $HERMES_HOME"
-  echo "    - Pi           $PI_HOME (or a 'pi' binary on PATH)"
-  echo "    - opencode     $OCODE_HOME (or an 'opencode' binary on PATH)"
+  echo "    - Pi           $PI_HOME"
+  echo "    - opencode     $OCODE_HOME"
   echo ""
-  echo "  If your install lives elsewhere, pass --cc-home / --codex-home / --openclaw-home / --hermes-home / --pi-home / --opencode-home:"
+  echo "  If your install lives elsewhere, pass --cc-home / --codex-home / --openclaw-home / --hermes-home / --pi-home / --opencode-home."
+  echo "  An explicit --<platform>-home always installs that platform, whether or not the directory or CLI was detected:"
   echo "    ./setup.sh --cc-home /path/to/.claude"
   echo "    ./setup.sh --codex-home /path/to/.codex"
   echo "    ./setup.sh --openclaw-home /path/to/.openclaw"
