@@ -41,5 +41,11 @@ describe('toUsage', () => {
     assert.equal(toUsage(null), undefined);
     assert.equal(toUsage('nonsense'), undefined);
     assert.equal(toUsage({ input: 'not-a-number' }), undefined);
+    // The `input` guard alone was pinned originally; weakening any of the
+    // other three to a bare `'output' in u` / `'cacheRead' in u` /
+    // `'cacheWrite' in u` left the suite green. This line closes all three
+    // at once — each surviving mutation turns one of these non-numbers
+    // into a returned field, so the result stops being undefined.
+    assert.equal(toUsage({ output: 'x', cacheRead: {}, cacheWrite: null }), undefined);
   });
 });
