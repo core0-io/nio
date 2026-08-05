@@ -777,6 +777,26 @@ describe('PiAdapter', () => {
       assert.equal((env.action.data as { content_preview: string }).content_preview, 'hello');
     });
 
+    it('reads the edit tool body from newText, not content', () => {
+      // Pi's write tool uses `content`; its edit tool uses `newText`.
+      // Without this the edit branch silently produces an empty preview
+      // and Phase 3 scans nothing.
+      const env = adapter.buildEnvelope(adapter.parseInput(piFixture('tool-call-edit.json')));
+      assert.ok(env);
+      assert.equal(env.action.type, 'write_file');
+      assert.equal((env.action.data as { path: string }).path, '/tmp/demo.txt');
+      assert.equal((env.action.data as { content_preview: string }).content_preview, 'goodbye');
+    });
+
+    it('builds a read_file envelope carrying the path', () => {
+      const env = adapter.buildEnvelope(
+        adapter.parseInput({ toolName: 'read', input: { path: '/etc/passwd' } }),
+      );
+      assert.ok(env);
+      assert.equal(env.action.type, 'read_file');
+      assert.equal((env.action.data as { path: string }).path, '/etc/passwd');
+    });
+
     it('returns null for an unmapped tool', () => {
       assert.equal(adapter.buildEnvelope(adapter.parseInput({ toolName: 'ls', input: {} })), null);
     });

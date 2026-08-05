@@ -1579,6 +1579,7 @@ describe('Integration: MCP config & persistence write protection (groups X, Y)',
     '/Users/test/Library/Application Support/Claude/claude_desktop_config.json',
     '/Users/test/.hermes/config.yaml',
     '/Users/test/.openclaw/openclaw.json',
+    '/Users/test/.pi/agent/settings.json',
   ]) {
     it(`X: write to MCP config (${path.split('/').slice(-2).join('/')}) is denied`, async () => {
       ctx = createTestContext('balanced');
