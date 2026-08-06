@@ -37,7 +37,7 @@ export {};
 import { readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { trace, TraceFlags, ROOT_CONTEXT, SpanStatusCode, type Link } from '@opentelemetry/api';
-import { NodeTracerProvider, SimpleSpanProcessor } from '@opentelemetry/sdk-trace-node';
+import { NodeTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-node';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
 import { OTLPTraceExporter as OTLPTraceExporterHttp } from '@opentelemetry/exporter-trace-otlp-http';
@@ -462,10 +462,56 @@ export function createTracerProvider(
 
   const provider = new NodeTracerProvider({
     resource: buildNioResource(platform, agentName),
-    spanProcessors: [new SimpleSpanProcessor(exporter)],
+    // BatchSpanProcessor, not SimpleSpanProcessor. Simple starts one
+    // export per `span.end()`, and `endTurn` ends a turn's whole tree in
+    // one synchronous burst — so a turn with more than 30 spans blew
+    // straight through the OTLP exporter's in-flight cap
+    // (`otlp-exporter-base`'s `concurrencyLimit: 30`, not reachable from
+    // our config surface). The overflow was rejected by
+    // `otlp-export-delegate` with 'Concurrent export limit reached' and
+    // returned without retry or requeue. The turn root is ended LAST, so
+    // it was always among the casualties: live traces arrived at SigNoz
+    // with exactly 30 spans and 0 roots. Batching turns that burst into
+    // one request, so the cap is never approached.
+    spanProcessors: [new BatchSpanProcessor(exporter, {
+      // Must hold a whole large turn between flushes. 2048 is the SDK
+      // default and is far above the largest turn observed.
+      maxQueueSize: 2048,
+      // One request per 512 spans instead of one per span.
+      maxExportBatchSize: 512,
+      // Every emit path force-flushes right after ending its spans, so
+      // this only bounds the worst case where a process exits between
+      // events.
+      scheduledDelayMillis: 1000,
+    })],
   });
   if (options.register !== false) provider.register();
   return provider;
+}
+
+/**
+ * Flush the provider without ever throwing.
+ *
+ * `SimpleSpanProcessor.forceFlush()` resolves whatever the export result
+ * was; `BatchSpanProcessor.forceFlush()` REJECTS when the batch's export
+ * fails (`_flushOneBatch` rejects on a non-SUCCESS result or after its
+ * own timeout). Every emit helper below awaits the flush inline, so
+ * without this the processor swap would turn "the collector endpoint is
+ * unreachable" into a thrown exception inside `recordPostToolUse` /
+ * `endTurn` / `emitSessionSpan` — i.e. telemetry taking the host down
+ * with it, on paths (the guard's deny close-out among them) whose whole
+ * point is to survive a broken collector.
+ *
+ * Nothing is lost by swallowing it: the underlying failure is already
+ * audited by `instrumentExporter`, which reports every FAILED export as
+ * an `otlp_export_failed` diagnostic with the endpoint in the hint.
+ */
+async function flushSpans(provider: NodeTracerProvider): Promise<void> {
+  try {
+    await provider.forceFlush();
+  } catch {
+    // Already audited at the exporter. Telemetry must not throw.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -896,7 +942,7 @@ export async function recordPostToolUse(
   // onto the turn's own span.
   emitDeferredSpan(provider, traceId, traceId.slice(0, 16), deferred);
 
-  await provider.forceFlush();
+  await flushSpans(provider);
 
   return {
     state: { ...result.state, deferred_spans: queued.slice(0, -1) },
@@ -953,7 +999,7 @@ export async function recordPostTaskToolUse(
   );
   span.end(endMs);
 
-  await provider.forceFlush();
+  await flushSpans(provider);
 
   const { [taskId]: _removed, ...remainingTasks } = state.pending_task_spans;
   void _removed;
@@ -1172,7 +1218,7 @@ export async function endTurn(
   (span as unknown as { parentSpanId?: string }).parentSpanId = undefined;
   span.end(endMs);
 
-  await provider.forceFlush();
+  await flushSpans(provider);
 
   return {
     session_id: state.session_id,
@@ -1270,7 +1316,7 @@ export async function emitSessionSpan(
   (span as unknown as { parentSpanId?: string }).parentSpanId = undefined;
   span.end();
 
-  await provider.forceFlush();
+  await flushSpans(provider);
 }
 
 /**
@@ -1385,7 +1431,7 @@ export async function recoverDeferredTree(
     emitDeferredSpan(provider, traceId, turnSpanId, span);
   }
 
-  await provider.forceFlush();
+  await flushSpans(provider);
 
   return {
     ...state,

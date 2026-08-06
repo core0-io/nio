@@ -649,8 +649,22 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
   });
 
   /**
-   * A tracer provider that records spans normally but whose flush always
-   * rejects — i.e. a live OTLP exporter that has gone away.
+   * A tracer provider that builds every chat span normally and then
+   * throws when the TURN ROOT is started — i.e. the export path blowing
+   * up after part of the tree already exists.
+   *
+   * Why not a rejecting `forceFlush` (what this helper used to be): the
+   * flush is deliberately no longer a throw vector. `traces-collector`'s
+   * `flushSpans` swallows it, and the runtime's trailing flush catches
+   * it, because `BatchSpanProcessor.forceFlush()` REJECTS on a failed
+   * export where `SimpleSpanProcessor`'s resolved — so after the
+   * processor swap an unreachable collector would have started throwing
+   * out of every turn boundary. Telemetry must not do that. The exit
+   * this test exists for is still reachable, just through a different
+   * door: anything raised while the tree is being built (a provider
+   * whose tracer rejects a span, an SDK that throws on a bad attribute)
+   * still propagates out of `endTurn`, and the `finally` is what has to
+   * clear the turn's events.
    *
    * A plain delegating object rather than a subclass or a Proxy: the
    * runtime and traces-collector only ever call `getTracer` and
@@ -662,6 +676,36 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     provider: ReturnType<typeof makeInMemoryTracer>['provider'],
   ): ReturnType<typeof makeInMemoryTracer>['provider'] {
     return {
+      getTracer: (...args: Parameters<typeof provider.getTracer>) => {
+        const tracer = provider.getTracer(...args);
+        return new Proxy(tracer, {
+          get(target, prop, receiver) {
+            if (prop !== 'startSpan') return Reflect.get(target, prop, receiver);
+            return (name: string, ...rest: unknown[]) => {
+              // The turn root, emitted last, after every chat span.
+              if (name.startsWith('invoke_agent')) throw new Error('OTLP exporter down');
+              return (target.startSpan as (...a: unknown[]) => unknown)(name, ...rest);
+            };
+          },
+        });
+      },
+      forceFlush: () => provider.forceFlush(),
+      shutdown: () => provider.shutdown(),
+      register: () => provider.register(),
+    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
+  }
+
+  /**
+   * The counterpart: a provider whose FLUSH rejects. This is what the
+   * live OTLP path now does on any failed export — `BatchSpanProcessor`
+   * replaced `SimpleSpanProcessor` so a turn bigger than the exporter's
+   * 30-in-flight cap stops losing its root, and Batch's `forceFlush()`
+   * rejects where Simple's resolved. It must not surface at the host.
+   */
+  function rejectingFlushProvider(
+    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
+  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
+    return {
       getTracer: (...args: Parameters<typeof provider.getTracer>) => provider.getTracer(...args),
       forceFlush: async () => { throw new Error('OTLP exporter down'); },
       shutdown: () => provider.shutdown(),
@@ -669,15 +713,47 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
   }
 
+  it('a rejecting flush does not surface at the turn boundary', async () => {
+    // Two guards stand between the exporter and the host, and this pins
+    // both: `traces-collector`'s `flushSpans` (inside `endTurn`) and the
+    // `.catch()` on the runtime's trailing `tracerProvider.forceFlush()`.
+    // Drop either one and an unreachable collector starts throwing out
+    // of every turn boundary, which every binding's outer catch then
+    // swallows — a silently broken host on a telemetry fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: rejectingFlushProvider(tracer.provider),
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      rt.onUserPrompt('s-flush', 'turn one');
+      rt.recordConversationEvent('s-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-flush'),
+        'a failed export must never propagate into the host',
+      );
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'sanity: the turn still built its chat span — the flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
   it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
     // The third exit `flushSessionTurn`'s try/finally exists for, and the
     // only one the two cases above cannot reach. It is not hypothetical:
-    // `endTurn`, `recordPostToolUse` and the trailing `forceFlush` all
-    // await an OTLP exporter, and every binding's outer catch swallows
-    // the rejection — so a broken exporter would leave the turn's events
-    // in the map to be replayed by the NEXT turn as its own chat spans,
-    // the exact bug the clearing exists to prevent, now with no error
-    // visible anywhere to explain it.
+    // `endTurn` and `recordPostToolUse` drive an OTEL SDK that can raise
+    // mid-tree, and every binding's outer catch swallows the rejection —
+    // so a broken exporter would leave the turn's events in the map to
+    // be replayed by the NEXT turn as its own chat spans, the exact bug
+    // the clearing exists to prevent, now with no error visible anywhere
+    // to explain it.
     const tracer = makeInMemoryTracer();
     try {
       const rt = new InProcessPluginRuntime({
@@ -694,11 +770,11 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await assert.rejects(
         () => rt.onTurnEnd('s-throw'),
         /OTLP exporter down/,
-        'sanity: the flush really did throw out of the export path, so the finally is what runs',
+        'sanity: the export path really did throw, so the finally is what runs',
       );
       assert.equal(
         chatSpans(tracer).length, 2,
-        'sanity: turn 1 built both of its chat spans before the flush blew up',
+        'sanity: turn 1 built both of its chat spans before the export blew up',
       );
 
       rt.onUserPrompt('s-throw', 'turn two');

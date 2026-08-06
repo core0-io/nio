@@ -740,7 +740,12 @@ export class InProcessPluginRuntime {
 
     await endTurn(tracerProvider, state, process.cwd(), null, calls, contentSink);
     this.sessionState.delete(sessionId);
-    await tracerProvider.forceFlush();
+    // `.catch()`: `endTurn` already flushed through the collector's own
+    // non-throwing helper. This belt-and-braces second flush must not be
+    // the one that throws — BatchSpanProcessor's forceFlush rejects when
+    // the export fails, and an unreachable collector is not a reason to
+    // fail the host's Stop handler.
+    await tracerProvider.forceFlush().catch(() => { /* audited at the exporter */ });
     if (loggerProvider) await loggerProvider.forceFlush();
   }
 

@@ -66,7 +66,13 @@ describe('collector export failures land in the audit log', () => {
     assert.ok(provider);
     const span = provider!.getTracer('t').startSpan('s');
     span.end();
-    await provider!.forceFlush();
+    // `.catch()`: the traces provider runs a BatchSpanProcessor, whose
+    // `forceFlush()` REJECTS when the batch's export fails (Simple's
+    // resolved regardless). That rejection is not what this test is
+    // about — the assertion below is that the failure was AUDITED. Nio's
+    // own call sites route through `flushSpans`, which swallows it for
+    // the same reason; this line stands in for that.
+    await provider!.forceFlush().catch(() => { /* asserted via the audit log below */ });
     await provider!.shutdown();
 
     assert.ok(exportFailures('traces').length >= 1, 'a traces export failure was recorded');
