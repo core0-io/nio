@@ -745,6 +745,61 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     }
   });
 
+  it('a rejecting LOGS flush does not surface at the turn boundary', async () => {
+    // The logs sibling of the case above, and the pin on all three of
+    // the runtime's `loggerProvider` flush sites: the one inside
+    // `flushSessionTurn`, the one in `flushTurnSpans` (reached via
+    // `onTurnEnd`), and the one in `disposeAllSessions`. The logs
+    // pipeline runs a `BatchLogRecordProcessor` — swapped in so a turn's
+    // content burst stops being dropped past the OTLP exporter's
+    // 30-in-flight cap — and a batched flush REJECTS once its export
+    // times out. (Not on a failed export: unlike the traces SDK, the
+    // logs SDK routes that to `globalErrorHandler` and resolves. See
+    // `flushLogRecords`' doc. Which is why the rejection has to be
+    // supplied here rather than produced by a real unreachable
+    // endpoint.) Route any of those three sites through a bare
+    // `forceFlush()` instead of `flushLogRecords` and a hung collector
+    // starts throwing out of the host's Stop handler: an observability
+    // fault turned into a host fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      // Minimal LoggerProvider surface: the runtime only ever calls
+      // `getLogger` (through the content sink) and `forceFlush`.
+      const rejectingLogs = {
+        getLogger: () => ({ emit: () => {} }),
+        forceFlush: async () => { throw new Error('OTLP logs exporter down'); },
+        shutdown: async () => {},
+      } as unknown as NonNullable<
+        ConstructorParameters<typeof InProcessPluginRuntime>[0]['loggerProvider']
+      >;
+
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: rejectingLogs,
+      });
+
+      rt.onUserPrompt('s-logs-flush', 'turn one');
+      rt.recordConversationEvent('s-logs-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-logs-flush'),
+        'a failed LOGS export must never propagate into the host',
+      );
+      await assert.doesNotReject(
+        () => rt.disposeAllSessions(),
+        'nor at process-wide teardown',
+      );
+      assert.equal(
+        chatSpans(tracer).length, 1,
+        'sanity: the turn still built its chat span — the logs flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
   it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
     // The third exit `flushSessionTurn`'s try/finally exists for, and the
     // only one the two cases above cannot reach. It is not hypothetical:

@@ -9,7 +9,7 @@
  * Before this fix: once the monitor gate (isSessionMonitored) was added
  * to scanner-hook.ts, exiting from an armed session required draining the
  * OTEL logs pipeline with `forceFlush()` + `shutdown()` instead of a bare
- * `process.exit(0)` — SimpleLogRecordProcessor's `forceFlush()` doesn't
+ * `process.exit(0)` — the log record processor's `forceFlush()` does not
  * await the in-flight HTTP POST, so exiting immediately after it can tear
  * the process down mid-request. `shutdown()` fixes that, but it has no
  * timeout of its own and `collector.timeout` does NOT bound it end to

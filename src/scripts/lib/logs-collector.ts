@@ -17,7 +17,7 @@ export {};
  * prefix.
  */
 
-import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import { trace, ROOT_CONTEXT, TraceFlags, type Context } from '@opentelemetry/api';
 import { OTLPLogExporter as OTLPLogExporterHttp } from '@opentelemetry/exporter-logs-otlp-http';
@@ -86,8 +86,66 @@ export function createLoggerProvider(
 
   return new LoggerProvider({
     resource: buildNioResource(platform, agentName),
-    processors: [new SimpleLogRecordProcessor(exporter)],
+    // BatchLogRecordProcessor, not SimpleLogRecordProcessor. Simple
+    // starts one export per `logger.emit()`, and a turn's content sink
+    // emits the whole turn's records — thinking, text, tool_input — in
+    // one synchronous burst (`emitContentRecords`' loop below). So a
+    // turn with more than 30 content records blew straight through the
+    // OTLP exporter's in-flight cap (`otlp-exporter-base`'s
+    // `concurrencyLimit: 30`, not reachable from our config surface).
+    // The overflow was rejected by `otlp-export-delegate` with
+    // 'Concurrent export limit reached' and returned without retry or
+    // requeue. This is the same defect the traces signal carried until
+    // `SimpleSpanProcessor` was swapped out, and it is why the measured
+    // live content distribution (137 tool_input / 116 tool_output) is a
+    // count of survivors rather than of what was produced. Batching
+    // turns that burst into one request, so the cap is never approached.
+    processors: [new BatchLogRecordProcessor(exporter, {
+      // Must hold a whole large turn between flushes. 2048 is the SDK
+      // default and is far above the largest burst observed.
+      maxQueueSize: 2048,
+      // One request per 512 records instead of one per record.
+      maxExportBatchSize: 512,
+      // Every entry point force-flushes at its turn/session boundary, so
+      // this only bounds the worst case where a process exits between
+      // events.
+      scheduledDelayMillis: 1000,
+    })],
   });
+}
+
+/**
+ * Flush the logger provider without ever throwing.
+ *
+ * Note the asymmetry with the traces SDK, because it is easy to get
+ * backwards. `BatchSpanProcessorBase._flushOneBatch` REJECTS on a
+ * non-SUCCESS export result, which is why `traces-collector`'s
+ * `flushSpans` exists. `BatchLogRecordProcessor` does NOT: its
+ * `_export` routes a failed result to `globalErrorHandler` and resolves
+ * (`sdk-logs@0.214.0`, `BatchLogRecordProcessorBase.js:122-131`).
+ * Verified rather than assumed — 40 records against a refused endpoint
+ * resolve in ~30 ms.
+ *
+ * The rejection vector that DOES exist is the timeout:
+ * `_flushOneBatch` wraps the export in `callWithTimeout(...,
+ * exportTimeoutMillis)`, so an endpoint that accepts the connection and
+ * never answers makes `forceFlush()` reject with 'Operation timed out'
+ * (verified: rejects at the configured bound). Callers await this flush
+ * on the host's turn and session boundaries, and a collector that hangs
+ * must not take the Stop handler down with it — least of all on the
+ * guard's deny close-out, whose whole point is to survive a broken
+ * collector.
+ *
+ * Nothing is lost by swallowing: the underlying failure is already
+ * audited by `instrumentExporter`, which reports every FAILED export as
+ * an `otlp_export_failed` diagnostic with the endpoint in the hint.
+ */
+export async function flushLogRecords(provider: LoggerProvider): Promise<void> {
+  try {
+    await provider.forceFlush();
+  } catch {
+    // Already audited at the exporter. Telemetry must not throw.
+  }
 }
 
 // ---------------------------------------------------------------------------

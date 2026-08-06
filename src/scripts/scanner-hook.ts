@@ -329,15 +329,17 @@ async function main(): Promise<void> {
     }
   }
 
-  // Drain before exiting. The logs pipeline uses a
-  // SimpleLogRecordProcessor whose export is a fire-and-forget promise,
-  // and its `forceFlush()` only awaits records still waiting on async
-  // resource attributes — not the in-flight HTTP requests. So
-  // `process.exit(0)` can tear the process down mid-POST. `shutdown()`
-  // is the call that actually awaits the exporter's request queue
-  // (OTLPExportDelegate.shutdown → forceFlush → promiseQueue.awaitAll).
-  // Only reachable when a provider was created at all, i.e. only for a
-  // monitored session.
+  // Drain before exiting, with `forceFlush()` AND `shutdown()`.
+  // `forceFlush()` is what hands the batched records to the exporter at
+  // all (the logs pipeline runs a BatchLogRecordProcessor so a turn's
+  // content burst is not dropped past the exporter's 30-in-flight cap);
+  // `shutdown()` is what awaits the exporter's own request queue
+  // (OTLPExportDelegate.shutdown → forceFlush → promiseQueue.awaitAll),
+  // so a bare `process.exit(0)` after the flush could still tear the
+  // process down mid-POST. Both are needed, and both `.catch()`: a
+  // batched flush rejects once its export times out, and a hung
+  // collector must not fail the scan. Only reachable when a provider was
+  // created at all, i.e. only for a monitored session.
   //
   // `shutdown()` is NOT bounded by `collector.timeout` — that config
   // only governs the request-timeout once a socket is connected; it does

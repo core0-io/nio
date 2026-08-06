@@ -46,7 +46,7 @@ import {
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider } from '../scripts/lib/metrics-collector.js';
-import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
+import { createLoggerProvider, flushLogRecords } from '../scripts/lib/logs-collector.js';
 import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
 import { dumpPayload } from '../scripts/lib/payload-dump.js';
 import { evaluateHook } from './hook-engine.js';
@@ -564,7 +564,13 @@ export class InProcessPluginRuntime {
     // exporter for a session nobody armed" the gate exists to prevent.
     if (!monitored) return;
     const loggerProvider = this.getLoggerProvider();
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // `flushLogRecords`, not a bare `forceFlush()`: the logs provider
+    // runs a BatchLogRecordProcessor (swapped in so a turn's content
+    // burst is not dropped past the OTLP exporter's 30-in-flight cap),
+    // and a batched flush REJECTS once `exportTimeoutMillis` elapses
+    // against a collector that accepts the connection and never answers.
+    // A hung collector is not a reason to fail the host's turn boundary.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /** Per-turn flush. Idempotent: no-op when no state exists. */
@@ -595,7 +601,9 @@ export class InProcessPluginRuntime {
     // whatever provider already exists rather than resolving (and thus
     // possibly building) one.
     const loggerProvider = this.existingLoggerProvider();
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // See `flushTurnSpans`: a batched flush can reject on timeout, and
+    // process-wide teardown must not fail because the collector hung.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   protected writeLifecycle(
@@ -746,7 +754,9 @@ export class InProcessPluginRuntime {
     // the export fails, and an unreachable collector is not a reason to
     // fail the host's Stop handler.
     await tracerProvider.forceFlush().catch(() => { /* audited at the exporter */ });
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // Same reasoning for the logs leg: a batched flush rejects when it
+    // times out, and this runs on the host's Stop path.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /**
