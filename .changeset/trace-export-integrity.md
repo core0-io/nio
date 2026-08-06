@@ -1,0 +1,21 @@
+---
+"@core0-io/nio": minor
+---
+
+Fix six defects found by running against a real backend
+
+All six survived a green test suite and several adversarial review rounds. Every one of them needed a live export to show up, because in each case the tests' *inputs* could not express the failure — fixtures had fields the host never sends, thinking blocks the host writes empty, turns smaller than the exporter's concurrency limit, and helpers wired to a span processor production had stopped using.
+
+**Telemetry was silently dropping data past 30 records.** `SimpleSpanProcessor` and `SimpleLogRecordProcessor` export every record individually, and the OTLP exporter caps concurrent exports at 30, rejecting the overflow with no retry and no queue. Any turn with more than 30 spans lost the ones that ended last — which is always the turn root, leaving a trace whose every span names a parent that was never exported. Backends cannot determine such a trace's start or duration and render it as scattered fragments. The same cap silently truncated content records. Both signals now use the batch processors.
+
+**Four ways a `deny` could stop reaching the host.** A tool argument of the wrong type (`{"command": 123}`) crashed the guard before it could answer — on Hermes that means exit 1 with empty stdout, which Hermes reads as *take no action*, so the dangerous call proceeds. Deeply nested tool arguments overflowed the stack in the MCP branch with the same result, reproduced through the shipped bundles with **no collector configured at all**. Telemetry flush failures could propagate out of the collector and into the guard's own close-out path. And the engine's own `catch` returned `allow`, so a write to `~/.ssh/authorized_keys` exited 0 with nothing shown to the user whenever the analysis threw.
+
+Host input is now parsed defensively along the whole path from stdin to decision, and an engine failure denies by action risk rather than waving everything through: `exec_command`, `write_file` and `network_request` are refused, reads are allowed, and both are recorded with a diagnostic the user can see. "The engine broke" no longer means "nothing gets checked", and it no longer means "nothing can run" either.
+
+**`nio.turn.user_prompt` was never populated on Claude Code.** It read a `prompt` field the host does not send — the payload carries `prompt_id` — so the attribute has been empty for as long as it has existed. It is now read from the transcript, filtered to real user messages: of 187 `user` rows in one live transcript, 154 were tool results and 13 were host-injected meta blocks carrying real text, all of which would otherwise have been recorded as things the user said.
+
+**Empty content records are no longer emitted.** Claude Code writes thinking blocks with only a signature and no text (382 blocks, all empty, in one measured session). Emitting those as records tagged `fidelity: full` told consumers the model reasoned and its reasoning was blank. Whether thinking text is available at all depends on the host and possibly on the model and thinking level — this is not a permanent property of the platform.
+
+**Content is now placed by size rather than by kind.** Assistant replies (max 360 bytes measured) and tool arguments (truncated to 2 KB) ride the span, so a trace is readable on its own. Tool results (up to 32 KB) and thinking stay on the logs signal, joined by `nio.span_id`.
+
+Two behaviour changes worth knowing: a turn now opens at `UserPromptSubmit` rather than at the first tool call, so `nio.turn_number` increments once per prompt instead of once per prompt-that-used-tools; and loosely-typed tool arguments that previously failed open now reach the analysers, so a host that emits them may see new denies.
