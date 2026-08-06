@@ -117,6 +117,72 @@ describe('collector-core: toolSummary', () => {
     const long = 'x'.repeat(500);
     assert.equal(toolSummary('Bash', { command: long }).length, 300);
   });
+
+  /**
+   * Totality, not cosmetics. `tool_input` is unvalidated `JSON.parse`d
+   * hook stdin, and every reader of this function sits on the GUARD path
+   * between "the guard decided" and "the host was told": a throw here
+   * downgrades a Hermes block to an empty stdout + exit 1, and a Claude
+   * Code exit-2 deny to a non-blocking exit 1. Both were reproduced
+   * end-to-end — see guard-decision-survives-malformed-tool-input.test.ts.
+   *
+   * Every field this function reads is covered, because each `as string`
+   * cast was its own latent throw site.
+   */
+  describe('is total for non-string argument values', () => {
+    const NON_STRINGS: ReadonlyArray<[string, unknown]> = [
+      ['number', 123],
+      ['boolean', true],
+      ['object', { argv: ['rm', '-rf', '/'] }],
+      ['array', ['rm', '-rf', '/']],
+      ['null', null],
+    ];
+
+    // Field name per tool, matching the branch that reads it.
+    const CASES: ReadonlyArray<[string, string]> = [
+      ['Bash', 'command'],
+      ['terminal', 'command'],
+      ['exec', 'command'],
+      ['shell', 'command'],
+      ['Write', 'file_path'],
+      ['Edit', 'path'],
+      ['WebFetch', 'url'],
+      ['WebSearch', 'query'],
+      ['write_file', 'path'],
+      ['patch', 'file_path'],
+      ['read_file', 'path'],
+      ['fetch', 'url'],
+      ['http_request', 'url'],
+      ['mystery_tool', 'whatever'],
+    ];
+
+    for (const [tool, field] of CASES) {
+      for (const [label, value] of NON_STRINGS) {
+        it(`${tool} with a ${label} ${field} returns a string instead of throwing`, () => {
+          const out = toolSummary(tool, { [field]: value });
+          assert.equal(typeof out, 'string', `${tool}/${field}/${label} must yield a string`);
+        });
+      }
+    }
+
+    it('keeps the value rather than blanking it — a numeric command is summarised as its digits', () => {
+      assert.equal(toolSummary('Bash', { command: 123 }), '123');
+      assert.equal(toolSummary('terminal', { command: 123 }), '123');
+    });
+
+    it('still truncates a non-string command to 300 chars', () => {
+      assert.equal(toolSummary('Bash', { command: { blob: 'x'.repeat(500) } }).length, 300);
+    });
+
+    it('degrades a circular argument to the empty string rather than throwing', () => {
+      // Reachable from the in-process runtime, which passes live host
+      // objects rather than JSON-parsed ones.
+      const circular: Record<string, unknown> = { name: 'x' };
+      circular['self'] = circular;
+      assert.equal(toolSummary('Bash', { command: circular }), '');
+      assert.equal(toolSummary('mystery_tool', circular), '');
+    });
+  });
 });
 
 // ── spanKey ────────────────────────────────────────────────────────────

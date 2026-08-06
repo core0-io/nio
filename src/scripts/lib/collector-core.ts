@@ -131,35 +131,118 @@ export interface DispatchOptions {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /**
+ * How every metrics call in this module records its point: land it in the
+ * aggregator, do NOT wait for the wire.
+ *
+ * All three of this module's callers — `collector-hook.ts` (Claude Code /
+ * Codex), `hook-cli.ts`'s Hermes collector path and its Hermes GUARD path
+ * — wrap the whole dispatch in one shared `createFlushBudget` deadline and
+ * then end with their own budgeted `meterProvider.forceFlush()` before
+ * exiting. A metrics flush *inside* dispatch therefore adds no delivery
+ * and spends the shared budget: measured 5.07s (refused endpoint) and
+ * 5.21s (stalled endpoint) per dispatch at the default
+ * `collector.timeout: 5000`, versus ~0.2s once the flush is dropped.
+ *
+ * What that cost bought, end-to-end with metrics stalled and traces
+ * healthy: `SessionEnd`'s `await recordTurn` burned the caller's remaining
+ * budget, the caller abandoned the dispatch, and the three things that
+ * come AFTER it — `emitSessionSpan`, `discardState`, `forgetSession` —
+ * never ran. Observed on the wire: one `/v1/traces` POST (the turn tree)
+ * instead of two, and the session's state shard still on disk. With a
+ * healthy sink, byte-identical fixtures produced both POSTs and no shard.
+ *
+ * The in-process runtime (`plugin-runtime.ts`) keeps the default — it is a
+ * long-lived daemon with no process exit to flush at — and so does
+ * `recordGuardDecision` on the guard hooks, which is bounded by
+ * `createFlushBudget` at each of its call sites instead.
+ */
+const NO_EARLY_FLUSH = { flush: false } as const;
+
+/**
+ * Coerce one tool argument to a string, for ANY runtime value.
+ *
+ * The `as string` casts this replaces were TypeScript fictions: every
+ * `tool_input` reaching this module is either `JSON.parse`d hook stdin
+ * (Claude Code / Codex / Hermes) or a live host object (the in-process
+ * runtime), and neither is schema-checked before it gets here. A model
+ * that emits `{"command": 123}` instead of `{"command": "123"}` used to
+ * reach `(123 || '').slice(0, 300)` and throw a TypeError out of
+ * `toolSummary` — see the block comment on {@link toolSummary} for what
+ * that cost.
+ *
+ * Never throws: a value that cannot be serialised (circular object from
+ * an in-process host, BigInt) degrades to the empty string rather than
+ * taking the caller down with it.
+ */
+function argText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value) ?? '';
+    } catch {
+      return '';
+    }
+  }
+  // number / boolean / symbol / bigint / function
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Best-effort summary of a tool invocation, suitable for span attributes
  * and audit log entries. Recognises Claude Code, OpenClaw, and Hermes
  * tool names; falls back to a JSON-stringified preview for unknowns.
+ *
+ * ── This function is on the GUARD path, so it must be total ───────────
+ *
+ * It is reached from three places that all run *after* the guard has
+ * already decided and *before* that decision is handed to the host:
+ * `guard-hook.ts`'s `spanKey()` (Claude Code / Codex), `hook-cli.ts`'s
+ * `spanKey()` (Hermes), and `dispatchCollectorEvent`'s `baseFields`,
+ * which is built OUTSIDE that function's own try/catch. A throw from
+ * here therefore does not degrade telemetry — it kills the process
+ * carrying a `deny`, and every host reads a dead hook as "no action":
+ *
+ *   hermes      `{"decision":"block",…}` on stdout, exit 0
+ *                 → empty stdout, exit 1      (measured)
+ *   claude code  exit 2 + reason on stderr
+ *                 → exit 1 + a Node stack     (measured; exit 1 is
+ *                    Claude Code's NON-blocking error code)
+ *
+ * Both were reproduced end-to-end against the shipped bundles with
+ * `tool_input: { command: 123 | true | {…} }` on a `blocked_tools` deny.
+ * Hence `argText` on every field read: a malformed tool argument is a
+ * telemetry-quality problem, never an enforcement one.
  */
 export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
   switch (toolName) {
     // Claude Code
     case 'Bash':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'Write':
     case 'Edit':
-      return (toolInput['file_path'] as string) || (toolInput['path'] as string) || '';
+      return argText(toolInput['file_path']) || argText(toolInput['path']);
     case 'WebFetch':
     case 'WebSearch':
-      return (toolInput['url'] as string) || (toolInput['query'] as string) || '';
+      return argText(toolInput['url']) || argText(toolInput['query']);
     // Hermes
     case 'terminal':
     case 'exec':
     case 'shell':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'write_file':
     case 'patch':
     case 'read_file':
-      return (toolInput['path'] as string) || (toolInput['file_path'] as string) || '';
+      return argText(toolInput['path']) || argText(toolInput['file_path']);
     case 'fetch':
     case 'http_request':
-      return (toolInput['url'] as string) || '';
+      return argText(toolInput['url']);
     default:
-      return JSON.stringify(toolInput).slice(0, 300);
+      return argText(toolInput).slice(0, 300);
   }
 }
 
@@ -541,7 +624,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'PostToolUse') {
@@ -626,7 +709,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCreated') {
@@ -647,7 +730,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCompleted') {
@@ -668,7 +751,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
@@ -708,7 +791,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (hasActiveTurn && meterProvider) {
-        await recordTurn(meterProvider);
+        await recordTurn(meterProvider, NO_EARLY_FLUSH);
       }
 
       if (event === 'SessionEnd') {
