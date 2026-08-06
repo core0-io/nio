@@ -563,8 +563,14 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     });
   }
 
-  const chatSpans = (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    tracer.finished().filter(s => s.name.startsWith('chat'));
+  // Flushes before reading. The in-memory tracer helper now wires the
+  // same BatchSpanProcessor production does, so a span that has ended is
+  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
+  // by the runtime itself — but a case that hands the runtime a wrapper
+  // whose `forceFlush` never reaches the real provider would otherwise
+  // read zero for the wrong reason.
+  const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
 
   it('a turn that ended with no state still drops its events (C1)', async () => {
     // The `!state` early return in `flushSessionTurn` used to be the one
@@ -593,7 +599,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await rt.onTurnEnd('s1');
 
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'turn 2 must produce exactly its own chat span — turn 1\'s three events were dropped at ITS boundary',
       );
     } finally {
@@ -619,7 +625,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await rt.onTurnEnd('s-recycled');
 
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'a new session under a reused id must not inherit the old session\'s calls',
       );
     } finally {
@@ -640,7 +646,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await rt.onTurnEnd('s-cap');
 
       assert.equal(
-        chatSpans(tracer).length, 200,
+        (await chatSpans(tracer)).length, 200,
         'exactly the last 200 events survive the cap',
       );
     } finally {
@@ -737,7 +743,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
         'a failed export must never propagate into the host',
       );
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'sanity: the turn still built its chat span — the flush is the only thing that failed',
       );
     } finally {
@@ -792,7 +798,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
         'nor at process-wide teardown',
       );
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'sanity: the turn still built its chat span — the logs flush is the only thing that failed',
       );
     } finally {
@@ -828,7 +834,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
         'sanity: the export path really did throw, so the finally is what runs',
       );
       assert.equal(
-        chatSpans(tracer).length, 2,
+        (await chatSpans(tracer)).length, 2,
         'sanity: turn 1 built both of its chat spans before the export blew up',
       );
 
@@ -837,7 +843,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       await assert.rejects(() => rt.onTurnEnd('s-throw'), /OTLP exporter down/);
 
       assert.equal(
-        chatSpans(tracer).length, 3,
+        (await chatSpans(tracer)).length, 3,
         'turn 2 must contribute exactly ONE new chat span — five means turn 1\'s two events ' +
           'survived its throwing exit and were replayed as turn 2\'s own calls',
       );
@@ -857,8 +863,14 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
 // thing standing between a torn-down session and a later turn under the
 // same id replaying its file.
 describe('InProcessPluginRuntime transcript-path lifecycle', () => {
-  const chatSpans = (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    tracer.finished().filter(s => s.name.startsWith('chat'));
+  // Flushes before reading. The in-memory tracer helper now wires the
+  // same BatchSpanProcessor production does, so a span that has ended is
+  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
+  // by the runtime itself — but a case that hands the runtime a wrapper
+  // whose `forceFlush` never reaches the real provider would otherwise
+  // read zero for the wrong reason.
+  const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
 
   it('onSessionEnd stops the session file being ours to replay (M1)', async () => {
     const tracer = makeInMemoryTracer();
@@ -897,7 +909,7 @@ describe('InProcessPluginRuntime transcript-path lifecycle', () => {
       rt.onUserPrompt('s-file', 'first turn');
       await rt.onSessionEnd('s-file');
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'sanity: the session file really was readable and really did produce a chat span',
       );
 
@@ -908,7 +920,7 @@ describe('InProcessPluginRuntime transcript-path lifecycle', () => {
       await rt.onTurnEnd('s-file');
 
       assert.equal(
-        chatSpans(tracer).length, 1,
+        (await chatSpans(tracer)).length, 1,
         'no new chat span: the ended session\'s transcript must no longer be ours to replay',
       );
     } finally {

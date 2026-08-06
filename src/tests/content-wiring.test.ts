@@ -162,8 +162,11 @@ describe('content wiring: a turn\'s content records join back to their chat span
     );
 
     // Content for a chat call cannot exist before the chat span does.
+    // Flush first: the helper batches like production, so without this the
+    // "nothing has gone out yet" assertion would be satisfied by records
+    // sitting unexported in the queue rather than by their absence.
     assert.equal(
-      byContentType(logger.emitted(), 'thinking').length,
+      byContentType(await logger.flushed(), 'thinking').length,
       0,
       'chat content must not go out before end of turn — the chat span id does not exist yet',
     );
@@ -178,6 +181,11 @@ describe('content wiring: a turn\'s content records join back to their chat span
       loggerProvider: logger.provider,
       logsConfig,
     });
+
+    // `dispatchCollectorEvent` does not flush the logger — its callers
+    // (collector-hook, hook-cli, plugin-runtime) do, at the turn boundary.
+    // So drain the batch here before reading records back.
+    await logger.flushed();
 
     const chatSpans = byName(tracer.finished(), 'chat claude-test-model');
     assert.equal(chatSpans.length, 2, 'two chat spans expected');
@@ -267,7 +275,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
       logsConfig,
     });
 
-    const thinking = byContentType(logger.emitted(), 'thinking');
+    const thinking = byContentType(await logger.flushed(), 'thinking');
     assert.equal(thinking.length, 1);
     const body = String(thinking[0]!.body);
     assert.ok(!body.includes(secret), 'the secret must not reach the wire');
@@ -325,7 +333,7 @@ describe('content wiring: a turn\'s content records join back to their chat span
         logsConfig,
       });
 
-      const thinking = byContentType(logger.emitted(), 'thinking');
+      const thinking = byContentType(await logger.flushed(), 'thinking');
       assert.equal(thinking.length, 1);
       const body = String(thinking[0]!.body);
       assert.ok(
@@ -355,7 +363,7 @@ describe('content wiring: tool output rides the logs signal, keyed to its tool s
       'total 0\ndrwxr-xr-x  2 nobody nobody 64 Aug  5 10:00 .',
     );
 
-    const outputs = byContentType(logger.emitted(), 'tool_output');
+    const outputs = byContentType(await logger.flushed(), 'tool_output');
     assert.equal(outputs.length, 1, 'the tool result must be captured exactly once');
     assert.match(String(outputs[0]!.body), /drwxr-xr-x/);
     assert.equal(attr(outputs[0]!, 'gen_ai.tool.call.id'), 'toolu_o1');
@@ -421,7 +429,7 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
       });
     }
 
-    const inputs = byContentType(logger.emitted(), 'tool_input');
+    const inputs = byContentType(await logger.flushed(), 'tool_input');
     assert.equal(inputs.length, 1, 'the arguments must be captured even without a source');
     const body = String(inputs[0]!.body);
     assert.ok(
@@ -498,7 +506,7 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
       });
     }
 
-    const inputs = byContentType(logger.emitted(), 'tool_input');
+    const inputs = byContentType(await logger.flushed(), 'tool_input');
     assert.equal(inputs.length, 1);
     const body = String(inputs[0]!.body);
     assert.ok(!body.includes(secret), 'the secret must not reach the wire');
@@ -532,8 +540,10 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
       });
     }
 
+    // Flush before a NEGATIVE assertion: batching would otherwise let an
+    // unexported record satisfy "no record was produced".
     assert.equal(
-      byContentType(logger.emitted(), 'tool_input').length,
+      byContentType(await logger.flushed(), 'tool_input').length,
       0,
       'an empty argument object is not worth a record',
     );
@@ -563,7 +573,7 @@ describe('audit log records carry the turn they belong to', () => {
     });
 
     const turn = byName(tracer.finished(), 'invoke_agent UserPromptSubmit')[0]!;
-    const post = logger.emitted().find((r) => attr(r, 'nio.event') === 'PostToolUse');
+    const post = (await logger.flushed()).find((r) => attr(r, 'nio.event') === 'PostToolUse');
     assert.ok(post, 'the PostToolUse audit record must have been exported');
     assert.ok(
       post!.spanContext,
@@ -843,7 +853,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
       const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
       assert.ok(chats.length >= 1, `${platform}: expected at least one chat span`);
       assert.ok(
-        contentRecords(logger.emitted()).some((r) => attr(r, 'nio.content.type') === 'text'),
+        contentRecords(await logger.flushed()).some((r) => attr(r, 'nio.content.type') === 'text'),
         `${platform}: expected the assistant text to reach the logs signal`,
       );
     }
@@ -897,7 +907,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
 
     const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
     assert.equal(chats.length, 1, 'the assistant message in the envelope must become a chat span');
-    const texts = byContentType(logger.emitted(), 'text');
+    const texts = byContentType(await logger.flushed(), 'text');
     assert.ok(
       texts.some((r) => String(r.body).includes('hermes assistant reply')),
       'the assistant reply must reach the logs signal',
@@ -1425,7 +1435,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
           'the deny must still stop the call — content capture changes nothing about enforcement',
         );
 
-        const inputs = byContentType(logger.emitted(), 'tool_input');
+        const inputs = byContentType(await logger.flushed(), 'tool_input');
         assert.equal(inputs.length, 1, 'the denied call\'s arguments must reach the logs signal');
         assert.ok(
           String(inputs[0]!.body).includes('unique-denied-marker'),
@@ -1503,6 +1513,6 @@ describe('platform wiring: every platform reaches a conversation source', () => 
       'the tool span falls back to hanging off the turn',
     );
     // Tool output still goes out — it never depended on the chat layer.
-    assert.equal(byContentType(logger.emitted(), 'tool_output').length, 1);
+    assert.equal(byContentType(await logger.flushed(), 'tool_output').length, 1);
   });
 });

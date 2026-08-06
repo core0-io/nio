@@ -177,7 +177,11 @@ describe('deferred tool spans are capped, and the overflow is flushed rather tha
 
         // ── MID-TURN. Nothing has closed the turn. On an unbounded
         // queue this list is empty: every span is still parked.
-        const midTurn = named(tracer.finished(), 'execute_tool');
+        // `overflowDeferredSpans` is synchronous and deliberately does
+        // not flush — the spans it emits ride the batch processor's own
+        // schedule. So drain the queue before counting, or this reads
+        // zero for a reason that has nothing to do with the cap.
+        const midTurn = named(await tracer.flushed(), 'execute_tool');
         assert.equal(
           midTurn.length, OVERFLOW,
           `${CALLS} tool calls against a ${MAX_DEFERRED_SPANS}-span cap must have flushed exactly ` +

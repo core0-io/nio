@@ -120,14 +120,17 @@ describe('tool content records outlive the span they name (deliberate)', () => {
         { event: { type: 'session.idle', properties: { sessionID } } } as never,
       );
 
-      const spans = tracer.finished();
+      // Flush both signals before reading: the helpers batch exactly as
+      // production does, and a NEGATIVE assertion read off an undrained
+      // queue would pass for the wrong reason.
+      const spans = await tracer.flushed();
       assert.equal(
         spans.length, 0,
         'a disarmed session exports nothing — if this ever becomes non-zero the capture gate is ' +
           'broken and this test is the least of the problems',
       );
 
-      const records = logger.emitted();
+      const records = await logger.flushed();
       const withSpan = records.filter((r) => spanIdOf(r) !== undefined);
       assert.equal(
         withSpan.length, 2,

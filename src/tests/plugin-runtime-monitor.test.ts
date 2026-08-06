@@ -182,13 +182,18 @@ describe('plugin runtime: providers are lazy and gated', () => {
       });
 
       rt.onSessionStart('sess-armed');
-      const armedRecords = logger.emitted().length;
+      // `onSessionStart` is synchronous and does not flush; the helper
+      // batches exactly as production does, so both reads below have to
+      // drain the queue first. The second one especially: without the
+      // flush, "an unarmed session added nothing" would be satisfied by a
+      // leaked record still sitting unexported.
+      const armedRecords = (await logger.flushed()).length;
       assert.ok(armedRecords > 0, 'sanity: an armed session does export its audit rows');
 
       rt.onSessionStart('sess-unarmed');
 
       assert.equal(
-        logger.emitted().length, armedRecords,
+        (await logger.flushed()).length, armedRecords,
         'an unarmed session must add no OTLP audit record, even once a provider exists',
       );
     } finally {
