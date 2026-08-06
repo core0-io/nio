@@ -869,3 +869,67 @@ describe('collector-core: resolveSpanKey — concurrent same-signature composite
     assert.equal(new Set(starts).size, 3, 'all three spans must carry distinct start times');
   });
 });
+
+// ── Malformed payload fields: degrade, never lose the whole branch ─────
+
+/**
+ * `dispatchCollectorEvent` catches everything its body throws and reports
+ * a diagnostic, so these are telemetry-quality defects rather than
+ * enforcement ones (unlike the sites in
+ * guard-decision-survives-malformed-payload.test.ts, which run outside
+ * any catch). What made them worth fixing anyway is WHERE the throw was:
+ * both sites run before their branch's `writeAuditLog`, so the whole
+ * event vanished — no audit row, no span — instead of degrading.
+ *
+ * MUTATION: restore `input.tool_name ?? ''` / `(prompt as string)` in
+ * collector-core.ts — the matching case's audit entry disappears.
+ */
+describe('collector-core: malformed payload fields degrade rather than lose the event', () => {
+  it('a non-string tool_name still writes its PostToolUse audit entry', async () => {
+    const { auditPath, logsConfig } = freshFixture();
+    await dispatchCollectorEvent({
+      event: 'PostToolUse',
+      // `tool_name` reaches `parseMcpToolName`, whose first statement is
+      // `toolName.startsWith('mcp__')`.
+      input: {
+        session_id: 'sess-malformed-name',
+        tool_name: 12345 as unknown as string,
+        tool_input: { command: 'ls' },
+        tool_response: { output: 'ok' },
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: null,
+      logsConfig,
+    });
+    const entries = readEntries(auditPath);
+    assert.equal(entries.length, 1, 'the audit entry must survive a non-string tool_name');
+    assert.equal(entries[0]!['event'], 'PostToolUse');
+    assert.equal(entries[0]!['tool_name'], '12345');
+  });
+
+  it('a non-string task_input.prompt still writes its TaskCreated audit entry', async () => {
+    const { auditPath, logsConfig } = freshFixture();
+    await dispatchCollectorEvent({
+      event: 'TaskCreated',
+      input: {
+        session_id: 'sess-malformed-prompt',
+        task_id: 'task-1',
+        task_input: { prompt: { text: 'do a thing' } as unknown as string },
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: null,
+      logsConfig,
+    });
+    const entries = readEntries(auditPath);
+    assert.equal(entries.length, 1, 'the audit entry must survive a non-string task prompt');
+    assert.equal(entries[0]!['task_id'], 'task-1');
+    assert.equal(
+      entries[0]!['task_summary'], '{"text":"do a thing"}',
+      'the prompt content must still reach the summary, serialised',
+    );
+  });
+});

@@ -41,6 +41,7 @@ import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { createFlushBudget } from './lib/flush-budget.js';
 import { dumpPayload } from './lib/payload-dump.js';
 import { spanKey, toolSummary, parseMcpToolName, type HookStdinPayload } from './lib/collector-core.js';
+import { asText } from '../adapters/common.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
 import { formatDiagnosticsForUser, type Diagnostic } from '../adapters/diagnostics.js';
@@ -196,7 +197,15 @@ async function main(): Promise<void> {
 
   // Record guard decision metrics
   const payload = (input as HookStdinPayload | Record<string, unknown>);
-  const toolName = (payload as Record<string, unknown>).tool_name as string || '';
+  // `asText`, not `as string`. This is a SECOND, independent read of the
+  // raw stdin payload — the adapter's own coercion never touches it — and
+  // it feeds `parseMcpToolName(toolName)` below, whose first statement is
+  // `toolName.startsWith('mcp__')`. That call sits AFTER `evaluateHook`
+  // has decided and BEFORE the decision is written, and unlike the
+  // trace-emitting block further down it is not gated on `tracerProvider`:
+  // a non-string `tool_name` therefore killed the deny on Claude Code and
+  // Codex with no collector configured at all.
+  const toolName = asText((payload as Record<string, unknown>).tool_name);
   if (meterProvider) {
     await withFlushBudget(
       recordGuardDecision(

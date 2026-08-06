@@ -6,6 +6,7 @@ import type {
   ExecCommandData, FileOperationData, NetworkRequestData,
 } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping for Pi.
@@ -67,7 +68,10 @@ export class PiAdapter implements HookAdapter {
   parseInput(raw: unknown): HookInput {
     const event = (raw ?? {}) as Record<string, unknown>;
     return {
-      toolName: (event.toolName as string) || '',
+      // `asText`, not `as string`: Pi runs Nio in-process and hands the
+      // adapter a live host object. See asText — a throw from the string
+      // methods that read this downstream loses the guard decision.
+      toolName: asText(event.toolName),
       toolInput: (event.input as Record<string, unknown>) || {},
       eventType: 'pre',
       sessionId: event.sessionId as string | undefined,
@@ -104,9 +108,14 @@ export class PiAdapter implements HookAdapter {
     let actionData: ActionData;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText`: these are
+      // model-authored, unvalidated values feeding fields the analysers
+      // treat as strings. `content.slice(10_000)` below used to throw on
+      // a non-string content, outside the orchestrator's try/catch,
+      // killing the process before its deny reached the host.
       case 'exec_command': {
         const data: ExecCommandData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
           cwd: input.cwd,
         };
@@ -118,10 +127,10 @@ export class PiAdapter implements HookAdapter {
         // Pi's write tool uses `content`; its edit tool uses
         // `newText` for the replacement body.
         const content =
-          (input.toolInput.content as string) ||
-          (input.toolInput.newText as string) || '';
+          asText(input.toolInput.content) ||
+          asText(input.toolInput.newText);
         const data: FileOperationData = {
-          path: (input.toolInput.path as string) || '',
+          path: asText(input.toolInput.path),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
@@ -130,7 +139,7 @@ export class PiAdapter implements HookAdapter {
 
       case 'read_file': {
         const data: FileOperationData = {
-          path: (input.toolInput.path as string) || '',
+          path: asText(input.toolInput.path),
         };
         actionData = data;
         break;
@@ -139,7 +148,7 @@ export class PiAdapter implements HookAdapter {
       case 'network_request': {
         const data: NetworkRequestData = {
           method: (input.toolInput.method as NetworkRequestData['method']) || 'GET',
-          url: (input.toolInput.url as string) || '',
+          url: asText(input.toolInput.url),
           body_preview: input.toolInput.body as string | undefined,
         };
         actionData = data;

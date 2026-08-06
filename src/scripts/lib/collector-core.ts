@@ -42,7 +42,7 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import type { ResolvedMetricsConfig as CollectorConfig } from '../../adapters/common.js';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
-import { writeAuditLog } from '../../adapters/common.js';
+import { writeAuditLog, asText } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
 import { forgetSession } from './monitor-check.js';
 import {
@@ -173,24 +173,13 @@ const NO_EARLY_FLUSH = { flush: false } as const;
  * Never throws: a value that cannot be serialised (circular object from
  * an in-process host, BigInt) degrades to the empty string rather than
  * taking the caller down with it.
+ *
+ * One definition, shared with the adapters: `adapters/common.ts`'s
+ * `asText` covers the same defect class on the guard-DECISION side of the
+ * same payload (`parseInput` / `buildEnvelope`). Two copies of a coercion
+ * this load-bearing would be two things to keep in step.
  */
-function argText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (value === undefined || value === null) return '';
-  if (typeof value === 'object') {
-    try {
-      return JSON.stringify(value) ?? '';
-    } catch {
-      return '';
-    }
-  }
-  // number / boolean / symbol / bigint / function
-  try {
-    return String(value);
-  } catch {
-    return '';
-  }
-}
+const argText = asText;
 
 /**
  * Best-effort summary of a tool invocation, suitable for span attributes
@@ -516,7 +505,13 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     }
   };
 
-  const toolName = input.tool_name ?? '';
+  // `argText`, not `?? ''`: `tool_name` is unvalidated host input and this
+  // value reaches `parseMcpToolName`, whose first statement calls
+  // `.startsWith` on it. That throw is caught by this function's own
+  // try/catch, so it costs enforcement nothing — but it costs the WHOLE
+  // branch: no audit entry, no span opened or closed, for every tool call
+  // in the session that carries a non-string name.
+  const toolName = argText(input.tool_name);
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
   const transcriptPath = input.transcript_path ?? null;
@@ -714,8 +709,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
     } else if (event === 'TaskCreated') {
       const taskId = input.task_id ?? spanKey(input);
-      const prompt = input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {});
-      const summary = (prompt as string).slice(0, 300);
+      // `argText`, not `as string`: a `task_input.prompt` that is not a
+      // string used to throw here. Caught by this function's try/catch, so
+      // again no enforcement cost — but the throw happens BEFORE
+      // `writeAuditLog`, so the whole TaskCreated record and its span were
+      // lost rather than degraded.
+      const summary = argText(
+        input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {}),
+      ).slice(0, 300);
 
       writeAuditLog(
         { event, ...baseFields, task_id: taskId, task_summary: summary },

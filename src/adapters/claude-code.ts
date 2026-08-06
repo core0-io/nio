@@ -4,6 +4,7 @@
 import { openSync, readSync, closeSync, fstatSync } from 'node:fs';
 import type { ActionEnvelope, ActionData, ActionType, ExecCommandData, FileOperationData, NetworkRequestData } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping — used when config does not
@@ -38,9 +39,13 @@ export class ClaudeCodeAdapter implements HookAdapter {
 
   parseInput(raw: unknown): HookInput {
     const data = raw as Record<string, unknown>;
-    const hookEvent = (data.hook_event_name as string) || '';
+    // `asText`, not `as string`: `raw` is unvalidated host JSON, and both
+    // of these are read by string methods (here and, for `toolName`, by
+    // `checkToolGate`'s MCP-name parse and allow/deny-list matching).
+    // See asText's doc for why a throw here loses the guard decision.
+    const hookEvent = asText(data.hook_event_name);
     return {
-      toolName: (data.tool_name as string) || '',
+      toolName: asText(data.tool_name),
       toolInput: (data.tool_input as Record<string, unknown>) || {},
       eventType: hookEvent.startsWith('Post') ? 'post' : 'pre',
       sessionId: data.session_id as string | undefined,
@@ -77,9 +82,15 @@ export class ClaudeCodeAdapter implements HookAdapter {
     let actionData: ActionData;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText`. The values are
+      // model-authored JSON — `{"command": 123}` is one token away from
+      // `{"command": "123"}` — and they flow straight into fields the
+      // analysers treat as strings. `content.slice(10_000)` below used to
+      // throw on a non-string content, outside the orchestrator's
+      // try/catch, killing the process before its deny reached the host.
       case 'exec_command': {
         const data: ExecCommandData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
           cwd: input.cwd,
         };
@@ -88,10 +99,10 @@ export class ClaudeCodeAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        const content = (input.toolInput.content as string) ||
-                        (input.toolInput.new_string as string) || '';
+        const content = asText(input.toolInput.content) ||
+                        asText(input.toolInput.new_string);
         const data: FileOperationData = {
-          path: (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.file_path),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
@@ -101,7 +112,7 @@ export class ClaudeCodeAdapter implements HookAdapter {
       case 'network_request': {
         const data: NetworkRequestData = {
           method: 'GET',
-          url: (input.toolInput.url as string) || (input.toolInput.query as string) || '',
+          url: asText(input.toolInput.url) || asText(input.toolInput.query),
         };
         actionData = data;
         break;
