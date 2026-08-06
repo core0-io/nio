@@ -150,6 +150,93 @@ function applyTiming(calls: ChatCall[]): void {
   }
 }
 
+interface RawUserEntry {
+  type?: string;
+  timestamp?: string;
+  isSidechain?: boolean;
+  isMeta?: boolean;
+  message?: { role?: string; content?: unknown };
+}
+
+/**
+ * Flattens a `user` message's content to plain text.
+ *
+ * Content is either a bare string (how Claude Code stores a typed
+ * prompt — 19 of 19 real prompts in the transcripts sampled) or a block
+ * array. Only `text` blocks contribute: the overwhelming majority of
+ * `type: 'user'` lines in a transcript are tool RESULTS (154 of 187
+ * sampled), which carry `tool_result` blocks and must flatten to the
+ * empty string so `lastUserMessageSince` skips them.
+ */
+function userMessageText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+
+  const parts: string[] = [];
+  for (const b of content) {
+    if (!b || typeof b !== 'object') continue;
+    const block = b as { type?: string; text?: string };
+    if (block.type === 'text' && typeof block.text === 'string') parts.push(block.text);
+  }
+  return parts.join('\n');
+}
+
+/**
+ * The most recent user message at or after `sinceMs`.
+ *
+ * Claude Code's UserPromptSubmit payload carries `prompt_id`, not the
+ * prompt text (verified against a live session: the payload has
+ * session_id / prompt_id / transcript_path / cwd / permission_mode /
+ * effort / hook_event_name). The text only exists in the transcript, so
+ * the turn attribute has to come from there.
+ *
+ * Three classes of `type: 'user'` line are NOT the user talking and are
+ * skipped, all three observed live:
+ *   - tool results (they flatten to '' — see `userMessageText`),
+ *   - `isMeta` lines, which the host writes for its own injected context
+ *     and which DO carry a text block (13 of 187 sampled lines),
+ *   - `isSidechain` lines, which belong to a sub-agent's conversation,
+ *     not the user's (the same flag `toCall` already tracks).
+ *
+ * Returns null rather than throwing for every failure mode: this runs
+ * inside a host-blocking hook.
+ */
+export function lastUserMessageSince(transcriptPath: string, sinceMs: number): string | null {
+  let latest: { ms: number; text: string } | null = null;
+
+  for (const line of readJsonlTail(transcriptPath)) {
+    let entry: RawUserEntry;
+    try {
+      entry = JSON.parse(line) as RawUserEntry;
+    } catch {
+      continue; // malformed line: skip, don't abort the rest of the file
+    }
+    // Same guard, for the same reason, as callsSince below: `JSON.parse`
+    // returns null (or a number, or an array) WITHOUT throwing for a
+    // line that is bare `null` / `42` / `[1,2,3]`, so the catch above
+    // never sees it and the property read on the next line is what
+    // actually throws. This exact shape has crashed this repo once.
+    if (!entry || typeof entry !== 'object') continue;
+    if (entry.type !== 'user') continue;
+    if (entry.isSidechain === true || entry.isMeta === true) continue;
+
+    const msg = entry.message;
+    if (!msg || typeof msg !== 'object') continue;
+
+    const ms = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
+    if (!Number.isFinite(ms) || ms < sinceMs) continue;
+
+    const text = userMessageText(msg.content).trim();
+    if (text.length === 0) continue;
+
+    // `>=` so that, among lines sharing a timestamp, the one later in
+    // the file wins — transcript order is the tie-breaker.
+    if (!latest || ms >= latest.ms) latest = { ms, text };
+  }
+
+  return latest ? latest.text : null;
+}
+
 export function createClaudeCodeSource(transcriptPath: string): ConversationSource {
   return {
     name: 'claude-code-transcript',
