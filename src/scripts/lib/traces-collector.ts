@@ -92,8 +92,39 @@ export function redactAndTruncate(value: unknown, maxBytes: number = MAX_ATTR_BY
   } catch {
     s = String(value);
   }
-  if (s && s.length > maxBytes) s = s.slice(0, maxBytes) + '…[truncated]';
+  if (s && s.length > maxBytes) s = flatten(s.slice(0, maxBytes)) + '…[truncated]';
   return s ?? '';
+}
+
+/**
+ * Copy a string into a fresh, flat one.
+ *
+ * `s.slice(0, n)` does NOT bound the memory the result costs. V8 answers
+ * a slice of a long string with a SlicedString — a view that keeps the
+ * WHOLE parent alive — so `redactAndTruncate` was capping the value at
+ * 2048 chars while still pinning every byte of the payload it was
+ * handed. Measured (2000 truncations of a distinct 50 KB payload, forced
+ * GC either side): **50,130 B retained per 2060-char output** without
+ * this copy, **4,192 B with it** — 12×, and the multiplier is set by the
+ * INPUT size, so it grows without bound as tool outputs get bigger.
+ *
+ * That matters most where truncated attributes are held rather than
+ * emitted and dropped: `deferred_spans` parks one closed tool span per
+ * call for the whole turn (see MAX_DEFERRED_SPANS), and every one of
+ * them carries `gen_ai.tool.call.arguments` + `gen_ai.tool.call.result`.
+ * The strings being pinned are Nio's own `JSON.stringify` intermediates,
+ * which would otherwise be collectable the moment this function returns.
+ *
+ * utf16le round-trip rather than `split('').join('')` (one copy instead
+ * of 2048 single-char strings) and rather than a utf8 round-trip, which
+ * is NOT identity: truncating at a fixed number of UTF-16 code units can
+ * split a surrogate pair, and utf8 would rewrite the resulting lone
+ * surrogate as U+FFFD. Verified character-identical against the plain
+ * slice over ASCII, multi-byte, split-surrogate-pair and lone-surrogate
+ * inputs.
+ */
+function flatten(s: string): string {
+  return Buffer.from(s, 'utf16le').toString('utf16le');
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +809,56 @@ function emitDeferredSpan(
     span.recordException(deferred.error);
   }
   span.end(deferred.end_ms);
+}
+
+/**
+ * Emit the oldest parked spans past `max` right now, as direct children
+ * of the turn root, and drop them from the queue. Returns the state
+ * unchanged when the queue is within budget.
+ *
+ * A bound on `deferred_spans` that DROPPED spans would be the wrong
+ * trade twice over: the whole point of parking one is that it is going
+ * to be exported at turn close, and its `tool_input` / `tool_output`
+ * content log records — emitted at PreToolUse / PostToolUse, carrying
+ * this span's id — are already on the logs signal, so dropping the span
+ * would leave the backend permanently holding records that name a span
+ * it will never receive. Flushing early costs only the attribution: an
+ * overflow span hangs off the turn root instead of the chat call that
+ * issued it, exactly the shape `eagerToolSpans: true` accepts on
+ * purpose.
+ *
+ * The loss is therefore parentage, not data — and it is marked rather
+ * than silent (`nio.span.deferred_overflow`), so a flat-looking subtree
+ * can be told apart from one that was never attributable.
+ *
+ * Callers own the policy (the `max`); this function owns the mechanism.
+ */
+export function overflowDeferredSpans(
+  provider: NodeTracerProvider,
+  state: CollectorState,
+  max: number,
+): CollectorState {
+  const deferred = state.deferred_spans ?? [];
+  if (deferred.length <= max) return state;
+  const traceId = state.turn_trace_id;
+  // No turn trace id means there is no root to parent onto and no trace
+  // to join; keeping the spans parked is strictly better than emitting
+  // them into a trace that does not exist.
+  if (!traceId) return state;
+
+  const cut = deferred.length - max;
+  for (let i = 0; i < cut; i++) {
+    const span = deferred[i]!;
+    emitDeferredSpan(provider, traceId, traceId.slice(0, 16), {
+      ...span,
+      attributes: {
+        ...span.attributes,
+        'nio.span.deferred_overflow': true,
+        'nio.span.deferred_cap': max,
+      },
+    });
+  }
+  return { ...state, deferred_spans: deferred.slice(cut) };
 }
 
 /**

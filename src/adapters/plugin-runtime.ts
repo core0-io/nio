@@ -37,6 +37,7 @@ import {
   recordCacheHitRate,
   recordPostToolUse,
   deferPostToolUse,
+  overflowDeferredSpans,
   recordPostTaskToolUse,
   recordUserPrompt,
   recordAssistantReply,
@@ -136,6 +137,28 @@ export interface PluginRuntimeOptions {
  * was wrong for any streaming platform — see `recordConversationEvent`.
  */
 const MAX_CONVERSATION_EVENTS = 200;
+
+/**
+ * Tool spans parked for end-of-turn attribution, past which the oldest
+ * are flushed early. See `onPostTool` and `overflowDeferredSpans`.
+ *
+ * The unit here is genuinely one TOOL CALL, on all three platforms in
+ * this family — the mistake `MAX_CONVERSATION_EVENTS` made is not
+ * reachable from this counter. A slot is claimed only by
+ * `deferPostToolUse`, which needs a matching `pending_spans` entry and
+ * removes it, so a second close of the same key adds nothing; no
+ * platform re-publishes a tool completion, and OpenClaw
+ * (`eagerToolSpans: true`) never parks at all, leaving its queue
+ * permanently empty and this cap unreachable for it. So N here is N
+ * tool calls in the currently-open turn, not N host deliveries.
+ *
+ * Sized well past any real turn: the point is a ceiling on a host that
+ * runs for weeks, not a working limit. What it actually bounds is the
+ * pathological case the review's estimate missed — a turn whose close
+ * never arrives, on a host where each parked span pins its tool's
+ * arguments and result.
+ */
+export const MAX_DEFERRED_SPANS = 500;
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
 
@@ -929,16 +952,6 @@ export class InProcessPluginRuntime {
         // Park by default so `endTurn` can nest this span under the chat
         // call that issued it — nothing at THIS moment knows which call
         // that was. `eagerToolSpans` opts a platform out; see its doc.
-        //
-        // Deliberately UNCAPPED, unlike `conversationEvents`. The two are
-        // not comparable: `deferred_spans` is bounded by the number of
-        // tool calls in one open turn and is emptied at every turn close,
-        // whereas the event store accumulates snapshot traffic the host
-        // republishes without limit. Measured at 5000 tool calls in a
-        // single turn (far past any real one): ~3.5 MB, ~740 B/span,
-        // because `redactAndTruncate` has already capped each attribute
-        // at 2048 B. A cap here would buy nothing and would silently drop
-        // spans that are about to be exported anyway.
         const r = this.opts.eagerToolSpans
           ? await recordPostToolUse(
               tracerProvider,
@@ -955,7 +968,27 @@ export class InProcessPluginRuntime {
               postAttrs,
               outcome.error ?? null,
             );
-        this.sessionState.set(sessionId, r.state);
+        // Bound the parked queue. `deferred_spans` is normally emptied at
+        // every turn close, so this only bites on a turn whose close
+        // never arrives — a host that stops delivering `session.idle` /
+        // `agent_end`, or one long enough to run 500 tools in a single
+        // turn. That case is worth bounding because a parked span is not
+        // the ~740 B the review measured against toy payloads: each one
+        // carries this call's arguments and result, and until
+        // `redactAndTruncate` started flattening (see its `flatten`
+        // helper) it pinned them at FULL length rather than truncated.
+        // Measured on the real opencode binding, 5000 calls with 20 KB
+        // arguments and results: 204 MB parked, ~41 KB/span — 60× the
+        // estimate that said a cap would buy nothing.
+        //
+        // Overflow is FLUSHED, never dropped: a dropped span would strand
+        // the `tool_input` / `tool_output` records already emitted under
+        // its id (see `emitToolContent`). The cost is parentage on the
+        // oldest spans only, and it is marked on them.
+        this.sessionState.set(
+          sessionId,
+          overflowDeferredSpans(tracerProvider, r.state, MAX_DEFERRED_SPANS),
+        );
       }
     }
     if (monitored) {
@@ -1093,6 +1126,34 @@ export class InProcessPluginRuntime {
    * the four records and stamp them with a `span_id` for a span that is
    * never emitted, which is a worse artefact than the omission. Decoupling
    * content from traces properly is a design change, not a patch here.
+   *
+   * KNOWN AND DELIBERATE: a record emitted here can OUTLIVE the span it
+   * names. Under the deferred default the tool span is parked until turn
+   * close, while `tool_input` goes out at PreToolUse and `tool_output` at
+   * PostToolUse, so between them there is a window in which the backend
+   * holds a record whose `span_id` has not arrived. The window does not
+   * always close. Two paths reach the permanent case, and the second
+   * needs no crash at all — measured against the real `createNioPlugin`
+   * binding, one `bash` call, in-memory logger and tracer:
+   *
+   *  1. the host dies mid-turn (the durability trade `eagerToolSpans`
+   *     documents);
+   *  2. the session is DISARMED mid-turn. `flushSessionTurnInner` takes
+   *     its `!tracerProvider` early return, drops the parked spans, and
+   *     the two content records emitted while the session was still
+   *     armed are left naming a span nobody will ever send. Probed:
+   *     `spans exported = 0`, `dangling content records = 2` (the
+   *     command line and the result body).
+   *
+   * Not fixed, and the alternative is worse. Making the content share the
+   * span's fate means parking it too — which would delete, on exactly the
+   * mid-turn crash of (1), the tool arguments and results that currently
+   * DO survive it. A dangling log record still carries what the tool was
+   * asked to do and what it answered; a parked one carries nothing. So
+   * the join is best-effort by design and the content leg is the durable
+   * one. `pi-opencode-content-span-lifetime.test.ts` pins path (2) so
+   * that a future "fix" which parks content has to argue with this
+   * comment first.
    */
   private emitToolContent(
     kind: 'input' | 'output',
