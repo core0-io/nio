@@ -71,9 +71,10 @@ export function emitToolOutputContent(
   if (!opts.spanId || !opts.traceId) return;
   if (!opts.result) return;
   try {
-    emitContentRecords(provider, [
-      buildToolOutputRecord(opts.result, opts.spanId, opts.traceId, limits, opts.toolCallId),
-    ]);
+    // `null` when the body came out empty after redaction/truncation —
+    // an empty record is not worth a log line (see `emit.ts`'s doc).
+    const record = buildToolOutputRecord(opts.result, opts.spanId, opts.traceId, limits, opts.toolCallId);
+    if (record) emitContentRecords(provider, [record]);
   } catch {
     // Non-critical — see createContentSink.
   }
@@ -103,9 +104,9 @@ export function emitToolInputContent(
   if (!opts.spanId || !opts.traceId) return;
   if (!opts.input) return;
   try {
-    emitContentRecords(provider, [
-      buildToolInputRecord(opts.input, opts.spanId, opts.traceId, limits, opts.toolCallId),
-    ]);
+    // `null` when the body came out empty — see `emitToolOutputContent`.
+    const record = buildToolInputRecord(opts.input, opts.spanId, opts.traceId, limits, opts.toolCallId);
+    if (record) emitContentRecords(provider, [record]);
   } catch {
     // Non-critical — see createContentSink.
   }

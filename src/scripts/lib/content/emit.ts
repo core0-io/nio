@@ -41,6 +41,24 @@ export {};
  * text gets interleaved with content, which can itself break a pattern
  * mid-match. Redacting first guarantees the secret patterns always see
  * the original, unmodified text.
+ *
+ * Empty bodies are never emitted
+ * -------------------------------------------------
+ * A block whose body is empty *after* redaction and truncation produces
+ * no record at all. This is not a micro-optimisation: measured live on
+ * 2026-08-06, every `thinking` record on the wire had a zero-length body
+ * (21/21), because that Claude Code session's transcript held 382
+ * `thinking` blocks with `thinking: ""` and only the signature filled in.
+ * Emitted as-is, each one carried `nio.content.fidelity = 'full'` and
+ * read downstream as "the model reasoned, and its reasoning was blank" —
+ * an assertion about the model that the data does not support. Silence is
+ * the honest signal.
+ *
+ * The rule is per-kind-agnostic on purpose: an empty body is contentless
+ * under `text`, `tool_input` and `tool_output` just as much as under
+ * `thinking`. And the check has to run on the FINAL body — the input to
+ * `truncateContent`, not its output, is what an earlier length check
+ * would see, and redaction can rewrite the body in between.
  */
 
 import type { ChatCall, ContentBlock } from '../conversation/types.js';
@@ -109,7 +127,10 @@ export interface ContentRecord {
 }
 
 /**
- * Build one `ContentRecord` per emittable block in `call`, in block order.
+ * Build one `ContentRecord` per emittable block in `call`, in block
+ * order. Blocks whose final body is empty produce no record at all (see
+ * the module doc), so the result can be shorter than `call.blocks` — the
+ * surviving records keep their own block index, they are not renumbered.
  *
  * Pure function: no IO, no OTEL provider, no global state. `spanId` /
  * `traceId` are supplied by the caller (the span layer), which is the
@@ -129,7 +150,8 @@ export function buildContentRecords(
       continue;
     }
 
-    records.push(buildRecord(block, block.type, spanId, traceId, limits));
+    const record = buildRecord(block, block.type, spanId, traceId, limits);
+    if (record) records.push(record);
   }
 
   return records;
@@ -147,7 +169,8 @@ export function buildContentRecords(
  *
  * Same pure-function contract, and the same redact-then-truncate order,
  * as `buildContentRecords`; see the module docs for why that order is
- * load-bearing.
+ * load-bearing. Returns `null` when the final body is empty — same rule,
+ * same reason, as the block path.
  */
 export function buildToolOutputRecord(
   result: string,
@@ -155,7 +178,7 @@ export function buildToolOutputRecord(
   traceId: string,
   limits: ContentLimits,
   toolCallId?: string
-): ContentRecord {
+): ContentRecord | null {
   return buildOutOfBandRecord('tool_output', result, spanId, traceId, limits.tool_output, toolCallId);
 }
 
@@ -198,7 +221,7 @@ export function buildToolInputRecord(
   traceId: string,
   limits: ContentLimits,
   toolCallId?: string
-): ContentRecord {
+): ContentRecord | null {
   return buildOutOfBandRecord('tool_input', input, spanId, traceId, limits.tool_input, toolCallId);
 }
 
@@ -214,9 +237,12 @@ function buildOutOfBandRecord(
   traceId: string,
   limit: number,
   toolCallId?: string
-): ContentRecord {
+): ContentRecord | null {
   const { text: redacted, hits } = redactSecrets(text);
   const { text: body, truncated, originalBytes } = truncateContent(redacted, limit);
+
+  // Nothing left to say — see the module doc.
+  if (body.length === 0) return null;
 
   const attributes: ContentRecordAttributes = {
     'nio.content.type': type,
@@ -250,7 +276,7 @@ function buildRecord(
   spanId: string,
   traceId: string,
   limits: ContentLimits
-): ContentRecord {
+): ContentRecord | null {
   const kind = BLOCK_TYPE_TO_KIND[type];
   const limit = limits[kind];
 
@@ -258,6 +284,10 @@ function buildRecord(
   // load-bearing (a secret straddling the cut point must never be split).
   const { text: redacted, hits } = redactSecrets(block.content);
   const { text: body, truncated, originalBytes } = truncateContent(redacted, limit);
+
+  // Nothing left to say — see the module doc. Checked here, after both
+  // steps, so a body that redaction or truncation emptied is caught too.
+  if (body.length === 0) return null;
 
   const attributes: ContentRecordAttributes = {
     'nio.content.type': BLOCK_TYPE_TO_CONTENT_TYPE[type],

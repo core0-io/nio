@@ -876,6 +876,29 @@ so there is nothing to emit through).
 | `nio.span_id` | Redundant plain-string copy of the built-in field |
 | `gen_ai.tool.call.id` | Only on `tool_input` / `tool_output` |
 
+**A record is never emitted with an empty body.** Emptiness is judged on
+the final body — after redaction, after truncation — and applies to every
+`nio.content.type`, since an empty body carries no information under any
+of them. A body that redaction reduced to `[REDACTED]`, or that
+truncation reduced to the truncation marker, is *not* empty and is still
+emitted: both still say something happened.
+
+> **Observed: no `thinking` records from Claude Code.** In one session
+> sampled on 2026-08-06, all 382 `thinking` blocks in the transcript had
+> `thinking: ""` with only `signature` populated, so — with the rule above
+> — that session produced no `thinking` content records at all (before the
+> rule, it produced 21 records with an empty body and
+> `nio.content.fidelity = 'full'`, which read as "the model reasoned, and
+> its reasoning was blank"). This is what the host wrote to its
+> transcript, not something nio drops: nio reads the field the host
+> provides. Treat it as one measurement, not as a property of the
+> platform — what a transcript carries can vary by model and by thinking
+> level, and this repo has already been wrong in this exact way once
+> (Codex was recorded as having no thinking text on the strength of an
+> `effort=medium` sample; `effort=high` produced it). If you need to know
+> whether reasoning is being captured on a given setup, measure that
+> setup.
+
 > **Why `nio.trace_id` / `nio.span_id` duplicate the built-in fields.**
 > Backends disagree on how they surface OTLP's binary `trace_id` /
 > `span_id` after ingestion — some expose `span_id`, some `SpanId`, some
