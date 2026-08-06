@@ -15,6 +15,19 @@ const GENEROUS_LIMITS: ContentLimits = {
   tool_output: 65536,
 };
 
+/**
+ * A reply too big for the span budget (`SPAN_CONTENT_LIMIT`, 2 KB — see
+ * `content/span-content.ts`), so the logs signal stays authoritative for
+ * it and a record IS produced.
+ *
+ * Every `text` fixture below is oversized on purpose. Under the
+ * size-based placement rule a SMALL reply rides on `nio.chat.reply` and
+ * emits no log record at all; a short fixture would therefore make these
+ * assertions vacuous rather than wrong. The small-reply side of the rule
+ * is pinned in `content-placement.test.ts`.
+ */
+const LONG_TEXT = `hello there ${'padding '.repeat(400)}`;
+
 function makeCall(blocks: ContentBlock[]): ChatCall {
   return {
     callId: 'call-1',
@@ -30,7 +43,7 @@ describe('buildContentRecords — shape and ordering', () => {
   it('produces one record per block, in order, with index preserved', () => {
     const call = makeCall([
       { type: 'thinking', index: 0, content: 'pondering', fidelity: 'full' },
-      { type: 'text', index: 1, content: 'hello there' },
+      { type: 'text', index: 1, content: LONG_TEXT },
       {
         type: 'tool_use',
         index: 2,
@@ -55,7 +68,7 @@ describe('buildContentRecords — shape and ordering', () => {
   it('only the thinking record carries nio.content.fidelity', () => {
     const call = makeCall([
       { type: 'thinking', index: 0, content: 'pondering', fidelity: 'summary' },
-      { type: 'text', index: 1, content: 'hello there' },
+      { type: 'text', index: 1, content: LONG_TEXT },
       {
         type: 'tool_use',
         index: 2,
@@ -73,7 +86,7 @@ describe('buildContentRecords — shape and ordering', () => {
 
   it('only the tool_use record carries gen_ai.tool.call.id', () => {
     const call = makeCall([
-      { type: 'text', index: 0, content: 'hello there' },
+      { type: 'text', index: 0, content: LONG_TEXT },
       {
         type: 'tool_use',
         index: 1,
@@ -97,7 +110,7 @@ describe('buildContentRecords — shape and ordering', () => {
 
 describe('buildContentRecords — trace/span association', () => {
   it('sets traceId/spanId as built-in fields and duplicates them as redundant attributes', () => {
-    const call = makeCall([{ type: 'text', index: 0, content: 'hi' }]);
+    const call = makeCall([{ type: 'text', index: 0, content: LONG_TEXT }]);
     const [rec] = buildContentRecords(call, 'span-42', 'trace-99', GENEROUS_LIMITS);
 
     assert.equal(rec!.traceId, 'trace-99');
@@ -113,7 +126,7 @@ describe('buildContentRecords — redaction', () => {
       {
         type: 'text',
         index: 0,
-        content: 'my key is sk-ant-api03-AbCdEf1234567890AbCdEf1234567890AbCdEf12 ok',
+        content: `my key is sk-ant-api03-AbCdEf1234567890AbCdEf1234567890AbCdEf12 ok ${LONG_TEXT}`,
       },
     ]);
     const [rec] = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
@@ -124,7 +137,7 @@ describe('buildContentRecords — redaction', () => {
   });
 
   it('omits nio.content.redactions when nothing was redacted', () => {
-    const call = makeCall([{ type: 'text', index: 0, content: 'nothing secret here' }]);
+    const call = makeCall([{ type: 'text', index: 0, content: `nothing secret here ${LONG_TEXT}` }]);
     const [rec] = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
     assert.equal(rec!.attributes['nio.content.redactions'], undefined);
   });
@@ -133,16 +146,16 @@ describe('buildContentRecords — redaction', () => {
 describe('buildContentRecords — truncation', () => {
   it('truncates an overlong body and reports truncated + original_bytes', () => {
     const limits: ContentLimits = { ...GENEROUS_LIMITS, text: 20 };
-    const call = makeCall([{ type: 'text', index: 0, content: 'a'.repeat(100) }]);
+    const call = makeCall([{ type: 'text', index: 0, content: 'a'.repeat(3_000) }]);
     const [rec] = buildContentRecords(call, 's', 't', limits);
 
     assert.equal(rec!.attributes['nio.content.truncated'], true);
-    assert.equal(rec!.attributes['nio.content.original_bytes'], 100);
+    assert.equal(rec!.attributes['nio.content.original_bytes'], 3_000);
     assert.ok(Buffer.byteLength(rec!.body, 'utf-8') <= 20);
   });
 
   it('omits truncated/original_bytes when the body fits under the limit', () => {
-    const call = makeCall([{ type: 'text', index: 0, content: 'short' }]);
+    const call = makeCall([{ type: 'text', index: 0, content: LONG_TEXT }]);
     const [rec] = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
     assert.equal(rec!.attributes['nio.content.truncated'], undefined);
     assert.equal(rec!.attributes['nio.content.original_bytes'], undefined);
@@ -165,7 +178,7 @@ describe('buildContentRecords — redact-before-truncate ordering', () => {
     // budget = limit - 14.
     // prefix (5 bytes) + 10 bytes into SECRET = 15 bytes => limit = 15 + 14 = 29.
     const prefix = 'x'.repeat(5);
-    const suffix = 'y'.repeat(50);
+    const suffix = 'y'.repeat(3_000);
     const content = `${prefix}${SECRET}${suffix}`;
     const limit = 29;
 

@@ -59,11 +59,29 @@ export {};
  * `thinking`. And the check has to run on the FINAL body — the input to
  * `truncateContent`, not its output, is what an earlier length check
  * would see, and redaction can rewrite the body in between.
+ *
+ * Content the SPAN already carries is not repeated here
+ * -------------------------------------------------
+ * Small content lives on the span, large content lives here — see
+ * `span-content.ts` for the rule and the measurements behind it. This
+ * module is the second half of that decision: whatever the span carried
+ * in full, it does NOT emit, so no body is ever on the wire twice.
+ *
+ *   - `text` blocks: suppressed when the call's joined reply fit
+ *     `nio.chat.reply` in full. A reply too big for the budget is kept
+ *     here at full per-kind fidelity, and the span's copy is flagged
+ *     `nio.content.truncated`.
+ *   - `tool_use` blocks: suppressed per tool call, for the ids the span
+ *     layer reports in `argumentsOnSpan`. It — not this module — is the
+ *     only place that knows whether a tool span existed to carry them.
+ *   - `thinking` and `tool_output` are never span-carried (measured p90
+ *     7.7 KB / max 32 KB for results), so they are unconditional here.
  */
 
 import type { ChatCall, ContentBlock } from '../conversation/types.js';
 import { redactSecrets } from './redact.js';
 import { truncateContent, type ContentKind, type ContentLimits } from './truncate.js';
+import { buildSpanContent, chatReplyText, spanCarriesWholeContent } from './span-content.js';
 
 /** The subset of `ContentBlock['type']` this module maps from. */
 type EmittableBlockType = 'thinking' | 'text' | 'tool_use';
@@ -128,9 +146,15 @@ export interface ContentRecord {
 
 /**
  * Build one `ContentRecord` per emittable block in `call`, in block
- * order. Blocks whose final body is empty produce no record at all (see
- * the module doc), so the result can be shorter than `call.blocks` — the
- * surviving records keep their own block index, they are not renumbered.
+ * order. Blocks whose final body is empty — or whose body the span
+ * already carries in full — produce no record at all (see the module
+ * doc), so the result can be shorter than `call.blocks`; the surviving
+ * records keep their own block index, they are not renumbered.
+ *
+ * `argumentsOnSpan` holds the `tool_use` ids whose complete arguments the
+ * tool span emitted alongside this call already carries. Omitting it
+ * (tests, callers with no span layer) means nothing was span-carried and
+ * every block is emitted, which is the pre-size-split behaviour.
  *
  * Pure function: no IO, no OTEL provider, no global state. `spanId` /
  * `traceId` are supplied by the caller (the span layer), which is the
@@ -141,12 +165,28 @@ export function buildContentRecords(
   call: ChatCall,
   spanId: string,
   traceId: string,
-  limits: ContentLimits
+  limits: ContentLimits,
+  argumentsOnSpan?: ReadonlySet<string>
 ): ContentRecord[] {
   const records: ContentRecord[] = [];
 
+  // Computed once per call, not per block: the placement decision is made
+  // on the JOINED reply, so the span carries all of it or none of it.
+  // Same function the span layer calls, so the two cannot disagree.
+  const replyOnSpan = spanCarriesWholeContent(buildSpanContent(chatReplyText(call)));
+
   for (const block of call.blocks) {
     if (block.type !== 'thinking' && block.type !== 'text' && block.type !== 'tool_use') {
+      continue;
+    }
+
+    // Already on the span in full — see the module doc.
+    if (block.type === 'text' && replyOnSpan) continue;
+    if (
+      block.type === 'tool_use'
+      && block.toolUse !== undefined
+      && argumentsOnSpan?.has(block.toolUse.id)
+    ) {
       continue;
     }
 

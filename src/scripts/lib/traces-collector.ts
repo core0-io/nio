@@ -51,6 +51,9 @@ import type {
 import type { ChatCall } from './conversation/types.js';
 import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js';
 import { redactSecrets } from './content/redact.js';
+import {
+  buildSpanContent, spanCarriesWholeContent, spanContentAttributes, type SpanContent,
+} from './content/span-content.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
@@ -64,8 +67,20 @@ export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
  * module can accept one without importing the logs SDK: traces stays
  * free of any logs-side dependency, and the two signals only meet in the
  * layer that owns both providers.
+ *
+ * `argumentsOnSpan` is how the two signals avoid shipping the same bytes
+ * twice: it holds the `tool_use` ids whose FULL arguments the tool span
+ * emitted just before this call already carries, so the sink must not
+ * repeat them as `tool_input` records. Only the span layer knows this —
+ * it depends on which deferred tool spans were attributed to this call
+ * and on whether each argument payload fit the span budget.
  */
-export type ChatContentSink = (call: ChatCall, spanId: string, traceId: string) => void;
+export type ChatContentSink = (
+  call: ChatCall,
+  spanId: string,
+  traceId: string,
+  argumentsOnSpan?: ReadonlySet<string>,
+) => void;
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
@@ -176,13 +191,16 @@ export function genAiToolAttributes(
  * The deferred flow (Claude Code / Codex / Hermes) parks finished tool
  * spans in the on-disk state file until end of turn, and every hook
  * event rewrites that whole file. Carrying the tool's arguments and
- * result there made it grow with each call in a long turn, for data the
- * logs signal now carries anyway (arguments via the issuing chat call's
- * `tool_use` block, result via the `tool_output` content record emitted
- * at PostToolUse). So the deferred path uses this; the eager paths
- * (OpenClaw's per-tool export, the guard's deny span) keep using
- * `genAiToolCallInputAttributes` below — they emit immediately and never
- * persist the payload.
+ * result there made it grow with each call in a long turn. So the
+ * deferred path uses this; the eager paths (OpenClaw's per-tool export,
+ * the guard's deny span) keep using `genAiToolCallInputAttributes` below
+ * — they emit immediately and never persist the payload.
+ *
+ * The deferred span still ENDS UP with its arguments: `endTurn` reads
+ * them out of the issuing chat call's `tool_use` block and attaches them
+ * at emit time via `genAiToolCallArgumentAttributes`. That costs nothing
+ * on disk — the payload is already in memory at that moment, having come
+ * from the conversation source rather than from the state file.
  */
 export function genAiToolCallIdAttributes(
   toolCallId?: string,
@@ -198,6 +216,26 @@ export function genAiToolCallInputAttributes(
   return {
     'gen_ai.tool.call.arguments': redactAndTruncate(toolInput),
     ...(toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {}),
+  };
+}
+
+/**
+ * Tool-call argument attrs for a DEFERRED tool span, built at end of turn
+ * from a body that `buildSpanContent` has already redacted and size-
+ * capped.
+ *
+ * Same attribute key as the eager path's `genAiToolCallInputAttributes`,
+ * so a consumer reads arguments off one key regardless of which flow
+ * produced the span. The difference is provenance: this one takes an
+ * already-prepared `SpanContent` (redacted, byte-capped, with a
+ * truncation flag) instead of raw input, because the placement decision
+ * — span or logs — is made on that same value and the two must not
+ * disagree.
+ */
+export function genAiToolCallArgumentAttributes(args: SpanContent): Record<string, unknown> {
+  return {
+    'gen_ai.tool.call.arguments': args.text,
+    ...spanContentAttributes(args),
   };
 }
 
@@ -823,6 +861,13 @@ function emitDeferredSpan(
   traceId: string,
   parentSpanId: string,
   deferred: DeferredSpan,
+  /**
+   * Attributes known only at emit time — currently the tool's arguments,
+   * recovered from the chat call that issued it. Kept out of
+   * `deferred.attributes` on purpose: everything in there is written to
+   * the state file on every hook event.
+   */
+  extraAttributes?: Record<string, unknown>,
 ): void {
   const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
     traceId,
@@ -843,7 +888,10 @@ function emitDeferredSpan(
     deferred.name,
     {
       startTime: deferred.start_ms,
-      attributes: deferred.attributes as Record<string, string | number | boolean>,
+      attributes: {
+        ...deferred.attributes,
+        ...extraAttributes,
+      } as Record<string, string | number | boolean>,
     },
     parentCtx,
   );
@@ -1154,15 +1202,33 @@ export async function endTurn(
   const tree = buildSpanTree(calls ?? [], state.deferred_spans ?? []);
   for (const node of tree.chats) {
     emitChatSpan(provider, traceId, turnSpanId, node.span_id, node.call);
+
+    // Tool arguments ride on the tool span when they fit the span budget
+    // (see content/span-content.ts). The payload comes from the chat
+    // call's own `tool_use` block — already in memory, never from the
+    // state file — so this costs nothing on disk. Ids whose FULL
+    // arguments landed on a span are handed to the content sink below so
+    // it does not repeat them as log records.
+    const argumentsOnSpan = new Set<string>();
+    for (const tool of node.tools) {
+      const args = toolArgumentsFor(node.call, tool.tool_use_id);
+      if (args && tool.tool_use_id && spanCarriesWholeContent(args)) {
+        argumentsOnSpan.add(tool.tool_use_id);
+      }
+      emitDeferredSpan(
+        provider, traceId, node.span_id, tool,
+        args ? genAiToolCallArgumentAttributes(args) : undefined,
+      );
+    }
+
+    // After the tool loop, not before: `argumentsOnSpan` is only complete
+    // once every tool span under this call has been emitted.
     if (contentSink) {
       try {
-        contentSink(node.call, node.span_id, traceId);
+        contentSink(node.call, node.span_id, traceId, argumentsOnSpan);
       } catch {
         // Content is telemetry; a failure here must not cost the tree.
       }
-    }
-    for (const tool of node.tools) {
-      emitDeferredSpan(provider, traceId, node.span_id, tool);
     }
   }
   for (const orphan of tree.orphans) {
@@ -1237,6 +1303,26 @@ export async function endTurn(
     ...(state.session_span_id !== undefined ? { session_span_id: state.session_span_id } : {}),
     ...(state.session_start_ms !== undefined ? { session_start_ms: state.session_start_ms } : {}),
   };
+}
+
+/**
+ * The arguments a chat call passed to one of its tool calls, prepared for
+ * a span attribute.
+ *
+ * `null` when the tool span carries no `tool_use_id` (it was attributed
+ * by time, not identity — see `buildSpanTree`), when the call declares no
+ * matching block, or when the argument body is empty. In every one of
+ * those cases the tool span simply gets no arguments attribute and the
+ * `tool_input` content record remains the only copy.
+ */
+function toolArgumentsFor(call: ChatCall, toolUseId?: string): SpanContent | null {
+  if (!toolUseId) return null;
+  for (const block of call.blocks) {
+    if (block.type !== 'tool_use') continue;
+    if (block.toolUse?.id !== toolUseId) continue;
+    return buildSpanContent(block.content);
+  }
+  return null;
 }
 
 /**

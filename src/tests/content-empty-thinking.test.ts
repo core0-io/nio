@@ -28,6 +28,14 @@ import {
 import type { ChatCall, ContentBlock } from '../scripts/lib/conversation/types.js';
 import { DEFAULT_CONTENT_LIMITS, type ContentLimits } from '../scripts/lib/content/truncate.js';
 
+/**
+ * A reply past the 2 KB span budget, so the logs signal keeps it (see
+ * `content/span-content.ts`). A short `text` fixture would now be carried
+ * by `nio.chat.reply` and emit no record at all, which would make the
+ * assertions below pass for the wrong reason.
+ */
+const LONG_TEXT = `visible answer ${'padding '.repeat(400)}`;
+
 function makeCall(blocks: ContentBlock[]): ChatCall {
   return {
     callId: 'c1',
@@ -44,7 +52,7 @@ describe('empty content records are not emitted', () => {
     // Exactly what Claude Code writes: signature only, body empty.
     const call = makeCall([
       { type: 'thinking', index: 0, content: '', fidelity: 'full' },
-      { type: 'text', index: 1, content: 'visible answer' },
+      { type: 'text', index: 1, content: LONG_TEXT },
     ]);
 
     const records = buildContentRecords(call, 'span1', 'trace1', DEFAULT_CONTENT_LIMITS);
@@ -61,7 +69,7 @@ describe('empty content records are not emitted', () => {
     // keep their own `nio.content.index` (the block's position in the
     // call), not be renumbered into a dense 0..n-1 sequence.
     const call = makeCall([
-      { type: 'text', index: 0, content: 'before' },
+      { type: 'text', index: 0, content: LONG_TEXT },
       { type: 'thinking', index: 1, content: '', fidelity: 'full' },
       {
         type: 'tool_use',
@@ -111,7 +119,9 @@ describe('empty content records are not emitted', () => {
     // it, so a block that is nothing but a secret is NOT empty and must
     // still be reported — the fact that a credential was in the stream is
     // itself the signal.
-    const call = makeCall([{ type: 'text', index: 0, content: 'AKIAIOSFODNN7EXAMPLE' }]);
+    const call = makeCall([
+      { type: 'thinking', index: 0, content: 'AKIAIOSFODNN7EXAMPLE', fidelity: 'full' },
+    ]);
 
     const records = buildContentRecords(call, 'span1', 'trace1', DEFAULT_CONTENT_LIMITS);
 
@@ -127,7 +137,7 @@ describe('empty content records are not emitted', () => {
     // check on the raw block, and pins the redact→truncate order the
     // module doc requires.
     const limits: ContentLimits = { ...DEFAULT_CONTENT_LIMITS, text: 4 };
-    const call = makeCall([{ type: 'text', index: 0, content: 'a'.repeat(100) }]);
+    const call = makeCall([{ type: 'text', index: 0, content: 'a'.repeat(3_000) }]);
 
     const records = buildContentRecords(call, 'span1', 'trace1', limits);
 

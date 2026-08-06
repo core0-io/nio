@@ -191,29 +191,44 @@ describe('content wiring: a turn\'s content records join back to their chat span
     assert.equal(chatSpans.length, 2, 'two chat spans expected');
     const turnTraceId = chatSpans[0]!.spanContext().traceId;
 
-    // One record per emittable block (thinking + text + tool_use) per call.
+    // `thinking` is the one emittable block kind logs still own outright
+    // — one record per call. The assistant's reply and the tool's
+    // arguments are small here, so the size-based placement rule
+    // (content/span-content.ts) put them on the spans instead and
+    // suppressed their records; that is asserted just below.
     const thinking = byContentType(logger.emitted(), 'thinking');
-    const text = byContentType(logger.emitted(), 'text');
     assert.equal(thinking.length, 2);
-    assert.equal(text.length, 2);
+
+    assert.deepEqual(
+      byContentType(logger.emitted(), 'text').map((r) => r.body), [],
+      'a short reply rides on nio.chat.reply; a record too would be the same bytes twice',
+    );
+    for (const chat of chatSpans) {
+      assert.equal(chat.attributes['nio.chat.reply'], 'here goes');
+    }
+    for (const tool of byName(tracer.finished(), 'execute_tool Bash')) {
+      assert.equal(tool.attributes['gen_ai.tool.call.arguments'], '{"command":"ls"}');
+    }
 
     // `tool_input` has two producers by design (see buildToolInputRecord):
     // the chat call's `tool_use` block, and PostToolUse's source-free
-    // record. Only the former belongs to a chat span; split them by span
-    // id so this test keeps asserting the chat-span association it is
-    // about, rather than silently accepting either producer.
+    // record. The former is now carried by the tool span, so only the
+    // latter — which lands on the tool span, not a chat span — remains.
     const chatSpanIds = new Set(chatSpans.map((s) => s.spanContext().spanId));
     const allToolInput = byContentType(logger.emitted(), 'tool_input');
     const toolInput = allToolInput.filter((r) => chatSpanIds.has(r.spanContext!.spanId));
-    assert.equal(toolInput.length, 2, 'one tool_use block record per chat call');
+    assert.deepEqual(
+      toolInput.map((r) => r.body), [],
+      'arguments the tool span carries in full must not be logged again',
+    );
     assert.equal(
-      allToolInput.length - toolInput.length,
+      allToolInput.length,
       2,
-      'and one source-free PostToolUse record per tool call, on the tool span',
+      'the source-free PostToolUse record per tool call still goes out, on the tool span',
     );
 
     const spanIds = chatSpanIds;
-    for (const record of [...thinking, ...text, ...toolInput]) {
+    for (const record of [...thinking, ...toolInput]) {
       // Built-in OTLP LogRecord fields — what a backend maps to trace_id / span_id.
       assert.ok(record.spanContext, 'record must carry a span context (emitAuditLog/emitContentRecords must pass one)');
       assert.equal(record.spanContext!.traceId, turnTraceId);
@@ -852,10 +867,14 @@ describe('platform wiring: every platform reaches a conversation source', () => 
 
       const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
       assert.ok(chats.length >= 1, `${platform}: expected at least one chat span`);
+      // The reply is small, so the size-based placement rule carries it on
+      // the span itself (content/span-content.ts) instead of in a log
+      // record — the trace is readable without a join.
       assert.ok(
-        contentRecords(await logger.flushed()).some((r) => attr(r, 'nio.content.type') === 'text'),
-        `${platform}: expected the assistant text to reach the logs signal`,
+        chats.some((c) => String(c.attributes['nio.chat.reply'] ?? '').length > 0),
+        `${platform}: expected the assistant text to reach the chat span`,
       );
+      await logger.flushed();
     }
   });
 
@@ -907,12 +926,11 @@ describe('platform wiring: every platform reaches a conversation source', () => 
 
     const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
     assert.equal(chats.length, 1, 'the assistant message in the envelope must become a chat span');
-    const texts = byContentType(await logger.flushed(), 'text');
-    assert.ok(
-      texts.some((r) => String(r.body).includes('hermes assistant reply')),
-      'the assistant reply must reach the logs signal',
+    await logger.flushed();
+    assert.equal(
+      chats[0]!.attributes['nio.chat.reply'], 'hermes assistant reply',
+      'the assistant reply must reach the chat span — small bodies do not go to logs',
     );
-    assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
   });
 
   it('openclaw builds its source from the events its daemon accumulated', async () => {
@@ -969,7 +987,12 @@ describe('platform wiring: every platform reaches a conversation source', () => 
           model: 'oc-test-model',
           outcome: 'ok',
           durationMs: 12,
-          assistantTexts: ['openclaw assistant reply'],
+          // Deliberately past the 2 KB span budget: this test's subject
+          // is the LOGS leg (the join key on a content record), and a
+          // small reply would now ride on `nio.chat.reply` and emit no
+          // record at all. The small-reply path is pinned in
+          // content-placement.test.ts.
+          assistantTexts: [`openclaw assistant reply ${'padding '.repeat(400)}`],
           usage: { input: 5, output: 3 },
         },
         ctx,
@@ -985,7 +1008,11 @@ describe('platform wiring: every platform reaches a conversation source', () => 
       );
       assert.ok(
         logBodies.includes('openclaw assistant reply'),
-        'the assistant text must reach the logs signal as content',
+        'an oversized assistant text must reach the logs signal as content',
+      );
+      assert.ok(
+        traceBodies.includes('nio.chat.reply'),
+        'and its truncated preview must ride on the chat span',
       );
       assert.ok(logBodies.includes('nio.span_id'), 'content records must carry the join key');
     } finally {
@@ -1158,12 +1185,10 @@ describe('platform wiring: every platform reaches a conversation source', () => 
         const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
         assert.equal(chats.length, 1, 'the session file entry must become a chat span');
         assert.equal(chats[0]!.name, 'chat pi-test-model');
-        const texts = byContentType(logger.emitted(), 'text');
-        assert.ok(
-          texts.some((r) => String(r.body).includes('pi assistant reply')),
-          'the assistant text must reach the logs signal',
+        assert.equal(
+          chats[0]!.attributes['nio.chat.reply'], 'pi assistant reply',
+          'the assistant text must reach the chat span',
         );
-        assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
       } finally {
         await tracer.shutdown();
         await logger.shutdown();
@@ -1321,12 +1346,10 @@ describe('platform wiring: every platform reaches a conversation source', () => 
         const chats = tracer.finished().filter((s) => s.name.startsWith('chat'));
         assert.equal(chats.length, 1, 'the accumulated envelope + part must become one chat span');
         assert.equal(chats[0]!.name, 'chat oc-parts-model');
-        const texts = byContentType(logger.emitted(), 'text');
-        assert.ok(
-          texts.some((r) => String(r.body).includes('opencode assistant reply')),
-          'the assistant text must reach the logs signal',
+        assert.equal(
+          chats[0]!.attributes['nio.chat.reply'], 'opencode assistant reply',
+          'the assistant text must reach the chat span',
         );
-        assert.equal(texts[0]!.spanContext!.spanId, chats[0]!.spanContext().spanId);
       } finally {
         await tracer.shutdown();
         await logger.shutdown();

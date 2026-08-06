@@ -165,11 +165,22 @@ function stalledConfig(endpoint: string): CollectorConfig {
   };
 }
 
-/** One chat call carrying `BLOCKS` text blocks — one content record each. */
+/**
+ * One chat call carrying `BLOCKS` thinking blocks — one content record
+ * each.
+ *
+ * `thinking`, not `text`: the size-based placement rule (see
+ * `content/span-content.ts`) carries a small assistant reply on the chat
+ * span and suppresses its log record, so a burst of short `text` blocks
+ * would now emit nothing at all and this test would pass vacuously.
+ * `thinking` is one of the two kinds logs own unconditionally, which is
+ * exactly what this test needs: a burst the logs signal really has to
+ * carry.
+ */
 function burstCall(): ChatCall {
   const blocks: ContentBlock[] = [];
   for (let i = 0; i < BLOCKS; i++) {
-    blocks.push({ type: 'text', index: i, content: `content-block-${i}` });
+    blocks.push({ type: 'thinking', index: i, content: `content-block-${i}` });
   }
   return {
     callId: 'call-capacity',

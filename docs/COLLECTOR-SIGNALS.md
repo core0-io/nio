@@ -175,9 +175,11 @@ Nio exports nothing by default. Each of the three signals is created only
 for sessions the user explicitly armed, or for every session when
 `collector.monitor_all_sessions: true` is set.
 
-Conversation content ([content records](#content-records)) rides the logs
-signal, so it is gated by exactly this switch: an unarmed session builds
-no logger provider, and nothing in the content path can emit without one.
+Conversation content is gated by exactly this switch on both signals it
+uses: the [content records](#content-records) need a logger provider,
+which an unarmed session never builds, and the span attributes that carry
+small bodies (`nio.chat.reply`, `gen_ai.tool.call.arguments`) ride the
+traces provider, which an unarmed session never builds either.
 
 This gate covers only the three OTLP signals above. The guard pipeline's
 Phase 5 (`guard.llm_analyser`) and Phase 6 (`guard.external_analyser`) have
@@ -428,7 +430,10 @@ tool's arguments and result still reach the backend either way: both go
 out as content records associated with the tool span, which needs no
 source (see [Content records](#content-records)). The hook platforms emit
 them at `PostToolUse`; the in-process platforms emit the arguments when
-the tool span opens and the result when it closes.
+the tool span opens and the result when it closes. What IS lost without a
+source is the span-side copy of the arguments — `gen_ai.tool.call.arguments`
+is attached at turn close from the chat call's `tool_use` block, so a
+source-less turn reads its tool arguments from the logs join only.
 
 **Which platforms nest tool spans under their chat call**
 
@@ -535,6 +540,10 @@ or plain `chat` when the source does not report a model.
 | `nio.content.blocks` | Number of content blocks in the call | turn close | all |
 | `nio.chat.is_sidechain` | True when the call belongs to a subagent rather than the main thread | turn close | all |
 | `nio.chat.timing` | `exact` / `inferred` / `synthetic` — how much `endMs - startMs` can be trusted | turn close | all |
+| `nio.chat.reply` | What the model said: this call's `text` blocks joined in order, redacted, ≤2 KB. Absent when the call said nothing. See [Content records](#content-records) for when a reply is instead (or also) a log record | turn close | all |
+| `nio.content.truncated` | `true` when `nio.chat.reply` did not fit the 2 KB budget — the full body is then in a `text` content record | turn close | all |
+| `nio.content.original_bytes` | Pre-truncation UTF-8 byte length of the reply; only present when truncated | turn close | all |
+| `nio.content.redactions` | Number of secrets replaced in the reply; only present when at least one was | turn close | all |
 
 > `nio.chat.timing` is not decoration — how much of it is measured varies
 > by platform:
@@ -644,7 +653,10 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
 | `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw / Pi, `callID` on opencode) | PreToolUse · PostToolUse | all |
-| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB. **Deferred platforms do not set this** — see the note below | PreToolUse | eager platforms (OpenClaw / Pi / opencode) + guard deny span |
+| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse (eager) · turn close (deferred) | all — see the note below |
+| `nio.content.truncated` | `true` when the arguments did not fit the 2 KB budget — the full body is then in a `tool_input` content record | turn close | deferred platforms |
+| `nio.content.original_bytes` | Pre-truncation UTF-8 byte length of the arguments; only present when truncated | turn close | deferred platforms |
+| `nio.content.redactions` | Number of secrets replaced in the arguments; only present when at least one was | turn close | deferred platforms |
 | `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB. **Deferred platforms do not set this** — see the note below | PostToolUse | eager platforms (OpenClaw / Pi / opencode) |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
@@ -664,15 +676,41 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.span.reclaim_reason` | Why it was reclaimed — currently only `no_post_tool_event` | turn flush | in-process platforms (in practice: opencode) |
 
 **Where tool payloads live on the deferred platforms.** Claude Code,
-Codex, and Hermes park finished tool spans in `traces-state-store-<session>.json`
-until the turn closes, and every hook event rewrites that file whole — so
-the tool's arguments and result are deliberately kept off the span there
-and carried by the logs signal instead: the arguments as a `tool_input`
-content record, the result as a `tool_output` content record, both
-emitted at `PostToolUse` (see [Content records](#content-records)). Both
-carry the same span id as the span itself, so the join works on the
-backend. `nio.tool_summary` stays on the span so a trace list is still
-readable without joining anything.
+Codex, and Hermes park finished tool spans in
+`traces-state-store-<session>.json` until the turn closes, and every hook
+event rewrites that file whole. Nothing bulky is therefore ever written
+into that file:
+
+- **Arguments** are attached to the span at *turn close*, read out of the
+  issuing chat call's `tool_use` block — which is already in memory,
+  having come from the conversation source — and never from the state
+  file. So `gen_ai.tool.call.arguments` is present on deferred tool spans
+  too, subject to the 2 KB budget.
+  The attachment needs an exact `tool_use_id` match between the parked
+  span and a `tool_use` block. Two cases miss: a span attributed to a
+  chat call by *time* rather than by id, and a session with no
+  `ConversationSource` at all (no `transcript_path`, unreadable session
+  file). For those the arguments are carried by the source-free
+  `tool_input` content record that `PostToolUse` emits — the one producer
+  that needs no source. That record is also what covers tool calls the
+  guard denied, which never reach `PostToolUse`'s span at all.
+- **Results** stay off the span entirely on every platform's deferred
+  path and travel as a `tool_output` content record emitted at
+  `PostToolUse` (see [Content records](#content-records)). Measured p90 is
+  7.7 KB and max 32 KB — the payload the span budget exists to keep out of
+  trace queries.
+
+Both records carry the same span id as the span itself, so the join works
+on the backend. `nio.tool_summary` stays on the span so a trace list is
+still readable without joining anything.
+
+> **Known overlap.** The source-free `PostToolUse` `tool_input` record is
+> emitted unconditionally, because `PostToolUse` cannot know whether the
+> turn will end up with a conversation source to attribute the call to. On
+> a session that *does* have one, the same arguments therefore appear both
+> as `gen_ai.tool.call.arguments` on the tool span and as that record.
+> Both derive from the same payload, so they cannot disagree. Collapse on
+> `gen_ai.tool.call.id` when counting.
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied. Otherwise the status is left at the OTel default, `UNSET` — Nio never calls `setStatus(OK)`, and most backends render `UNSET` as "ok". A **reclaimed** span (`nio.span.reclaimed=true`) is also `UNSET`, but that does *not* mean it succeeded: its outcome is genuinely unknown. Treat `UNSET` as success only for spans without the reclaim marker.
 
@@ -850,10 +888,67 @@ session) carry none rather than claiming an association they don't have.
 ### Content records
 
 The conversation itself — reasoning, replies, tool arguments, tool
-results — travels on the logs signal, not as span attributes. Trace
-backends cap attribute length aggressively and a 64 KB reasoning trace has
-no business inside a span; the logs signal has no such ceiling, and the
-records join back to their span by id.
+results — is split between the **traces** and the **logs** signal
+**by size**, not by kind. Small bodies ride on the span so a trace is
+readable on its own; large ones stay in the logs signal, where there is
+no attribute ceiling and no cost to a trace query, and join back to their
+span by id.
+
+#### The size rule
+
+The budget is **2 KB of UTF-8 per span attribute**
+(`SPAN_CONTENT_LIMIT`, `src/scripts/lib/content/span-content.ts`).
+
+| Content | Span side | Logs side |
+| --- | --- | --- |
+| Assistant reply (`text`) | `nio.chat.reply` on the `chat` span — all `text` blocks of the call joined in order | a `text` record **only** when the reply exceeded the budget |
+| Tool arguments (`tool_input`) | `gen_ai.tool.call.arguments` on the `execute_tool` span | a `tool_input` record when the arguments exceeded the budget, when the tool call never produced a span (guard-denied / interrupted), or from the source-free `PostToolUse` producer (see below) |
+| Tool result (`tool_output`) | never | always a `tool_output` record |
+| Reasoning (`thinking`) | never | always a `thinking` record |
+
+**One body, one owner.** A body is never on the wire twice. If the span
+attribute is present and `nio.content.truncated` is **absent**, the span
+holds the whole thing and no log record was emitted for it. If
+`nio.content.truncated` is `true`, the span holds a preview and the log
+record — full fidelity, up to the configured per-kind limit — is
+authoritative. That is the whole consumer-side rule:
+
+> read the span attribute; join the logs only when
+> `nio.content.truncated` is set, or when the attribute is missing.
+
+**Where the split comes from.** Measured live against SigNoz on
+2026-08-06, in UTF-8 bytes per record:
+
+| type | n | avg | p50 | p90 | max | >2 KB | >8 KB |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `text` | 16 | 170 | 150 | 294 | 360 | 0 | 0 |
+| `tool_input` | 137 | 764 | 248 | 2133 | 8171 | 14 | 0 |
+| `tool_output` | 116 | 2267 | 371 | 7748 | 32768 | 27 | 10 |
+| `thinking` | 21 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+Replies topped out at 360 bytes, so forcing a log join to read what the
+model said bought nothing. Tool results reached the 32 KB cap and would
+be paid for on every trace query. `thinking` measured zero only because
+that host wrote its blocks empty (see the note further down) — on
+platforms that do populate it, reasoning is the largest payload of all,
+so it is treated like `tool_output`.
+
+**Limitations of that sample — read before re-tuning the budget.** It was
+collected *before* the exporter's concurrency limit was fixed, so every
+export past the 30th in a turn was silently dropped. The drop was by
+**arrival order, not by size**, so the shape of the distribution is
+unbiased — but `n` is small, and these are counts of survivors, not of
+what was produced. The 2 KB budget is therefore chosen on principle (it
+is the same `MAX_ATTR_BYTES` every other nio span attribute already obeys,
+and a conservative single-attribute ceiling across backends) and merely
+*checked* against the sample, where it lands at the `tool_input` knee
+(p90 = 2133). Do not re-derive it from these percentiles.
+
+**Redaction runs before truncation, on both sides.** Both the span copy
+and the log record go through the same `redactSecrets` → `truncateContent`
+pipeline, in that order. Reversed, a secret straddling the cut point would
+be sliced in half and the redactor — which matches contiguous text — would
+never see it, leaving half a live credential on the wire.
 
 **These records are OTLP-only.** They are never written to the local
 `audit.jsonl`, and they are emitted **only for a session armed with
@@ -913,8 +1008,9 @@ become available at different moments:
 
 | Content | Associated span | Emitted at |
 | --- | --- | --- |
-| `thinking` · `text` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
-| `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — requires a `ConversationSource` |
+| `thinking` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
+| `text` | the `chat` span | **turn close**, as above — and *only* when the reply exceeded the 2 KB span budget; otherwise it is `nio.chat.reply` on the span and no record is emitted |
+| `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — requires a `ConversationSource`, and only when the tool span could not carry the arguments (no exact `tool_use_id` match, or over budget) |
 | `tool_input` (out of band) | the `execute_tool` span | Claude Code / Codex / Hermes: **`PostToolUse`**. OpenClaw / Pi / opencode: **when the tool span opens** — the runtime has the params on the pre-side and an outcome, not params, on the post-side. Either way the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
 | `tool_output` | the `execute_tool` span | **when the tool call finishes** (`PostToolUse` on the hook platforms, `onPostTool` on the in-process ones) — same pre-allocated id |
 

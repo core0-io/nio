@@ -101,13 +101,16 @@ describe('plugin runtime: chat spans reach the wire', () => {
         `the accumulated llm_output event must become a chat span; got ${JSON.stringify(names)}`,
       );
 
-      // The content sink is the other half: without it the chat span is
-      // structure with no words in it.
-      const bodies = logger.emitted().map((r) => String(r.body));
-      assert.ok(
-        bodies.some((b) => b.includes('done')),
-        `the assistant text must reach the logs signal; got ${JSON.stringify(bodies)}`,
+      // The content half: without it the chat span is structure with no
+      // words in it. A reply this small rides on the span itself under
+      // the size-based placement rule (content/span-content.ts) rather
+      // than in a log record.
+      const chat = tracer.finished().find((s) => s.name.startsWith('chat'));
+      assert.equal(
+        chat!.attributes['nio.chat.reply'], 'done',
+        'the assistant text must reach the chat span',
       );
+      logger.emitted();
     } finally {
       await tracer.shutdown();
       await logger.shutdown();

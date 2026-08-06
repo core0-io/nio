@@ -30,6 +30,10 @@ import { emitContentRecords } from '../logs-collector.js';
  * Build the sink `endTurn` calls once per chat span, or `undefined` when
  * content must not be captured (no provider — see the module doc).
  *
+ * The `argumentsOnSpan` set the span layer passes through is forwarded
+ * verbatim: it is what stops a tool-argument body from going out both as
+ * a span attribute and as a log record (see `content/span-content.ts`).
+ *
  * Failures are swallowed here rather than propagated: the caller is in
  * the middle of emitting a span tree, and losing the tree because one
  * content record could not be serialised would trade a large signal for
@@ -40,9 +44,12 @@ export function createContentSink(
   limits: ContentLimits,
 ): ChatContentSink | undefined {
   if (!provider) return undefined;
-  return (call, spanId, traceId) => {
+  return (call, spanId, traceId, argumentsOnSpan) => {
     try {
-      emitContentRecords(provider, buildContentRecords(call, spanId, traceId, limits));
+      emitContentRecords(
+        provider,
+        buildContentRecords(call, spanId, traceId, limits, argumentsOnSpan),
+      );
     } catch {
       // Non-critical — content capture must never break span export.
     }

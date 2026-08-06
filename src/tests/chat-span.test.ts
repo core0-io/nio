@@ -244,6 +244,10 @@ describe('chatSpanAttributes', () => {
       'nio.content.blocks': 3,
       'nio.chat.is_sidechain': true,
       'nio.chat.timing': 'inferred',
+      // Small enough for the span budget, so the trace is readable on its
+      // own and no `text` content record is emitted — see
+      // content/span-content.ts.
+      'nio.chat.reply': 'hi',
     });
   });
 

@@ -27,6 +27,7 @@ export {};
 import { randomBytes } from 'node:crypto';
 import type { ChatCall } from './conversation/types.js';
 import type { DeferredSpan } from './traces-state-store.js';
+import { buildSpanContent, chatReplyText, spanContentAttributes } from './content/span-content.js';
 
 export interface ChatSpanNode {
   /** Span id minted for this chat call; the parent id of its tool spans. */
@@ -49,6 +50,13 @@ export interface SpanTree {
  * real measurement on one platform and a fabricated 0 on others (see
  * `TimingFidelity`). A consumer that cannot tell the two apart will read
  * synthetic zeros as "the model answered instantly".
+ *
+ * `nio.chat.reply` carries what the model actually SAID, when it fits the
+ * span budget (see `content/span-content.ts`). Measured live, assistant
+ * replies topped out at 360 bytes — small enough that forcing a log join
+ * to read them bought nothing. When a reply does NOT fit, the attribute
+ * holds a truncated preview marked `nio.content.truncated` and the
+ * `text` content records stay authoritative.
  */
 export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
   let thinkingChars = 0;
@@ -59,6 +67,9 @@ export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
   }
 
   const usage = call.usage ?? {};
+  // Redact-then-truncate happens inside buildSpanContent; `null` means
+  // the call said nothing, and no empty attribute is invented for it.
+  const reply = buildSpanContent(chatReplyText(call));
   return {
     'gen_ai.operation.name': 'chat',
     ...(call.model ? { 'gen_ai.request.model': call.model } : {}),
@@ -77,6 +88,7 @@ export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
     'nio.content.blocks': call.blocks.length,
     'nio.chat.is_sidechain': call.isSidechain,
     'nio.chat.timing': call.timing,
+    ...(reply ? { 'nio.chat.reply': reply.text, ...spanContentAttributes(reply) } : {}),
   };
 }
 

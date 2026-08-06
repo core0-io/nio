@@ -49,6 +49,8 @@ import {
   deferPostToolUse,
   endTurn,
 } from '../scripts/lib/traces-collector.js';
+import { SPAN_CONTENT_LIMIT } from '../scripts/lib/content/span-content.js';
+import type { ChatCall } from '../scripts/lib/conversation/types.js';
 import type { CollectorConfig } from '../scripts/lib/config-loader.js';
 import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
@@ -70,6 +72,8 @@ interface StalledCollector {
   url: string;
   /** Span names across every request body the server finished reading. */
   received: string[];
+  /** Total decoded bytes the endpoint read — proof the fat variant is fat. */
+  bytes: number;
   requests: number;
   close(): Promise<void>;
 }
@@ -92,11 +96,13 @@ async function startStalledCollector(): Promise<StalledCollector> {
   const received: string[] = [];
   const sockets = new Set<Socket>();
   let requests = 0;
+  let bytes = 0;
 
   const server: Server = createServer((req, res) => {
     requests += 1;
     void readBody(req).then(raw => {
       const body = req.headers['content-encoding'] === 'gzip' ? gunzipSync(raw) : raw;
+      bytes += body.byteLength;
       try {
         const payload = JSON.parse(body.toString('utf-8')) as {
           resourceSpans?: Array<{ scopeSpans?: Array<{ spans?: Array<{ name?: string }> }> }>;
@@ -128,6 +134,7 @@ async function startStalledCollector(): Promise<StalledCollector> {
   return {
     url: `http://127.0.0.1:${port}`,
     received,
+    get bytes() { return bytes; },
     get requests() { return requests; },
     close: () => new Promise<void>(resolve => {
       for (const s of sockets) s.destroy();
@@ -188,6 +195,96 @@ describe('trace export capacity: a large turn keeps every span', () => {
         collector.received.length, EXPECTED_SPANS,
         `every span of the turn must be sent; got ${collector.received.length} of ${EXPECTED_SPANS} `
         + `across ${collector.requests} request(s) — anything short of this is a silent drop.`,
+      );
+    } finally {
+      await provider!.shutdown().catch(() => { /* the endpoint never answers */ });
+      await collector.close();
+    }
+  });
+
+  // Same burst, but with every span carrying content.
+  //
+  // Task 5 moved small bodies from the logs signal ONTO the span
+  // (`nio.chat.reply`, `gen_ai.tool.call.arguments`, ≤2 KB each), which
+  // makes each exported span materially bigger. The burst above uses
+  // bare spans and would therefore stay green even if the extra payload
+  // pushed the exporter back over an edge. This variant fills every
+  // content attribute to the budget so the fattened tree is what actually
+  // has to reach the wire.
+  it(`puts all ${EXPECTED_SPANS} spans on the wire when every span carries a full ${SPAN_CONTENT_LIMIT}-byte payload`, async () => {
+    const collector = await startStalledCollector();
+    const config: CollectorConfig = {
+      endpoint: collector.url,
+      api_key: '',
+      headers: {},
+      timeout: 1500,
+      protocol: 'http',
+      enabled: true,
+      metrics_enabled: false,
+      traces_enabled: true,
+      logs_enabled: false,
+    };
+    const provider = createTracerProvider(config, 'claude-code', undefined, { register: false });
+    assert.ok(provider, 'createTracerProvider returned a provider');
+
+    try {
+      let state = ensureTurn(null, 'sess-capacity-fat');
+      for (let i = 0; i < TOOL_CALLS; i++) {
+        state = recordPreToolUse(
+          state, `toolu-${i}`, 'Bash', `cmd ${i}`,
+          // The tool-call id is what `deferPostToolUse` copies into
+          // `tool_use_id`, and what lets endTurn find the chat call whose
+          // `tool_use` block holds this span's arguments.
+          { 'gen_ai.tool.call.id': `toolu-${i}` },
+        );
+        const post = deferPostToolUse(state, `toolu-${i}`, '/tmp');
+        assert.notEqual(post.durationMs, null, `toolu-${i} produced a deferred span`);
+        state = post.state;
+      }
+
+      // One chat call per tool, each with a budget-filling reply and a
+      // budget-filling argument payload, so every emitted span is at the
+      // 2 KB attribute ceiling rather than bare.
+      const bulk = 'z'.repeat(SPAN_CONTENT_LIMIT);
+      const calls: ChatCall[] = [];
+      for (let i = 0; i < TOOL_CALLS; i++) {
+        calls.push({
+          callId: `req-${i}`,
+          model: 'claude-fat',
+          startMs: 1_000 + i,
+          endMs: 1_001 + i,
+          timing: 'exact',
+          isSidechain: false,
+          blocks: [
+            { type: 'text', index: 0, content: bulk },
+            {
+              type: 'tool_use', index: 1, content: bulk,
+              toolUse: { id: `toolu-${i}`, name: 'Bash', input: bulk },
+            },
+          ],
+        });
+      }
+
+      await endTurn(provider!, state, '/tmp', null, calls);
+
+      assert.ok(
+        collector.received.includes(TURN_ROOT_NAME),
+        'the turn root must reach the exporter even with content-bearing spans',
+      );
+      assert.equal(
+        collector.received.length, EXPECTED_SPANS + TOOL_CALLS,
+        `every span of the turn must be sent — ${TOOL_CALLS} chat + ${TOOL_CALLS} tool + 1 root; `
+        + `got ${collector.received.length} across ${collector.requests} request(s). `
+        + 'Moving content onto the span must not reintroduce the silent drop.',
+      );
+      // Non-vacuity: without the content attributes this tree serialises
+      // to a small fraction of this. 80 content-bearing spans at the 2 KB
+      // ceiling cannot fit in less than ~160 KB of OTLP JSON.
+      assert.ok(
+        collector.bytes > 160_000,
+        `the exported payload must actually carry the content — only ${collector.bytes} `
+        + 'decoded bytes reached the endpoint, so the spans went out bare and this test '
+        + 'would prove nothing about fat spans.',
       );
     } finally {
       await provider!.shutdown().catch(() => { /* the endpoint never answers */ });
