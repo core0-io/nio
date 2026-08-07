@@ -23,6 +23,10 @@ const PI_FIXTURES = join(PROJECT_ROOT, 'src', 'tests', 'fixtures', 'pi');
 const FIXTURE = join(PI_FIXTURES, 'session.jsonl');
 const MALFORMED_FIXTURE = join(PI_FIXTURES, 'session-malformed-lines.jsonl');
 const OPENAI_FIXTURE = join(PI_FIXTURES, 'session-openai.jsonl');
+// Three assistant entries, all arriving through ONE aggregator provider
+// (`ollama-cloud`) — the shape that made the old provider-keyed rule
+// wrong. Models: glm-5.2, gpt-oss:120b, and an unrecognised id.
+const AGGREGATOR_FIXTURE = join(PI_FIXTURES, 'session-aggregator.jsonl');
 const IMAGE_ONLY_FIXTURE = join(PI_FIXTURES, 'session-image-only.jsonl');
 
 // session.jsonl holds exactly two assistant entries (m2, m4). The user
@@ -51,19 +55,32 @@ describe('pi-source', () => {
     assert.equal(first.blocks[0].content, 'I should list them.');
   });
 
-  // Fidelity follows the provider on the message, not the platform.
-  it('marks an Anthropic-provider call as full fidelity', () => {
+  // Fidelity follows the model on the message, not the platform.
+  it('marks a Claude-model call as full fidelity', () => {
     const [first] = createPiSource(FIXTURE).callsSince(0);
     assert.equal(first.blocks[0].fidelity, 'full');
   });
 
   // The other half of the same wiring: a Pi session configured against a
-  // non-Anthropic provider must NOT be labelled 'full'. Pinning only the
-  // Anthropic direction leaves a hard-coded `'full'` undetected.
-  it('marks a non-Anthropic-provider call as summary fidelity', () => {
+  // withheld-CoT model must NOT be labelled 'full'. Pinning only the
+  // Claude direction leaves a hard-coded `'full'` undetected.
+  it('marks an OpenAI-reasoning-model call as summary fidelity', () => {
     const [only] = createPiSource(OPENAI_FIXTURE).callsSince(0);
     assert.equal(only.blocks[0].type, 'thinking');
     assert.equal(only.blocks[0].fidelity, 'summary');
+  });
+
+  // The wiring test that matters: Pi must hand `message.model` to the
+  // fidelity rule, not just `message.provider`. All three entries below
+  // share one provider string and must still get three different
+  // verdicts — passing only the provider collapses them to one.
+  it('reads fidelity from message.model when one aggregator serves several models', () => {
+    const calls = createPiSource(AGGREGATOR_FIXTURE).callsSince(0);
+    assert.deepEqual(calls.map((c) => c.model), ['glm-5.2', 'gpt-oss:120b', 'mystery-thinker-9']);
+    assert.deepEqual(
+      calls.map((c) => c.blocks[0].fidelity),
+      ['full', 'summary', 'unknown'],
+    );
   });
 
   it('extracts the tool call id, name and serialised arguments', () => {

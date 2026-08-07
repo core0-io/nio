@@ -1011,7 +1011,7 @@ so there is nothing to emit through).
 | --- | --- |
 | `nio.content.type` | `thinking` / `text` / `tool_input` / `tool_output` |
 | `nio.content.index` | Position of the source block within its LLM call; `0` for the out-of-band `tool_input` / `tool_output` records, which have no block sequence |
-| `nio.content.fidelity` | `full` / `summary` — only on `thinking`. Follows the model provider, not the platform: Anthropic models return complete reasoning, OpenAI's reasoning series returns step summaries. Do not treat the two as interchangeable |
+| `nio.content.fidelity` | `full` / `summary` / `unknown` — only on `thinking`. Judged from the **model**, never from the platform and never from the provider. See "How `nio.content.fidelity` is decided" below |
 | `nio.content.truncated` | `true` only when the body was cut |
 | `nio.content.original_bytes` | Pre-truncation UTF-8 byte length; only present when truncated |
 | `nio.content.redactions` | Number of secrets replaced; only present when at least one was |
@@ -1041,6 +1041,67 @@ emitted: both still say something happened.
 > `effort=medium` sample; `effort=high` produced it). If you need to know
 > whether reasoning is being captured on a given setup, measure that
 > setup.
+
+#### How `nio.content.fidelity` is decided
+
+A thinking block is only as useful as the reasoning it actually
+contains. Some models return their raw chain-of-thought; some APIs
+deliberately withhold it and return a step-level summary instead
+(measured at ~3% of the underlying reasoning by volume for OpenAI's
+reasoning series). Reading the second as if it were the first turns
+"the summary didn't mention risk X" into "the model didn't consider
+risk X".
+
+The verdict is taken from the **model id** the host reports — Pi's
+`message.model`, opencode's `modelID`, OpenClaw's `llm_output.model`.
+
+| Value | Meaning |
+| --- | --- |
+| `full` | The model returns its reasoning verbatim. Recognised families: Anthropic Claude (including routed ids such as `us.anthropic.claude-opus-4-6-v1`), DeepSeek, GLM/ChatGLM, Qwen/QwQ |
+| `summary` | The API withholds the raw chain-of-thought and returns a step-level narration. Recognised families: OpenAI's reasoning series (`gpt-5*`, `o1`/`o3`/`o4`, `codex*`, `gpt-oss`), Gemini thinking models (which return *thought summaries*) |
+| `unknown` | No rule recognised the model. nio has no evidence either way |
+
+**`unknown` is not a synonym for `summary`.** It is emitted, not
+omitted, so that a consumer can tell "we know this is a partial
+account" from "we do not know what this is". Treat an `unknown` block
+as text the model produced, and do not use it to argue either that the
+model's full reasoning is present or that it is missing. Model families
+ship faster than these rules do; matching on family patterns rather
+than on a roster of model ids keeps a version bump
+(`claude-opus-4-6` → `claude-opus-5`) from turning into an `unknown`,
+but a genuinely new family will report `unknown` until a rule is added
+for it (one entry in `MODEL_RULES`, in
+`src/scripts/lib/conversation/shared.ts`, with the reason it earns its
+value).
+
+**The provider is a fallback, never the primary signal.** A provider
+string names the channel a call arrived through — an aggregator, a
+gateway, a cloud vendor — and one channel serves models that behave
+completely differently. Measured over 16 real sessions (1298 thinking
+blocks with a body):
+
+| provider | model | blocks | max chars | mean chars |
+| --- | --- | --- | --- | --- |
+| `ollama-cloud` | `glm-5.2` | 154 | 55088 | 3589 |
+| `ollama-cloud` | `gpt-oss:120b` | 802 | 9168 | 213 |
+| `ollama-cloud` | `deepseek-v4-flash` | 248 | 9325 | 570 |
+| `openrouter` | `qwen/qwen3.5-122b-a10b` | 103 | 1347 | 339 |
+| `amazon-bedrock` | `us.anthropic.claude-opus-4-6-v1` | 1 | 125 | 125 |
+
+One provider name, a 17× difference in reasoning volume between two of
+its models. Until nio 2.5.1 this attribute was decided by whether the
+provider string contained "anthropic", which labelled the 125-character
+bedrock block `full` and 55088 characters of glm-5.2 reasoning
+`summary` — the two exactly inverted. Provider is now consulted only
+when the model id decides nothing, and only for first-party provider
+names (`anthropic` → `full`, `openai`/`azure-openai` → `summary`);
+aggregator and cloud-route names carry no fidelity information and
+resolve to `unknown`.
+
+> **Not a size measurement.** Fidelity says what the API is willing to
+> return, not how long the reasoning happened to be. A short `full`
+> block is a short thought; a long `summary` block is still a summary.
+> Do not re-derive this attribute from body length.
 
 > **Why `nio.trace_id` / `nio.span_id` duplicate the built-in fields.**
 > Backends disagree on how they surface OTLP's binary `trace_id` /

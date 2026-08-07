@@ -71,19 +71,36 @@ describe('opencode-source', () => {
     assert.equal(call.isSidechain, false);
   });
 
-  it('marks an Anthropic-provider call as full fidelity', () => {
+  it('marks a Claude-model call as full fidelity', () => {
     const [call] = createOpenCodeSource(EVENTS).callsSince(0);
     assert.equal(call.blocks[0].fidelity, 'full');
   });
 
-  // The other direction of the same wiring. Pinning only the Anthropic
-  // side would let a hard-coded `'full'` through undetected — fidelity
-  // follows the model provider, never the host platform.
-  it('marks a non-Anthropic-provider call as summary fidelity', () => {
-    const events = [assistantMessage({ providerID: 'openai' }), ...EVENTS.slice(1)];
+  // The other direction of the same wiring. Pinning only the Claude side
+  // would let a hard-coded `'full'` through undetected.
+  it('marks a withheld-CoT model as summary fidelity', () => {
+    const events = [
+      assistantMessage({ providerID: 'openai', modelID: 'gpt-5-codex' }),
+      ...EVENTS.slice(1),
+    ];
     const [call] = createOpenCodeSource(events).callsSince(0);
     assert.equal(call.blocks[0].type, 'thinking');
     assert.equal(call.blocks[0].fidelity, 'summary');
+  });
+
+  // opencode must hand `modelID` to the fidelity rule. These three all
+  // arrive through the SAME aggregator providerID, exactly as observed
+  // in the field, so a rule reading providerID cannot tell them apart —
+  // it would report one value for all three.
+  it('reads fidelity from modelID, not from the aggregator providerID', () => {
+    const verdicts = (['glm-5.2', 'gpt-oss:120b', 'mystery-thinker-9'] as const).map((modelID) => {
+      const events = [
+        assistantMessage({ providerID: 'ollama-cloud', modelID }),
+        ...EVENTS.slice(1),
+      ];
+      return createOpenCodeSource(events).callsSince(0)[0].blocks[0].fidelity;
+    });
+    assert.deepEqual(verdicts, ['full', 'summary', 'unknown']);
   });
 
   it('extracts the tool call id, name and serialised input', () => {

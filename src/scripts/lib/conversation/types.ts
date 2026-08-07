@@ -16,19 +16,36 @@ export {};
 /**
  * How faithful a thinking block is to the model's actual reasoning.
  *
- * This is NOT a platform property — it follows the model provider, and
- * the same platform yields different values depending on which model is
- * configured. Anthropic models return complete reasoning traces;
- * OpenAI's reasoning series does not expose raw chain-of-thought at the
- * API level and gives step-level summaries instead (measured at ~3% of
- * the underlying reasoning by volume).
+ * This is NOT a platform property, and it is NOT a provider property
+ * either — it belongs to the MODEL. A provider string names the channel
+ * the call went through (an aggregator, a gateway, a cloud vendor), and
+ * one channel serves models that behave completely differently: in a
+ * measured sample, `ollama-cloud` served both `glm-5.2` (mean 3589
+ * characters of reasoning per block, max 55088) and `gpt-oss:120b`
+ * (mean 213) — a 17× difference under one provider name. See
+ * `fidelityForModel` in `shared.ts` for the rules.
  *
- * Consumers must not treat the two as interchangeable: a 40-character
+ * Values:
+ *
+ * - `full` — the model returns its raw reasoning; what is captured is
+ *   what the model produced. Anthropic's Claude family with extended
+ *   thinking, and the open-weight reasoning families that stream their
+ *   chain-of-thought verbatim.
+ * - `summary` — the API deliberately withholds the raw chain-of-thought
+ *   and returns a step-level summary instead (measured at ~3% of the
+ *   underlying reasoning by volume for OpenAI's reasoning series).
+ * - `unknown` — no rule matched the model id. NOT a synonym for
+ *   `summary`: it means nio has no evidence either way, which is the
+ *   honest answer for a model family released after these rules were
+ *   written.
+ *
+ * Consumers must not treat these as interchangeable: a 40-character
  * step title and a thousand-word reasoning chain are different kinds of
  * evidence. Analyses that conflate them will read "the summary didn't
- * mention risk X" as "the model didn't consider risk X".
+ * mention risk X" as "the model didn't consider risk X" — and an
+ * `unknown` block must not be used to support that inference at all.
  */
-export type ThinkingFidelity = 'full' | 'summary';
+export type ThinkingFidelity = 'full' | 'summary' | 'unknown';
 
 /**
  * How much the start/end timestamps can be trusted.

@@ -24,7 +24,7 @@ export {};
  */
 
 import { readJsonlTail } from './read-jsonl.js';
-import { fidelityForProvider, toUsage } from './shared.js';
+import { fidelityForModel, toUsage } from './shared.js';
 import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
 
 interface PiContentBlock {
@@ -45,7 +45,7 @@ interface PiAssistantEntry {
   entryId?: string;
 }
 
-function blocksFrom(content: unknown, provider: unknown): ContentBlock[] {
+function blocksFrom(content: unknown, model: unknown, provider: unknown): ContentBlock[] {
   if (!Array.isArray(content)) return [];
   const out: ContentBlock[] = [];
   for (const raw of content) {
@@ -56,7 +56,7 @@ function blocksFrom(content: unknown, provider: unknown): ContentBlock[] {
         type: 'thinking',
         index: out.length,
         content: b.thinking,
-        fidelity: fidelityForProvider(provider),
+        fidelity: fidelityForModel(model, provider),
       });
     } else if (b.type === 'text' && typeof b.text === 'string' && b.text.length > 0) {
       out.push({ type: 'text', index: out.length, content: b.text });
@@ -110,7 +110,7 @@ export function createPiSource(sessionFilePath: string): ConversationSource {
       const calls: ChatCall[] = [];
       assistants.forEach(({ msg, ts, entryId }, i) => {
         if (ts < sinceMs) return;
-        const blocks = blocksFrom(msg.content, msg.provider);
+        const blocks = blocksFrom(msg.content, msg.model, msg.provider);
         if (blocks.length === 0) return;
         // End is the next assistant message's start when there is one.
         // Both ends are never reported by Pi, so this is 'inferred'.

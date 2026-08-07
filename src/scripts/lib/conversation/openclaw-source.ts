@@ -38,13 +38,13 @@ export {};
  * it sees — mirroring how `codex-source.ts` treats a `reasoning` entry
  * as opening a call that a later entry closes.
  *
- * Fidelity is judged from `llm_output.provider` — a genuine model-
- * provider signal, not a host-platform one, so keying off it doesn't
- * violate the "fidelity is judged from data shape, not platform" rule
- * (see `ThinkingFidelity` in `types.ts`): a provider string mentioning
- * "anthropic" gets `'full'`; everything else (openai, azure, unknown,
- * absent) gets the conservative default `'summary'` rather than
- * overclaiming a fidelity we have no evidence for.
+ * Fidelity is judged from `llm_output.model`, with `llm_output.provider`
+ * as the fallback when the model id decides nothing — see
+ * `fidelityForModel` in `shared.ts`. It is deliberately NOT judged from
+ * the provider first: a provider string names the channel a call went
+ * through, and one channel serves models with completely different
+ * reasoning contracts. An unrecognised model reports `'unknown'` rather
+ * than being defaulted either way.
  *
  * KNOWN GAP — this module never emits a `tool_use` block. The other
  * three sources reconstruct it from data the platform hands them
@@ -63,7 +63,7 @@ export {};
  */
 
 import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
-import { fidelityForProvider, toUsage } from './shared.js';
+import { fidelityForModel, toUsage } from './shared.js';
 
 interface RawLlmOutputEvent {
   runId?: string;
@@ -155,7 +155,7 @@ export function createOpenClawSource(events: unknown[]): ConversationSource {
 
           const blocks: PartialBlock[] = [];
           if (pendingThinking) {
-            blocks.push({ type: 'thinking', content: pendingThinking, fidelity: fidelityForProvider(e.provider) });
+            blocks.push({ type: 'thinking', content: pendingThinking, fidelity: fidelityForModel(e.model, e.provider) });
             pendingThinking = undefined;
           }
           const assistantTextBlock = toAssistantTextBlock(e.assistantTexts);

@@ -48,19 +48,41 @@ describe('openclaw source', () => {
     assert.equal(callB!.stopReason, 'success');
   });
 
-  it('identifies a Thinking-prefixed message as a thinking block, fidelity keyed off provider', () => {
+  it('identifies a Thinking-prefixed message as a thinking block, fidelity keyed off the model', () => {
     const calls = createOpenClawSource(loadEvents()).callsSince(0);
     const callA = calls.find((c) => c.callId === 'call-ph-1');
     assert.ok(callA, 'fixture must contain call-ph-1');
     const thinking = callA!.blocks.filter((b) => b.type === 'thinking');
     assert.equal(thinking.length, 1);
-    assert.equal(thinking[0].fidelity, 'summary', 'provider "openai" must not be reported as full fidelity');
+    assert.equal(thinking[0].fidelity, 'summary', 'a gpt-5 model must not be reported as full fidelity');
 
     const callC = calls.find((c) => c.callId === 'call-ph-3');
     assert.ok(callC, 'fixture must contain call-ph-3');
     const thinkingC = callC!.blocks.filter((b) => b.type === 'thinking');
     assert.equal(thinkingC.length, 1);
-    assert.equal(thinkingC[0].fidelity, 'full', 'provider "anthropic" must be reported as full fidelity');
+    assert.equal(thinkingC[0].fidelity, 'full', 'a claude model must be reported as full fidelity');
+  });
+
+  // The fixture's provider and model agree (openai/gpt-5, anthropic/
+  // claude), so it cannot show WHICH of the two the verdict came from.
+  // These events cross them the way a real aggregator does: one
+  // `ollama-cloud` provider serving three different models. A source
+  // that forwarded `event.provider` would report one value for all
+  // three; forwarding `event.model` gives three.
+  it('reads fidelity from llm_output.model, not from the aggregator provider', () => {
+    const events = ['glm-5.2', 'gpt-oss:120b', 'mystery-thinker-9'].flatMap((model, i) => [
+      { hook: 'before_message_write', event: { body: `Thinking: placeholder ${i}.` } },
+      {
+        hook: 'llm_output',
+        event: { runId: `run-${i}`, callId: `call-${i}`, provider: 'ollama-cloud', model, outcome: 'success', durationMs: 100 },
+      },
+    ]);
+    const calls = createOpenClawSource(events).callsSince(0);
+    assert.deepEqual(calls.map((c) => c.model), ['glm-5.2', 'gpt-oss:120b', 'mystery-thinker-9']);
+    assert.deepEqual(
+      calls.map((c) => c.blocks.find((b) => b.type === 'thinking')?.fidelity),
+      ['full', 'summary', 'unknown'],
+    );
   });
 
   it('degrades gracefully when the undocumented assistantTexts/usage fields are absent', () => {

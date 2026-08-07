@@ -32,7 +32,7 @@ export {};
  * first-seen order still decides block order.
  */
 
-import { fidelityForProvider } from './shared.js';
+import { fidelityForModel } from './shared.js';
 import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
 
 interface Accum {
@@ -103,7 +103,7 @@ function callFrom(id: string, acc: Accum, sinceMs: number): ChatCall | null {
     if (p.type === 'reasoning' && typeof p.text === 'string' && p.text.length > 0) {
       blocks.push({
         type: 'thinking', index: blocks.length, content: p.text,
-        fidelity: fidelityForProvider(info.providerID),
+        fidelity: fidelityForModel(info.modelID, info.providerID),
       });
     } else if (
       p.type === 'text' && typeof p.text === 'string' && p.text.length > 0

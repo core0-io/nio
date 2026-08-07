@@ -232,9 +232,15 @@ describe('conversation cross-source parity (Claude Code / Codex / Hermes / Pi / 
       for (const c of calls) {
         const thinking = c.blocks.filter((b) => b.type === 'thinking');
         assert.equal(thinking.length, 1, `${label} call ${c.callId} must have exactly one thinking block`);
+        // Every fixture here names either a recognised model family or
+        // a first-party provider (opencode's placeholder model id rides
+        // the `providerID: 'anthropic'` fallback), so every source must
+        // reach a definite verdict. 'unknown' is a legal
+        // ThinkingFidelity value, but here it would mean neither the
+        // model id nor the provider reached the rule.
         assert.ok(
           thinking[0].fidelity === 'full' || thinking[0].fidelity === 'summary',
-          `${label} call ${c.callId} thinking block must carry a fidelity value`,
+          `${label} call ${c.callId} thinking block must carry a definite fidelity value`,
         );
       }
     }
