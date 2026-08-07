@@ -63,6 +63,8 @@ unverified — the cell says which.
 | Signal | Claude Code | Codex | Hermes | OpenClaw | Pi | opencode |
 | --- | --- | --- | --- | --- | --- | --- |
 | Turn root span `invoke_agent UserPromptSubmit` | ✓ | ✓ | ✓ | ✓ | ✓ (`agent_end`) | ✓ (`session.idle`) |
+| `chat <model>` span per LLM call | ✓ (transcript) | ✓ (rollout) | ✓ (`post_llm_call` envelope) | ✓ (`llm_output` events) | ✓ (session file) | ✓ (accumulated parts) |
+| `session` span + turn→session span link | ✓ link; span only at `SessionEnd` | ~ link only — Codex fires no session-end event | ✓ | **— (in-process hosts mint no session ids)** | **—** | **—** |
 | Tool span `execute_tool <name>` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Deny / confirm-denied orphan span | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
@@ -189,10 +191,13 @@ gate" below — and are not affected by monitor state either way. Both ship
 disabled (`llm_analyser.enabled: false`, `external_analyser: []`), so on
 an unmodified config nothing leaves the machine through them either.
 
-Arming is `/nio-monitor on` on Claude Code and Codex, and `/nio monitor on`
-on OpenClaw and Hermes — those two platforms do not install the focused
-`nio-*` skills, so the unified `/nio` is their entry point. Both run the
-same code.
+Arming is `/nio-monitor on` on the platforms that install the focused
+`nio-*` skills (Claude Code, Codex, Pi, opencode) and `/nio monitor on`
+on OpenClaw and Hermes, which keep the unified `/nio` as their only entry
+point. Both forms run the same code. Claude Code is the only host whose
+session-id environment variable is verified, so everywhere else `on`
+leaves a *pending arm* that the next hook event from the same directory
+claims (60 s TTL).
 
 The gate sits **before OTEL provider creation** — an unmonitored session
 does not initialise exporters at all, so the cost is one small file read
@@ -214,15 +219,16 @@ Two things are outside the gate:
 - **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
   it never leaves the machine and backs `/nio report`.
 
-**One limitation, on OpenClaw only.** OpenClaw runs Nio inside a
-long-lived daemon and OTEL counters there are cumulative for the life of
-that process. A daemon in which no session has ever been armed creates no
-providers and exports nothing. But once any session has been armed and
-recorded a counter, the metrics exporter keeps re-sending its accumulated
-totals about once a second until the daemon restarts — disarming,
-`session_end` and the arm-record deletion all stop *new* data being
-collected, but none of them can stop that timer. The other three
-platforms run one process per hook event, so nothing outlives it.
+**One limitation, on the in-process hosts (OpenClaw · Pi · opencode).**
+These three load Nio into a long-lived host process and OTEL counters
+there are cumulative for the life of that process. A host in which no
+session has ever been armed creates no providers and exports nothing. But
+once any session has been armed and recorded a counter, the metrics
+exporter keeps re-sending its accumulated totals about once a second until
+the host restarts — disarming, session end and the arm-record deletion all
+stop *new* data being collected, but none of them can stop that timer. The
+three hook platforms (Claude Code, Codex, Hermes) run one process per hook
+event, so nothing outlives it.
 
 State lives in `${NIO_HOME}/monitored-sessions.json`, separate from
 `traces-state-store-<session>.json` — session-scoped durable state versus
@@ -367,7 +373,9 @@ One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic con
 ```text
 Trace: session                        (its own trace; emitted at SessionEnd)
    ↑ span link
-Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
+Trace: invoke_agent UserPromptSubmit  (root, opens at UserPromptSubmit, ends at Stop / SubagentStop)
+                                      (a host that fires no prompt event opens it at the turn's first
+                                       event instead — every branch calls ensureTurn)
   ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
   ├─ Span: execute_tool <name>   (exported as the tool finishes; joins to its chat call
   │                               by gen_ai.tool.call.id, not by parentage — see below)
@@ -431,7 +439,7 @@ Recovered trees keep the DEAD session's identity, not the recovering
 one's. `nio.platform` / `service.name` / `gen_ai.agent.name` live on the
 OTEL Resource, so the shard records the platform and agent name that wrote
 it and the sweep builds a short-lived provider from them when they differ
-— all four platforms share `$NIO_HOME` by default, and Claude Code and
+— every platform shares `$NIO_HOME` by default, and Claude Code and
 Codex are the same scripts behind a different `--platform` flag.
 
 A pre-upgrade `traces-state-store.json` is adopted once, by the session
@@ -541,7 +549,7 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `gen_ai.usage.cache_creation.input_tokens` | Cache-creation input tokens | Stop · SubagentStop · SessionEnd | all |
 | `gen_ai.usage.cache_read.input_tokens` | Cache-read input tokens | Stop · SubagentStop · SessionEnd | all |
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | turn close | all |
-| `nio.turn_number` | Per-session counter, starts at 1 | turn close | all |
+| `nio.turn_number` | Per-session counter, starts at 1. Increments once per turn — i.e. once per user prompt, since `UserPromptSubmit` is what opens a turn | turn close | all |
 | `nio.cwd` | Working dir at turn start | turn close (when set) | all |
 | `nio.turn.user_prompt` | First user message of the turn, redacted, ≤2 KB | UserPromptSubmit | all |
 | `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw) · `message_end` (Pi) | OpenClaw + Pi |
@@ -552,10 +560,11 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 ### Span: `chat <model>` (LLM call)
 
 One per LLM call within the turn, reconstructed from the platform's
-conversation data at turn close (Claude Code / Codex: the session file at
-`transcript_path`; Hermes: the raw `post_llm_call` envelope; OpenClaw: the
-`llm_output` events the daemon accumulated). Span name is `chat <model>`,
-or plain `chat` when the source does not report a model.
+conversation data at turn close (Claude Code / Codex / Pi: the session
+file at `transcript_path`; Hermes: the raw `post_llm_call` envelope;
+OpenClaw / opencode: the events the resident plugin accumulated). Span
+name is `chat <model>`, or plain `chat` when the source does not report a
+model.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
@@ -645,17 +654,18 @@ which takes `deferred_spans` and nothing else — and is finally removed by
 ever adds a session-boundary hook, wire it to `collector-hook.js` with
 `event: 'SessionEnd'` and this paragraph goes away.
 
-**OpenClaw: no session layer at all.** Unlike the other three platforms,
-OpenClaw's `session_start` handler in `src/adapters/openclaw-plugin.ts`
-never calls `startSessionTrace` — no `session_trace_id` / `session_span_id`
-is ever minted, so no `session` root span is ever emitted and no OpenClaw
-turn root ever carries a session link. This is not a bug being tracked;
-OpenClaw's session boundary is a long-lived daemon lifecycle rather than a
-per-process hook pair, and wiring it up was out of scope for the session
-span work. `gen_ai.conversation.id` / `session.id` are still present on
-every OpenClaw turn span regardless, so session-level aggregation by id
-still works — only the dedicated `session` root span and its link are
-absent.
+**The in-process hosts have no session layer at all** — OpenClaw, Pi and
+opencode alike. `startSessionTrace` and `emitSessionSpan` are called only
+from `collector-core.ts`, which is the hook platforms' dispatcher;
+`InProcessPluginRuntime` never calls either, so no
+`session_trace_id` / `session_span_id` is ever minted, no `session` root
+span is ever emitted, and no turn root on those hosts carries a session
+link. This is not a bug being tracked; their session boundary is a
+long-lived process lifecycle rather than a per-process hook pair, and
+wiring it up was out of scope for the session span work.
+`gen_ai.conversation.id` / `session.id` are still present on every turn
+span regardless, so session-level aggregation by id still works — only the
+dedicated `session` root span and its link are absent.
 
 **Known gap · a hard crash on Claude Code can leave a dangling session
 link.** Once a session starts, its turn roots link to
@@ -733,11 +743,19 @@ is still readable without joining anything.
 
 > **Known overlap.** The arguments appear up to three times on a session
 > that has a conversation source: as `gen_ai.tool.call.arguments` on the
-> tool span, as the source-free `tool_input` record `PostToolUse` emits,
-> and inside the `tool_use` block of the chat call's own content record.
-> All three derive from the same payload and cannot disagree; the span
-> copy is capped at 2 KB while the records are full-fidelity. Collapse on
-> `gen_ai.tool.call.id` when counting.
+> tool span, as the source-free `tool_input` record (emitted at
+> `PostToolUse` on the hook platforms, at tool-span open on the in-process
+> ones), and inside the `tool_use` block of the chat call's own content
+> record. All three derive from the same payload and cannot disagree; the
+> span copy is capped at 2 KB while the records are full-fidelity.
+> Collapse on `gen_ai.tool.call.id` when counting.
+>
+> This is not the intended design — the `tool_use` block was meant to be
+> suppressed whenever the tool span carried the same bytes, but that
+> suppression keys off the tool spans a turn boundary attributes to a chat
+> call, and eager export leaves a turn boundary nothing to attribute. It
+> is bounded (one extra record per tool call) and consistent, so it is
+> documented rather than papered over.
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied. Otherwise the status is left at the OTel default, `UNSET` — Nio never calls `setStatus(OK)`, and most backends render `UNSET` as "ok". A **reclaimed** span (`nio.span.reclaimed=true`) is also `UNSET`, but that does *not* mean it succeeded: its outcome is genuinely unknown. Treat `UNSET` as success only for spans without the reclaim marker.
 
@@ -950,19 +968,32 @@ The budget is **2 KB of UTF-8 per span attribute**
 | Content | Span side | Logs side |
 | --- | --- | --- |
 | Assistant reply (`text`) | `nio.chat.reply` on the `chat` span — all `text` blocks of the call joined in order | a `text` record **only** when the reply exceeded the budget |
-| Tool arguments (`tool_input`) | `gen_ai.tool.call.arguments` on the `execute_tool` span | a `tool_input` record when the arguments exceeded the budget, when the tool call never produced a span (guard-denied / interrupted), or from the source-free `PostToolUse` producer (see below) |
+| Tool arguments (`tool_input`) | `gen_ai.tool.call.arguments` on the `execute_tool` span | a `tool_input` record from the source-free producer on **every** tool call, plus one from the chat call's `tool_use` block whenever a conversation source exists — see "the arguments are the exception" below |
 | Tool result (`tool_output`) | never | always a `tool_output` record |
 | Reasoning (`thinking`) | never | always a `thinking` record |
 
-**One body, one owner.** A body is never on the wire twice. If the span
-attribute is present and `nio.content.truncated` is **absent**, the span
-holds the whole thing and no log record was emitted for it. If
-`nio.content.truncated` is `true`, the span holds a preview and the log
-record — full fidelity, up to the configured per-kind limit — is
-authoritative. That is the whole consumer-side rule:
+**One body, one owner — for the reply.** The assistant reply is never on
+the wire twice. If `nio.chat.reply` is present and `nio.content.truncated`
+is **absent**, the span holds the whole thing and no `text` record was
+emitted for it. If `nio.content.truncated` is `true`, the span holds a
+preview and the log record — full fidelity, up to the configured per-kind
+limit — is authoritative. The consumer-side rule for a reply is therefore:
 
-> read the span attribute; join the logs only when
+> read `nio.chat.reply`; join the `text` records only when
 > `nio.content.truncated` is set, or when the attribute is missing.
+
+**The arguments are the exception, and it is not a small one.** The
+suppression mechanism that keeps a body single-owned works off the set of
+tool spans a turn boundary attributes to a chat call — and since tool
+spans became eager, a turn boundary finds nothing parked, so that set is
+always empty. The consequence is that a tool call's arguments go out on
+the span **and** as a `tool_input` record **and**, when a conversation
+source exists, a second time inside the chat call's `tool_use` block. All
+copies derive from the same payload and cannot disagree; the span copy is
+capped at 2 KB while the records run to the full per-kind limit. Collapse
+on `gen_ai.tool.call.id` when counting. See the "Known overlap" note under
+[the tool span](#span-execute_tool-name-tool-span) for the same fact from
+the trace side.
 
 **Where the split comes from.** Measured live against SigNoz on
 2026-08-06, in UTF-8 bytes per record:
@@ -1011,7 +1042,7 @@ so there is nothing to emit through).
 | --- | --- |
 | `nio.content.type` | `thinking` / `text` / `tool_input` / `tool_output` |
 | `nio.content.index` | Position of the source block within its LLM call; `0` for the out-of-band `tool_input` / `tool_output` records, which have no block sequence |
-| `nio.content.fidelity` | `full` / `summary` / `unknown` — only on `thinking`. Judged from the **model**, never from the platform and never from the provider. See "How `nio.content.fidelity` is decided" below |
+| `nio.content.fidelity` | `full` / `summary` / `unknown` — only on `thinking`. A property of the **model**, never of the platform tag and never of the transport the call arrived over. See "How `nio.content.fidelity` is decided" below |
 | `nio.content.truncated` | `true` only when the body was cut |
 | `nio.content.original_bytes` | Pre-truncation UTF-8 byte length; only present when truncated |
 | `nio.content.redactions` | Number of secrets replaced; only present when at least one was |
@@ -1052,8 +1083,23 @@ reasoning series). Reading the second as if it were the first turns
 "the summary didn't mention risk X" into "the model didn't consider
 risk X".
 
-The verdict is taken from the **model id** the host reports — Pi's
-`message.model`, opencode's `modelID`, OpenClaw's `llm_output.model`.
+On the three hosts that report a model id per call — Pi's
+`message.model`, opencode's `modelID`, OpenClaw's `llm_output.model` — the
+verdict is taken from that **model id** by `fidelityForModel`, with the
+provider string as a fallback only.
+
+The other three hosts do not need the lookup, because their session file
+only ever holds one model family, and the value is fixed at the source
+rather than guessed:
+
+| Host | Value | Why |
+| --- | --- | --- |
+| Claude Code | always `full` | a Claude Code transcript is Anthropic extended thinking, which returns the reasoning verbatim |
+| Codex | always `summary` | `reasoning.summary[].text` is a step title; the real trace is only present as opaque `encrypted_content` |
+| Hermes | per payload shape | a `codex_reasoning_items` / `_issuer_kind: codex` marker → the relayed model is an OpenAI reasoning model → `summary`; Anthropic-shaped `type: 'thinking'` content blocks → `full`; neither shape → **no thinking block is fabricated at all** |
+
+Either way the value describes the **model**, never the platform tag and
+never the transport the call arrived over.
 
 | Value | Meaning |
 | --- | --- |
@@ -1119,7 +1165,7 @@ become available at different moments:
 | --- | --- | --- |
 | `thinking` | the `chat` span | **turn close**, in the same batch as the span tree — a chat span id does not exist until `buildSpanTree` mints it |
 | `text` | the `chat` span | **turn close**, as above — and *only* when the reply exceeded the 2 KB span budget; otherwise it is `nio.chat.reply` on the span and no record is emitted |
-| `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — requires a `ConversationSource`, and only when the tool span could not carry the arguments (no exact `tool_use_id` match, or over budget) |
+| `tool_input` (from the call's `tool_use` block) | the `chat` span | **turn close**, as above — emitted whenever a `ConversationSource` could be built. The suppression that used to skip it when the tool span already carried the arguments is inert under eager tool spans (nothing is parked for a turn boundary to attribute), so in practice it is always emitted |
 | `tool_input` (out of band) | the `execute_tool` span | Claude Code / Codex / Hermes: **`PostToolUse`**. OpenClaw / Pi / opencode: **when the tool span opens** — the runtime has the params on the pre-side and an outcome, not params, on the post-side. Either way the tool span's id was pre-allocated at `PreToolUse` and survives the deferral |
 | `tool_output` | the `execute_tool` span | **when the tool call finishes** (`PostToolUse` on the hook platforms, `onPostTool` on the in-process ones) — same pre-allocated id |
 
@@ -1152,8 +1198,9 @@ other, so they are not deduplicated:
 
 Tell them apart — or collapse them — by `nio.span_id`: chat span vs. tool
 span, with the same `nio.content.type` and the same
-`gen_ai.tool.call.id`. The overlap is a bounded 2x on tool arguments
-only; it does not grow with session length.
+`gen_ai.tool.call.id`. The overlap is bounded at two log records per tool
+call (three copies in total counting the span attribute) and applies to
+tool arguments only; it does not grow with session length.
 
 **Redaction runs before truncation, always.** The reverse order can slice
 a credential in half at the cut point, leaving one half of a live secret

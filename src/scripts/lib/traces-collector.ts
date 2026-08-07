@@ -1303,7 +1303,7 @@ export async function endTurn(
   return {
     session_id: state.session_id,
     turn_number: state.turn_number,
-    turn_trace_id: '',          // cleared — re-derived on next PreToolUse
+    turn_trace_id: '',          // cleared — re-minted by the next turn's first ensureTurn (UserPromptSubmit)
     turn_start_ms: 0,
     pending_spans: {},
     pending_task_spans: {},

@@ -386,7 +386,10 @@ collector:
   # Session-level capture switch.
   #
   # false (default) — no session exports telemetry until it is explicitly
-  #   armed with `/nio-monitor` inside that session.
+  #   armed inside that session: `/nio-monitor on` where the focused skill
+  #   is installed (Claude Code, Codex, Pi, opencode), `/nio monitor on`
+  #   on OpenClaw and Hermes. Applies to all three OTLP signals, including
+  #   the conversation content carried on spans.
   # true            — every session exports telemetry (CI / team machines).
   #
   # Guard enforcement and the local audit log are unaffected either way.

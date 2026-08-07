@@ -47,7 +47,7 @@ The CLI prints JSON.
 
 - `removed` — `true` if at least one armed session record was deleted, `false` if there was nothing to delete. A live but unclaimed `pending_arm` is always cleared either way, so `removed: false` does **not** mean `off` did nothing.
 - `removed_sessions` — how many armed records were deleted.
-- `matched_by` — how they were chosen. `session` means the platform exposed a session id and only that one session was disarmed. `cwd` means it did not (Codex, Hermes and OpenClaw are always here), so `off` disarmed **every** session armed from the current directory — which is the only handle those platforms have on their own record, since it was created by a hook event under an id the CLI never sees. Tell the user which happened when `removed_sessions > 1`.
+- `matched_by` — how they were chosen. `session` means the platform exposed a session id and only that one session was disarmed. `cwd` means it did not (Codex, Hermes, OpenClaw, Pi and opencode are always here — Claude Code is the only host whose session-id environment variable is verified), so `off` disarmed **every** session armed from the current directory — which is the only handle those platforms have on their own record, since it was created by a hook event under an id the CLI never sees. Tell the user which happened when `removed_sessions > 1`.
 
 **`status`** returns:
 
@@ -66,22 +66,24 @@ The CLI prints JSON.
 
 When a session is armed, these are exported to the configured OTLP endpoint:
 
-- **traces** — turn / tool-call spans, including the redacted user prompt that opened the turn (`nio.turn.user_prompt`, ≤2 KB) and per-call content-length counters (thinking/text character counts) on each LLM-call span
-- **metrics** — tool-use and guard-decision counters
-- **logs** — audit records, **plus conversation content**: model reasoning ("thinking"), assistant reply text, tool arguments, and tool output. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
+- **traces** — a `session` span, one turn span per prompt, one `chat` span per LLM call, and one span per tool call. These carry the redacted user prompt that opened the turn (`nio.turn.user_prompt`, ≤2 KB), the model / token usage / finish reason of each LLM call, and — because small content rides the span rather than the logs — **what the model said** (`nio.chat.reply`, ≤2 KB) and **the arguments each tool was called with** (`gen_ai.tool.call.arguments`, ≤2 KB)
+- **metrics** — tool-use, turn, and guard-decision counters plus a risk-score histogram
+- **logs** — audit records, **plus the conversation content that does not fit on a span**: model reasoning ("thinking") and tool output always, and the reply / tool arguments whenever they exceeded the 2 KB span budget. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
+
+Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. Tool arguments are the one body that can be on the wire more than once (the span copy, plus one or two log records) — see COLLECTOR-SIGNALS.md. Either way, both signals are armed and disarmed by this same switch.
 
 When it is not armed, none of the above leave the machine.
 
 **This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read/wrote, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.
 
-## Known Limitation on OpenClaw
+## Known Limitation on the In-Process Hosts (OpenClaw · Pi · opencode)
 
-OpenClaw runs Nio inside a long-lived daemon rather than a fresh process per event, and OTEL metric counters there are cumulative for the life of that process. The practical consequence:
+OpenClaw, Pi and opencode load Nio into a long-lived host process rather than spawning a fresh one per event, and OTEL metric counters there are cumulative for the life of that process. The practical consequence:
 
-- A daemon where **no** session has ever been armed exports nothing at all — no exporter is even created.
-- Once **any** session in that daemon has been armed and recorded a counter, the metrics exporter starts a periodic export and **keeps re-sending its accumulated counter totals roughly once a second until the daemon restarts** — including after `off`, after the session ends, and after the arm record is deleted.
+- A host where **no** session has ever been armed exports nothing at all — no exporter is even created.
+- Once **any** session in that process has been armed and recorded a counter, the metrics exporter starts a periodic export and **keeps re-sending its accumulated counter totals roughly once a second until the host restarts** — including after `off`, after the session ends, and after the arm record is deleted.
 
-What `off` does guarantee on OpenClaw is that **no new session data is collected**: no new spans, no new audit records, and no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the OpenClaw daemon clears it.
+What `off` does guarantee there is that **no new session data is collected**: no new spans, no new audit records, and no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the host process clears it.
 
 Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.
 
@@ -107,5 +109,5 @@ If you want to confirm your own machine sends nothing outbound regardless of mon
 
 - Capture takes effect from the **next** hook event; the currently executing tool call is not retroactively captured.
 - There is no backfill. Anything that happened before `on` is not captured.
-- Records expire after 7 days as a backstop. Claude Code, Hermes, and OpenClaw clear the record as soon as the session ends, so the backstop rarely matters there. Codex has no session-end hook to key off, so an armed Codex session relies on the 7-day expiry or a manual `off` — worth knowing if you reuse the same session id across `codex resume` calls.
+- Records expire after 7 days as a backstop. Claude Code, Hermes, OpenClaw and Pi clear the record as soon as the session ends, so the backstop rarely matters there. Two exceptions: Codex has no session-end hook to key off, and opencode only sweeps its sessions when the plugin itself is torn down (host exit) rather than per session — on both, an armed session relies on the 7-day expiry or a manual `off`. Worth knowing if you reuse the same session id across `codex resume` calls.
 - To capture every session without arming each one, set `collector.monitor_all_sessions: true` in `~/.nio/config.yaml`.
