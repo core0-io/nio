@@ -112,31 +112,75 @@ for (const l of logs) {
 const write = (file, rows) =>
   fs.writeFileSync(file, rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
 
+// One span per line with its content records inlined, so a reader never has to
+// join two files by hand. Content stays on the logs signal in the backend
+// because tool results reach 32 KB; this is the reading view, not the wire.
+function combine(spanRows, logRows) {
+  const bySpan = new Map();
+  for (const l of logRows) {
+    const a = l.attributes_string || {}, n = l.attributes_number || {};
+    const sid = a['nio.span_id'];
+    if (!sid) continue;
+    const rec = { type: a['nio.content.type'], body: l.body || '' };
+    if (a['nio.content.fidelity']) rec.fidelity = a['nio.content.fidelity'];
+    if (a['gen_ai.tool.call.id']) rec.tool_call_id = a['gen_ai.tool.call.id'];
+    if (n['nio.content.index'] !== undefined) rec.index = n['nio.content.index'];
+    if (n['nio.content.original_bytes'] !== undefined) {
+      rec.truncated = true;
+      rec.original_bytes = n['nio.content.original_bytes'];
+    }
+    if (!bySpan.has(sid)) bySpan.set(sid, []);
+    bySpan.get(sid).push(rec);
+  }
+  return spanRows.map(s => ({
+    ...(s.nio_group ? { nio_group: s.nio_group } : {}),
+    trace_id: s.traceID,
+    span_id: s.spanID,
+    parent_span_id: s.parentSpanID || null,
+    name: s.name,
+    service: s.serviceName,
+    start: new Date(Date.parse(s.timestamp)).toISOString(),
+    duration_ms: Math.round((s.durationNano || 0) / 1e6),
+    attributes: {
+      ...(s.attributes_string || {}),
+      ...(s.attributes_number || {}),
+      ...(s.attributes_bool || {}),
+    },
+    content: (bySpan.get(s.spanID) || []).sort((a, b) => (a.index ?? 0) - (b.index ?? 0)),
+  }));
+}
+
+// Each bucket gets its own directory holding traces / logs / combined, so a
+// bucket can be handed over on its own without the caller reassembling paths.
+function emit(dir, spanRows, logRows) {
+  fs.mkdirSync(dir, { recursive: true });
+  write(path.join(dir, 'traces.jsonl'), spanRows);
+  write(path.join(dir, 'logs.jsonl'), logRows);
+  write(path.join(dir, 'combined.jsonl'), combine(spanRows, logRows));
+}
+
 const groups = [...spansByGroup.keys()].sort();
 console.log('\nPer agent+model:');
 for (const g of groups) {
   const gs = spansByGroup.get(g), gl = logsByGroup.get(g) || [];
-  write(path.join(outDir, `${g}.traces.jsonl`), gs);
-  write(path.join(outDir, `${g}.logs.jsonl`), gl);
+  emit(path.join(outDir, g), gs, gl);
   const thinking = gl.filter(l => l.attributes_string['nio.content.type'] === 'thinking');
   const chars = thinking.reduce((n, l) => n + (l.body || '').length, 0);
   console.log(`  ${g.padEnd(28)} ${String(gs.length).padStart(5)} spans  ${String(gl.length).padStart(5)} content  ` +
               `${String(thinking.length).padStart(4)} thinking (${chars} chars)`);
 }
 
-// The full set is the concatenation of the splits — not a re-query — so it is
-// exactly what the per-group files contain, with a group label added.
+// The full set is the concatenation of the buckets — not a re-query — so it
+// cannot disagree with them. Rows carry the bucket they came from.
 const fullSpans = [], fullLogs = [];
 for (const g of groups) {
   for (const s of spansByGroup.get(g)) fullSpans.push({ nio_group: g, ...s });
   for (const l of (logsByGroup.get(g) || [])) fullLogs.push({ nio_group: g, ...l });
 }
-write(path.join(outDir, 'full.traces.jsonl'), fullSpans);
-write(path.join(outDir, 'full.logs.jsonl'), fullLogs);
+emit(path.join(outDir, 'full'), fullSpans, fullLogs);
 
-console.log('\nFull set (concatenation of the above, each row tagged with nio_group):');
-console.log(`  full.traces.jsonl  ${fullSpans.length} spans`);
-console.log(`  full.logs.jsonl    ${fullLogs.length} content records`);
+console.log('\nfull/  (concatenation of the above,每行带 nio_group)');
+console.log(`  ${fullSpans.length} spans  ${fullLogs.length} content records`);
 
 const conflicted = [...traceModel.entries()].filter(([, v]) => v.conflicts.size);
 if (conflicted.length) {
@@ -149,5 +193,15 @@ if (orphanLogs) console.log(`  ${orphanLogs} content record(s) name a span that 
 JS
 
 rm -rf "$RAW"
+
 echo
-ls -la "$OUT" | tail -n +2 | awk '{printf "  %-34s %8s\n", $9, $5}'
+echo "Layout:"
+for d in "$OUT"/*/; do
+  [ -d "$d" ] || continue
+  printf "  %s\n" "$(basename "$d")/"
+  for f in traces logs combined; do
+    [ -f "$d$f.jsonl" ] || continue
+    printf "    %-16s %7s lines  %6s\n" "$f.jsonl" \
+      "$(wc -l < "$d$f.jsonl" | tr -d ' ')" "$(du -h "$d$f.jsonl" | cut -f1)"
+  done
+done
