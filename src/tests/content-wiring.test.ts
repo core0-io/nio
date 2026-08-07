@@ -34,6 +34,7 @@ import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/com
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import { closeOtlpSink } from './helpers/otlp-sink.js';
 import { writeCaptureOnConfig } from './helpers/capture-on.js';
 
 const baseConfig: ResolvedMetricsConfig = {
@@ -1018,7 +1019,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     } finally {
       if (previousHome === undefined) delete process.env['NIO_HOME'];
       else process.env['NIO_HOME'] = previousHome;
-      await new Promise<void>((r) => server.close(() => r()));
+      await closeOtlpSink(server);
     }
   });
 
@@ -1138,7 +1139,7 @@ describe('platform wiring: every platform reaches a conversation source', () => 
     } finally {
       if (previousHome === undefined) delete process.env['NIO_HOME'];
       else process.env['NIO_HOME'] = previousHome;
-      await new Promise<void>((r) => server.close(() => r()));
+      await closeOtlpSink(server);
     }
   });
 

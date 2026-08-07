@@ -51,6 +51,7 @@ import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import { closeOtlpSink } from './helpers/otlp-sink.js';
 
 interface WireSpan {
   name: string;
@@ -90,7 +91,7 @@ describe('openclaw span hierarchy: tool spans are eager siblings of chat, not de
     port = (sink.address() as { port: number }).port;
   });
 
-  afterHook(async () => { await new Promise<void>((r) => sink.close(() => r())); });
+  afterHook(async () => { await closeOtlpSink(sink); });
 
   /** Every span the sink has seen so far, flattened out of the OTLP JSON. */
   function spans(): WireSpan[] {

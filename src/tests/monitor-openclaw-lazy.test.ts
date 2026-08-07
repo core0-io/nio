@@ -39,6 +39,7 @@ import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import { closeOtlpSink } from './helpers/otlp-sink.js';
 
 function makeFakeApi() {
   const handlers = new Map<string, (e: unknown, c?: unknown) => Promise<unknown> | unknown>();
@@ -75,7 +76,7 @@ describe('openclaw providers are created lazily, not at registration', () => {
     port = (sink.address() as { port: number }).port;
   });
 
-  afterHook(async () => { await new Promise<void>((r) => sink.close(() => r())); });
+  afterHook(async () => { await closeOtlpSink(sink); });
 
   it('reads the collector endpoint at first monitored use, not at registration', async () => {
     const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-monitor-oc-lazy-')));

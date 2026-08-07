@@ -162,6 +162,67 @@ export const MAX_DEFERRED_SPANS = 500;
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
 
+/**
+ * Every OTLP provider the runtime built ITSELF — never an injected one.
+ *
+ * These providers own background export timers
+ * (`PeriodicExportingMetricReader` at 1 s, both BatchProcessors at 1 s)
+ * that run until the provider is shut down or the process dies. In
+ * production that is the documented, deliberate lifetime: one runtime
+ * per host process, and cumulative metric semantics need the reader to
+ * outlive any one session (see the KNOWN RESIDUAL LIMITATION note on
+ * the provider caches below).
+ *
+ * In a TEST process it is a leak with teeth. A test that points the
+ * runtime at a loopback OTLP sink and then closes that sink leaves the
+ * reader exporting once a second into a dead port forever. Each attempt
+ * opens a fresh TCP connect — a REF'D libuv handle — so the event loop
+ * never drains and the `node --test` worker never exits. All its tests
+ * have passed; the process simply hangs, and with it the whole run.
+ * That is not hypothetical: it was the cause of the intermittent
+ * multi-minute `pnpm test` hangs, caught with the worker still spinning
+ * on `ECONNREFUSED` against two already-closed ports.
+ *
+ * The registry exists so a test can undo exactly what it caused. It
+ * holds only runtime-built providers, so shutting it down can never
+ * tear down a provider the test injected and still wants to read.
+ */
+const runtimeBuiltProviders = new Set<{ shutdown(): Promise<void> }>();
+
+/**
+ * Shut down every provider the runtime built itself, and forget them.
+ *
+ * TEST TEARDOWN ONLY. Call it before closing the loopback OTLP sink a
+ * test stood up, so the final export still has somewhere to land and no
+ * export timer outlives the sink. Safe to call when nothing was built —
+ * it is then a no-op — and safe to call twice.
+ *
+ * Failures are swallowed on purpose: teardown must not turn a passing
+ * test red because an exporter could not reach a socket that the test
+ * is in the middle of taking away.
+ */
+export async function shutdownRuntimeBuiltProviders(): Promise<void> {
+  const providers = [...runtimeBuiltProviders];
+  runtimeBuiltProviders.clear();
+  await Promise.all(providers.map(p => p.shutdown().catch(() => undefined)));
+}
+
+/**
+ * How many runtime-built providers are currently live. The invariant a
+ * teardown helper asserts: zero once the sink is gone.
+ */
+export function runtimeBuiltProviderCount(): number {
+  return runtimeBuiltProviders.size;
+}
+
+/** Record a provider the runtime built itself; `null` means none was. */
+function trackRuntimeBuiltProvider<T extends { shutdown(): Promise<void> } | null>(
+  provider: T,
+): T {
+  if (provider) runtimeBuiltProviders.add(provider);
+  return provider;
+}
+
 export interface PreToolResult {
   /** True when the binding layer must stop the tool from running. */
   block: boolean;
@@ -309,9 +370,9 @@ export class InProcessPluginRuntime {
     if (this.opts.tracerProvider !== undefined) return this.opts.tracerProvider;
     if (this.tracerProviderCache === undefined) {
       try {
-        this.tracerProviderCache = createTracerProvider(
+        this.tracerProviderCache = trackRuntimeBuiltProvider(createTracerProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.tracerProviderCache = null;
       }
@@ -323,9 +384,9 @@ export class InProcessPluginRuntime {
     if (this.opts.meterProvider !== undefined) return this.opts.meterProvider;
     if (this.meterProviderCache === undefined) {
       try {
-        this.meterProviderCache = createMeterProvider(
+        this.meterProviderCache = trackRuntimeBuiltProvider(createMeterProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.meterProviderCache = null;
       }
@@ -338,9 +399,9 @@ export class InProcessPluginRuntime {
     if (this.config.collector?.logs?.enabled === false) return null;
     if (this.loggerProviderCache === undefined) {
       try {
-        this.loggerProviderCache = createLoggerProvider(
+        this.loggerProviderCache = trackRuntimeBuiltProvider(createLoggerProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.loggerProviderCache = null;
       }

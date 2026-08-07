@@ -10,6 +10,7 @@ import { createServer, type Server } from 'node:http';
 import { saveMonitorStore } from '../scripts/lib/monitor-store.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
+import { closeOtlpSink } from './helpers/otlp-sink.js';
 
 /** Minimal OpenClaw register API stand-in — captures handlers by name. */
 function makeFakeApi() {
@@ -73,7 +74,7 @@ describe('openclaw monitor gating: armed vs unarmed reach the wire', () => {
     port = (sink.address() as { port: number }).port;
   });
 
-  afterHook(async () => { await new Promise<void>((r) => sink.close(() => r())); });
+  afterHook(async () => { await closeOtlpSink(sink); });
 
   /**
    * Register a fresh plugin instance against a fresh NIO_HOME pointed at
