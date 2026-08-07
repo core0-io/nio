@@ -14,9 +14,12 @@
 set -euo pipefail
 
 OUT="./nio-export-by-model"
-# Models to leave out entirely. Defaults to gpt-5.5: two chat spans from a
-# stray Hermes turn, not part of the measured run.
-SKIP_MODELS="${SKIP_MODELS:-gpt-5.5}"
+# Models to leave out entirely. Empty by default: skipping is trace-wide, so
+# naming a model here also drops every tool span in the traces that model
+# appears in — a single unwanted chat span can cost dozens of spans that have
+# nothing to do with it. Filter downstream on gen_ai.request.model instead
+# unless you really mean "discard those whole turns".
+SKIP_MODELS="${SKIP_MODELS:-}"
 while [ $# -gt 0 ]; do
   case "$1" in
     -o|--out)  OUT="${2:-}"; shift 2 ;;
