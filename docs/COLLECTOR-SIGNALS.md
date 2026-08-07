@@ -875,7 +875,27 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 The flat attribute set used for OTEL Logs indexing. Same key names as the matching trace span attributes wherever a concept overlaps (tool name, conversation id, guard decision, …) — same query keys work across logs and traces.
 
 - `body` = JSON-stringified entry (full content of the JSONL line)
-- `severityNumber` / `severityText` derived from `risk_level`: `low`→INFO, `medium`→WARN, `high`→ERROR, `critical`→FATAL; INFO when no `risk_level`
+- `severityNumber` / `severityText` — always an **OTel severity**, never a nio risk level. `severityText` is one of `INFO` / `WARN` / `ERROR` / `FATAL`, and always the standard name of the record's own `severityNumber`
+- `nio.risk_level` — the nio risk level, when the entry has one
+
+**Severity and risk level are two different dimensions.** `severityNumber` /
+`severityText` are the OTel log level, and backends build their severity
+facets and filters from the names the OTel logs data model defines. Nio's
+risk level (`low` / `medium` / `high` / `critical`) is a classification of
+the *action*, not of the log record, so it travels as its own attribute:
+
+| entry carries | `severityNumber` | `severityText` | `nio.risk_level` |
+| --- | --- | --- | --- |
+| `risk_level: low` | 9 | `INFO` | `low` |
+| `risk_level: medium` | 13 | `WARN` | `medium` |
+| `risk_level: high` | 17 | `ERROR` | `high` |
+| `risk_level: critical` | 21 | `FATAL` | `critical` |
+| any other / unrecognised `risk_level` | 9 | `INFO` | the value as-is |
+| no `risk_level` (hook, lifecycle, diagnostic) | 9 | `INFO` | *absent* |
+
+An entry without a risk level is `INFO` because nio reached no verdict on
+it — not because the verdict was "low". Filter on `nio.risk_level`, not on
+severity, to find low-risk actions.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
@@ -885,6 +905,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+| `nio.risk_level` | Nio risk level of the entry — same values, but present on **any** entry carrying one, including a `session_scan` entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above | guard decision · session scan | all |
 | `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
 | `nio.guard.risk_tags` | Comma-joined rule IDs that fired | guard decision | all |
 | `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |
@@ -983,7 +1004,7 @@ never see it, leaving half a live credential on the wire.
 so there is nothing to emit through).
 
 - `body` = the content itself: redacted first, then truncated
-- `severityNumber` / `severityText` = INFO / `low` — content is not a verdict
+- `severityNumber` / `severityText` = `9` / `INFO` — content is not a verdict, so it carries no risk level and no `nio.risk_level` attribute
 - built-in `trace_id` / `span_id` = the span this content belongs to
 
 | Attribute | Description |

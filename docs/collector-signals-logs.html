@@ -163,8 +163,22 @@
         <p>The flat attribute set used for OTEL Logs indexing. Same key names as the matching trace span attributes wherever a concept overlaps (tool name, conversation id, guard decision, …) — same query keys work across logs and traces.</p>
         <ul>
           <li><code>body</code> = JSON-stringified entry (full content of the JSONL line)</li>
-          <li><code>severityNumber</code> / <code>severityText</code> derived from <code>risk_level</code>: <code>low</code>→INFO, <code>medium</code>→WARN, <code>high</code>→ERROR, <code>critical</code>→FATAL; INFO when no <code>risk_level</code></li>
+          <li><code>severityNumber</code> / <code>severityText</code> — always an <strong>OTel severity</strong>, never a nio risk level. <code>severityText</code> is one of <code>INFO</code> / <code>WARN</code> / <code>ERROR</code> / <code>FATAL</code>, and always the standard name of the record's own <code>severityNumber</code></li>
+          <li><code>nio.risk_level</code> — the nio risk level, when the entry has one</li>
         </ul>
+        <p><strong>Severity and risk level are two different dimensions.</strong> <code>severityNumber</code> / <code>severityText</code> are the OTel log level, and backends build their severity facets and filters from the names the OTel logs data model defines. Nio's risk level (<code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code>) is a classification of the <em>action</em>, not of the log record, so it travels as its own attribute.</p>
+        <table>
+          <thead><tr><th>entry carries</th><th><code>severityNumber</code></th><th><code>severityText</code></th><th><code>nio.risk_level</code></th></tr></thead>
+          <tbody>
+            <tr><td><code>risk_level: low</code></td><td>9</td><td><code>INFO</code></td><td><code>low</code></td></tr>
+            <tr><td><code>risk_level: medium</code></td><td>13</td><td><code>WARN</code></td><td><code>medium</code></td></tr>
+            <tr><td><code>risk_level: high</code></td><td>17</td><td><code>ERROR</code></td><td><code>high</code></td></tr>
+            <tr><td><code>risk_level: critical</code></td><td>21</td><td><code>FATAL</code></td><td><code>critical</code></td></tr>
+            <tr><td>any other / unrecognised <code>risk_level</code></td><td>9</td><td><code>INFO</code></td><td>the value as-is</td></tr>
+            <tr><td>no <code>risk_level</code> (hook, lifecycle, diagnostic)</td><td>9</td><td><code>INFO</code></td><td><em>absent</em></td></tr>
+          </tbody>
+        </table>
+        <p>An entry without a risk level is <code>INFO</code> because nio reached no verdict on it — not because the verdict was "low". Filter on <code>nio.risk_level</code>, not on severity, to find low-risk actions.</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
@@ -174,6 +188,7 @@
             <tr><td><code>session.id</code></td><td>Mirror of <code>gen_ai.conversation.id</code> for OTel base-spec consumers</td><td>every audit entry with a session</td><td>all</td></tr>
             <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>ask</code></td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.risk_level</code></td><td>Nio risk level of the entry — same values, but present on <strong>any</strong> entry carrying one, including a <code>session_scan</code> entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above</td><td>guard decision · session scan</td><td>all</td></tr>
             <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.guard.risk_tags</code></td><td>Comma-joined rule IDs that fired</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>

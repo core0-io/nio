@@ -2,9 +2,9 @@
 "@core0-io/nio": minor
 ---
 
-Fix six defects found by running against a real backend
+Fix seven defects found by running against a real backend
 
-All six survived a green test suite and several adversarial review rounds. Every one of them needed a live export to show up, because in each case the tests' *inputs* could not express the failure — fixtures had fields the host never sends, thinking blocks the host writes empty, turns smaller than the exporter's concurrency limit, and helpers wired to a span processor production had stopped using.
+All seven survived a green test suite and several adversarial review rounds. Every one of them needed a live export to show up, because in each case the tests' *inputs* could not express the failure — fixtures had fields the host never sends, thinking blocks the host writes empty, turns smaller than the exporter's concurrency limit, and helpers wired to a span processor production had stopped using.
 
 **Telemetry was silently dropping data past 30 records.** `SimpleSpanProcessor` and `SimpleLogRecordProcessor` export every record individually, and the OTLP exporter caps concurrent exports at 30, rejecting the overflow with no retry and no queue. Any turn with more than 30 spans lost the ones that ended last — which is always the turn root, leaving a trace whose every span names a parent that was never exported. Backends cannot determine such a trace's start or duration and render it as scattered fragments. The same cap silently truncated content records. Both signals now use the batch processors.
 
@@ -15,6 +15,8 @@ Host input is now parsed defensively along the whole path from stdin to decision
 **`nio.turn.user_prompt` was never populated on Claude Code.** It read a `prompt` field the host does not send — the payload carries `prompt_id` — so the attribute has been empty for as long as it has existed. It is now read from the transcript, filtered to real user messages: of 187 `user` rows in one live transcript, 154 were tool results and 13 were host-injected meta blocks carrying real text, all of which would otherwise have been recorded as things the user said.
 
 **Empty content records are no longer emitted.** Claude Code writes thinking blocks with only a signature and no text (382 blocks, all empty, in one measured session). Emitting those as records tagged `fidelity: full` told consumers the model reasoned and its reasoning was blank. Whether thinking text is available at all depends on the host and possibly on the model and thinking level — this is not a permanent property of the platform.
+
+**The whole logs signal was invisible in the backend's Logs UI.** Every log record was emitted with nio's risk level (`low` / `medium` / `high` / `critical`) as its OTel `severityText`, contradicting the `severityNumber` sitting next to it — and because records without a risk level (lifecycle, hook and diagnostic entries, i.e. most of them) were defaulted to `low`, that was almost every record. Those are not severity names, so a backend that facets on severity could not bucket a single row: 834 records were in storage and none were visible. `severityText` is now the standard OTel name for the record's own severity number (`INFO` / `WARN` / `ERROR` / `FATAL`), and the risk level moved to its own `nio.risk_level` attribute — set only on entries that actually carry one, so nothing is stamped with a verdict nio never reached. The local `~/.nio/audit.jsonl` is unaffected; it never carried a severity field.
 
 **Content is now placed by size rather than by kind.** Assistant replies (max 360 bytes measured) and tool arguments (truncated to 2 KB) ride the span, so a trace is readable on its own. Tool results (up to 32 KB) and thinking stay on the logs signal, joined by `nio.span_id`.
 
