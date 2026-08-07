@@ -71,19 +71,14 @@ describe('empty content records are not emitted', () => {
     const call = makeCall([
       { type: 'text', index: 0, content: LONG_TEXT },
       { type: 'thinking', index: 1, content: '', fidelity: 'full' },
-      {
-        type: 'tool_use',
-        index: 2,
-        content: 'ls -la',
-        toolUse: { id: 'tool-1', name: 'Bash', input: '{"command":"ls -la"}' },
-      },
+      { type: 'thinking', index: 2, content: 'second thought', fidelity: 'full' },
     ]);
 
     const records = buildContentRecords(call, 'span1', 'trace1', DEFAULT_CONTENT_LIMITS);
 
     assert.deepEqual(
       records.map((r) => r.attributes['nio.content.type']),
-      ['text', 'tool_input']
+      ['text', 'thinking']
     );
     assert.deepEqual(
       records.map((r) => r.attributes['nio.content.index']),

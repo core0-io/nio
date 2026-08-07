@@ -32,9 +32,13 @@ import {
   nioGuardAttributes,
   recordPreToolUse,
   recordPostToolUse,
-  genAiToolCallInputAttributes,
+  genAiToolCallArgumentAttributes,
+  genAiToolCallIdAttributes,
   setPendingGuardAttrs,
 } from './lib/traces-collector.js';
+import { buildSpanContent, spanCarriesWholeContent } from './lib/content/span-content.js';
+import { emitToolInputContent } from './lib/content/sink.js';
+import { loadContentLimits } from './lib/config-loader.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
@@ -273,11 +277,37 @@ async function main(): Promise<void> {
       const toolInput = ((payload as Record<string, unknown>).tool_input ?? {}) as Record<string, unknown>;
       const tool_use_id = (payload as Record<string, unknown>).tool_use_id as string | undefined;
       const summary = toolSummary(toolName, toolInput);
+      // Same argument pipeline as collector-core's PostToolUse branch —
+      // redact, then cap at the span budget, with `nio.content.truncated`
+      // set when it did not fit. It used to be `redactAndTruncate`, which
+      // caps silently: a blocked call with a 5 KB payload put a clipped
+      // body on the span with nothing saying so, and the documented
+      // consumer rule ("attribute present, no truncated flag ⇒ the span
+      // has all of it") read it as complete.
+      const spanArgs = buildSpanContent(
+        Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '',
+      );
       state = recordPreToolUse(
         state, key, toolName, summary,
-        genAiToolCallInputAttributes(toolInput, tool_use_id),
+        {
+          ...(spanArgs ? genAiToolCallArgumentAttributes(spanArgs) : {}),
+          ...genAiToolCallIdAttributes(tool_use_id),
+        },
         evalStartMs,
       );
+      // This site emits the blocked call's span, so it owns the size
+      // decision for its arguments too (see `buildToolInputRecord`).
+      // PostToolUse never fires for a blocked call, so nothing downstream
+      // would ever put the over-budget remainder on the wire — and the
+      // arguments of a DENIED call are the ones a reviewer most wants.
+      if (spanArgs !== null && !spanCarriesWholeContent(spanArgs)) {
+        emitToolInputContent(loggerProvider, loadContentLimits(), {
+          input: JSON.stringify(toolInput),
+          spanId: state.pending_spans[key]?.span_id ?? '',
+          traceId: state.turn_trace_id,
+          ...(tool_use_id ? { toolCallId: tool_use_id } : {}),
+        });
+      }
       const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
       // Budgeted like every other OTLP-touching await here: this call
       // ends in `provider.forceFlush()`. On timeout `state` keeps the

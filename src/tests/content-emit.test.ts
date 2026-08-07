@@ -3,7 +3,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildContentRecords } from '../scripts/lib/content/emit.js';
+import { buildContentRecords, buildToolInputRecord } from '../scripts/lib/content/emit.js';
 import type { ChatCall, ContentBlock } from '../scripts/lib/conversation/types.js';
 import type { ContentLimits } from '../scripts/lib/content/truncate.js';
 
@@ -54,14 +54,18 @@ describe('buildContentRecords — shape and ordering', () => {
 
     const records = buildContentRecords(call, 'span-1', 'trace-1', GENEROUS_LIMITS);
 
-    assert.equal(records.length, 3);
+    // The `tool_use` block contributes NOTHING: a tool call's arguments
+    // are owned by the site that emits its span (see emit.ts). The two
+    // surviving records keep their own block index — they are not
+    // renumbered to close the gap the dropped block left.
+    assert.equal(records.length, 2);
     assert.deepEqual(
       records.map((r) => r.attributes['nio.content.index']),
-      [0, 1, 2]
+      [0, 1]
     );
     assert.deepEqual(
       records.map((r) => r.attributes['nio.content.type']),
-      ['thinking', 'text', 'tool_input']
+      ['thinking', 'text']
     );
   });
 
@@ -77,14 +81,21 @@ describe('buildContentRecords — shape and ordering', () => {
       },
     ]);
 
-    const [thinkingRec, textRec, toolRec] = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
+    const records = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
+    const [thinkingRec, textRec] = records;
 
+    assert.equal(records.length, 2, 'the tool_use block contributes no record');
     assert.equal(thinkingRec!.attributes['nio.content.fidelity'], 'summary');
     assert.equal(textRec!.attributes['nio.content.fidelity'], undefined);
-    assert.equal(toolRec!.attributes['nio.content.fidelity'], undefined);
   });
 
-  it('only the tool_use record carries gen_ai.tool.call.id', () => {
+  it('a tool_use block produces no record at all — its arguments belong to the tool span', () => {
+    // The defect this pins: while these blocks produced records, a tool
+    // call in a session with a conversation source shipped its arguments
+    // THREE times — the tool span attribute, the out-of-band record its
+    // post-side event emits, and this. This module runs at end of turn
+    // from replayed history and cannot see whether a span carried them,
+    // so it emits nothing and the span site decides (see emit.ts).
     const call = makeCall([
       { type: 'text', index: 0, content: LONG_TEXT },
       {
@@ -93,12 +104,27 @@ describe('buildContentRecords — shape and ordering', () => {
         content: 'ls -la',
         toolUse: { id: 'tool-xyz', name: 'Bash', input: '{}' },
       },
+      {
+        type: 'tool_use',
+        index: 2,
+        // Over the 2 KB span budget: size does not resurrect the block
+        // producer either. The out-of-band record is the log-side owner
+        // at every size.
+        content: 'a'.repeat(9_000),
+        toolUse: { id: 'tool-big', name: 'Bash', input: '{}' },
+      },
     ]);
 
-    const [textRec, toolRec] = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
+    const records = buildContentRecords(call, 's', 't', GENEROUS_LIMITS);
 
-    assert.equal(textRec!.attributes['gen_ai.tool.call.id'], undefined);
-    assert.equal(toolRec!.attributes['gen_ai.tool.call.id'], 'tool-xyz');
+    assert.deepEqual(
+      records.map((r) => r.attributes['nio.content.type']), ['text'],
+      'only the oversized reply survives; neither tool_use block is emitted',
+    );
+    assert.equal(
+      records.find((r) => r.attributes['gen_ai.tool.call.id'] !== undefined), undefined,
+      'no record from this producer may claim a tool call id',
+    );
   });
 
   it('returns an empty array for a call with no blocks', () => {
@@ -210,17 +236,9 @@ describe('buildContentRecords — per-kind limits', () => {
     assert.ok(Buffer.byteLength(rec!.body, 'utf-8') <= 20);
   });
 
-  it('uses limits.tool_input (not limits.tool_output or others) for tool_use blocks', () => {
+  it('uses limits.tool_input (not limits.tool_output or others) for the out-of-band arguments record', () => {
     const limits: ContentLimits = { ...GENEROUS_LIMITS, tool_input: 20, tool_output: 65536 };
-    const call = makeCall([
-      {
-        type: 'tool_use',
-        index: 0,
-        content: 'a'.repeat(50),
-        toolUse: { id: 'tool-1', name: 'Bash', input: '{}' },
-      },
-    ]);
-    const [rec] = buildContentRecords(call, 's', 't', limits);
+    const rec = buildToolInputRecord('a'.repeat(50), 's', 't', limits, 'tool-1');
     assert.equal(rec!.attributes['nio.content.truncated'], true);
     assert.ok(Buffer.byteLength(rec!.body, 'utf-8') <= 20);
   });

@@ -44,8 +44,12 @@ import {
   ensureTurn,
   nioGuardAttributes,
   recordPostToolUse,
+  genAiToolCallArgumentAttributes,
   setPendingGuardAttrs,
 } from './lib/traces-collector.js';
+import { buildSpanContent, spanCarriesWholeContent } from './lib/content/span-content.js';
+import { emitToolInputContent } from './lib/content/sink.js';
+import { loadContentLimits } from './lib/config-loader.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
@@ -704,6 +708,26 @@ async function main(): Promise<void> {
       if (isBlock) {
         const cwd = collectorInput.cwd ?? process.cwd();
         const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
+        // The blocked call's span is emitted HERE and its PostToolUse
+        // never fires, so this site owns its arguments — exactly as
+        // guard-hook.ts does for Claude Code / Codex. Before this, the
+        // pending entry held identity only (collector-core's PreToolUse
+        // parks no payload), so a denied Hermes call reached the backend
+        // with its span carrying no `gen_ai.tool.call.arguments` at all.
+        const blockedInput = (collectorInput.tool_input ?? {}) as Record<string, unknown>;
+        const spanArgs = buildSpanContent(
+          Object.keys(blockedInput).length > 0 ? JSON.stringify(blockedInput) : '',
+        );
+        // Logs carry the arguments only when the span could not — same
+        // rule, same value, as every other span-emitting site.
+        if (spanArgs !== null && !spanCarriesWholeContent(spanArgs)) {
+          emitToolInputContent(loggerProvider, loadContentLimits(), {
+            input: JSON.stringify(blockedInput),
+            spanId: state.pending_spans[key]?.span_id ?? '',
+            traceId: state.turn_trace_id,
+            ...(collectorInput.tool_use_id ? { toolCallId: collectorInput.tool_use_id } : {}),
+          });
+        }
         // Budgeted like every other OTLP-touching await here: this call
         // ends in `provider.forceFlush()`. On timeout `state` keeps the
         // value it had before the call, so `saveState` below still runs
@@ -712,7 +736,10 @@ async function main(): Promise<void> {
         const r = await withFlushBudget(
           recordPostToolUse(
             tracerProvider, state, key, cwd,
-            guardAttrs,
+            {
+              ...guardAttrs,
+              ...(spanArgs ? genAiToolCallArgumentAttributes(spanArgs) : {}),
+            },
             reason,
           ).catch(e => {
             reportFlushFailure('traces', collectorConfig.endpoint, e);

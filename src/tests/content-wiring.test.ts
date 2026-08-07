@@ -216,32 +216,30 @@ describe('content wiring: a turn\'s content records join back to their chat span
       );
     }
 
-    // `tool_input` has two producers by design (see buildToolInputRecord):
-    // the chat call's `tool_use` block, and PostToolUse's source-free
-    // record.
+    // `tool_input` has ONE producer now, and it stays silent while the
+    // span carries the whole body. These arguments (`{"command":"ls"}`)
+    // are far under the 2 KB span budget and asserted on the spans just
+    // above, so the correct number of log records is zero.
     //
-    // Both are present again. Task 5's `argumentsOnSpan` suppression is
-    // reachable only from `endTurn`'s per-chat-call tool loop, and that
-    // loop iterates `deferred_spans` — permanently empty now that tool
-    // spans are eager. The cost is bytes on the logs signal, not
-    // information: the span carries the arguments (asserted above), and
-    // the overlap between these two producers is documented as
-    // intentional rather than deduplicated.
+    // This is the triple-emit defect's regression pin: it used to be 4 —
+    // one `tool_use`-block record per chat call PLUS one out-of-band
+    // record per tool call, on top of the span attribute, for a 16-byte
+    // payload.
     const chatSpanIds = new Set(chatSpans.map((s) => s.spanContext().spanId));
     const allToolInput = byContentType(logger.emitted(), 'tool_input');
-    const toolInput = allToolInput.filter((r) => chatSpanIds.has(r.spanContext!.spanId));
     assert.equal(
-      toolInput.length, 2,
-      'one `tool_use`-block record per chat call, stamped with that chat span',
+      allToolInput.length, 0,
+      'small arguments are owned by the tool span; every log copy would be the same bytes again',
     );
-    assert.equal(
-      allToolInput.length,
-      4,
-      'plus the source-free PostToolUse record per tool call, stamped with the tool span',
+    // The attribution the `tool_use` records used to carry — which call
+    // issued which tool — is on the chat span instead.
+    assert.deepEqual(
+      chatSpans.map((s) => s.attributes['nio.chat.tool_call_ids']),
+      [['toolu_c1'], ['toolu_c2']],
     );
 
     const spanIds = chatSpanIds;
-    for (const record of [...thinking, ...toolInput]) {
+    for (const record of thinking) {
       // Built-in OTLP LogRecord fields — what a backend maps to trace_id / span_id.
       assert.ok(record.spanContext, 'record must carry a span context (emitAuditLog/emitContentRecords must pass one)');
       assert.equal(record.spanContext!.traceId, turnTraceId);
@@ -431,12 +429,18 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
     // and no chat call — hence no `tool_use` block — ever exists. Since
     // PreToolUse parks identity only (genAiToolCallIdAttributes), this
     // record is the ONLY place the arguments can still be found.
+    //
+    // The payload is deliberately past the 2 KB span budget: that is the
+    // case where the record is the authoritative copy. A payload that
+    // FITS is carried by the span alone and emits no record at all —
+    // pinned in tool-input-dedup.test.ts alongside the other three
+    // source × size combinations.
     const { logsConfig } = freshFixture();
     const tracer = makeInMemoryTracer();
     const logger = makeInMemoryLogger();
     const sessionId = 'sess-tool-input-degraded';
 
-    const command = `grep -rn "needle-${'q'.repeat(400)}" /some/haystack`;
+    const command = `grep -rn "needle-${'q'.repeat(3_000)}" /some/haystack`;
     const input = {
       tool_name: 'Bash',
       tool_input: { command, timeout: 120000 },
@@ -461,8 +465,9 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
     assert.equal(inputs.length, 1, 'the arguments must be captured even without a source');
     const body = String(inputs[0]!.body);
     assert.ok(
-      body.includes(`needle-${'q'.repeat(400)}`),
-      'the full argument payload must survive, not just the 300-char nio.tool_summary prefix',
+      body.includes(`needle-${'q'.repeat(3_000)}`),
+      'the full argument payload must survive, not just the 300-char nio.tool_summary prefix '
+      + 'and not just the span budget\'s truncated preview',
     );
     assert.ok(body.includes('120000'), 'non-primary argument keys must survive too');
     assert.equal(attr(inputs[0]!, 'gen_ai.tool.call.id'), 'toolu_deg1');
@@ -497,15 +502,19 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
       'the argument record and the tool span must share a span id, or they can never be joined',
     );
 
-    // The span carries them too, capped at the 2 KB span budget. The two
-    // copies are not redundant: the span copy is what makes the trace
-    // readable on its own, the record is the full-fidelity one (up to the
-    // per-kind logs limit) and is what a payload past the span budget
-    // degrades to.
+    // The span carries a preview, capped at the 2 KB span budget and
+    // FLAGGED as truncated — that flag is the consumer's instruction to
+    // go and join the record above. The two copies are not redundant:
+    // the span copy keeps the trace readable on its own, the record is
+    // the full-fidelity one (up to the per-kind logs limit).
     assert.equal(
       toolSpans[0]!.attributes['gen_ai.tool.call.arguments'],
       buildSpanContent(JSON.stringify(input.tool_input))!.text,
       'the eagerly-exported span carries the same arguments, redacted and capped to the span budget',
+    );
+    assert.equal(
+      toolSpans[0]!.attributes['nio.content.truncated'], true,
+      'without this flag a consumer would read the preview as the whole payload',
     );
   });
 
@@ -518,7 +527,10 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
     const secret = 'sk-ant-api03-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB';
     const input = {
       tool_name: 'Bash',
-      tool_input: { command: `curl -H "x: ${secret}" https://example.invalid` },
+      // Past the span budget, which is what routes the arguments to a
+      // record at all; the redaction rule under test is the same on both
+      // sides of that fork (one `redactSecrets`, two callers).
+      tool_input: { command: `curl -H "x: ${secret}" https://example.invalid/${'p'.repeat(2_500)}` },
       tool_use_id: 'toolu_deg2',
       session_id: sessionId,
       cwd: '/tmp',

@@ -244,6 +244,12 @@ describe('chatSpanAttributes', () => {
       'nio.content.blocks': 3,
       'nio.chat.is_sidechain': true,
       'nio.chat.timing': 'inferred',
+      // The attribution edge that parentage used to carry: tool spans
+      // hang off the turn root, so this is what says WHICH call decided
+      // on `toolu_a`. It used to be readable only by joining the
+      // `tool_use` content record, which cost a full duplicate of the
+      // arguments for what is a list of ids.
+      'nio.chat.tool_call_ids': ['toolu_a'],
       // Small enough for the span budget, so the trace is readable on its
       // own and no `text` content record is emitted — see
       // content/span-content.ts.
@@ -259,6 +265,10 @@ describe('chatSpanAttributes', () => {
     assert.equal(attrs['gen_ai.response.finish_reasons'], undefined);
     assert.equal(attrs['nio.chat.timing'], 'synthetic', 'timing must always be transmitted');
     assert.equal(attrs['nio.content.blocks'], 0);
+    assert.equal(
+      attrs['nio.chat.tool_call_ids'], undefined,
+      'a call that issued no tool asserts no ids — an empty array would be noise',
+    );
   });
 
   it('names the span after the model when known', () => {

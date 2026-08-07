@@ -70,7 +70,7 @@ import { createSourceForPlatform, type SourceInput } from './conversation/factor
 import { lastUserMessageSince } from './conversation/claude-code-source.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
-import { buildSpanContent } from './content/span-content.js';
+import { buildSpanContent, spanCarriesWholeContent } from './content/span-content.js';
 import { loadContentLimits, type CollectorConfig as ExporterConfig } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
@@ -744,23 +744,31 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
         });
 
-        // Arguments go out here too, against the same pre-minted tool
-        // span id. This is the ONLY tool-argument record a session
-        // without a ConversationSource (no transcript_path, unreadable
-        // session file) ever gets: PreToolUse now parks identity only,
-        // and the chat call's `tool_use` block requires a source that
-        // such a session does not have. Without this, degrading the
-        // STRUCTURE (turn → tool instead of turn → chat → tool) would
-        // also silently degrade the CONTENT down to `nio.tool_summary`'s
-        // 300 chars. See buildToolInputRecord for why the overlap with
-        // the chat-call block is intentional rather than deduplicated.
-        const inputText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
-        emitToolInputContent(loggerProvider, contentLimits(), {
-          input: inputText,
-          spanId: toolSpanId,
-          traceId: state.turn_trace_id,
-          ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
-        });
+        // Arguments go out on the logs signal ONLY when the span above
+        // could not carry the whole body. Decided from `spanArgs` — the
+        // very value that went onto the span two statements ago — so the
+        // span and the record cannot disagree about who owns the bytes.
+        // `spanCarriesWholeContent` is false for a truncated body and for
+        // no body at all; the latter emits nothing anyway
+        // (`emitToolInputContent` skips an empty input).
+        //
+        // When it does fire, this is the ONLY tool-argument record: a
+        // session without a ConversationSource (no transcript_path,
+        // unreadable session file) has no chat call to hang one off, and
+        // a session WITH one no longer produces a second copy from the
+        // `tool_use` block (see content/emit.ts). Without this leg,
+        // degrading the STRUCTURE (turn → tool instead of
+        // turn → chat → tool) would also silently degrade an
+        // over-budget payload down to the span's truncated preview.
+        if (!spanCarriesWholeContent(spanArgs)) {
+          const inputText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
+          emitToolInputContent(loggerProvider, contentLimits(), {
+            input: inputText,
+            spanId: toolSpanId,
+            traceId: state.turn_trace_id,
+            ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
+          });
+        }
       }
 
       if (meterProvider) {

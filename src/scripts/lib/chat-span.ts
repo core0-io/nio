@@ -63,13 +63,26 @@ export interface SpanTree {
  * to read them bought nothing. When a reply does NOT fit, the attribute
  * holds a truncated preview marked `nio.content.truncated` and the
  * `text` content records stay authoritative.
+ *
+ * `nio.chat.tool_call_ids` is the attribution edge that parentage used to
+ * carry. Tool spans hang off the turn root now, so "which call decided on
+ * this tool" is only recoverable by matching a tool span's
+ * `gen_ai.tool.call.id` against the ids its issuing call declared. That
+ * used to be readable only from the `tool_use` content records — which
+ * meant paying a full duplicate of the arguments for a fact that is a
+ * list of ids. Absent when the call issued no tool: an empty array would
+ * assert nothing the reader could not already see.
  */
 export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
   let thinkingChars = 0;
   let textChars = 0;
+  const toolCallIds: string[] = [];
   for (const block of call.blocks) {
     if (block.type === 'thinking') thinkingChars += block.content.length;
     else if (block.type === 'text') textChars += block.content.length;
+    else if (block.type === 'tool_use' && block.toolUse !== undefined) {
+      toolCallIds.push(block.toolUse.id);
+    }
   }
 
   const usage = call.usage ?? {};
@@ -94,6 +107,7 @@ export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
     'nio.content.blocks': call.blocks.length,
     'nio.chat.is_sidechain': call.isSidechain,
     'nio.chat.timing': call.timing,
+    ...(toolCallIds.length > 0 ? { 'nio.chat.tool_call_ids': toolCallIds } : {}),
     ...(reply ? { 'nio.chat.reply': reply.text, ...spanContentAttributes(reply) } : {}),
   };
 }

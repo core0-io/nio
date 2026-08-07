@@ -17,7 +17,9 @@
  *     log record.
  *  2. A reply too big for the span budget keeps its full-fidelity log
  *     record, and the span says so via `nio.content.truncated`.
- *  3. The same two rules for tool arguments, on the tool span.
+ *  3. The same two rules for tool arguments, on the tool span — with the
+ *     log-side copy owned by the site that EMITS that span, never by the
+ *     turn boundary, which cannot see whether a span exists.
  *  4. `tool_output` never reaches a span — measured p90 7.7 KB, max
  *     32 KB, which is exactly the payload the span budget exists to keep
  *     out of trace queries.
@@ -31,7 +33,9 @@ import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
 import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
 
 import { endTurn, type CollectorState, type DeferredSpan } from '../scripts/lib/traces-collector.js';
-import { createContentSink, emitToolOutputContent } from '../scripts/lib/content/sink.js';
+import {
+  createContentSink, emitToolInputContent, emitToolOutputContent,
+} from '../scripts/lib/content/sink.js';
 import { DEFAULT_CONTENT_LIMITS } from '../scripts/lib/content/truncate.js';
 import { SPAN_CONTENT_LIMIT } from '../scripts/lib/content/span-content.js';
 import type { ChatCall, ContentBlock } from '../scripts/lib/conversation/types.js';
@@ -201,7 +205,14 @@ describe('tool argument placement', () => {
     );
   });
 
-  it('truncates oversized arguments on the span and keeps the full copy in logs', async () => {
+  it('marks the truncation on the span and emits NO record from the turn boundary', async () => {
+    // The over-budget half of the size rule, and the half the triple-emit
+    // defect lived in. `endTurn` replays history: it can see that the
+    // body is too big for a span, but not whether a span was emitted at
+    // all, so a record from here would be a guess — and while it did
+    // guess, every tool call with a source shipped its arguments three
+    // times. The full copy is emitted by the site that emits the span,
+    // in the same breath (see the next case).
     const args = `{"command":"${filler(SPAN_CONTENT_LIMIT * 3)}"}`;
     const { spans, records } = await runTurn(
       [call([toolUseBlock(0, 'toolu_a', args)])], [toolSpan('toolu_a')],
@@ -217,19 +228,62 @@ describe('tool argument placement', () => {
     assert.equal(tool.attributes['nio.content.truncated'], true);
     assert.equal(tool.attributes['nio.content.original_bytes'], args.length);
 
-    const logged = recordsOfType(records, 'tool_input');
-    assert.equal(logged.length, 1, 'logs stay authoritative for arguments the span could not hold');
-    assert.equal(logged[0]!.body, args);
+    assert.deepEqual(
+      recordsOfType(records, 'tool_input').map((r) => r.body), [],
+      'the turn boundary is not a producer of tool arguments',
+    );
   });
 
-  it('leaves arguments in logs when no tool span could claim them', async () => {
-    // Guard-denied / interrupted calls reach no PostToolUse, so nothing
-    // parks a deferred span for them and no span can carry the payload.
+  it('pairs the truncated span attribute with the full-fidelity record from the span site', async () => {
+    // What a consumer must be able to do: read the truncated preview off
+    // the span, see `nio.content.truncated`, and find the whole body in
+    // logs under the SAME span id. That pairing is the contract
+    // `emitToolInputContent`'s callers honour; here it is exercised
+    // end to end against the real sink.
+    const args = `{"command":"${filler(SPAN_CONTENT_LIMIT * 3)}"}`;
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    try {
+      emitToolInputContent(logger.provider, DEFAULT_CONTENT_LIMITS, {
+        input: args,
+        spanId: TOOL_SPAN_ID,
+        traceId: TRACE_ID,
+        toolCallId: 'toolu_a',
+      });
+      await endTurn(
+        tracer.provider, stateWith([toolSpan('toolu_a')]), null, null,
+        [call([toolUseBlock(0, 'toolu_a', args)])],
+        createContentSink(logger.provider, DEFAULT_CONTENT_LIMITS),
+      );
+
+      const logged = recordsOfType(await logger.flushed(), 'tool_input');
+      assert.equal(logged.length, 1, 'exactly one full copy — not one per producer');
+      assert.equal(logged[0]!.body, args);
+      assert.equal(
+        logged[0]!.spanContext!.spanId,
+        spanNamed(await tracer.flushed(), 'execute_tool Bash').spanContext().spanId,
+        'the record must name the tool span whose attribute it completes',
+      );
+    } finally {
+      await tracer.shutdown();
+      await logger.shutdown();
+    }
+  });
+
+  it('keeps the chat call → tool call edge on the chat span, not in a log record', async () => {
+    // What the `tool_use` content records uniquely carried was
+    // attribution: which LLM call decided on this tool. Tool spans hang
+    // off the turn root, so that edge has to live somewhere — it is a
+    // list of ids on the chat span now, not a duplicate of the arguments.
     const args = '{"command":"rm -rf /"}';
     const { spans, records } = await runTurn([call([toolUseBlock(0, 'toolu_a', args)])], []);
 
     assert.equal(spans.filter((s) => s.name === 'execute_tool Bash').length, 0);
-    assert.deepEqual(recordsOfType(records, 'tool_input').map((r) => r.body), [args]);
+    assert.deepEqual(recordsOfType(records, 'tool_input').map((r) => r.body), []);
+    assert.deepEqual(
+      spanNamed(spans, 'chat claude-x').attributes['nio.chat.tool_call_ids'],
+      ['toolu_a'],
+    );
   });
 });
 

@@ -70,7 +70,7 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 - **metrics** — tool-use, turn, and guard-decision counters plus a risk-score histogram
 - **logs** — audit records, **plus the conversation content that does not fit on a span**: model reasoning ("thinking") and tool output always, and the reply / tool arguments whenever they exceeded the 2 KB span budget. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
 
-Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. Tool arguments are the one body that can be on the wire more than once (the span copy, plus one or two log records) — see COLLECTOR-SIGNALS.md. Either way, both signals are armed and disarmed by this same switch.
+Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. (On OpenClaw, Pi and opencode the tool-argument record is emitted unconditionally, by design: it has to outlive a tool span the host may never let nio send. See COLLECTOR-SIGNALS.md.) Either way, both signals are armed and disarmed by this same switch.
 
 When it is not armed, none of the above leave the machine.
 

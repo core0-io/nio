@@ -884,7 +884,7 @@ measurements and for the chat/session span attribute tables.
 
 **Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set), plus the full `nio.guard.*` set from the pre-side decision. `gen_ai.tool.call.result` is set by the **in-process** platforms only — on the hook platforms the result travels as a `tool_output` content record instead (measured p90 7.7 KB, max 32 KB: too large for a span attribute a trace query pays for).
 
-**Chat span (`chat <model>`) attributes:** `gen_ai.operation.name` (= `chat`), `gen_ai.request.model`, `gen_ai.response.id`, per-call `gen_ai.usage.*`, `gen_ai.response.finish_reasons`, `nio.content.thinking_chars` / `text_chars` / `blocks`, `nio.chat.is_sidechain`, `nio.chat.timing` (`exact` / `inferred` / `synthetic`), and `nio.chat.reply` (the call's `text` blocks joined, redacted, ≤2 KB).
+**Chat span (`chat <model>`) attributes:** `gen_ai.operation.name` (= `chat`), `gen_ai.request.model`, `gen_ai.response.id`, per-call `gen_ai.usage.*`, `gen_ai.response.finish_reasons`, `nio.content.thinking_chars` / `text_chars` / `blocks`, `nio.chat.is_sidechain`, `nio.chat.timing` (`exact` / `inferred` / `synthetic`), `nio.chat.tool_call_ids` (the tool-call ids this call issued — the chat → tool edge, since tool spans hang off the turn root), and `nio.chat.reply` (the call's `text` blocks joined, redacted, ≤2 KB).
 
 **Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 

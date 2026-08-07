@@ -76,18 +76,16 @@ export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
  * free of any logs-side dependency, and the two signals only meet in the
  * layer that owns both providers.
  *
- * `argumentsOnSpan` is how the two signals avoid shipping the same bytes
- * twice: it holds the `tool_use` ids whose FULL arguments the tool span
- * emitted just before this call already carries, so the sink must not
- * repeat them as `tool_input` records. Only the span layer knows this —
- * it depends on which deferred tool spans were attributed to this call
- * and on whether each argument payload fit the span budget.
+ * The sink emits the call's own blocks only. A tool call's arguments are
+ * owned by the site that emits that tool's span (see
+ * `content/emit.ts`'s module doc), and the chat call's claim on them —
+ * "this call issued that tool" — rides the chat span as
+ * `nio.chat.tool_call_ids` instead of a duplicate log record.
  */
 export type ChatContentSink = (
   call: ChatCall,
   spanId: string,
   traceId: string,
-  argumentsOnSpan?: ReadonlySet<string>,
 ) => void;
 
 // ---------------------------------------------------------------------------
@@ -1220,26 +1218,20 @@ export async function endTurn(
     // Tool arguments ride on the tool span when they fit the span budget
     // (see content/span-content.ts). The payload comes from the chat
     // call's own `tool_use` block — already in memory, never from the
-    // state file — so this costs nothing on disk. Ids whose FULL
-    // arguments landed on a span are handed to the content sink below so
-    // it does not repeat them as log records.
-    const argumentsOnSpan = new Set<string>();
+    // state file — so this costs nothing on disk. Only reachable on the
+    // parking path (`eagerToolSpans: false`); `node.tools` is empty
+    // whenever tool spans are eager, which is the production default.
     for (const tool of node.tools) {
       const args = toolArgumentsFor(node.call, tool.tool_use_id);
-      if (args && tool.tool_use_id && spanCarriesWholeContent(args)) {
-        argumentsOnSpan.add(tool.tool_use_id);
-      }
       emitDeferredSpan(
         provider, traceId, node.span_id, tool,
         args ? genAiToolCallArgumentAttributes(args) : undefined,
       );
     }
 
-    // After the tool loop, not before: `argumentsOnSpan` is only complete
-    // once every tool span under this call has been emitted.
     if (contentSink) {
       try {
-        contentSink(node.call, node.span_id, traceId, argumentsOnSpan);
+        contentSink(node.call, node.span_id, traceId);
       } catch {
         // Content is telemetry; a failure here must not cost the tree.
       }

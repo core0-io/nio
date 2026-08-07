@@ -71,11 +71,36 @@ export {};
  *     `nio.chat.reply` in full. A reply too big for the budget is kept
  *     here at full per-kind fidelity, and the span's copy is flagged
  *     `nio.content.truncated`.
- *   - `tool_use` blocks: suppressed per tool call, for the ids the span
- *     layer reports in `argumentsOnSpan`. It — not this module — is the
- *     only place that knows whether a tool span existed to carry them.
- *   - `thinking` and `tool_output` are never span-carried (measured p90
- *     7.7 KB / max 32 KB for results), so they are unconditional here.
+ *   - `thinking` is never span-carried (measured p90 7.7 KB), so it is
+ *     unconditional here.
+ *
+ * Why `tool_use` blocks produce NOTHING here
+ * -------------------------------------------------
+ * They used to, and that was the one place a body could reach the wire
+ * three times: `gen_ai.tool.call.arguments` on the tool span, the
+ * out-of-band `tool_input` record the tool's own post-side event emits,
+ * and a third copy from this module. The suppression that was supposed
+ * to prevent it (`argumentsOnSpan`, an id set derived from
+ * `state.deferred_spans`) went permanently inert when tool spans became
+ * eager — `deferred_spans` is always empty now — so every tool call in
+ * a session with a conversation source shipped its arguments three
+ * times.
+ *
+ * The fix is structural rather than another suppression flag. A tool
+ * call's arguments are owned by the SITE THAT EMITS ITS SPAN, which is
+ * the only place that knows, from the one `SpanContent` value it is
+ * holding, whether the span carried the whole body or a truncated
+ * preview — and can emit the full-fidelity `tool_input` record in the
+ * same breath when it could not (`buildToolInputRecord`). That decision
+ * is local, needs no cross-event state, and cannot disagree with itself.
+ *
+ * This module runs at the END of the turn, from replayed history. It
+ * cannot see whether a span was emitted, so any rule it applied would be
+ * a guess. What it uniquely knew — which chat call issued which tool
+ * call — is not a body at all, and now rides the chat span as
+ * `nio.chat.tool_call_ids` (see `chat-span.ts`), where it costs a few
+ * dozen bytes instead of a duplicate of the arguments and needs no log
+ * join to read.
  */
 
 import type { ChatCall, ContentBlock } from '../conversation/types.js';
@@ -84,34 +109,29 @@ import { truncateContent, type ContentKind, type ContentLimits } from './truncat
 import { buildSpanContent, chatReplyText, spanCarriesWholeContent } from './span-content.js';
 
 /** The subset of `ContentBlock['type']` this module maps from. */
-type EmittableBlockType = 'thinking' | 'text' | 'tool_use';
+type EmittableBlockType = 'thinking' | 'text';
 
 /** Maps a block's type to the `ContentKind` used to look up its byte limit. */
 const BLOCK_TYPE_TO_KIND: Record<EmittableBlockType, ContentKind> = {
   thinking: 'thinking',
   text: 'text',
-  tool_use: 'tool_input',
 };
 
 /**
  * `nio.content.type` values this module can produce.
  *
- * `buildContentRecords` only ever emits the first three — they are the
- * block types a `ChatCall` carries. `tool_output` has no block to come
- * from (a tool result arrives out-of-band, from the hook that observed
- * the tool finish, not from the call that requested it) and is built by
- * `buildToolOutputRecord` instead. `user_prompt` is still carried as a
- * turn-span attribute and has no builder here yet.
- *
- * `tool_input` has TWO producers, deliberately — see
- * `buildToolInputRecord`.
+ * `buildContentRecords` only ever emits the first two — they are the
+ * block types a `ChatCall` carries that no span owns. `tool_input` and
+ * `tool_output` both come from the hook that observed the tool, not from
+ * the call that requested it, and are built by `buildToolInputRecord` /
+ * `buildToolOutputRecord`. `user_prompt` is still carried as a turn-span
+ * attribute and has no builder here yet.
  */
 type EmittedContentType = 'thinking' | 'text' | 'tool_input' | 'tool_output';
 
 const BLOCK_TYPE_TO_CONTENT_TYPE: Record<EmittableBlockType, EmittedContentType> = {
   thinking: 'thinking',
   text: 'text',
-  tool_use: 'tool_input',
 };
 
 export interface ContentRecordAttributes {
@@ -130,7 +150,7 @@ export interface ContentRecordAttributes {
   'nio.trace_id': string;
   /** Redundant copy of `spanId` as a plain string attribute; see module docs. */
   'nio.span_id': string;
-  /** Only present on records built from a `tool_use` block. */
+  /** Only present on the out-of-band tool records (`tool_input` / `tool_output`). */
   'gen_ai.tool.call.id'?: string;
 }
 
@@ -151,10 +171,8 @@ export interface ContentRecord {
  * doc), so the result can be shorter than `call.blocks`; the surviving
  * records keep their own block index, they are not renumbered.
  *
- * `argumentsOnSpan` holds the `tool_use` ids whose complete arguments the
- * tool span emitted alongside this call already carries. Omitting it
- * (tests, callers with no span layer) means nothing was span-carried and
- * every block is emitted, which is the pre-size-split behaviour.
+ * `tool_use` blocks produce no record here at all — the tool's own span
+ * site owns its arguments; see the module doc.
  *
  * Pure function: no IO, no OTEL provider, no global state. `spanId` /
  * `traceId` are supplied by the caller (the span layer), which is the
@@ -166,7 +184,6 @@ export function buildContentRecords(
   spanId: string,
   traceId: string,
   limits: ContentLimits,
-  argumentsOnSpan?: ReadonlySet<string>
 ): ContentRecord[] {
   const records: ContentRecord[] = [];
 
@@ -176,19 +193,12 @@ export function buildContentRecords(
   const replyOnSpan = spanCarriesWholeContent(buildSpanContent(chatReplyText(call)));
 
   for (const block of call.blocks) {
-    if (block.type !== 'thinking' && block.type !== 'text' && block.type !== 'tool_use') {
+    if (block.type !== 'thinking' && block.type !== 'text') {
       continue;
     }
 
     // Already on the span in full — see the module doc.
     if (block.type === 'text' && replyOnSpan) continue;
-    if (
-      block.type === 'tool_use'
-      && block.toolUse !== undefined
-      && argumentsOnSpan?.has(block.toolUse.id)
-    ) {
-      continue;
-    }
 
     const record = buildRecord(block, block.type, spanId, traceId, limits);
     if (record) records.push(record);
@@ -226,34 +236,34 @@ export function buildToolOutputRecord(
  * Build the record carrying a tool call's ARGUMENTS, from the hook
  * payload rather than from a `ChatCall`.
  *
- * Why this exists alongside the `tool_use` block records
- * `buildContentRecords` already produces: those only exist when a
- * `ConversationSource` could be built (a readable transcript, or Hermes's
- * envelope). Without one — no `transcript_path`, an unreadable session
- * file — `endTurn` degrades to the flat `turn → tool` shape AND, before
- * this builder existed, the arguments vanished entirely: the tool span
- * had been switched from `genAiToolCallInputAttributes` to
- * `genAiToolCallIdAttributes`, leaving only the 300-char
- * `nio.tool_summary`. That made the degraded path a net loss against the
- * pre-chat-layer behaviour. This record is emitted from PostToolUse,
- * where the tool span id has been known since PreToolUse, so it needs no
- * source at all.
+ * This is the ONLY producer of `tool_input` records, and it is the LOG
+ * side of the size rule rather than a second copy of it. The contract
+ * every caller must honour:
  *
- * The two producers are NOT deduplicated, on purpose — neither one
- * subsumes the other:
+ *   **Emit this only when the tool span you are emitting could not carry
+ *   the whole body** — i.e. `!spanCarriesWholeContent(spanArgs)` for the
+ *   very `SpanContent` you just put on the span as
+ *   `gen_ai.tool.call.arguments`. Same value, same statement, so the two
+ *   signals cannot disagree about who owns the bytes.
  *
- *   - The `tool_use` block covers calls that never reach PostToolUse:
- *     anything the guard denied, and interrupted calls. Dropping it would
- *     lose exactly the arguments a security reviewer most wants.
- *   - This record covers sessions with no `ConversationSource` at all,
- *     and lands on the TOOL span (next to `tool_output`) rather than on
- *     the chat span.
+ * Callers, all of which are span-emitting sites:
  *
- * They are cheap to tell apart or collapse downstream: same
- * `nio.content.type`, same `gen_ai.tool.call.id`, different `nio.span_id`
- * (chat span vs. tool span). Bounded 2x on tool arguments only — unlike
- * the per-turn replay this pipeline had to fix elsewhere, it does not
- * grow with session length.
+ *   - `collector-core.ts` PostToolUse — the hook family's normal path.
+ *   - `guard-hook.ts` / `hook-cli.ts` block path — a denied call's span
+ *     is emitted synchronously there and its post-side event never
+ *     fires, so that site owns its arguments too.
+ *   - `plugin-runtime.ts` PreToolUse — the in-process family emits this
+ *     unconditionally, deliberately: the params are only in hand at the
+ *     pre side, and the record is designed to OUTLIVE a span that a
+ *     mid-turn crash or disarm may never send (see `emitToolContent`).
+ *     That family therefore keeps a bounded second copy of small
+ *     arguments; the hook family does not.
+ *
+ * It needs no `ConversationSource`, which is what keeps arguments on the
+ * wire for a session with no readable transcript — the regression this
+ * builder was originally added to fix. It lands on the TOOL span, next
+ * to `tool_output`; which chat call issued that tool is carried by the
+ * chat span's `nio.chat.tool_call_ids`, not by a second content record.
  */
 export function buildToolInputRecord(
   input: string,
@@ -347,10 +357,6 @@ function buildRecord(
 
   if (hits > 0) {
     attributes['nio.content.redactions'] = hits;
-  }
-
-  if (type === 'tool_use' && block.toolUse !== undefined) {
-    attributes['gen_ai.tool.call.id'] = block.toolUse.id;
   }
 
   return { traceId, spanId, body, attributes };

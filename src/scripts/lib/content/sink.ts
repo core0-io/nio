@@ -30,9 +30,9 @@ import { emitContentRecords } from '../logs-collector.js';
  * Build the sink `endTurn` calls once per chat span, or `undefined` when
  * content must not be captured (no provider — see the module doc).
  *
- * The `argumentsOnSpan` set the span layer passes through is forwarded
- * verbatim: it is what stops a tool-argument body from going out both as
- * a span attribute and as a log record (see `content/span-content.ts`).
+ * Tool arguments do NOT come through here: they are owned by the site
+ * that emits the tool's span, which is the only place that can tell
+ * whether the span carried the whole body (see `buildToolInputRecord`).
  *
  * Failures are swallowed here rather than propagated: the caller is in
  * the middle of emitting a span tree, and losing the tree because one
@@ -44,11 +44,11 @@ export function createContentSink(
   limits: ContentLimits,
 ): ChatContentSink | undefined {
   if (!provider) return undefined;
-  return (call, spanId, traceId, argumentsOnSpan) => {
+  return (call, spanId, traceId) => {
     try {
       emitContentRecords(
         provider,
-        buildContentRecords(call, spanId, traceId, limits, argumentsOnSpan),
+        buildContentRecords(call, spanId, traceId, limits),
       );
     } catch {
       // Non-critical — content capture must never break span export.
@@ -92,10 +92,11 @@ export function emitToolOutputContent(
  * PreToolUse.
  *
  * Deliberately independent of `ConversationSource`: this is what keeps
- * tool arguments on the wire when a session has no transcript to replay
- * (see `buildToolInputRecord` for why the chat call's `tool_use` block
- * does not subsume it). Same gating as `emitToolOutputContent` — no
- * provider, no ids, or nothing to say means nothing is emitted.
+ * tool arguments on the wire when a session has no transcript to replay.
+ * Callers must only reach here when the tool span could NOT carry the
+ * whole body — see `buildToolInputRecord` for the contract. Same gating
+ * as `emitToolOutputContent` — no provider, no ids, or nothing to say
+ * means nothing is emitted.
  */
 export function emitToolInputContent(
   provider: LoggerProvider | null | undefined,
