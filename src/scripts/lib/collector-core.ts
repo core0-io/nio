@@ -44,7 +44,7 @@ import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
 import { writeAuditLog, asText } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
-import { forgetSession } from './monitor-check.js';
+import { forgetSession, sessionEndDisarms } from './monitor-check.js';
 import {
   ensureTurn,
   recordPreToolUse,
@@ -885,7 +885,15 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // reload above then returns null, and `prev` (loaded earlier in
         // this same dispatch) has already had its turn closed.
         discardState(logsConfig, sessionId);
-        forgetSession(sessionId, logsConfig);
+        // The arm record outlives the state shard on any platform whose
+        // SessionEnd is really a turn boundary — see
+        // `sessionEndDisarms`. Dropping it there is the one part of this
+        // teardown that cannot heal itself: the shard is rebuilt by the
+        // next event, the arm is not, and the user is never told their
+        // `/nio monitor on` stopped applying.
+        if (sessionEndDisarms(platform)) {
+          forgetSession(sessionId, logsConfig);
+        }
       }
 
     } else if (event === 'SessionStart') {

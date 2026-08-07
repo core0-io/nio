@@ -90,9 +90,48 @@ export function isSessionMonitored(
 }
 
 /**
+ * Platforms whose `SessionEnd` does not actually end the session.
+ *
+ * Hermes fires `on_session_end` at the end of every TURN. Measured on a
+ * live install (`audit.jsonl`, one continuous run under a single
+ * `session_id`): **1 SessionStart against 6 SessionEnd**, interleaved
+ * with 7 UserPromptSubmit and 134 PreToolUse/PostToolUse pairs — the host
+ * keeps using the same session after each one. Treating that as a real
+ * teardown made `forgetSession` disarm a session that was still running,
+ * so `/nio monitor on` bought a single turn of capture and then went
+ * silent, leaving a store that looked as though nothing had ever been
+ * armed. Nothing else in the SessionEnd branch has to change: emitting
+ * the session span and discarding the turn shard per turn is
+ * self-correcting, but deleting the user's arm is not — nothing
+ * re-creates it.
+ *
+ * These platforms fall back to `SESSION_TTL_MS`, exactly as Codex already
+ * does — it has no session-end hook at all — plus `/nio monitor off`,
+ * which disarms by cwd on precisely the platforms that arm by cwd.
+ *
+ * Declared here, next to the store it protects, so a platform whose
+ * lifecycle events are turn-scoped has one obvious place to say so.
+ */
+export const PER_TURN_SESSION_END_PLATFORMS: ReadonlySet<string> = new Set([
+  'hermes',
+]);
+
+/**
+ * Whether a `SessionEnd` from this platform is authoritative enough to
+ * drop the session's arm record.
+ */
+export function sessionEndDisarms(platform: string): boolean {
+  return !PER_TURN_SESSION_END_PLATFORMS.has(platform);
+}
+
+/**
  * Drop a session's arm record. Called on SessionEnd so a finished
  * session does not linger in the store until the 7-day backstop.
  * Never throws — cleanup failure must not break session teardown.
+ *
+ * Callers on the hook path must gate this behind {@link sessionEndDisarms}
+ * — see its docblock for the platform whose SessionEnd is a turn
+ * boundary.
  */
 export function forgetSession(
   sessionId: string,
