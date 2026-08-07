@@ -48,12 +48,13 @@ import { forgetSession } from './monitor-check.js';
 import {
   ensureTurn,
   recordPreToolUse,
-  deferPostToolUse,
+  recordPostToolUse,
   recordPreTaskToolUse,
   recordPostTaskToolUse,
   endTurn,
   recordUserPrompt,
   genAiToolCallIdAttributes,
+  genAiToolCallArgumentAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
   startSessionTrace,
@@ -69,6 +70,7 @@ import { createSourceForPlatform, type SourceInput } from './conversation/factor
 import { lastUserMessageSince } from './conversation/claude-code-source.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
+import { buildSpanContent } from './content/span-content.js';
 import { loadContentLimits, type CollectorConfig as ExporterConfig } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
@@ -686,26 +688,45 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const mcpAttrs = mcp
           ? { 'gen_ai.tool.type': 'mcp', 'nio.mcp.server': mcp.server, 'nio.mcp.tool': mcp.tool }
           : {};
-        // The tool span's id was minted at PreToolUse and survives the
-        // defer, so the result content can go out NOW, already
-        // associated with the span the backend receives later. Read
-        // before deferPostToolUse — that call removes the pending entry.
+        // The tool span's id was minted at PreToolUse, so the content
+        // records below can name it. Read before `recordPostToolUse` —
+        // that call removes the pending entry.
         const toolSpanId = state.pending_spans[key]?.span_id ?? '';
-        // Parked, not emitted: the span can only be nested under the
-        // LLM call that issued it, and that is not knowable until the
-        // turn ends. endTurn emits the whole tree.
+        // EMITTED NOW, as a direct child of the turn root — not parked
+        // until the turn closes. Deferral bought nesting under the chat
+        // call that issued the tool, and the cost was measured on a live
+        // session: a 7-minute turn with 38 finished tool spans sitting in
+        // the state shard and NOTHING on the backend, plus a crash in
+        // that window leaving no trace of where the agent got to. Both
+        // are worse than a flat tree, so the issuing call survives as
+        // DATA (`gen_ai.tool.call.id`, set by `recordPreToolUse` and
+        // carried onto the span here) rather than as tree structure.
         //
-        // The result payload is deliberately NOT among the attrs parked
-        // here — see the tool-output emit below.
-        const result = deferPostToolUse(
-          state, key, cwd,
+        // The result payload is deliberately NOT among the attrs here —
+        // see the tool-output emit below.
+        //
+        // The ARGUMENTS are, and they come from the live hook payload
+        // rather than from the state file. `endTurn` used to attach them
+        // by reading the issuing chat call's `tool_use` block, which is
+        // no longer reachable — the span leaves before that call is
+        // reconstructed — so without this, moving tool arguments onto
+        // the span would have been silently undone. The payload still
+        // never touches disk: `recordPostToolUse` drains the entry it
+        // appends, so `persist` below writes an empty `deferred_spans`.
+        const spanArgs = buildSpanContent(
+          Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '',
+        );
+        const result = await recordPostToolUse(
+          tracerProvider, state, key, cwd,
           {
             ...drained.attrs,
+            ...(spanArgs ? genAiToolCallArgumentAttributes(spanArgs) : {}),
             ...genAiToolCallOutputAttributes({ error: err ?? null }),
             ...mcpAttrs,
           },
           err ?? null,
         );
+        state = result.state;
         persist(result.state);
 
         // A plain `output` string is the common shape and is emitted

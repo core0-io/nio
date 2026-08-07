@@ -99,9 +99,10 @@ export function registerOpenClawPlugin(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
-    // OpenClaw exports each finished tool span immediately instead of
-    // parking it for end-of-turn attribution. Not a preference: neither
-    // of buildSpanTree's channels exists on this platform (no `tool_use`
+    // Redundant with the runtime default since eager emission became
+    // universal, and kept explicit anyway: OpenClaw is the one platform
+    // where parking could never have paid for itself even in principle.
+    // Neither of buildSpanTree's channels exists here (no `tool_use`
     // block, `timing: 'synthetic'`), so a parked span would still land on
     // the turn root — while becoming losable, since this family holds its
     // turn state in memory with nothing on disk to replay. Pinned by

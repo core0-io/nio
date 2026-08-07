@@ -16,22 +16,30 @@ export {};
  *
  *   Trace: "invoke_agent UserPromptSubmit" — one trace per conversation turn
  *     └─ Span: "chat <model>" — one span per LLM call
- *          └─ Span: "execute_tool <name>" — the tools that call issued
- *     └─ Span: "execute_tool <name>" — tools that could not be attributed
+ *     └─ Span: "execute_tool <name>" — one per tool call, a SIBLING of chat
  *     └─ Span: "task:execute" — one span per task lifecycle
  *
- * Why tool spans are deferred
- * ---------------------------
- * A tool span can only be nested under the LLM call that issued it, and
- * that attribution is unknown at PostToolUse time — it comes from the
- * conversation source once the turn is over. So finished tool spans park
- * in `state.deferred_spans` (`deferPostToolUse`) and the whole tree is
- * emitted together in `endTurn`.
+ * Why tool spans are eager
+ * ------------------------
+ * `recordPostToolUse` emits a finished tool span immediately, as a child
+ * of the turn root. Only the chat layer and the turn root wait for
+ * `endTurn`, because only they need the conversation source.
  *
- * The one exception is the guard's block path: `recordPostToolUse` keeps
- * the old immediate-emit behaviour. A denied action is a security event,
- * and making it wait tens of seconds for the turn to end before it
- * becomes visible is not an acceptable trade for a nicer tree.
+ * Nesting a tool under the LLM call that issued it is not knowable at
+ * PostToolUse time — the attribution comes from the conversation source
+ * once the turn is over — so it can only be had by parking every
+ * finished span until then. That was tried and measured: a live
+ * seven-minute turn showed NOTHING on the backend while 38 finished
+ * spans sat in its state shard, and a crash in that window left no
+ * record of how far the agent got. The issuing call now survives as
+ * DATA — `gen_ai.tool.call.id` on the tool span, joinable against the
+ * chat call's `tool_use` block — instead of as a parent edge.
+ *
+ * `deferPostToolUse` and `state.deferred_spans` are kept and still
+ * exercised. `PluginRuntimeOptions.eagerToolSpans: false` selects them,
+ * the crash-salvage in `traces-state-store.ts` reads and writes them, and
+ * a turn boundary still reclaims any span whose post-side event never
+ * arrived. Nothing on the default path leaves anything parked.
  */
 
 import { readFileSync } from 'node:fs';
@@ -124,9 +132,11 @@ export function redactAndTruncate(value: unknown, maxBytes: number = MAX_ATTR_BY
  * INPUT size, so it grows without bound as tool outputs get bigger.
  *
  * That matters most where truncated attributes are held rather than
- * emitted and dropped: `deferred_spans` parks one closed tool span per
- * call for the whole turn (see MAX_DEFERRED_SPANS), and every one of
- * them carries `gen_ai.tool.call.arguments` + `gen_ai.tool.call.result`.
+ * emitted and dropped — the parking path (`eagerToolSpans: false`) holds
+ * one closed tool span per call for the whole turn (see
+ * MAX_DEFERRED_SPANS), each carrying `gen_ai.tool.call.arguments` +
+ * `gen_ai.tool.call.result`. It is cheap enough to be worth keeping on
+ * the eager path too, where the strings live only until the export.
  * The strings being pinned are Nio's own `JSON.stringify` intermediates,
  * which would otherwise be collectable the moment this function returns.
  *
@@ -188,19 +198,19 @@ export function genAiToolAttributes(
 /**
  * Tool-call identity only — no payload.
  *
- * The deferred flow (Claude Code / Codex / Hermes) parks finished tool
- * spans in the on-disk state file until end of turn, and every hook
- * event rewrites that whole file. Carrying the tool's arguments and
- * result there made it grow with each call in a long turn. So the
- * deferred path uses this; the eager paths (OpenClaw's per-tool export,
- * the guard's deny span) keep using `genAiToolCallInputAttributes` below
- * — they emit immediately and never persist the payload.
+ * Used by the hook flow (Claude Code / Codex / Hermes) at PreToolUse,
+ * where the span's identity has to survive a process boundary through
+ * the on-disk state file and every hook event rewrites that file whole.
+ * Carrying the tool's arguments and result there made it grow with each
+ * call in a long turn.
  *
- * The deferred span still ENDS UP with its arguments: `endTurn` reads
- * them out of the issuing chat call's `tool_use` block and attaches them
- * at emit time via `genAiToolCallArgumentAttributes`. That costs nothing
- * on disk — the payload is already in memory at that moment, having come
- * from the conversation source rather than from the state file.
+ * The span still ENDS UP with its arguments. `collector-core.ts` attaches
+ * them at PostToolUse via `genAiToolCallArgumentAttributes`, off the live
+ * hook payload — and since `recordPostToolUse` drains the entry it
+ * appends, they reach the exporter without ever being written to disk.
+ * The in-process runtime has the params in hand at the pre side and uses
+ * `genAiToolCallInputAttributes` below instead; its state is in memory,
+ * so it has no file to keep small.
  */
 export function genAiToolCallIdAttributes(
   toolCallId?: string,
@@ -962,15 +972,19 @@ export function overflowDeferredSpans(
  * Thin wrapper over `deferPostToolUse` + a single-span flush, kept for
  * the callers that cannot wait for the end of turn:
  *
+ *  - the NORMAL post-side close, on every platform. This is the default
+ *    path now; see `PluginRuntimeOptions.eagerToolSpans` for the
+ *    measurement that made it so.
  *  - the guard's block path (guard-hook / hook-cli / openclaw-plugin):
  *    PostToolUse will never fire for a denied call, and a security event
  *    that only surfaces once the turn closes is not observable when it
  *    matters.
- *  - OpenClaw's eager per-tool export and its end-of-session sweep of
- *    leftover pending spans.
+ *  - the turn/session sweep of leftover pending spans.
  *
- * Behaviourally identical to the pre-deferral implementation: the span
- * goes out now, `deferred_spans` is left exactly as it was found.
+ * The span goes out now and `deferred_spans` is left exactly as it was
+ * found — the entry `deferPostToolUse` appends is drained again before
+ * returning, which is also why the arguments passed in `postAttributes`
+ * never reach the on-disk state file.
  */
 export async function recordPostToolUse(
   provider: NodeTracerProvider,
@@ -1409,11 +1423,21 @@ export async function emitSessionSpan(
  * Detects a deferred-span tree left behind by a process that was killed
  * before it ever reached `Stop`/`SubagentStop`/`SessionEnd`.
  *
- * Deferral moved the crash blast radius: before it, a killed process
- * only cost the turn's root span (every tool span had already gone out
- * individually). Now the whole tree — root AND every finished tool span —
- * sits unflushed in `state.deferred_spans` until endTurn runs. If that
- * never happens, all of it would silently vanish.
+ * Only reachable from a shard the PARKING path wrote — an older nio, or
+ * a runtime with `PluginRuntimeOptions.eagerToolSpans: false`. Under the
+ * default nothing is ever parked, so `deferred_spans` is empty and this
+ * returns false for every shard the current code produces. Kept because
+ * those shards outlive the upgrade that stopped producing them.
+ *
+ * What it was for: deferral moved the crash blast radius. Before it, a
+ * killed process only cost the turn's root span, every tool span having
+ * gone out individually. Under deferral the whole tree — root AND every
+ * finished tool span — sat unflushed in `state.deferred_spans` until
+ * endTurn ran, and if that never happened all of it silently vanished.
+ * Note the limit even then: this adopts a shard whose turn is already
+ * CLOSED (or belongs to another session). A LIVE turn's queue is not
+ * salvage material, which is why the parked spans of a crashed long turn
+ * were never recoverable at all.
  *
  * True when the loaded state carries a non-empty `deferred_spans` that
  * the CURRENT event's turn cannot own — either because the incoming

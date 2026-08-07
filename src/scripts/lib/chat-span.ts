@@ -10,14 +10,20 @@ export {};
  * A trace of `turn → tool` shows what the agent did but not why: the
  * reasoning between two tool calls is invisible, and two tools that the
  * model decided on in one breath look identical to two tools it decided
- * on after re-reading a result. Nesting each tool span under the chat
- * call that issued it restores that structure.
+ * on after re-reading a result. The `chat` layer this module builds
+ * restores that: one span per LLM call, carrying the model, its usage,
+ * its finish reason and its words.
  *
- * The attribution cannot be done at PostToolUse time — nothing at that
- * moment knows which LLM call requested the tool. It is only knowable
- * once the turn is over and the conversation source has produced its
- * `ChatCall[]`. Hence: finished tool spans park in `deferred_spans`, and
- * this module joins the two halves at end of turn.
+ * It does NOT normally decide a tool span's parent any more. Attribution
+ * is only knowable once the turn is over and the conversation source has
+ * produced its `ChatCall[]`, and buying it meant parking every finished
+ * tool span until then — which made a long turn invisible and a mid-turn
+ * crash unreconstructable. Tool spans are now exported as they finish and
+ * hang off the turn root, joined to their chat call by
+ * `gen_ai.tool.call.id` rather than by parentage. `buildSpanTree` still
+ * runs, and still attributes whatever a turn boundary finds in
+ * `deferred_spans` — which is nothing at all unless
+ * `PluginRuntimeOptions.eagerToolSpans` was set to `false`.
  *
  * Pure by design — `ChatCall[]` + `DeferredSpan[]` in, a tree out. No
  * OTEL, no IO, no clock. The emitting side (traces-collector) walks the

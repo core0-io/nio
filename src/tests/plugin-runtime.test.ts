@@ -207,20 +207,19 @@ describe('InProcessPluginRuntime span wiring', () => {
       await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
       assert.equal(tracer.finished().length, 0, 'no span before the post side');
 
-      // An allowed tool's span is PARKED at the post side, not emitted:
-      // which chat call issued it is only knowable once the turn's
-      // conversation has been reconstructed. `eagerToolSpans` (OpenClaw)
-      // is the opt-out; the default runtime waits. Contrast the deny path
-      // below, which must not wait for a turn that may never end.
+      // An allowed tool's span goes out AT the post side, like the deny
+      // path below. Parking it until turn close would buy nesting under
+      // the chat call that issued it and cost the whole turn's
+      // visibility — see PluginRuntimeOptions.eagerToolSpans.
       await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
       assert.equal(
-        tracer.finished().length, 0,
-        'the allow-path span is deferred for attribution, not exported at the post side',
+        tracer.finished().filter((s) => s.name.startsWith('execute_tool')).length, 1,
+        'the allow-path span is exported at the post side, not held for the turn boundary',
       );
 
       await rt.onTurnEnd('s1');
       const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
-      assert.equal(spans.length, 1);
+      assert.equal(spans.length, 1, 'and the turn boundary must not send it a second time');
       assert.equal(spans[0]!.attributes['nio.guard.decision'], 'allow');
       assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
     } finally {
@@ -1732,11 +1731,14 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
 
-      // Before the child's idle nothing has been emitted at all: the
-      // child's turn root is still open, and its tool span is parked for
-      // end-of-turn attribution rather than exported at
-      // tool.execute.after (see PluginRuntimeOptions.eagerToolSpans).
-      assert.equal(tracer.finished().length, 0);
+      // Before the child's idle the child's tool span is already out
+      // (eager export) but nothing that waits for a turn boundary is:
+      // no turn root, no task span. Those are what this case is about.
+      assert.equal(
+        tracer.finished().filter(s => !s.name.startsWith('execute_tool')).length,
+        0,
+        'the child\'s turn root and the parent-side task span are both still open',
+      );
 
       await hooks.event!(
         { event: { type: 'session.idle', properties: { sessionID: 'sub-3' } } } as never,

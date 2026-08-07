@@ -102,6 +102,18 @@ export interface OpenCodePluginOptions {
    * whether anything was ever said inside them.
    */
   loggerProvider?: ReturnType<typeof createLoggerProvider>;
+  /**
+   * Test seam for the DORMANT deferral path. Production leaves this
+   * undefined, which is `true` — every tool span is exported the moment
+   * it closes (see `PluginRuntimeOptions.eagerToolSpans`).
+   *
+   * Passing `false` selects the park-until-turn-close path, which still
+   * exists because `deferred_spans` is what the crash-recovery machinery
+   * in `traces-state-store.ts` reads and because `MAX_DEFERRED_SPANS`
+   * bounds it. `deferred-span-cap.test.ts` uses this to keep that
+   * mechanism under test rather than letting it rot unexercised.
+   */
+  eagerToolSpans?: boolean;
 }
 
 export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePlugin {
@@ -118,6 +130,9 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       tracerProvider: options.tracerProvider,
       meterProvider: options.meterProvider,
       loggerProvider: options.loggerProvider,
+      ...(options.eagerToolSpans !== undefined
+        ? { eagerToolSpans: options.eagerToolSpans }
+        : {}),
     });
 
     /** Guard verdicts parked by callID so permission.ask can reuse them. */

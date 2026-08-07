@@ -2,38 +2,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * A tool's content records can outlive the span they name, and that is
- * the deliberate half of the deferred-span trade. Pinned here so a
- * future "fix" has to argue with the reasoning rather than discover it.
+ * The window in which a tool's content records name a span the backend
+ * does not have yet, and what closed most of it.
  *
- * Under the default (`eagerToolSpans: false`) the tool span is parked
- * until turn close, while `tool_input` goes out at PreToolUse and
- * `tool_output` at PostToolUse — both stamped with the span id the
- * backend has not received yet. Normally the span follows at turn close
- * and the join completes. This test drives the case where it never does,
- * and it is reachable WITHOUT a crash: the session is disarmed
- * mid-turn, so `flushSessionTurnInner` takes its `!tracerProvider` early
- * return, drops the parked spans, and the two records emitted while the
- * session was still armed are left naming a span nobody will send.
+ * `tool_input` goes out at the pre side and `tool_output` at the post
+ * side, each stamped with the tool span's id. While tool spans were
+ * PARKED until turn close, that window covered the whole turn and did
+ * not always end: a mid-turn disarm (or a mid-turn crash) left both
+ * records naming a span nobody would ever send.
  *
- * The alternative — parking the content alongside the span so the two
- * share a fate — is worse where it counts. It would delete, on exactly
- * the mid-turn host crash that motivated the question, the tool
- * arguments and results that survive it today. A dangling log record
- * still says what the tool was asked to do and what it answered; a
- * parked one says nothing. So the join is best-effort by design and the
- * content leg is the durable one.
+ * Eager export closes it for a tool that RAN. The span leaves at the
+ * post side, immediately after the record that names it, so the first
+ * case below — a disarm after the tool completed — now joins cleanly
+ * where it used to dangle two records.
  *
- * ── Why this case is not vacuous ──────────────────────────────────────
+ * What remains is the narrow case in the second test: a disarm BETWEEN
+ * the two sides. The arguments were emitted while armed, the post side
+ * finds the session unmonitored and resolves no provider, and
+ * `flushSessionTurnInner` takes its `!tracerProvider` early return. That
+ * record dangles, permanently, and that is still the right trade:
+ * parking the content so it shares the span's fate would delete, on
+ * exactly the mid-turn crash that motivated the question, the arguments
+ * that survive it today. A dangling record says what the tool was asked
+ * to do; a parked one says nothing.
  *
- * Both halves are asserted against each other on ONE run: the content
- * records must be present AND carry their real payloads, and the span id
- * they name must be absent from everything the tracer received. An
- * implementation that parks content fails the first half; one that
- * exports spans for a disarmed session fails the second (and would be a
- * capture-gate break, not just a shape change).
+ * ── Why these cases are not vacuous ───────────────────────────────────
  *
- * It drives the real `createNioPlugin` binding through the real
+ * Each asserts both halves against each other on one run — which records
+ * exist AND which span ids the tracer actually received — so an
+ * implementation that parks content fails one half and one that exports
+ * spans for a disarmed session fails the other. The two cases differ by
+ * exactly one thing, the position of the disarm relative to
+ * `tool.execute.after`, so neither can pass by accident on the other's
+ * mechanism.
+ *
+ * They drive the real `createNioPlugin` binding through the real
  * per-session monitor gate — arming and disarming through
  * `saveMonitorStore`, never `monitor_all_sessions` — because the gate
  * transition is the mechanism under test.
@@ -71,8 +74,8 @@ const bodyOf = (r: ReadableLogRecord): string =>
 const spanIdOf = (r: ReadableLogRecord): string | undefined =>
   (r as unknown as { spanContext?: { spanId?: string } }).spanContext?.spanId;
 
-describe('tool content records outlive the span they name (deliberate)', () => {
-  it('keeps the arguments and result on the wire when a mid-turn disarm kills their span', async () => {
+describe('tool content records and the span they name', () => {
+  it('joins both records to their span when the disarm lands after the tool completed', async () => {
     const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-lifetime-')));
     // Deliberately NOT writeCaptureOnConfig: this case pins the gate
     // transition itself, so arming has to be visible next to the
@@ -124,10 +127,16 @@ describe('tool content records outlive the span they name (deliberate)', () => {
       // production does, and a NEGATIVE assertion read off an undrained
       // queue would pass for the wrong reason.
       const spans = await tracer.flushed();
+      const toolSpans = spans.filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(
-        spans.length, 0,
-        'a disarmed session exports nothing — if this ever becomes non-zero the capture gate is ' +
-          'broken and this test is the least of the problems',
+        toolSpans.length, 1,
+        'the tool span left at tool.execute.after, while the session was still armed — parking it ' +
+          'would have made this 0 and stranded both records below',
+      );
+      assert.equal(
+        spans.filter((s) => s.name.startsWith('invoke_agent')).length, 0,
+        'and the turn root was NOT exported: the disarm took flushSessionTurnInner\'s early ' +
+          'return, so this run really did lose everything that waits for turn close',
       );
 
       const records = await logger.flushed();
@@ -151,16 +160,91 @@ describe('tool content records outlive the span they name (deliberate)', () => {
 
       const namedSpanIds = new Set(withSpan.map(spanIdOf));
       assert.equal(namedSpanIds.size, 1, 'both records name the one tool span');
+      assert.equal(
+        [...namedSpanIds][0], toolSpans[0]!.spanContext().spanId,
+        'and that span is the one the tracer received — the join completes. Under the parked ' +
+          'implementation this is precisely where it did not.',
+      );
+    } finally {
+      if (previousHome === undefined) delete process.env['NIO_HOME'];
+      else process.env['NIO_HOME'] = previousHome;
+      await tracer.shutdown();
+      await logger.shutdown();
+    }
+  });
+
+  it('leaves the arguments record dangling when the disarm lands mid-call', async () => {
+    const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-content-lifetime-mid-')));
+    writeFileSync(join(home, 'config.yaml'), 'collector: {}\n', 'utf-8');
+    const logsConfig = { path: join(home, 'audit.jsonl') } as CollectorLogsConfig;
+    const sessionID = 'oc-content-lifetime-2';
+
+    const previousHome = process.env['NIO_HOME'];
+    process.env['NIO_HOME'] = home;
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    try {
+      saveMonitorStore(logsConfig, {
+        sessions: { [sessionID]: { armed_at: Date.now(), cwd: join(home, 'workdir') } },
+      });
+
+      const { createNioPlugin } = await import('../adapters/opencode-plugin.js');
+      const hooks = await createNioPlugin({
+        nioFactory: stubNioAllow(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: logger.provider,
+      })({ directory: '/tmp', worktree: '/tmp' } as never);
+
+      await hooks.event!({
+        event: { type: 'session.created', properties: { info: { id: sessionID } } },
+      } as never);
+      await hooks['chat.message']!(
+        {}, { message: { sessionID }, parts: [{ type: 'text', text: 'read the file' }] },
+      );
+      await hooks['tool.execute.before']!(
+        { tool: 'bash', sessionID, callID: 'clt_2' } as never,
+        { args: { command: 'grep -rn TODO src' } } as never,
+      );
+
+      // ── `/nio monitor off` lands WHILE the tool is running. ────────
+      saveMonitorStore(logsConfig, { sessions: {} });
+
+      await hooks['tool.execute.after']!(
+        { tool: 'bash', sessionID, callID: 'clt_2', args: {} } as never,
+        { title: 'bash', output: 'src/a.ts:1: TODO fix', metadata: {} } as never,
+      );
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID } } } as never,
+      );
+
+      const spans = await tracer.flushed();
+      assert.equal(
+        spans.length, 0,
+        'the post side found the session unmonitored and resolved no provider — if this ever ' +
+          'becomes non-zero the capture gate is broken and this test is the least of the problems',
+      );
+
+      const records = await logger.flushed();
+      const withSpan = records.filter((r) => spanIdOf(r) !== undefined);
+      assert.equal(
+        withSpan.length, 1,
+        'only the arguments record was emitted while armed; the result record was gated off with ' +
+          'the span',
+      );
+      assert.ok(
+        bodyOf(withSpan[0]!).includes('grep -rn TODO src'),
+        'and it carries the real arguments, not an empty shell',
+      );
+
       const exportedSpanIds = new Set(spans.map((s) => s.spanContext().spanId));
-      for (const id of namedSpanIds) {
-        assert.equal(
-          exportedSpanIds.has(id!), false,
-          'DOCUMENTED CONSEQUENCE: the span these records name is never exported. The window ' +
-            'between a content record and its parked span does not always close — a mid-turn ' +
-            'disarm (here) and a mid-turn host death both leave it open permanently. See ' +
-            'InProcessPluginRuntime.emitToolContent for why this is preferred to the alternative.',
-        );
-      }
+      assert.equal(
+        exportedSpanIds.has(spanIdOf(withSpan[0]!)!), false,
+        'DOCUMENTED CONSEQUENCE: the span this record names is never exported. Eager export ' +
+          'closed the window for a tool that ran; a disarm (or a crash) between the two sides ' +
+          'still leaves it open permanently. See InProcessPluginRuntime.emitToolContent for why ' +
+          'this is preferred to parking the content.',
+      );
     } finally {
       if (previousHome === undefined) delete process.env['NIO_HOME'];
       else process.env['NIO_HOME'] = previousHome;

@@ -107,21 +107,32 @@ export interface PluginRuntimeOptions {
    * as a direct child of the turn root, instead of parking it for
    * end-of-turn attribution under the chat call that issued it.
    *
-   * Defaults to false (park + attribute), which is what every platform
-   * whose `ConversationSource` reconstructs `tool_use` blocks wants —
-   * Pi and opencode both do, and both carry non-synthetic timing, so
-   * `buildSpanTree` can name the issuing call.
+   * DEFAULTS TO TRUE, on every platform. Set it to `false` only to
+   * exercise the parking path in a test.
    *
-   * OpenClaw sets it to true. There, attribution is impossible in
-   * principle: `createOpenClawSource` emits no `tool_use` block and all
-   * its calls are `timing: 'synthetic'`, so both of `buildSpanTree`'s
-   * channels are unavailable and a parked span would land on the turn
-   * root anyway — the exact same tree, bought with a real loss. The
-   * in-process family keeps its turn state in memory only (no
-   * `traces-state-store-<session>.json`, so no recovery replay), so a
-   * span parked until turn close is simply gone if the host dies first.
-   * Paying that for no structural gain is the trade OpenClaw declines.
-   * See `openclaw-span-hierarchy.test.ts` and
+   * Deferral was tried and measured. What it bought was real — a tool
+   * span nested under the `chat` call that issued it, on the platforms
+   * whose `ConversationSource` reconstructs `tool_use` blocks (Pi,
+   * opencode) — but the price, on a live session, was:
+   *
+   *  - a 7-minute turn during which the backend showed NOTHING. 38
+   *    finished tool spans sat in the state shard (`deferred: 38`,
+   *    `pending: 0`) while the newest span the backend held belonged to
+   *    the previous turn. A long turn is unobservable, which makes the
+   *    tool unverifiable exactly when it is working hardest;
+   *  - a crash in that window leaving no trace at all — not a truncated
+   *    tree, no record of how far the agent got. Nothing re-sends those
+   *    parked spans either: the recovery path (`hasOrphanedDeferredTree`)
+   *    only adopts a shard whose turn is already CLOSED, so a live turn's
+   *    queue is not salvage material.
+   *
+   * The issuing call therefore survives as DATA rather than as tree
+   * structure: `gen_ai.tool.call.id` stays on the tool span, so a backend
+   * can still join a tool to the call that made it. What is given up is
+   * the parent/child edge, deliberately.
+   *
+   * See `eager-tool-spans.test.ts` (visibility before turn close),
+   * `openclaw-span-hierarchy.test.ts` and
    * `pi-opencode-span-hierarchy.test.ts`.
    */
   eagerToolSpans?: boolean;
@@ -142,15 +153,21 @@ const MAX_CONVERSATION_EVENTS = 200;
  * Tool spans parked for end-of-turn attribution, past which the oldest
  * are flushed early. See `onPostTool` and `overflowDeferredSpans`.
  *
- * The unit here is genuinely one TOOL CALL, on all three platforms in
- * this family — the mistake `MAX_CONVERSATION_EVENTS` made is not
- * reachable from this counter. A slot is claimed only by
- * `deferPostToolUse`, which needs a matching `pending_spans` entry and
- * removes it, so a second close of the same key adds nothing; no
- * platform re-publishes a tool completion, and OpenClaw
- * (`eagerToolSpans: true`) never parks at all, leaving its queue
- * permanently empty and this cap unreachable for it. So N here is N
- * tool calls in the currently-open turn, not N host deliveries.
+ * UNREACHABLE UNDER THE DEFAULT and kept anyway. Since `eagerToolSpans`
+ * became the default on every platform, nothing parks: `onPostTool`
+ * drains each span onto the wire as it closes, so the queue this bounds
+ * is permanently empty. The cap survives because the deferral path
+ * itself does — `eagerToolSpans: false` still selects it, and the
+ * crash-recovery machinery in `traces-state-store.ts` still reads and
+ * writes `deferred_spans` on shards written by that path.
+ *
+ * The unit is genuinely one TOOL CALL, on all three platforms in this
+ * family — the mistake `MAX_CONVERSATION_EVENTS` made is not reachable
+ * from this counter. A slot is claimed only by `deferPostToolUse`, which
+ * needs a matching `pending_spans` entry and removes it, so a second
+ * close of the same key adds nothing, and no platform re-publishes a
+ * tool completion. So N here is N tool calls in the currently-open turn,
+ * not N host deliveries.
  *
  * Sized well past any real turn: the point is a ceiling on a host that
  * runs for weeks, not a working limit. What it actually bounds is the
@@ -272,6 +289,12 @@ export class InProcessPluginRuntime {
   private readonly transcriptPaths = new Map<string, string>();
 
   private readonly opts: PluginRuntimeOptions;
+  /**
+   * Resolved once, so the default lives in exactly one place. `?? true`
+   * rather than a bare read: `undefined` means "caller expressed no
+   * preference", which is now eager. See `PluginRuntimeOptions`.
+   */
+  private readonly eagerToolSpans: boolean;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
 
@@ -305,6 +328,7 @@ export class InProcessPluginRuntime {
 
   constructor(opts: PluginRuntimeOptions) {
     this.opts = opts;
+    this.eagerToolSpans = opts.eagerToolSpans ?? true;
     this.platform = opts.platform;
     this.adapter = opts.adapter;
 
@@ -747,22 +771,18 @@ export class InProcessPluginRuntime {
       //    claiming success), and the span is tagged with explicit
       //    reclaim attrs so a consumer can tell it apart from a span
       //    that was genuinely closed on a successful tool return.
-      // 3. Route it the same way `onPostTool` routes a normal close.
-      //    This loop used to call `recordPostToolUse` unconditionally,
-      //    which emits immediately under `traceId.slice(0,16)` — the
-      //    turn root — and it runs ABOVE the `buildSpanTree` call below,
-      //    so a reclaimed span could never nest even when its
-      //    `tool_use` id was sitting right there in `pending.attributes`.
-      //    Since reclaim is opencode's NORMAL path for a tool that threw
-      //    (point 1), that meant the calls a reviewer most wants in
-      //    context — the failing ones — were precisely the ones that
-      //    lost it. Parking instead hands them to the same attribution
-      //    pass as every other span; the reclaim marker and the
-      //    unknowable outcome above are unaffected.
+      // 3. Route it the same way `onPostTool` routes a normal close, so
+      //    the two paths cannot drift. Under the default
+      //    (`eagerToolSpans`) that is an immediate emit under
+      //    `traceId.slice(0,16)` — the turn root — which is where every
+      //    tool span now lands. This loop is what keeps a span whose
+      //    post-side event NEVER ARRIVES from being dropped: on opencode
+      //    that is the normal path for a tool that threw, since
+      //    `tool.execute.after` is not delivered in that case.
       const { state: drained, attrs } = takePendingGuardAttrs(state, k);
       state = drained;
       const reclaimAttrs = { ...attrs, ...nioReclaimedSpanAttributes() };
-      const r = this.opts.eagerToolSpans
+      const r = this.eagerToolSpans
         ? await recordPostToolUse(
             tracerProvider,
             state,
@@ -1025,10 +1045,12 @@ export class InProcessPluginRuntime {
           outcome.result,
           pending?.attributes?.['gen_ai.tool.call.id'] as string | undefined,
         );
-        // Park by default so `endTurn` can nest this span under the chat
-        // call that issued it — nothing at THIS moment knows which call
-        // that was. `eagerToolSpans` opts a platform out; see its doc.
-        const r = this.opts.eagerToolSpans
+        // Emit NOW, as a child of the turn root. Parking it until the
+        // turn closes would let `endTurn` nest it under the chat call
+        // that issued it, and that trade was measured and rejected —
+        // see `PluginRuntimeOptions.eagerToolSpans`. The issuing call
+        // still rides along as `gen_ai.tool.call.id`.
+        const r = this.eagerToolSpans
           ? await recordPostToolUse(
               tracerProvider,
               drained,

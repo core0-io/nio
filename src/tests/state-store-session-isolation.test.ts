@@ -165,12 +165,23 @@ describe('traces state store: two concurrent sessions do not cross-contaminate',
       },
     });
 
-    const deferredA = loadState(logsConfig, 'sess-A')?.deferred_spans ?? [];
+    // A's post must have FOUND A's pending entry. The probe is the
+    // exported span: with the shared file, `ensureTurn` saw a session
+    // change on B's event and reset `pending_spans`, so A's post got
+    // `durationMs: null` and emitted nothing at all.
+    const toolSpansA = tracer.finished().filter((s) => s.name === 'execute_tool Bash');
     assert.equal(
-      deferredA.length, 1,
-      'A\'s closed tool span must be parked on A\'s own state, not lost to B\'s reset',
+      toolSpansA.length, 1,
+      'A\'s closed tool span must be exported off A\'s own state, not lost to B\'s reset',
     );
-    assert.equal(deferredA[0]?.name, 'execute_tool Bash');
+    assert.equal(
+      toolSpansA[0]!.attributes['gen_ai.tool.call.id'], 'call-a',
+      'and it must be A\'s call, not B\'s',
+    );
+    assert.deepEqual(
+      loadState(logsConfig, 'sess-A')?.deferred_spans ?? [], [],
+      'nothing is parked: the span left at PostToolUse (see eager-tool-spans.test.ts)',
+    );
 
     // And B's own pending span is untouched by A's post.
     const stateB = loadState(logsConfig, 'sess-B');

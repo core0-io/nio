@@ -23,8 +23,16 @@
  * The fix splits the sweep into a salvage leg (1h, takes only
  * `deferred_spans`) and a GC leg (7d, deletes). These tests pin the
  * salvage leg's promise: after it runs, an idle-but-alive session is
- * indistinguishable from one that was never swept, except that its
- * already-finished spans went out early tagged `nio.turn.incomplete`.
+ * indistinguishable from one that was never swept, except that any
+ * spans it found PARKED went out early tagged `nio.turn.incomplete`.
+ *
+ * Since tool spans became eager, a shard written by the current code
+ * never has anything parked, so the salvage leg's normal outcome is now
+ * "leave it completely alone" — which the first case pins. The leg
+ * itself is still reachable from a shard written by the deferral path (a
+ * nio that predates the switch, or `eagerToolSpans: false`), and the
+ * second case constructs exactly that shard so the adoption machinery
+ * does not rot.
  *
  * `state-store-session-isolation.test.ts` covers the two legs' timing;
  * this file covers what the live session sees.
@@ -36,7 +44,8 @@ import { mkdtempSync, utimesSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
-import { statePath, loadState } from '../scripts/lib/traces-state-store.js';
+import { statePath, loadState, saveState } from '../scripts/lib/traces-state-store.js';
+import { recordPreToolUse, deferPostToolUse } from '../scripts/lib/traces-collector.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer, type InMemoryTracer } from './helpers/tracer.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
@@ -107,7 +116,14 @@ describe('an idle-but-alive session survives another session\'s SessionStart swe
 
     const before = loadState(logsConfig, LIVE);
     assert.ok(before?.pending_spans['call-slow'], 'precondition: the slow call is pending');
-    assert.equal(before?.deferred_spans?.length, 1, 'precondition: one finished span is parked');
+    assert.deepEqual(
+      before?.deferred_spans ?? [], [],
+      'precondition: nothing is parked — the finished Read span left at PostToolUse',
+    );
+    assert.equal(
+      named(tracer.finished(), 'execute_tool Read').length, 1,
+      'precondition: …and it is already on the wire, so the sweep cannot cost it anything',
+    );
     const turnTraceId = before!.turn_trace_id;
     const sessionTraceId = before!.session_trace_id;
     assert.ok(turnTraceId && sessionTraceId);
@@ -128,12 +144,17 @@ describe('an idle-but-alive session survives another session\'s SessionStart swe
     assert.equal(swept?.turn_trace_id, turnTraceId, 'the turn must not be restarted');
     assert.equal(swept?.turn_number, before!.turn_number, 'turn_number must not be reused');
     assert.equal(swept?.session_trace_id, sessionTraceId, 'the session trace must survive');
-    assert.deepEqual(swept?.deferred_spans, [], 'the salvaged tree must be drained');
+    assert.deepEqual(swept?.deferred_spans ?? [], [], 'and still nothing parked');
 
-    // The salvage did happen — this is not just "the sweep skipped it".
+    // Under eager export the salvage leg finds nothing to take, so it
+    // must leave the shard completely alone — no early flush, no
+    // detached root. `hasOrphanedDeferredTree` is gated on a non-empty
+    // `deferred_spans`, so this is the shape for every shard written by
+    // the current code; the salvage itself is still pinned, against a
+    // shard written by the deferral path, in the case below.
     assert.equal(
-      incompleteRoots(tracer.finished()).length, 1,
-      'the parked tree must still be flushed early, tagged nio.turn.incomplete',
+      incompleteRoots(tracer.finished()).length, 0,
+      'nothing was parked, so nothing may be flushed early and tagged nio.turn.incomplete',
     );
 
     // The slow call finally returns.
@@ -159,14 +180,22 @@ describe('an idle-but-alive session survives another session\'s SessionStart swe
 
     await send('SessionStart', { session_id: LIVE });
     await send('UserPromptSubmit', { session_id: LIVE, prompt: 'hello' });
-    await send('PreToolUse', {
-      session_id: LIVE, tool_name: 'Read', tool_use_id: 'c1',
-      tool_input: { file_path: '/x' }, cwd: '/tmp',
-    });
-    await send('PostToolUse', {
-      session_id: LIVE, tool_name: 'Read', tool_use_id: 'c1',
-      tool_input: { file_path: '/x' }, tool_response: { output: 'ok' }, cwd: '/tmp',
-    });
+
+    // A shard carrying a PARKED span. Nothing on the eager default
+    // produces one, so the salvage leg is now reachable only from a
+    // shard written by the deferral path — a nio that predates the
+    // switch, or a runtime configured with `eagerToolSpans: false`.
+    // Those shards outlive the upgrade that stopped producing them, so
+    // the machinery that adopts them stays, and stays under test.
+    {
+      let parked = loadState(logsConfig, LIVE)!;
+      parked = recordPreToolUse(
+        parked, 'c1', 'Read', '/x', { 'gen_ai.tool.call.id': 'c1' },
+      );
+      parked = deferPostToolUse(parked, 'c1', '/tmp').state;
+      assert.equal(parked.deferred_spans?.length, 1, 'precondition: the shard has a parked span');
+      saveState(logsConfig, parked, LIVE);
+    }
 
     ageShard(logsConfig, LIVE, TWO_HOURS);
     await otherSessionStart(logsConfig, tracer, 'sess-new-window-2');

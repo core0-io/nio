@@ -353,8 +353,8 @@ async function runToolPair(
   });
 }
 
-describe('end-to-end: turn → chat → tool', () => {
-  it('nests each tool span under the chat call that issued it, chats under the turn', async () => {
+describe('end-to-end: turn → {chat, tool}', () => {
+  it('emits each tool span at PostToolUse and the chat spans at turn close, all under the turn', async () => {
     const { makeInMemoryTracer } = await import('./helpers/tracer.js');
     const { loadState } = await import('../scripts/lib/traces-state-store.js');
     const { dir, logsConfig } = freshFixture();
@@ -364,14 +364,21 @@ describe('end-to-end: turn → chat → tool', () => {
     await runToolPair(logsConfig, tracer.provider, sessionId, 'toolu_e2e_1');
     await runToolPair(logsConfig, tracer.provider, sessionId, 'toolu_e2e_2');
 
+    // Both tool spans are already out, mid-turn. Deferring them would
+    // have bought nesting under their issuing chat call and cost the
+    // whole turn's visibility — see eager-tool-spans.test.ts for the
+    // measurement that settled it.
     assert.equal(
       tracer.finished().length,
-      0,
-      'tool spans must be held back until the turn ends — attribution is not knowable at PostToolUse time',
+      2,
+      'both tool spans go out at PostToolUse, before the turn closes',
     );
 
     const mid = loadState(logsConfig, sessionId);
-    assert.equal(mid?.deferred_spans?.length, 2, 'both finished tool spans park in deferred_spans');
+    assert.deepEqual(
+      mid?.deferred_spans ?? [], [],
+      'and nothing is parked in the state file waiting for the turn to end',
+    );
 
     // Transcript is written after the turn started so both calls pass the
     // `callsSince(turn_start_ms)` filter.
@@ -416,7 +423,10 @@ describe('end-to-end: turn → chat → tool', () => {
       assert.equal(chat.spanContext().traceId, turn.spanContext().traceId);
     }
 
-    // Each tool hangs off ITS OWN chat — not the turn, and not the other chat.
+    // Every tool is a SIBLING of the chats, under the turn root. The
+    // issuing call is still recoverable — as data, on
+    // `gen_ai.tool.call.id`, which a backend can join against the
+    // `tool_use` block of the chat call — but no longer as a parent edge.
     const chatByCallId = new Map(
       chatSpans.map((c) => [c.attributes['gen_ai.response.id'] as string, c]),
     );
@@ -431,10 +441,19 @@ describe('end-to-end: turn → chat → tool', () => {
       assert.ok(tool, `tool span for ${toolUseId} missing`);
       assert.equal(
         parentOf(tool!),
-        chat!.spanContext().spanId,
-        `${toolUseId} must hang off ${reqId}, not off the turn or the other chat`,
+        turn.spanContext().spanId,
+        `${toolUseId} must hang off the turn root — it was exported long before ${reqId} existed`,
       );
-      assert.notEqual(parentOf(tool!), turn.spanContext().spanId);
+      assert.notEqual(
+        parentOf(tool!),
+        chat!.spanContext().spanId,
+        'stated as an inequality too: a tool nested under its chat means the deferral path is back',
+      );
+      assert.equal(
+        tool!.attributes['gen_ai.tool.call.id'],
+        toolUseId,
+        'the join key that replaces the parent edge must be on the span',
+      );
     }
 
     // Chat attributes survive the trip through OTEL.

@@ -17,11 +17,9 @@
  * `200 / chunks_per_message` calls — single digits on any real turn.
  *
  * That is not a cosmetic loss. When the cap evicts an assistant
- * message's envelope, its chat span is never built, so the tool spans
- * that would have nested underneath it have no call to name and fall
- * back onto the turn root — undoing, for exactly the long multi-step
- * turns where the structure is worth most, the nesting that
- * `pi-opencode-span-hierarchy.test.ts` pins for short ones.
+ * message's envelope, its chat span is never built at all — the model's
+ * words, its token usage and its finish reason are simply gone from the
+ * trace, on exactly the long multi-step turns where they are worth most.
  *
  * ── Why this case is not vacuous ──────────────────────────────────────
  *
@@ -31,8 +29,8 @@
  * envelope republished at completion the way opencode does. That is
  * {@link MESSAGES} * (CHUNKS_PER_MESSAGE + 3) ≈ 1030 deliveries against
  * a 200-slot budget — so under the old blind-append accumulation only
- * the last two messages' envelopes survive and eight of the ten tool
- * spans orphan onto the turn root. Mutation-checked: reverting
+ * the last two messages' envelopes survive and eight of the ten chat
+ * spans are never built. Mutation-checked: reverting
  * `recordConversationEvent` to push-and-splice turns this case red on
  * the chat-span count.
  *
@@ -201,22 +199,29 @@ describe('opencode conversation-event cap counts LLM calls, not streamed snapsho
         assert.equal(tools.length, MESSAGES, 'every tool call must still produce a span');
 
         // Each chat span is identified by the message id it was built
-        // from (`gen_ai.response.id` is the ChatCall's callId).
-        const chatIdBySpanId = new Map<string, unknown>();
-        for (const c of chats) chatIdBySpanId.set(c.spanContext().spanId, c.attributes['gen_ai.response.id']);
-
+        // from (`gen_ai.response.id` is the ChatCall's callId). Naming
+        // every id explicitly, rather than only counting the spans, is
+        // what makes eviction detectable: the cap drops the OLDEST
+        // events, so a count-only assertion could be satisfied by ten
+        // spans rebuilt from the wrong ten messages.
+        const chatCallIds = new Set(chats.map((c) => c.attributes['gen_ai.response.id']));
         const turnRootId = turns[0]!.spanContext().spanId;
         for (let i = 0; i < MESSAGES; i++) {
+          assert.ok(
+            chatCallIds.has(`msg_cap_${i}`),
+            `no chat span was rebuilt from msg_cap_${i} — that message's envelope was evicted by ` +
+              'the cap, which is exactly the silent loss this cap must not cause',
+          );
           const tool = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === `call_cap_${i}`);
           assert.ok(tool, `tool span for call_cap_${i} must exist`);
-          assert.notEqual(
-            parentOf(tool!), turnRootId,
-            `tool span for call_cap_${i} fell back onto the turn root — its issuing chat call was ` +
-              'evicted, which is exactly the silent flattening this cap must not cause',
-          );
+          // Tool spans are eager now, so the parent is the turn root for
+          // all of them and carries no information about which call
+          // issued them — `gen_ai.tool.call.id`, asserted by the `find`
+          // above, is the surviving link. Pinned so a reader does not
+          // mistake the flat shape here for the eviction this test hunts.
           assert.equal(
-            chatIdBySpanId.get(parentOf(tool!) ?? ''), `msg_cap_${i}`,
-            `tool span for call_cap_${i} must nest under the chat span rebuilt from msg_cap_${i}`,
+            parentOf(tool!), turnRootId,
+            'every tool span hangs off the turn root — see eager-tool-spans.test.ts',
           );
         }
       } finally {

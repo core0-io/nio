@@ -46,12 +46,12 @@ function readEntries(path: string): Array<Record<string, unknown>> {
 }
 
 /**
- * Close the turn so the deferred tool spans are exported.
+ * Close the turn, so the chat layer and the turn root are exported.
  *
- * Tool spans are held in `deferred_spans` until end of turn — they can
- * only be nested under the LLM call that issued them, and that is not
- * knowable at PostToolUse time. Every assertion about an exported tool
- * span therefore has to run a turn boundary first.
+ * Tool spans no longer need this — they go out at PostToolUse (see
+ * `eager-tool-spans.test.ts`). It is kept because a turn boundary is
+ * still what reclaims a span whose post-side event never arrived, and
+ * because several cases below assert on the whole finished tree.
  */
 async function flushTurn(
   sessionId: string,
@@ -457,7 +457,10 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
       logsConfig,
     });
 
-    assert.equal(tracer.finished().length, 0, 'the tool span waits for the turn to end');
+    assert.equal(
+      toolSpans(tracer.finished()).length, 1,
+      'the tool span goes out at PostToolUse, not at turn close',
+    );
     await flushTurn(sessionId, 'claude-code', logsConfig, tracer.provider);
 
     const spans = toolSpans(tracer.finished());

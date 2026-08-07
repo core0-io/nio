@@ -30,6 +30,7 @@ import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
 
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
 import { statePath } from '../scripts/lib/traces-state-store.js';
+import { buildSpanContent } from '../scripts/lib/content/span-content.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
@@ -208,24 +209,35 @@ describe('content wiring: a turn\'s content records join back to their chat span
       assert.equal(chat.attributes['nio.chat.reply'], 'here goes');
     }
     for (const tool of byName(tracer.finished(), 'execute_tool Bash')) {
-      assert.equal(tool.attributes['gen_ai.tool.call.arguments'], '{"command":"ls"}');
+      assert.equal(
+        tool.attributes['gen_ai.tool.call.arguments'], '{"command":"ls"}',
+        'the tool span still carries its arguments — but now from the live PostToolUse payload, '
+        + 'because the span leaves before the chat call it used to borrow them from exists',
+      );
     }
 
     // `tool_input` has two producers by design (see buildToolInputRecord):
     // the chat call's `tool_use` block, and PostToolUse's source-free
-    // record. The former is now carried by the tool span, so only the
-    // latter — which lands on the tool span, not a chat span — remains.
+    // record.
+    //
+    // Both are present again. Task 5's `argumentsOnSpan` suppression is
+    // reachable only from `endTurn`'s per-chat-call tool loop, and that
+    // loop iterates `deferred_spans` — permanently empty now that tool
+    // spans are eager. The cost is bytes on the logs signal, not
+    // information: the span carries the arguments (asserted above), and
+    // the overlap between these two producers is documented as
+    // intentional rather than deduplicated.
     const chatSpanIds = new Set(chatSpans.map((s) => s.spanContext().spanId));
     const allToolInput = byContentType(logger.emitted(), 'tool_input');
     const toolInput = allToolInput.filter((r) => chatSpanIds.has(r.spanContext!.spanId));
-    assert.deepEqual(
-      toolInput.map((r) => r.body), [],
-      'arguments the tool span carries in full must not be logged again',
+    assert.equal(
+      toolInput.length, 2,
+      'one `tool_use`-block record per chat call, stamped with that chat span',
     );
     assert.equal(
       allToolInput.length,
-      2,
-      'the source-free PostToolUse record per tool call still goes out, on the tool span',
+      4,
+      'plus the source-free PostToolUse record per tool call, stamped with the tool span',
     );
 
     const spanIds = chatSpanIds;
@@ -485,13 +497,15 @@ describe('content wiring: tool arguments do not depend on a ConversationSource',
       'the argument record and the tool span must share a span id, or they can never be joined',
     );
 
-    // And the span itself still carries no arguments attribute — the
-    // record above is genuinely the only carrier, not a belt-and-braces
-    // copy of something still on the span.
+    // The span carries them too, capped at the 2 KB span budget. The two
+    // copies are not redundant: the span copy is what makes the trace
+    // readable on its own, the record is the full-fidelity one (up to the
+    // per-kind logs limit) and is what a payload past the span budget
+    // degrades to.
     assert.equal(
       toolSpans[0]!.attributes['gen_ai.tool.call.arguments'],
-      undefined,
-      'arguments must ride the logs signal, not the span attributes',
+      buildSpanContent(JSON.stringify(input.tool_input))!.text,
+      'the eagerly-exported span carries the same arguments, redacted and capped to the span budget',
     );
   });
 
@@ -663,18 +677,30 @@ describe('deferred state carries metadata only', () => {
       'the argument payload itself must not reach the state file',
     );
 
-    // …but the metadata that makes the span readable is still there.
+    // Nothing is parked at all any more — the span left at PostToolUse,
+    // so the payload never had a window in which it could reach disk.
     const parsed = JSON.parse(afterPost) as {
       deferred_spans?: Array<{ attributes: Record<string, unknown> }>;
     };
-    assert.equal(parsed.deferred_spans?.length, 1);
-    const attrs = parsed.deferred_spans![0]!.attributes;
-    assert.equal(attrs['gen_ai.tool.name'], 'Bash');
-    assert.equal(attrs['gen_ai.tool.call.id'], 'toolu_state_1');
+    assert.deepEqual(
+      parsed.deferred_spans ?? [], [],
+      'eager emission drains the entry it appends, so the shard carries no span at all',
+    );
+
+    // …and the metadata that makes the span readable rode out on it.
+    const toolSpan = byName(tracer.finished(), 'execute_tool Bash')[0]!;
+    assert.ok(toolSpan, 'the tool span must have been exported at PostToolUse');
+    assert.equal(toolSpan.attributes['gen_ai.tool.name'], 'Bash');
+    assert.equal(toolSpan.attributes['gen_ai.tool.call.id'], 'toolu_state_1');
     assert.equal(
-      attrs['nio.tool_summary'],
+      toolSpan.attributes['nio.tool_summary'],
       'ls -la',
       'the short summary stays on the span — it is what makes a trace list scannable',
+    );
+    assert.ok(
+      String(toolSpan.attributes['gen_ai.tool.call.arguments']).includes(marker),
+      'and the full arguments ride the span, having gone straight from the hook payload to the '
+      + 'exporter without a stop on disk',
     );
   });
 });

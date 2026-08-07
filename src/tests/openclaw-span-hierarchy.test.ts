@@ -2,25 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Platform exception, pinned: on OpenClaw a tool span is a SIBLING of
- * the `chat` span, exported eagerly at `after_tool_call`.
+ * On OpenClaw a tool span is a SIBLING of the `chat` span, exported
+ * eagerly at `after_tool_call`.
  *
- * Every other platform parks a finished tool span in
- * `traces-state-store-<session>.json` and emits the whole tree at turn
- * close, nesting each tool under the `chat` call that issued it.
- * OpenClaw cannot: `createOpenClawSource` never produces a `tool_use`
- * block, and all its calls are `timing: 'synthetic'`, so both of
- * `buildSpanTree`'s attribution channels are unavailable and every tool
- * span lands on the turn root no matter WHEN it is emitted. That is why
- * the plugin keeps its eager per-tool export — deferring would trade
- * crash-resilience (OpenClaw's state is in memory; nothing on disk for
- * the recovery path to replay) for no structural gain. See
- * COLLECTOR-SIGNALS.md § "Platform exception · on OpenClaw, chat and
- * execute_tool are siblings".
+ * This used to be a documented platform EXCEPTION — every other platform
+ * parked its finished tool spans and nested each under the `chat` call
+ * that issued it, and OpenClaw could not, because
+ * `createOpenClawSource` produces no `tool_use` block and all its calls
+ * are `timing: 'synthetic'`, leaving both of `buildSpanTree`'s
+ * attribution channels unavailable. It is no longer an exception: eager
+ * export is now the default everywhere (see
+ * `PluginRuntimeOptions.eagerToolSpans` and `eager-tool-spans.test.ts`),
+ * so this file pins the shape the whole product has, on the binding that
+ * had it first. See COLLECTOR-SIGNALS.md § "Tool spans are siblings of
+ * chat, on every platform".
  *
- * The exception was documented but had no guard, so nothing stopped
+ * The behaviour was documented but had no guard, so nothing stopped
  * someone "unifying" OpenClaw onto the deferred path and silently
- * dropping that crash-resilience.
+ * dropping its crash-resilience.
  *
  * ── Why this test is not vacuous ──────────────────────────────────────
  *
@@ -172,13 +171,14 @@ describe('openclaw span hierarchy: tool spans are eager siblings of chat, not de
 
       // ── Property 1: EAGER. The tool span is already on the wire, and
       // the turn has not closed yet — nothing has emitted a chat span or
-      // a turn root. On the deferred platforms this list would be empty
-      // at this point.
+      // a turn root. Under the parking path this list would be empty at
+      // this point.
       const eagerTools = toolSpans();
       assert.equal(
         eagerTools.length, 1,
         'the tool span must reach the exporter at after_tool_call, not wait for the turn to close — ' +
-        'OpenClaw keeps its state in memory, so a deferred span is simply lost if the daemon dies',
+        'a turn that shows nothing until it ends is unverifiable, and OpenClaw keeps its state in ' +
+        'memory, so a deferred span is simply lost if the daemon dies',
       );
       assert.equal(
         chatSpans().length, 0,
@@ -203,7 +203,7 @@ describe('openclaw span hierarchy: tool spans are eager siblings of chat, not de
       assert.equal(
         toolsAfter.length, 1,
         'the eagerly-exported tool span must NOT be re-emitted by endTurn — deferred_spans is ' +
-        'empty on OpenClaw precisely because recordPostToolUse already drained it',
+        'empty precisely because recordPostToolUse already drained it',
       );
       assert.equal(
         toolsAfter[0]!.spanId, tool.spanId,
@@ -211,10 +211,10 @@ describe('openclaw span hierarchy: tool spans are eager siblings of chat, not de
       );
       assert.notEqual(
         toolsAfter[0]!.parentSpanId, chats[0]!.spanId,
-        'PLATFORM EXCEPTION: on OpenClaw the tool span is a sibling of the chat span, never its ' +
-        'child — createOpenClawSource emits no tool_use block and all its calls are synthetic, ' +
-        'so buildSpanTree has no attribution channel. If this ever becomes false, ' +
-        'COLLECTOR-SIGNALS.md\'s platform-exception section is stale.',
+        'the tool span is a sibling of the chat span, never its child. On OpenClaw it could ' +
+        'never have been otherwise (no tool_use block, all calls synthetic, so buildSpanTree has ' +
+        'no attribution channel); everywhere else it is now a deliberate trade. If this ever ' +
+        'becomes false, COLLECTOR-SIGNALS.md\'s span-hierarchy section is stale.',
       );
       assert.equal(
         toolsAfter[0]!.parentSpanId, chats[0]!.parentSpanId,

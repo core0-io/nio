@@ -2,50 +2,46 @@
 // SPDX-License-Identifier: Apache-2.0
 
 /**
- * Pi and opencode nest a tool span under the chat call that issued it.
+ * On Pi and opencode too, a tool span is a SIBLING of the chat span.
  *
- * OpenClaw's tool spans are eager SIBLINGS of chat (pinned by
- * `openclaw-span-hierarchy.test.ts`): `createOpenClawSource` emits no
- * `tool_use` block and all its calls are `timing: 'synthetic'`, so
- * neither of `buildSpanTree`'s attribution channels exists there and a
- * parked span would land on the turn root anyway.
+ * This file used to pin the opposite. Pi and opencode are the two
+ * platforms where nesting was actually achievable — Pi's `toolCall`
+ * blocks carry an id and its calls are `inferred`; opencode's tool parts
+ * carry `callID` and its calls are `exact`, so both of `buildSpanTree`'s
+ * attribution channels exist — and it demonstrably worked. It was given
+ * up anyway, because it can only be bought by holding every tool span
+ * until the turn ends, and that made a long turn invisible and a
+ * mid-turn crash unreconstructable. `eager-tool-spans.test.ts` carries
+ * the measurement; `PluginRuntimeOptions.eagerToolSpans` carries the
+ * reasoning.
  *
- * Pi and opencode have BOTH channels — Pi's `toolCall` blocks carry an
- * id and its calls are `inferred`; opencode's tool parts carry `callID`
- * and its calls are `exact` — so neither qualifies for that exception.
- * These two cases pin that their tool spans really do end up beneath
- * their chat span rather than beside it.
+ * So what these cases now pin is the shape that replaced it, on the two
+ * bindings that had the most to lose:
+ *
+ *  - the tool span hangs off the TURN ROOT, beside the chat span, not
+ *    under it;
+ *  - `gen_ai.tool.call.id` is still on the tool span, carrying the
+ *    issuing call as data so a backend can join what the tree no longer
+ *    encodes. This is the entire compensation for the flat shape, so it
+ *    is asserted on every case;
+ *  - the chat layer itself is UNAFFECTED — chat spans are still
+ *    reconstructed from the conversation source at turn close and still
+ *    hang off the turn root. Only the tool → chat edge was dropped.
  *
  * ── Why these cases are not vacuous ──────────────────────────────────
  *
- * `buildSpanTree` tries the id channel first and the time window
- * second, so an input where BOTH channels would succeed proves nothing
- * about either: delete one and the other silently covers for it. Each
- * case below is therefore arranged so exactly ONE channel can claim the
- * span, and says which:
- *
- *  - Pi: the transcript entry is stamped AFTER the tool span starts, so
- *    `findCallByTime` skips it (`startMs < call.startMs`). Only the
- *    `tool_use` id can attribute the span. Mutation-checked: making
- *    `pi-source.ts` stop emitting `tool_use` blocks turns this case red
- *    (the span becomes an orphan on the turn root).
- *  - opencode: the second tool call's `message.part.updated` never
- *    arrives, so there is no `tool_use` block carrying its `callID` and
- *    the id channel comes up empty. That is a real opencode state, not a
- *    contrivance — tool parts are published asynchronously and a turn
- *    can close before the snapshot for one of them does. Only the time
- *    window can attribute it, and the window is only consulted for a
- *    call whose `timing` is not `'synthetic'`. Mutation-checked: pinning
- *    `opencode-source.ts` to `timing: 'synthetic'` turns this case red.
- *
- * The first opencode tool call keeps its part, so the id channel is
- * covered on that platform too.
+ * Each states the parentage as an equality against the turn root AND an
+ * inequality against the chat span, so a regression to the parked path
+ * fails both ways round rather than sliding through a `!==` that any
+ * shape satisfies. The chat-span assertions are what keep them honest in
+ * the other direction: a run that produced no chat span at all would
+ * make "the tool is not under the chat span" trivially true, so every
+ * case first proves the chat span exists.
  *
  * Both cases drive the real bindings (`registerPiExtension` /
- * `createNioPlugin`) rather than calling `buildSpanTree` directly: the
- * parenting depends on the runtime PARKING the finished tool span for
- * end-of-turn attribution (`PluginRuntimeOptions.eagerToolSpans` false),
- * which a direct `buildSpanTree` call would not exercise at all.
+ * `createNioPlugin`) rather than calling `buildSpanTree` directly, so
+ * the emission path — where the span is now sent from — is what is
+ * exercised.
  */
 
 import { describe, it } from 'node:test';
@@ -99,8 +95,8 @@ const parentOf = (span: ReadableSpan): string | undefined =>
 const named = (spans: readonly ReadableSpan[], prefix: string): ReadableSpan[] =>
   spans.filter((s) => s.name.startsWith(prefix));
 
-describe('pi + opencode span hierarchy: tool spans nest under their chat call', () => {
-  it('pi nests the tool span under the chat call carrying the matching tool_use id', async () => {
+describe('pi + opencode span hierarchy: tool spans are siblings of their chat call', () => {
+  it('pi puts the tool span on the turn root and keeps the tool_use id on it', async () => {
     await withCaptureOnHome('nio-pi-hierarchy-', async (home) => {
       const tracer = makeInMemoryTracer();
       try {
@@ -189,21 +185,27 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
 
         assert.equal(
           parentOf(tools[0]!),
-          chats[0]!.spanContext().spanId,
-          'Pi has both of buildSpanTree\'s attribution channels, so its tool span must nest under ' +
-            'the chat call whose tool_use id it matches — not sit beside it on the turn root the ' +
-            'way OpenClaw\'s does (openclaw-span-hierarchy.test.ts)',
+          turns[0]!.spanContext().spanId,
+          'the tool span hangs off the turn root — it was exported at tool_result, long before ' +
+            'this transcript entry was read and the chat span built',
         );
         assert.notEqual(
           parentOf(tools[0]!),
-          turns[0]!.spanContext().spanId,
-          'stated as an inequality too: a tool span on the turn root means attribution failed and ' +
-            'the tree quietly flattened',
+          chats[0]!.spanContext().spanId,
+          'stated as an inequality too: nesting under the chat call means the span was parked ' +
+            'until turn close again, and with it the whole turn\'s visibility',
+        );
+        assert.equal(
+          tools[0]!.attributes['gen_ai.tool.call.id'],
+          'call_hier_1',
+          'the issuing call survives as data: the same id Pi\'s toolCall block carries, so a ' +
+            'backend can still join the two',
         );
         assert.equal(
           parentOf(chats[0]!),
           turns[0]!.spanContext().spanId,
-          'and the chat span itself still hangs off the turn root',
+          'and the chat span itself still hangs off the turn root — the chat LAYER is unaffected, ' +
+            'only the tool → chat edge was dropped',
         );
       } finally {
         await tracer.shutdown();
@@ -211,7 +213,7 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
     });
   });
 
-  it('opencode nests the tool span under its chat call, by id and by time window', async () => {
+  it('opencode puts both tool spans on the turn root, each keeping its callID', async () => {
     await withCaptureOnHome('nio-oc-hierarchy-', async () => {
       const tracer = makeInMemoryTracer();
       try {
@@ -294,27 +296,35 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
         assert.equal(turns.length, 1, 'the turn root must have been exported');
 
         const chatSpanId = chats[0]!.spanContext().spanId;
-        const byId = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_with_part');
-        const byTime = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_without_part');
-        assert.ok(byId && byTime, 'both tool spans must carry their real opencode callID');
+        const turnSpanId = turns[0]!.spanContext().spanId;
+        // One tool call has an accumulated `message.part.updated` and one
+        // never got one — a real opencode state, since tool parts are
+        // published asynchronously and a turn can close before a
+        // snapshot does. Both are asserted so the shape cannot depend on
+        // whether the conversation source happened to see the call.
+        const withPart = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_with_part');
+        const withoutPart = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === 'call_without_part');
+        assert.ok(
+          withPart && withoutPart,
+          'both tool spans must carry their real opencode callID — that id is the whole ' +
+            'compensation for no longer encoding the issuing call as a parent edge',
+        );
 
-        assert.equal(
-          parentOf(byId!),
-          chatSpanId,
-          'the tool call whose message part was accumulated is attributed by tool_use id and must ' +
-            'nest under the chat span',
-        );
-        assert.equal(
-          parentOf(byTime!),
-          chatSpanId,
-          'the tool call whose part never arrived has no tool_use id to match, so it can only be ' +
-            'attributed by the time window — which buildSpanTree consults ONLY because opencode ' +
-            'reports both ends of the call and therefore earns timing: \'exact\'. If this goes red, ' +
-            'opencode-source.ts stopped reporting real timing and the tree flattened',
-        );
+        for (const tool of [withPart!, withoutPart!]) {
+          assert.equal(
+            parentOf(tool),
+            turnSpanId,
+            'every tool span hangs off the turn root, exported as its tool.execute.after arrived',
+          );
+          assert.notEqual(
+            parentOf(tool),
+            chatSpanId,
+            'stated as an inequality too: a tool under the chat span means the parked path is back',
+          );
+        }
         assert.equal(
           parentOf(chats[0]!),
-          turns[0]!.spanContext().spanId,
+          turnSpanId,
           'and the chat span itself still hangs off the turn root',
         );
       } finally {
@@ -323,21 +333,19 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
     });
   });
 
-  it('opencode nests a RECLAIMED tool span — the tool that threw — under its chat call', async () => {
+  it('opencode still emits a RECLAIMED tool span — the tool that threw — marked as a reclaim', async () => {
     // Reclaim is not the exceptional path on opencode, it is the normal
     // path for every tool call that throws: `tool.execute.after` is
     // simply not delivered, so `session.idle` finds the span still
     // pending and force-closes it in `flushSessionTurnInner`'s reclaim
-    // loop. That loop used to emit eagerly onto the turn root, which
-    // meant the failing calls — the ones a reviewer most wants to see in
-    // context — were exactly the ones that lost it, even though the
-    // `tool_use` id needed to attribute them was already on the pending
-    // span.
+    // loop. That loop is the one part of the deferral machinery that is
+    // still load-bearing under eager emission — without it a tool that
+    // threw would produce no span at all.
     //
-    // Not vacuous: the loop runs ABOVE `buildSpanTree` in the same
-    // function, so an eager emission cannot be attributed by either
-    // channel. Mutation-checked — putting `recordPostToolUse` back
-    // unconditionally turns this case red with the span on the turn root.
+    // Not vacuous: the span asserted on here can only come from that
+    // loop. No `tool.execute.after` is ever delivered below, so the
+    // normal `onPostTool` emission path is never reached; delete the
+    // reclaim loop and the tool-span count goes to zero.
     await withCaptureOnHome('nio-oc-reclaim-', async () => {
       const tracer = makeInMemoryTracer();
       try {
@@ -415,15 +423,21 @@ describe('pi + opencode span hierarchy: tool spans nest under their chat call', 
           'the outcome is unknowable, so the reclaimed span must assert neither success nor error',
         );
         assert.equal(
+          tools[0]!.attributes['gen_ai.tool.call.id'],
+          'call_that_threw',
+          'the reclaimed span keeps its callID — a failing call is the one a reviewer most wants ' +
+            'to trace back to the model turn that issued it',
+        );
+        assert.equal(
           parentOf(tools[0]!),
-          chats[0]!.spanContext().spanId,
-          'a reclaimed span carrying a tool_use id must be attributed like any other',
+          turns[0]!.spanContext().spanId,
+          'and it is routed exactly like a normally-closed span: onto the turn root',
         );
         assert.notEqual(
           parentOf(tools[0]!),
-          turns[0]!.spanContext().spanId,
-          'stated as an inequality too: on the turn root means the reclaim loop emitted eagerly ' +
-            'and skipped attribution entirely',
+          chats[0]!.spanContext().spanId,
+          'stated as an inequality too, so the reclaim path cannot quietly diverge from the ' +
+            'normal close path',
         );
       } finally {
         await tracer.shutdown();

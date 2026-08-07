@@ -5,11 +5,25 @@
  * `deferred_spans` is bounded, and going over the bound FLUSHES the
  * oldest parked spans instead of dropping them.
  *
- * The in-process family parks every closed tool span until turn close so
- * `buildSpanTree` can nest it under the chat call that issued it. That
- * queue had no ceiling, on the reasoning that a turn is self-limiting and
- * a parked span costs ~740 B. Both halves of that are weaker than they
- * look:
+ * ── The path under test is DORMANT in production ─────────────────────
+ *
+ * Since eager emission became the default (`eagerToolSpans`, see
+ * `eager-tool-spans.test.ts` for the measurement that settled it),
+ * nothing parks: every tool span is exported as it closes and this queue
+ * is permanently empty. The first two cases therefore pass
+ * `eagerToolSpans: false` explicitly to reach the parking path at all.
+ *
+ * The mechanism is kept, and kept under test, because `deferred_spans`
+ * is still the structure `traces-state-store.ts`'s crash-salvage reads
+ * and writes, and because an unbounded queue behind a flag is a latent
+ * defect rather than a dead one. The third case is the one that pins
+ * production behaviour.
+ *
+ * The in-process family used to park every closed tool span until turn
+ * close so `buildSpanTree` could nest it under the chat call that issued
+ * it. That queue had no ceiling, on the reasoning that a turn is
+ * self-limiting and a parked span costs ~740 B. Both halves of that are
+ * weaker than they look:
  *
  *  - the queue is emptied by the turn CLOSE, so a host that stops
  *    delivering `session.idle` / `agent_end` has nothing emptying it;
@@ -42,9 +56,9 @@
  * non-synthetic timing so the surviving spans have a chat call to nest
  * under) and it drives `createNioPlugin`, not the runtime in isolation.
  *
- * The second case pins the OpenClaw invariance: `eagerToolSpans: true`
- * never parks anything, so the cap is unreachable there and OpenClaw's
- * wire output is untouched by this change.
+ * The third case pins the production default: `eagerToolSpans: true`
+ * never parks anything, so the cap is unreachable and the wire output is
+ * untouched by this mechanism.
  */
 
 import { describe, it } from 'node:test';
@@ -111,6 +125,10 @@ async function driveOpenTurn(tracer: ReturnType<typeof makeInMemoryTracer>, sess
     // whose exporters outlive the test.
     meterProvider: null,
     loggerProvider: null,
+    // The cap only exists on the parking path, and parking is no longer
+    // the default. Without this the queue is empty at every close and
+    // both cases below would assert against a mechanism that never ran.
+    eagerToolSpans: false,
   })({ directory: '/tmp', worktree: '/tmp' } as never);
 
   await hooks.event!({
@@ -263,13 +281,14 @@ describe('deferred tool spans are capped, and the overflow is flushed rather tha
     });
   });
 
-  it('never engages on a platform that exports eagerly (OpenClaw is untouched)', async () => {
+  it('never engages under the production default (eager export leaves the queue empty)', async () => {
     await withCaptureOnHome('nio-defer-cap-eager-', async () => {
       const tracer = makeInMemoryTracer();
       try {
-        // `eagerToolSpans: true` is exactly what openclaw-plugin.ts
-        // passes. Under it `recordPostToolUse` drains the queue on every
-        // close, so it can never reach the cap however long the turn is.
+        // `eagerToolSpans: true` is the runtime default and what
+        // openclaw-plugin.ts states explicitly. Under it
+        // `recordPostToolUse` drains the queue on every close, so it can
+        // never reach the cap however long the turn is.
         const rt = new InProcessPluginRuntime({
           platform: 'openclaw',
           adapter: new OpenClawAdapter(),
@@ -298,8 +317,8 @@ describe('deferred tool spans are capped, and the overflow is flushed rather tha
         );
         assert.equal(
           tools.filter((s) => s.attributes['nio.span.deferred_overflow'] !== undefined).length, 0,
-          'no OpenClaw span may acquire the overflow marker: its queue is empty at every close, ' +
-            'so the cap is unreachable and its wire output is byte-for-byte what it was',
+          'no span may acquire the overflow marker under the default: the queue is empty at every ' +
+            'close, so the cap is unreachable and the wire output is byte-for-byte what it was',
         );
         await rt.onTurnEnd(sessionId);
       } finally {

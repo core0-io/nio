@@ -67,7 +67,8 @@ unverified — the cell says which.
 | Deny / confirm-denied orphan span | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
 | `gen_ai.tool.call.id` | ✓ | ✓ | ✓ | ✓ | ✓ (`toolCallId`) | ✓ (`callID`) |
-| Tool spans nested under the issuing `chat` span | ✓ | ✓ | ✓ | **— (siblings; see the platform exception under [Traces](#traces))** | ✓ | ✓ |
+| Tool spans nested under the issuing `chat` span | **— (no platform; siblings everywhere — see [Traces](#traces))** | — | — | — | — | — |
+| Tool span exported before the turn closes | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `tool_input` / `tool_output` content records | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Token usage on the turn span | ✓ (transcript) | **— (parser is Claude-Code-schema-only)** | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
 | `nio.turn.user_prompt` | ✓ | ✓ | ✓ | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
@@ -368,24 +369,32 @@ Trace: session                        (its own trace; emitted at SessionEnd)
    ↑ span link
 Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
   ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
-  │    └─ Span: execute_tool <name>   (the tools THAT call issued; not on OpenClaw — see below)
-  ├─ Span: execute_tool <name>   (tools that could not be attributed — hung off the turn)
+  ├─ Span: execute_tool <name>   (exported as the tool finishes; joins to its chat call
+  │                               by gen_ai.tool.call.id, not by parentage — see below)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
 ```
 
-**Emission timing.** A tool span can only be nested under the LLM call
-that issued it, and that attribution is unknowable at `PostToolUse` time —
-it comes from the conversation source once the turn is over. So finished
-tool spans are parked in `traces-state-store-<session>.json` and the WHOLE tree
-(chat spans, their tools, the unattributed tools, the turn root) is
-exported together at `Stop` / `SubagentStop` / `SessionEnd`. Two
-exceptions keep their immediate export: the guard's deny / confirm-denied
-span (a security event must not wait for a turn to close) and OpenClaw's
-eager per-tool export.
+**Emission timing.** A tool span is exported the moment the tool
+finishes, on every platform — `PostToolUse` on Claude Code / Codex,
+`post_tool_call` on Hermes, `after_tool_call` / `tool_result` /
+`tool.execute.after` on OpenClaw / Pi / opencode — as a direct child of
+the turn root. So is the guard's deny / confirm-denied span, for which no
+post-side event ever fires. The `chat` layer and the turn root are the
+only things that wait for `Stop` / `SubagentStop` / `SessionEnd`, because
+they can only be reconstructed from the conversation source once the turn
+is over.
 
-If the host process dies before the turn closes, the parked tree is
-flushed by the next event that finds it — or by the next `SessionStart` —
-under a root tagged `nio.turn.incomplete: true`.
+This is a deliberate reversal: tool spans used to be parked in
+`traces-state-store-<session>.json` so they could be nested under the chat
+call that issued them. See [Tool spans are siblings of `chat`](#traces)
+below for what that cost and what replaced it.
+
+If the host process dies before the turn closes, the turn root and its
+chat layer are lost — the tool spans are already on the backend. A shard
+still carrying PARKED spans (written by an older nio, or by
+`eagerToolSpans: false`) is flushed by the next event that finds it — or
+by the next `SessionStart` — under a root tagged
+`nio.turn.incomplete: true`.
 
 **One state file per session.** The store is sharded: the filename
 carries the session id, sanitised to `[A-Za-z0-9_-]` and suffixed with a
@@ -411,6 +420,13 @@ separate leg on a separate clock: a week untouched, at which point nothing
 in it can belong to a running host. Shards of sessions that end cleanly
 are deleted immediately at `SessionEnd`.
 
+Since tool spans became eager, `deferred_spans` is empty on every shard
+the current code writes, so the salvage leg's normal outcome is now
+"leave the shard completely alone" — there is nothing parked to flush and
+no detached `nio.turn.incomplete` root is produced. It still fires for a
+shard written by an older nio or by `eagerToolSpans: false`, which is the
+case `state-store-idle-session.test.ts` constructs.
+
 Recovered trees keep the DEAD session's identity, not the recovering
 one's. `nio.platform` / `service.name` / `gen_ai.agent.name` live on the
 OTEL Resource, so the shard records the platform and agent name that wrote
@@ -430,71 +446,84 @@ tool's arguments and result still reach the backend either way: both go
 out as content records associated with the tool span, which needs no
 source (see [Content records](#content-records)). The hook platforms emit
 them at `PostToolUse`; the in-process platforms emit the arguments when
-the tool span opens and the result when it closes. What IS lost without a
-source is the span-side copy of the arguments — `gen_ai.tool.call.arguments`
-is attached at turn close from the chat call's `tool_use` block, so a
-source-less turn reads its tool arguments from the logs join only.
+the tool span opens and the result when it closes. The span-side copy of
+the arguments is unaffected too: `gen_ai.tool.call.arguments` comes off
+the live tool payload, not off the conversation source. What is lost
+without a source is the `chat` layer itself — the model's words, its
+token usage and its finish reasons.
 
-**Which platforms nest tool spans under their chat call**
+**Tool spans are siblings of `chat`, on every platform**
 
-| Platform | Tool span parent | Why |
+| Platform | Tool span parent | Emitted at |
 | --- | --- | --- |
-| Claude Code | the `chat` span that issued it | `tool_use` ids from the transcript |
-| Codex | the `chat` span that issued it | `call_id` from the rollout file |
-| Hermes | the `chat` span that issued it | `tool_calls[].id` from the `post_llm_call` payload |
-| Pi | the `chat` span that issued it | `toolCall.id` from the session JSONL, plus `inferred` timing |
-| opencode | the `chat` span that issued it | `callID` from the tool part, plus `exact` timing |
-| **OpenClaw** | **the turn root — sibling of `chat`** | neither channel exists; see below |
+| Claude Code | the turn root — sibling of `chat` | `PostToolUse` |
+| Codex | the turn root — sibling of `chat` | `PostToolUse` |
+| Hermes | the turn root — sibling of `chat` | `post_tool_call` |
+| OpenClaw | the turn root — sibling of `chat` | `after_tool_call` |
+| Pi | the turn root — sibling of `chat` | `tool_result` |
+| opencode | the turn root — sibling of `chat` | `tool.execute.after` |
 
-Pi and opencode are pinned by
-`src/tests/pi-opencode-span-hierarchy.test.ts`, which drives each real
-binding end to end and asserts the tool span's `parentSpanId` is the chat
-span's id. Each case is arranged so only ONE of the two channels can
-claim the span, so neither can silently cover for the other: Pi's
-transcript entry is stamped after the tool span opens (time window out of
-play, id channel decisive), and one of opencode's two tool calls has no
-accumulated message part (id channel out of play, time window decisive).
-Dropping `tool_use` from `pi-source.ts` turns the Pi case red; pinning
-`opencode-source.ts` to `timing: 'synthetic'` turns the opencode case
-red.
+There used to be an OpenClaw exception here, in the other direction:
+every other platform nested its tool spans under the `chat` call that
+issued them, and OpenClaw could not because neither of `buildSpanTree`'s
+attribution channels exists there (`createOpenClawSource` emits no
+`tool_use` block, and all its calls are `timing: 'synthetic'`, which the
+time-window fallback skips by design). The exception is gone because the
+nesting is gone.
 
-**Platform exception · on OpenClaw, `chat` and `execute_tool` are
-siblings.** Every other platform nests a tool span under the chat span
-that issued it. OpenClaw cannot, because both of `buildSpanTree`'s
-attribution channels are unavailable there:
+**Why the nesting was given up.** A tool span can only be attributed to
+the call that issued it once the turn's conversation has been
+reconstructed, and that does not happen until the turn closes. Nesting
+therefore requires holding every finished tool span until then. It
+worked — verified live, `execute_tool Bash` under a `chat` parent — and
+it was still the wrong trade:
 
-1. `createOpenClawSource` never emits a `tool_use` block — its own
-   documented known gap. OpenClaw's `llm_output` event carries no content
-   field, and correlating `before_tool_call` / `after_tool_call` back to
-   the right chat call would be guesswork on a platform the source has
-   never been verified against live.
-2. All OpenClaw calls are `timing: 'synthetic'` (no event carries a real
-   timestamp), and the time-window fallback skips synthetic calls by
-   design.
+- **A long turn showed nothing at all.** Measured on a live session: a
+  turn ran for seven minutes with 38 finished tool spans parked in its
+  `traces-state-store-<session>.json` shard (`deferred: 38`,
+  `pending: 0`), while the newest span the backend held still belonged to
+  the previous turn. An agent is least observable exactly when it is
+  doing the most.
+- **A crash in that window left nothing to reconstruct.** Not a truncated
+  tree — no record of how far the agent got. Nothing re-sends a live
+  turn's parked spans either: the salvage path
+  (`hasOrphanedDeferredTree`) only adopts a shard whose turn is already
+  closed. A guard tool earns its keep at a crash scene, and deferral
+  removed the crash scene.
 
-So every OpenClaw tool span is an orphan and lands on the turn root
-**regardless of when it is emitted** — verified by running the plugin
-with its `after_tool_call` deferred like every other platform's: the
-parent stayed the turn root. That is why the plugin keeps its eager
-per-tool export (`PluginRuntimeOptions.eagerToolSpans`, set only by the
-OpenClaw binding): deferring would trade crash-resilience (the whole
-in-process family holds its turn state in memory, with no
-`traces-state-store-<session>.json` for the recovery path to replay, so a
-parked span is simply lost if the host dies before turn close) and prompt
-visibility for no structural gain. Pi and opencode pay exactly that
-crash-resilience price and get the nesting for it, which is why the
-default is to park. Closing the exception requires teaching
-`openclaw-source.ts` to reconstruct `tool_use` first.
+**What replaced it.** The issuing call survives as DATA rather than as
+tree structure. `gen_ai.tool.call.id` is on every tool span, carrying the
+same id the chat call's `tool_use` block carries, so a backend can join
+a tool to the call that made it — it is a join instead of a parent edge.
+The `chat` layer itself is unchanged: chat spans are still reconstructed
+from the conversation source at turn close and still hang off the turn
+root. Only the tool → chat edge was dropped.
 
-Both halves of the exception — the eager export AND the sibling
-parentage — are pinned by
-`src/tests/openclaw-span-hierarchy.test.ts`, which drives a real
-`before_tool_call` / `after_tool_call` pair through the plugin against an
-OTLP sink. It is deliberately not a "no tool span appeared" assertion:
-that shape would pass under any implementation. Switching the plugin to
-the deferred path turns the eager assertions red; re-parenting the span
-turns the parentage assertions red. If you close this exception, that
-test is what tells you the documentation above is now stale.
+The time-window and id channels in `buildSpanTree` are still there and
+still used for anything that IS parked (see below), but they no longer
+decide a normal tool span's parent, because a normal tool span is gone
+before they run.
+
+**The deferral path still exists, dormant.** `PluginRuntimeOptions.eagerToolSpans`
+defaults to `true` everywhere; `false` selects parking and is used only
+to keep the machinery under test. `deferred_spans` is kept for three
+reasons: it is the structure the crash-salvage in `traces-state-store.ts`
+reads and writes, shards written by an older nio still carry it, and a
+turn boundary still reclaims any span whose post-side event never arrived
+(opencode's normal path for a tool that threw — `tool.execute.after` is
+not delivered in that case). A reclaimed span is routed exactly like a
+normal close: onto the turn root, marked `nio.span.reclaimed`.
+
+**Pinned by**
+`src/tests/eager-tool-spans.test.ts` — a 40-tool turn whose spans are all
+asserted on the wire *before* any turn boundary is dispatched, against a
+real OTLP sink, with the state shard asserted empty at the same moment.
+Reverting `collector-core.ts` to `deferPostToolUse` turns it red.
+`src/tests/openclaw-span-hierarchy.test.ts` and
+`src/tests/pi-opencode-span-hierarchy.test.ts` pin the sibling parentage
+and the surviving `gen_ai.tool.call.id` on the real bindings; each states
+the parentage as an equality against the turn root *and* an inequality
+against the chat span, so a regression to parking fails both ways round.
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
@@ -559,10 +588,16 @@ or plain `chat` when the source does not report a model.
 > has a `created` but no `completed`).
 >
 > A consumer that cannot tell them apart reads a synthetic zero-duration
-> span as "the model answered instantly". `buildSpanTree` reads it too:
-> its time-window attribution channel is enabled only for a call whose
-> timing is not `synthetic`, which is what lets opencode nest a tool span
-> whose `callID` never showed up in a message part.
+> span as "the model answered instantly". That is the whole of what this
+> attribute is for now. It used to have a second job — `buildSpanTree`
+> enabled its time-window attribution channel only for a call whose
+> timing was not `synthetic` — but neither that channel nor the
+> `tool_use`-id channel decides a tool span's parent any more: tool spans
+> are exported at their post-side event, long before any of this is
+> reconstructed, and hang off the turn root. `gen_ai.tool.call.id` is the
+> surviving link between a tool and the call that issued it. Both
+> channels still run, for whatever a turn boundary finds parked (see
+> [Tool spans are siblings of `chat`](#traces)).
 
 **Known limitation · Hermes replays its history.** Every `post_llm_call`
 payload carries the *entire* `conversation_history`, and each one closes a
@@ -571,8 +606,9 @@ each later turn's tree. Chat spans and their content records therefore
 repeat across a Hermes session. This is deliberate rather than
 deduplicated: the earlier calls are what a later turn's tool spans
 attribute to (a tool runs in the turn *after* the call that requested it),
-so dropping them would orphan the nesting this layer exists for. Dedupe
-on `gen_ai.response.id` at query time when counting calls.
+so dropping them would lose the chat spans a later turn's tool calls join
+back to on `gen_ai.tool.call.id`. Dedupe on `gen_ai.response.id` at query
+time when counting calls.
 
 ### Span: `session` (session root)
 
@@ -653,11 +689,11 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
 | `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw / Pi, `callID` on opencode) | PreToolUse · PostToolUse | all |
-| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse (eager) · turn close (deferred) | all — see the note below |
-| `nio.content.truncated` | `true` when the arguments did not fit the 2 KB budget — the full body is then in a `tool_input` content record | turn close | deferred platforms |
-| `nio.content.original_bytes` | Pre-truncation UTF-8 byte length of the arguments; only present when truncated | turn close | deferred platforms |
-| `nio.content.redactions` | Number of secrets replaced in the arguments; only present when at least one was | turn close | deferred platforms |
-| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB. **Deferred platforms do not set this** — see the note below | PostToolUse | eager platforms (OpenClaw / Pi / opencode) |
+| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse (in-process) · PostToolUse (hook platforms) | all — see the note below |
+| `nio.content.truncated` | `true` when the arguments did not fit the 2 KB budget — the full body is then in a `tool_input` content record | PostToolUse | hook platforms (Claude Code / Codex / Hermes) |
+| `nio.content.original_bytes` | Pre-truncation UTF-8 byte length of the arguments; only present when truncated | PostToolUse | hook platforms |
+| `nio.content.redactions` | Number of secrets replaced in the arguments; only present when at least one was | PostToolUse | hook platforms |
+| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB. **The hook platforms do not set this** — see the note below | PostToolUse | in-process platforms (OpenClaw / Pi / opencode) |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
@@ -675,41 +711,32 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `nio.span.reclaimed` | `true` on a span the turn flush had to close because the host never delivered a post-side event. Absent otherwise | turn flush | in-process platforms (in practice: opencode) |
 | `nio.span.reclaim_reason` | Why it was reclaimed — currently only `no_post_tool_event` | turn flush | in-process platforms (in practice: opencode) |
 
-**Where tool payloads live on the deferred platforms.** Claude Code,
-Codex, and Hermes park finished tool spans in
-`traces-state-store-<session>.json` until the turn closes, and every hook
-event rewrites that file whole. Nothing bulky is therefore ever written
-into that file:
+**Where tool payloads live.** Nothing bulky is written into
+`traces-state-store-<session>.json`: every hook event rewrites that file
+whole, so a payload parked in it is paid for on every subsequent event.
 
-- **Arguments** are attached to the span at *turn close*, read out of the
-  issuing chat call's `tool_use` block — which is already in memory,
-  having come from the conversation source — and never from the state
-  file. So `gen_ai.tool.call.arguments` is present on deferred tool spans
-  too, subject to the 2 KB budget.
-  The attachment needs an exact `tool_use_id` match between the parked
-  span and a `tool_use` block. Two cases miss: a span attributed to a
-  chat call by *time* rather than by id, and a session with no
-  `ConversationSource` at all (no `transcript_path`, unreadable session
-  file). For those the arguments are carried by the source-free
-  `tool_input` content record that `PostToolUse` emits — the one producer
-  that needs no source. That record is also what covers tool calls the
-  guard denied, which never reach `PostToolUse`'s span at all.
-- **Results** stay off the span entirely on every platform's deferred
-  path and travel as a `tool_output` content record emitted at
-  `PostToolUse` (see [Content records](#content-records)). Measured p90 is
-  7.7 KB and max 32 KB — the payload the span budget exists to keep out of
-  trace queries.
+- **Arguments** ride on the span, capped at the 2 KB budget. They are
+  taken from the live tool payload at the moment the span is emitted —
+  `tool_input` from the hook stdin on Claude Code / Codex / Hermes, the
+  handler's `params` on OpenClaw / Pi / opencode — and go straight from
+  there to the exporter without a stop on disk. No conversation source is
+  involved, so a session without one keeps them.
+- **Results** stay off the span on the hook platforms and travel as a
+  `tool_output` content record emitted at `PostToolUse` (see
+  [Content records](#content-records)). Measured p90 is 7.7 KB and max
+  32 KB — the payload the span budget exists to keep out of trace
+  queries.
 
-Both records carry the same span id as the span itself, so the join works
-on the backend. `nio.tool_summary` stays on the span so a trace list is
-still readable without joining anything.
+Content records carry the same span id as the span itself, so the join
+works on the backend. `nio.tool_summary` stays on the span so a trace list
+is still readable without joining anything.
 
-> **Known overlap.** The source-free `PostToolUse` `tool_input` record is
-> emitted unconditionally, because `PostToolUse` cannot know whether the
-> turn will end up with a conversation source to attribute the call to. On
-> a session that *does* have one, the same arguments therefore appear both
-> as `gen_ai.tool.call.arguments` on the tool span and as that record.
-> Both derive from the same payload, so they cannot disagree. Collapse on
+> **Known overlap.** The arguments appear up to three times on a session
+> that has a conversation source: as `gen_ai.tool.call.arguments` on the
+> tool span, as the source-free `tool_input` record `PostToolUse` emits,
+> and inside the `tool_use` block of the chat call's own content record.
+> All three derive from the same payload and cannot disagree; the span
+> copy is capped at 2 KB while the records are full-fidelity. Collapse on
 > `gen_ai.tool.call.id` when counting.
 
 **Span status:** `ERROR` (with `recordException(error)`) when the tool failed or the guard denied / confirm-denied. Otherwise the status is left at the OTel default, `UNSET` — Nio never calls `setStatus(OK)`, and most backends render `UNSET` as "ok". A **reclaimed** span (`nio.span.reclaimed=true`) is also `UNSET`, but that does *not* mean it succeeded: its outcome is genuinely unknown. Treat `UNSET` as success only for spans without the reclaim marker.
