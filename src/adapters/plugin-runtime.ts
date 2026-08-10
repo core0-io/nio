@@ -136,6 +136,19 @@ export interface PluginRuntimeOptions {
    * `pi-opencode-span-hierarchy.test.ts`.
    */
   eagerToolSpans?: boolean;
+  /**
+   * Directory this runtime instance serves, for sessions whose binding
+   * supplies no per-session cwd of their own.
+   *
+   * opencode passes its plugin input's `directory` here: one plugin
+   * instance is created per project directory, so that IS the working
+   * directory of every session it serves — and it is NOT necessarily
+   * `process.cwd()`, which is wherever the opencode server happened to
+   * be launched from.
+   *
+   * Unset falls back to `process.cwd()`. See `cwdFor`.
+   */
+  defaultCwd?: string;
 }
 
 /**
@@ -288,6 +301,27 @@ export class InProcessPluginRuntime {
    */
   private readonly transcriptPaths = new Map<string, string>();
 
+  /**
+   * Per-session working directory, as reported by the binding.
+   *
+   * This class serves MANY sessions from ONE long-running process, so
+   * `process.cwd()` is a process-wide constant that says nothing about
+   * any individual session — it is fixed when the host is launched and
+   * is shared by every session thereafter. cwd is nonetheless a
+   * session-scoped property everywhere it is used here: the monitor gate
+   * matches a pending arm by the directory it was made in (that match is
+   * the only thing stopping one session claiming another's arm), and
+   * `nio.cwd` on a span claims to say where that session's work
+   * happened.
+   *
+   * Populated opportunistically — every entry point that receives a cwd
+   * from the host records it here, so a session is keyed correctly from
+   * its first event rather than only if some particular event arrived
+   * first. Cleared at `onSessionEnd`, after the flush, so a long-running
+   * host does not accumulate one entry per session forever.
+   */
+  private readonly sessionCwds = new Map<string, string>();
+
   private readonly opts: PluginRuntimeOptions;
   /**
    * Resolved once, so the default lives in exactly one place. `?? true`
@@ -365,7 +399,58 @@ export class InProcessPluginRuntime {
    * is armed.
    */
   protected isMonitored(sessionId: string): boolean {
-    return isSessionMonitored(sessionId, process.cwd(), this.config.collector?.logs);
+    return isSessionMonitored(sessionId, this.cwdFor(sessionId), this.config.collector?.logs);
+  }
+
+  /**
+   * Record the working directory a binding reports for a session.
+   *
+   * Called from every entry point that gets one, not just session start:
+   * OpenClaw delivers no session-start event a cwd could ride on at all,
+   * and a host is free to deliver a tool call before whatever event the
+   * binding chose to record from. Empty and absent values are ignored
+   * rather than stored — `''` would be compared against a real directory
+   * and match nothing, which is worse than falling back.
+   */
+  setSessionCwd(sessionId: string, cwd: string | null | undefined): void {
+    if (typeof cwd === 'string' && cwd.length > 0) this.sessionCwds.set(sessionId, cwd);
+  }
+
+  /**
+   * This session's working directory, for the monitor gate and for the
+   * `nio.cwd` span attribute.
+   *
+   * Fallback order: what the binding told us for this session, then the
+   * directory this runtime instance serves (`defaultCwd` — opencode's
+   * plugin `directory`), then `process.cwd()`.
+   *
+   * ── Why `process.cwd()` is the last resort, and not "fail closed" ──
+   *
+   * Refusing to answer (passing `null` to the gate) is NOT the safe
+   * choice it looks like. A null cwd cannot match a pending arm, and on
+   * every platform in this family the pending arm is the ONLY way to arm
+   * a session — `resolveSessionId` reads Claude Code's environment
+   * variable and nothing else, so `/nio monitor on` here always writes
+   * `pending_arm` and waits for an event to claim it. A null cwd would
+   * therefore make arming permanently impossible, silently, for any
+   * platform whose binding cannot report a directory.
+   *
+   * OpenClaw is exactly that platform, and not by omission: its hook
+   * context carries `sessionKey` / `sessionId` / `runId` and no
+   * directory, because an OpenClaw session is a conversation rather than
+   * a checkout. Its `/nio monitor on` runs in this same process and
+   * stamps the arm with `process.cwd()`, so `process.cwd()` is both
+   * sides of that comparison and the pairing stays consistent.
+   *
+   * The security property the cwd match exists for is untouched by the
+   * fallback: the comparison still happens, and a session whose
+   * directory does not match a pending arm still fails to claim it. What
+   * the fallback loses is only the ability to TELL two sessions apart
+   * when the host never said where either of them is — which is the
+   * situation that already obtained before any of this existed.
+   */
+  protected cwdFor(sessionId: string): string {
+    return this.sessionCwds.get(sessionId) ?? this.opts.defaultCwd ?? process.cwd();
   }
 
   /**
@@ -599,7 +684,17 @@ export class InProcessPluginRuntime {
     return { events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
   }
 
-  /** Hard session boundary — drop stale turn numbering, write audit row. */
+  /**
+   * Hard session boundary — drop stale turn numbering, write audit row.
+   *
+   * Deliberately takes no cwd. A binding says where a session is either
+   * per session (`setSessionCwd`, which Pi calls off every event's ctx)
+   * or once for the whole runtime (`defaultCwd`, which opencode fills
+   * from its plugin directory); neither needs a session-start event to
+   * have arrived, and both work for the sessions that never produce one
+   * — an opencode sub-agent child, or any session already running when
+   * the plugin loaded.
+   */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
     // A recycled session id must not inherit the previous session's
@@ -624,6 +719,10 @@ export class InProcessPluginRuntime {
     // that ends here won't get another chance to be reaped until the
     // process restarts or the backstop fires.
     forgetSession(sessionId, this.config.collector?.logs);
+    // Last, after every gate consultation above has had the session's
+    // real directory: these hosts run for weeks, so one map entry per
+    // session that ever existed is a leak with extra steps.
+    this.sessionCwds.delete(sessionId);
   }
 
   /**
@@ -787,21 +886,21 @@ export class InProcessPluginRuntime {
             tracerProvider,
             state,
             k,
-            process.cwd(),
+            this.cwdFor(sessionId),
             reclaimAttrs,
             null,
           )
         : deferPostToolUse(
             state,
             k,
-            process.cwd(),
+            this.cwdFor(sessionId),
             reclaimAttrs,
             null,
           );
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {
-      const r = await recordPostTaskToolUse(tracerProvider, state, k, process.cwd());
+      const r = await recordPostTaskToolUse(tracerProvider, state, k, this.cwdFor(sessionId));
       state = r.state;
     }
 
@@ -827,7 +926,7 @@ export class InProcessPluginRuntime {
       ? createContentSink(loggerProvider, loadContentLimits())
       : undefined;
 
-    await endTurn(tracerProvider, state, process.cwd(), null, calls, contentSink);
+    await endTurn(tracerProvider, state, this.cwdFor(sessionId), null, calls, contentSink);
     this.sessionState.delete(sessionId);
     // `.catch()`: `endTurn` already flushed through the collector's own
     // non-throwing helper. This belt-and-braces second flush must not be
@@ -1055,14 +1154,14 @@ export class InProcessPluginRuntime {
               tracerProvider,
               drained,
               spanKey,
-              process.cwd(),
+              this.cwdFor(sessionId),
               postAttrs,
               outcome.error ?? null,
             )
           : deferPostToolUse(
               drained,
               spanKey,
-              process.cwd(),
+              this.cwdFor(sessionId),
               postAttrs,
               outcome.error ?? null,
             );
@@ -1156,7 +1255,7 @@ export class InProcessPluginRuntime {
     if (tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
-        const r = await recordPostTaskToolUse(tracerProvider, state, taskId, process.cwd());
+        const r = await recordPostTaskToolUse(tracerProvider, state, taskId, this.cwdFor(sessionId));
         this.sessionState.set(sessionId, r.state);
       }
     }
@@ -1172,15 +1271,31 @@ export class InProcessPluginRuntime {
    * never blocks and never runs Phase 0–6.
    */
   onUserBash(sessionId: string, command: string, cwd: string): void {
+    // The one event that always carried a real directory. Recording it
+    // costs nothing and means a session whose start event was missed
+    // still gets keyed correctly the first time the user types a shell
+    // command — done BEFORE the audit row, which consults the gate.
+    this.setSessionCwd(sessionId, cwd);
     this.writeLifecycle(sessionId, 'user_bash', { command, cwd, actor: 'user' });
   }
 
-  /** `/nio ...` sub-command router, shared by every platform. */
-  async dispatchCommand(rawArgs: string): Promise<string> {
+  /**
+   * `/nio ...` sub-command router, shared by every platform.
+   *
+   * `opts.cwd` is the directory the command was typed in. It matters for
+   * exactly one subcommand and matters completely there: `monitor on`
+   * stamps a `pending_arm` with it, and the gate will only let a session
+   * claim that arm when the session's own directory matches. Passing the
+   * host process's cwd instead — which is what omitting it does — arms a
+   * directory no session may be working in, and the arm then expires
+   * unclaimed after 60s with capture never starting.
+   */
+  async dispatchCommand(rawArgs: string, opts?: { cwd?: string }): Promise<string> {
     try {
       return await dispatchNioCommand(rawArgs ?? '', {
         orchestrator: this.orchestrator,
         scanner: this.scanner,
+        ...(opts?.cwd ? { cwd: opts.cwd } : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
@@ -1313,7 +1428,7 @@ export class InProcessPluginRuntime {
     if (!state) return;
     const { state: drained } = takePendingGuardAttrs(state, spanKey);
     const r = await recordPostToolUse(
-      tracerProvider, drained, spanKey, process.cwd(), attrs, error,
+      tracerProvider, drained, spanKey, this.cwdFor(sessionId), attrs, error,
     );
     this.sessionState.set(sessionId, r.state);
   }

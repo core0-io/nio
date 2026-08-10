@@ -110,6 +110,16 @@ export function registerOpenClawPlugin(
     eagerToolSpans: true,
   });
 
+  // NOTE — no `defaultCwd`, and no `setSessionCwd` anywhere below, on
+  // purpose. OpenClaw's hook context carries `sessionKey` / `sessionId`
+  // / `runId` and no directory of any kind: a session here is a
+  // conversation, not a checkout, so there is no per-session working
+  // directory to report. Its sessions therefore take `cwdFor`'s
+  // `process.cwd()` fallback — which is the SAME value `/nio monitor on`
+  // stamps its arm with, since that command runs in this very process,
+  // so arming stays consistent. See `InProcessPluginRuntime.cwdFor` for
+  // why the fallback is `process.cwd()` and not a refusal to answer.
+
   /** OpenClaw carries the session id on ctx, with several fallbacks. */
   const sid = (ctx: unknown, event?: { runId?: string }): string => {
     const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };

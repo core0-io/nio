@@ -166,7 +166,15 @@ export function runMonitorCommand(
   const logsConfig = loadLogsConfig();
   const store = loadMonitorStore(logsConfig);
   const sessionId = resolveSessionId();
-  const cwd = options.cwd ?? process.cwd();
+  // Canonicalised HERE, at the point it enters the store, rather than
+  // only where it is compared. The gate canonicalises the event's cwd
+  // before matching it against `pending_arm.cwd`
+  // (`isSessionMonitored`), so an arm stored in unresolved form can
+  // never be claimed. That did not bite while every caller passed
+  // `process.cwd()` — POSIX always reports it resolved — but a host
+  // that hands us a session directory hands us whatever form IT holds,
+  // and on macOS anything under `/tmp` or `/var` arrives unresolved.
+  const cwd = canonicaliseCwd(options.cwd ?? process.cwd());
   const now = Date.now();
 
   if (command === 'on') {

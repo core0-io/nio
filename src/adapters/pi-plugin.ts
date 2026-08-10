@@ -120,8 +120,25 @@ export function registerPiExtension(
     loggerProvider: options.loggerProvider,
   });
 
-  const sid = (ctx: unknown): string =>
-    (ctx as PiContext).sessionManager.getSessionId();
+  /**
+   * This event's session id — and, as a side effect, the directory that
+   * session is working in.
+   *
+   * The cwd recording lives here rather than in `session_start` alone
+   * because every handler already funnels through this helper, so one
+   * line covers the whole binding and no ordering assumption is needed:
+   * Pi is free to deliver a tool call before whatever event we might
+   * otherwise have chosen to read the directory from. It matters because
+   * the runtime serves every Pi session from ONE process, so without it
+   * the monitor gate compares a pending arm against the directory `pi`
+   * was launched in instead of the one this session is in.
+   */
+  const sid = (ctx: unknown): string => {
+    const c = ctx as PiContext;
+    const id = c.sessionManager.getSessionId();
+    rt.setSessionCwd(id, c.cwd);
+    return id;
+  };
 
   // ---- Guard: tool_call can block -----------------------------------------
   pi.on('tool_call', async (event: unknown, ctx: unknown) => {
@@ -292,7 +309,14 @@ export function registerPiExtension(
   pi.registerCommand('nio', {
     description: 'Nio — scan code, evaluate an action, read the audit report, manage config',
     handler: async (args: string, ctx: unknown) => {
-      const text = await rt.dispatchCommand(args ?? '');
+      // `ctx.cwd`, not the process's: `/nio monitor on` keys its arm to
+      // this directory and the gate will only hand that arm to a session
+      // working in the same one. Pi serves every session from one
+      // process, so the process cwd would key the arm to wherever `pi`
+      // was started and the request would expire unclaimed.
+      const text = await rt.dispatchCommand(args ?? '', {
+        cwd: (ctx as PiContext)?.cwd,
+      });
       try {
         (ctx as PiContext).ui.notify(text, 'info');
       } catch {

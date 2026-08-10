@@ -130,6 +130,15 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       tracerProvider: options.tracerProvider,
       meterProvider: options.meterProvider,
       loggerProvider: options.loggerProvider,
+      // The project directory this plugin instance serves. opencode
+      // builds one plugin per directory and hands it here, so it is the
+      // working directory of every session this runtime sees — unlike
+      // `process.cwd()`, which is wherever the opencode server was
+      // started and is shared by every project it serves. The monitor
+      // gate matches a pending arm by directory, so keying sessions on
+      // the server's launch directory would let one project's session
+      // claim an arm made in another.
+      defaultCwd: input.directory,
       ...(options.eagerToolSpans !== undefined
         ? { eagerToolSpans: options.eagerToolSpans }
         : {}),
@@ -402,7 +411,12 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
           },
           async execute(args) {
             try {
-              return await rt.dispatchCommand((args.command as string) ?? '');
+              // The project directory, not the server's launch
+              // directory: `monitor on` keys its arm to this, and the
+              // gate hands that arm only to a session working here.
+              return await rt.dispatchCommand((args.command as string) ?? '', {
+                cwd: input.directory,
+              });
             } catch (err) {
               const msg = err instanceof Error ? err.stack || err.message : String(err);
               return `[nio_command error] ${msg}`;

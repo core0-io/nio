@@ -3,11 +3,12 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, symlinkSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { saveMonitorStore, loadMonitorStore } from '../scripts/lib/monitor-store.js';
 import { runMonitorCommand } from '../scripts/lib/monitor-commands.js';
+import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 import { trackTempDir } from './helpers/tmp-dirs.js';
 
@@ -64,5 +65,52 @@ describe('monitor on (direct) preserves a foreign pending arm', () => {
     });
     withEnv(home, 'sess-x', () => runMonitorCommand('off', { cwd: '/x' }));
     assert.equal(loadMonitorStore(logsConfig).pending_arm, undefined);
+  });
+});
+
+describe('monitor on canonicalises the directory it keys the arm to', () => {
+  /**
+   * The gate canonicalises the EVENT's cwd before comparing it against
+   * `pending_arm.cwd` (`isSessionMonitored`), so an arm stored in
+   * unresolved form can never be claimed.
+   *
+   * This never bit while every caller passed `process.cwd()` — POSIX
+   * always reports that resolved, so both sides were canonical by
+   * accident. It bites the moment a caller passes a directory it got
+   * from somewhere else: the in-process runtimes now thread the SESSION's
+   * directory in, and a host is free to hand over the unresolved form.
+   * On macOS that is every path under `/tmp` and `/var`.
+   */
+  it('stores the resolved path when handed a symlinked one', () => {
+    const { home, logsConfig } = fresh();
+    const realDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cmd-real-')));
+    const linkParent = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cmd-link-')));
+    const linkDir = join(linkParent, 'link');
+    symlinkSync(realDir, linkDir, 'dir');
+
+    withEnv(home, null, () => runMonitorCommand('on', { cwd: linkDir }));
+
+    assert.equal(
+      loadMonitorStore(logsConfig).pending_arm?.cwd, realpathSync(linkDir),
+      'an arm stored under the symlinked path is unclaimable: the gate resolves the ' +
+        'session\'s cwd before comparing, so the two forms never match',
+    );
+  });
+
+  it('a session reporting the symlinked path claims that arm', () => {
+    const { home, logsConfig } = fresh();
+    const realDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cmd-real2-')));
+    const linkParent = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-cmd-link2-')));
+    const linkDir = join(linkParent, 'link');
+    symlinkSync(realDir, linkDir, 'dir');
+
+    withEnv(home, null, () => runMonitorCommand('on', { cwd: linkDir }));
+    const monitored = withEnv(home, null, () =>
+      isSessionMonitored('sess-symlinked', linkDir, logsConfig));
+
+    assert.equal(
+      monitored, true,
+      'the end-to-end pairing: arm from a directory, then be a session in it',
+    );
   });
 });
