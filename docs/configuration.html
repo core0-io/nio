@@ -260,13 +260,30 @@
 
         <hr>
 
-        <h2>collector</h2>
+        <h2 id="collector">collector</h2>
         <p>Telemetry. Disabled when <code>endpoint</code> is empty AND all local options are off.</p>
         <p>See <a href="collector-signals.html">Collector Signals</a> for the full per-instrument / per-span / per-event schema that lands in OTLP and the local audit log.</p>
 
+        <div class="callout warn">
+          <div class="title">Nothing here turns capture on</div>
+          <p>Every field in this section describes <em>where and how</em> telemetry would be exported. Whether it is collected at all is a separate, per-session switch: capture is <strong>off by default</strong> and is armed inside a session with <a href="nio-monitor.html"><code>/nio-monitor on</code></a> (<code>/nio monitor on</code> on OpenClaw and Hermes), or globally with <a href="#collector.monitor_all_sessions"><code>collector.monitor_all_sessions</code></a>. Guard enforcement and the local <code>~/.nio/audit.jsonl</code> are unaffected by that switch. See <a href="collector-signals.html#gating">Capture gating</a>.</p>
+        </div>
+
         <h3 id="collector.endpoint"><code>collector.endpoint</code></h3>
-        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>"http://localhost:4318"</code></p>
-        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal. <code>/nio doctor</code> validates the schema only — it does <strong>not</strong> probe the endpoint, since collector gateways are commonly gated by routing headers (e.g. <code>x-event-pipeline-id</code>) that a bare reachability probe wouldn't include. Export failures surface at runtime as <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
+        <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code> (empty — no OTLP export)</p>
+        <p>OTLP base URL. <code>/v1/traces</code>, <code>/v1/metrics</code>, <code>/v1/logs</code> are appended automatically per signal. Leave empty to disable OTLP export entirely; a typical local value is <code>http://localhost:4318</code>. Setting it does not by itself start collection — see the note above. <code>/nio doctor</code> validates the schema only — it does <strong>not</strong> probe the endpoint, since collector gateways are commonly gated by routing headers (e.g. <code>x-event-pipeline-id</code>) that a bare reachability probe wouldn't include. Export failures surface at runtime as <a href="diagnostics.html#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
+
+        <h3 id="collector.monitor_all_sessions"><code>collector.monitor_all_sessions</code></h3>
+        <p><strong>Type:</strong> boolean · <strong>Default:</strong> <code>false</code></p>
+        <p>The session-level capture switch.</p>
+        <ul>
+          <li><code>false</code> (default) — no session exports telemetry until it is explicitly armed <em>inside that session</em>: <code>/nio-monitor on</code> where the focused skill is installed (Claude Code, Codex, Pi, opencode), <code>/nio monitor on</code> on OpenClaw and Hermes. This applies to <strong>all three</strong> OTLP signals, including the conversation content carried on spans.</li>
+          <li><code>true</code> — every session exports telemetry, with no in-session step. Intended for CI and team machines where the operator has already made that decision.</li>
+        </ul>
+        <p>Either way, guard enforcement and the local audit log are unaffected. Note this key lives under <code>collector:</code>, not <code>guard:</code>.</p>
+        <pre><code>collector:
+  monitor_all_sessions: false</code></pre>
+        <p>Arm state is stored in <code>${NIO_HOME}/monitored-sessions.json</code> and expires after 7 days as a backstop.</p>
 
         <h3 id="collector.api_key"><code>collector.api_key</code></h3>
         <p><strong>Type:</strong> string · <strong>Default:</strong> <code>""</code></p>
@@ -314,6 +331,21 @@
             <tr><td><code>max_size_mb</code></td><td>number</td><td><code>100</code></td><td>Rotation threshold.</td></tr>
           </tbody>
         </table>
+        <p>The logs signal carries two kinds of record. <strong>Audit entries</strong> (guard, scan, lifecycle, hook events) are dual-written to OTLP and the local JSONL — and the local leg is <em>never</em> gated by monitor state. <strong>Content records</strong> (reasoning, replies, tool arguments and results) go to OTLP only, never to the local file.</p>
+
+        <h3 id="collector.content_limits"><code>collector.content_limits</code></h3>
+        <p>Per-kind size caps for conversation content records, in UTF-8 <strong>bytes</strong>. Cuts land on whole character boundaries and append <code>…[truncated]</code>.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Default</th><th>Note</th></tr></thead>
+          <tbody>
+            <tr><td><code>thinking</code></td><td><code>65536</code></td><td>64 KB — model reasoning</td></tr>
+            <tr><td><code>text</code></td><td><code>65536</code></td><td>64 KB — assistant reply that overflowed the 2 KB span budget</td></tr>
+            <tr><td><code>user_prompt</code></td><td><code>32768</code></td><td>32 KB — reserved; the prompt currently rides the turn span</td></tr>
+            <tr><td><code>tool_input</code></td><td><code>16384</code></td><td>16 KB — tool arguments that overflowed the span budget</td></tr>
+            <tr><td><code>tool_output</code></td><td><code>32768</code></td><td>32 KB — tool results</td></tr>
+          </tbody>
+        </table>
+        <p>These exist to contain pathological output (a <code>cat</code> of a huge file, a <code>find /</code> dump), not to clip normal conversation — typical reasoning and replies run 2–10 KB and never reach them. Set any kind to <code>0</code> to capture it uncapped, accepting that OTLP gRPC's 4 MB per-message ceiling fails the <em>whole</em> export, the hook blocks its host while serialising, and some log backends reject over-long lines.</p>
 
         <hr>
 
@@ -321,7 +353,7 @@
         <table>
           <thead><tr><th>Variable</th><th>Default</th><th>Effect</th></tr></thead>
           <tbody>
-            <tr><td><code>NIO_HOME</code></td><td><code>~/.nio</code></td><td>Where Nio reads <code>config.yaml</code>, writes audit log + metrics.</td></tr>
+            <tr><td><code>NIO_HOME</code></td><td><code>~/.nio</code></td><td>Where Nio reads <code>config.yaml</code> and writes the audit log, the monitor arm state (<code>monitored-sessions.json</code>) and the per-session trace state shards. There is no local metrics file.</td></tr>
             <tr><td><code>CLAUDE_CONFIG_DIR</code></td><td><code>~/.claude</code></td><td>Used by <code>setup.sh --cc-home</code> resolution.</td></tr>
             <tr><td><code>OPENCLAW_STATE_DIR</code></td><td><code>~/.openclaw</code></td><td>Used by <code>setup.sh --openclaw-home</code> resolution.</td></tr>
           </tbody>
@@ -330,9 +362,9 @@
       </div>
 
       <div class="page-nav">
-        <a href="nio-external-score.html">
+        <a href="nio-monitor.html">
           <span class="dir">← Prev</span>
-          <span class="label">/nio-external-score</span>
+          <span class="label">/nio-monitor</span>
         </a>
         <div class="spacer"></div>
         <a href="phases/" class="next">

@@ -41,11 +41,17 @@
 
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Logs</div>
-        <h1><em>Logs</em> — audit-log entries, dual-written</h1>
-        <p class="lead">Audit entries are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing.</p>
+        <h1><em>Logs</em> — audit entries, dual-written · conversation content, OTLP-only</h1>
+        <p class="lead">The logs signal carries two kinds of record. <strong>Audit entries</strong> are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing. <strong>Content records</strong> carry the conversation itself and are OTLP-only.</p>
       </div>
 
       <div class="doc">
+
+        <div class="callout warn">
+          <div class="title">The OTLP leg is gated; the local file is not</div>
+          <p>The logger provider is built only for a session someone armed with <a href="nio-monitor.html"><code>/nio-monitor on</code></a> (<code>/nio monitor on</code> on OpenClaw and Hermes), or when <code>collector.monitor_all_sessions: true</code>. Until then <strong>nothing goes to <code>/v1/logs</code></strong> and no content record is produced at all.</p>
+          <p>The local <code>~/.nio/audit.jsonl</code> leg is <strong>never</strong> gated: guard decisions, skill scans, lifecycle and hook events are written to it whether or not the session was armed, because the file never leaves the machine and backs <a href="nio-report.html"><code>/nio report</code></a>. It is controlled by <code>collector.logs.local</code> alone. See <a href="collector-signals.html#gating">Capture gating</a>.</p>
+        </div>
 
         <h2 id="entry-types">Entry types</h2>
         <p>Discriminated by the <code>event</code> field. Five shapes — four named entry types plus the catch-all "hook event" record.</p>
@@ -59,7 +65,7 @@
             <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
             <tbody>
               <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
-              <tr><td><code>platform</code></td><td>string</td><td><code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td></tr>
+              <tr><td><code>platform</code></td><td>string</td><td><code>claude-code</code> / <code>codex</code> / <code>hermes</code> / <code>openclaw</code> / <code>pi</code> / <code>opencode</code></td></tr>
               <tr><td><code>agent_name</code></td><td>string?</td><td>User-configured <a href="configuration.html#agent_name"><code>agent_name</code></a>; omitted when unset</td></tr>
               <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
               <tr><td><code>cwd</code></td><td>string?</td><td>working dir</td></tr>
@@ -194,7 +200,7 @@
             <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.task_id</code></td><td>Task id from the dispatch event</td><td>TaskCreated · TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.task_summary</code></td><td>Derived from task input</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
-            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>every audit entry</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>codex</code> / <code>hermes</code> / <code>openclaw</code> / <code>pi</code> / <code>opencode</code></td><td>every audit entry</td><td>all</td></tr>
             <tr><td><code>gen_ai.agent.name</code></td><td>User-configured <a href="configuration.html#agent_name"><code>agent_name</code></a>; only emitted when set</td><td>every audit entry (when configured)</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>every audit entry with cwd</td><td>all</td></tr>
             <tr><td><code>nio.event</code></td><td>Discriminator — hook event name vs guard / lifecycle / scan / config_error</td><td>every audit entry</td><td>all</td></tr>
@@ -210,7 +216,53 @@
           </tbody>
         </table>
 
-        <p style="font-size: 13px; color: var(--fg-2);">Local JSONL path: <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). Rotation kicks in at <code>collector.logs.max_size_mb</code> (default 100 MB) — the live file is renamed to <code>&lt;path&gt;.1</code>.</p>
+        <h2 id="content-records">Content records</h2>
+        <p>The conversation itself — reasoning, replies, tool arguments, tool results — is split between the <a href="collector-signals-traces.html#span-content">traces</a> and the logs signal <strong>by size</strong>, not by kind. Small bodies ride on the span so a trace is readable on its own; large ones stay here, where there is no attribute ceiling and no cost to a trace query, and join back to their span by id.</p>
+        <table>
+          <thead><tr><th>Content</th><th>Span side</th><th>Logs side</th><th>Cap</th></tr></thead>
+          <tbody>
+            <tr><td>Assistant reply (<code>text</code>)</td><td><code>nio.chat.reply</code> on the <code>chat</code> span — all <code>text</code> blocks of the call joined in order</td><td>a <code>text</code> record <strong>only</strong> when the reply exceeded the 2 KB budget</td><td>64 KB</td></tr>
+            <tr><td>Tool arguments (<code>tool_input</code>)</td><td><code>gen_ai.tool.call.arguments</code> on the <code>execute_tool</code> span</td><td>a <code>tool_input</code> record <strong>only</strong> when the arguments exceeded the budget (hook platforms); on the in-process platforms one record always, emitted at span open</td><td>16 KB</td></tr>
+            <tr><td>Tool result (<code>tool_output</code>)</td><td>hook platforms: never. In-process: a ≤2 KB copy as <code>gen_ai.tool.call.result</code></td><td>always a <code>tool_output</code> record</td><td>32 KB</td></tr>
+            <tr><td>Reasoning (<code>thinking</code>)</td><td>never</td><td>always a <code>thinking</code> record</td><td>64 KB</td></tr>
+          </tbody>
+        </table>
+        <p><strong>One body, one owner.</strong> A body is not on the wire twice. If <code>nio.chat.reply</code> is present and <code>nio.content.truncated</code> is <em>absent</em>, the span holds the whole reply and no <code>text</code> record was emitted for it. If <code>nio.content.truncated</code> is <code>true</code>, the span holds a preview and the log record — full fidelity, up to the configured per-kind limit — is authoritative. Redaction runs before truncation on both sides, so a secret straddling the cut point cannot be sliced in half past the redactor.</p>
+        <p><strong>These records are OTLP-only</strong> — never written to the local <code>audit.jsonl</code>, and emitted only for a session armed with <a href="nio-monitor.html"><code>/nio-monitor</code></a>. Caps are configurable via <code>collector.content_limits</code>.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Value</th></tr></thead>
+          <tbody>
+            <tr><td><code>body</code></td><td>The content itself: redacted first, then truncated</td></tr>
+            <tr><td><code>severityNumber</code> / <code>severityText</code></td><td><code>9</code> / <code>INFO</code> — content is not a verdict, so it carries no risk level and no <code>nio.risk_level</code></td></tr>
+            <tr><td>built-in <code>trace_id</code> / <code>span_id</code></td><td>The span this content belongs to; mirrored as plain strings in <code>nio.trace_id</code> / <code>nio.span_id</code></td></tr>
+            <tr><td><code>nio.content.type</code></td><td><code>thinking</code> / <code>text</code> / <code>tool_input</code> / <code>tool_output</code></td></tr>
+            <tr><td><code>nio.content.index</code></td><td>Position of the source block within its LLM call; <code>0</code> for the out-of-band <code>tool_input</code> / <code>tool_output</code> records</td></tr>
+            <tr><td><code>nio.content.fidelity</code></td><td><code>full</code> / <code>summary</code> / <code>unknown</code> — only on <code>thinking</code>. See below</td></tr>
+            <tr><td><code>nio.content.truncated</code> · <code>nio.content.original_bytes</code> · <code>nio.content.redactions</code></td><td>Set only when the body was cut / when at least one secret was replaced</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>Only on <code>tool_input</code> / <code>tool_output</code></td></tr>
+          </tbody>
+        </table>
+        <p><strong>A record is never emitted with an empty body.</strong> Emptiness is judged on the final body — after redaction, after truncation — and applies to every <code>nio.content.type</code>. A body that redaction reduced to <code>[REDACTED]</code>, or that truncation reduced to the truncation marker, is <em>not</em> empty and is still emitted: both still say something happened.</p>
+
+        <h3 id="fidelity">How <code>nio.content.fidelity</code> is decided</h3>
+        <p>A thinking block is only as useful as the reasoning it actually contains. Some models return their raw chain-of-thought; some APIs deliberately withhold it and return a step-level summary instead. Reading the second as if it were the first turns "the summary didn't mention risk X" into "the model didn't consider risk X". The verdict is therefore a property of the <strong>model</strong> — never of the platform tag, and never of the transport the call arrived over.</p>
+        <table>
+          <thead><tr><th>Value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>full</code></td><td>The model returns its reasoning verbatim. Recognised families: Anthropic Claude (including routed ids such as <code>us.anthropic.claude-opus-4-6-v1</code>), DeepSeek, GLM/ChatGLM, Qwen/QwQ</td></tr>
+            <tr><td><code>summary</code></td><td>The API withholds the raw chain-of-thought and returns a step-level narration. Recognised families: OpenAI's reasoning series (<code>gpt-5*</code>, <code>o1</code>/<code>o3</code>/<code>o4</code>, <code>codex*</code>, <code>gpt-oss</code>), Gemini thinking models</td></tr>
+            <tr><td><code>unknown</code></td><td>No rule recognised the model. Nio has no evidence either way — this is a real answer, not a placeholder for <code>summary</code></td></tr>
+          </tbody>
+        </table>
+        <p>On the three hosts that report a model id per call — Pi, opencode, OpenClaw — the verdict is taken from that model id, with the provider string as a fallback only. The other three do not need the lookup, because their session file only ever holds one model family: Claude Code is always <code>full</code>, Codex always <code>summary</code>, and Hermes decides per payload shape (an OpenAI-reasoning marker → <code>summary</code>; Anthropic-shaped thinking blocks → <code>full</code>; neither → no thinking block is fabricated at all).</p>
+
+        <div class="callout warn">
+          <div class="title">Observed: no <code>thinking</code> records from Claude Code</div>
+          <p>In one session sampled on 2026-08-06, all 382 <code>thinking</code> blocks in the transcript had <code>thinking: ""</code> with only the <code>signature</code> populated — so that session produced no <code>thinking</code> content records at all. This is what the host wrote to its transcript, not something Nio drops: Nio reads the field the host provides.</p>
+          <p><strong>Treat it as one measurement, not as a property of the platform.</strong> What a transcript carries can vary by model and by thinking level, and this project has already been wrong in exactly this way once (Codex was recorded as having no thinking text on the strength of an <code>effort=medium</code> sample; <code>effort=high</code> produced it). If you need to know whether reasoning is being captured on a given setup, measure that setup.</p>
+        </div>
+
+        <p style="font-size: 13px; color: var(--fg-2);">Local JSONL path: <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). Rotation kicks in at <code>collector.logs.max_size_mb</code> (default 100 MB) — the live file is renamed to <code>&lt;path&gt;.1</code>. Content records never appear in it.</p>
 
       </div>
 

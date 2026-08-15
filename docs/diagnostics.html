@@ -119,6 +119,7 @@
 
         <h2 id="nio-doctor"><code>/nio doctor</code></h2>
         <p>Doctor is the canonical place to validate a config change. Unlike <code>/nio report</code> (which reads the audit log), doctor actually executes the network checks live — it acquires a real OAuth token against each enabled <code>external_analyser</code> entry and re-runs schema validation on the on-disk YAML. Run it after every config edit, or when something doesn't behave the way you expect.</p>
+        <p>Collector diagnostics only appear for a session that was armed with <a href="nio-monitor.html"><code>/nio-monitor</code></a> (or under <code>collector.monitor_all_sessions: true</code>) — an unarmed session builds no exporters, so there is nothing that can fail to export. Guard diagnostics (Phases 0–6) are independent of monitor state.</p>
         <p>Collector reachability is intentionally <strong>not</strong> probed — its config correctness is covered by the schema check, and OTLP gateways commonly require routing headers (e.g. <code>x-event-pipeline-id</code>) that a bare probe wouldn't include, producing misleading 401/403 reports. Export failures surface at runtime as <a href="#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
 
         <pre><code>## Nio Doctor

@@ -343,18 +343,23 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 | --- | --- | --- | --- |
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …); same key as the tool-span attribute | PreToolUse · PostToolUse · guard decision | all |
 | `nio.event` | Hook event firing this counter — `PreToolUse` / `PostToolUse` / `TaskCreated` / `TaskCompleted` | PreToolUse · PostToolUse · TaskCreated · TaskCompleted | all |
-| `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | every metric | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+
+**`nio.platform` is not a data-point label.** It — along with
+`service.name` and `gen_ai.agent.name` — lives on the OTEL **Resource**
+the meter provider is built with (`buildNioResource`), so it reaches every
+data point without multiplying the label set. See
+[Resource attributes](#resource-attributes).
 
 ### Label sets per instrument
 
 | Instrument | Labels |
 | --- | --- |
-| `nio.tool_use.count` | `gen_ai.tool.name` · `nio.event` · `nio.platform` |
-| `nio.turn.count` | `nio.platform` |
-| `nio.decision.count` | `nio.guard.decision` · `nio.guard.risk_level` · `gen_ai.tool.name` · `nio.platform` |
-| `nio.risk.score` | `gen_ai.tool.name` · `nio.platform` |
+| `nio.tool_use.count` | `gen_ai.tool.name` · `nio.event` |
+| `nio.turn.count` | *(none)* |
+| `nio.decision.count` | `nio.guard.decision` · `nio.guard.risk_level` · `gen_ai.tool.name` |
+| `nio.risk.score` | `gen_ai.tool.name` |
 
 **Note — `agent_name` deliberately not a metric label.** The user-configured [`agent_name`](configuration.html#agent_name) lands on traces (`gen_ai.agent.name`) and on audit-log records (`agent_name` field), but **not** on metrics. Adding it as a metric label would multiply every series by the number of distinct agent names and inflate the backend's cardinality budget. Use `nio.platform` for host-level metric slicing; query the trace / log layer if you need to attribute metrics back to a specific deployment.
 
