@@ -142,6 +142,110 @@ export interface RecordOptions {
   flush?: boolean;
 }
 
+/**
+ * Coalescing state for one MeterProvider's flushes. Keyed by provider so
+ * the fork-per-event hooks (a fresh provider per process) and the
+ * in-process runtime (one provider for the host's life) share the code
+ * without sharing state.
+ */
+interface FlushState {
+  /** The flush currently on the wire, as a promise that never rejects. */
+  active: Promise<void> | null;
+  /** The single queued follow-up flush shared by every waiting caller. */
+  queued: Promise<void> | null;
+}
+
+const flushStates = new WeakMap<MeterProvider, FlushState>();
+
+function flushStateFor(provider: MeterProvider): FlushState {
+  let state = flushStates.get(provider);
+  if (!state) {
+    state = { active: null, queued: null };
+    flushStates.set(provider, state);
+  }
+  return state;
+}
+
+function startFlush(provider: MeterProvider, state: FlushState): Promise<void> {
+  const flush = provider.forceFlush();
+  // Bookkeeping rides a swallowed copy: a rejected flush must reach the
+  // CALLER (which is what decides whether to report it) without the state
+  // machine's own handle surfacing as an unhandled rejection.
+  const settled = flush.then(() => {}, () => {});
+  state.active = settled;
+  void settled.then(() => {
+    if (state.active === settled) state.active = null;
+  });
+  return flush;
+}
+
+/**
+ * `provider.forceFlush()`, with concurrent calls collapsed.
+ *
+ * ── The problem ───────────────────────────────────────────────────────
+ *
+ * `otlp-exporter-base` caps in-flight exports at 30
+ * (`shared-configuration.js`, `concurrencyLimit: 30`) and
+ * `otlp-export-delegate.js` REJECTS the overflow outright —
+ * `'Concurrent export limit reached'` — without retrying or queueing.
+ * Nothing reaches the network on that path, so the endpoint's health is
+ * irrelevant to the failure.
+ *
+ * `InProcessPluginRuntime` issues two fire-and-forget metric flushes per
+ * tool event (`recordToolUse('PreToolUse')` and `recordGuardDecision`,
+ * neither awaited) plus one awaited on the post side, all against ONE
+ * provider cached for the host process's life. Overlapping tool events
+ * therefore stack unawaited flushes on a single exporter. Measured over
+ * 20 overlapping tool events against a sink that answered 200 to every
+ * request: peak 30 in-flight exports, 4 `Concurrent export limit reached`
+ * diagnostics, and 27 further exports dropped by the backoff those
+ * failures opened. Nio tripped its own circuit breaker against a healthy
+ * endpoint.
+ *
+ * The fork-per-event hooks never hit this — each is its own process with
+ * its own exporter, and their flushes are awaited in sequence. Measured
+ * over the same 20 tool calls driven through the real hook binaries: 121
+ * `/v1/metrics` requests, peak in-flight 1.
+ *
+ * ── Why collapsing them is safe ───────────────────────────────────────
+ *
+ * Metric temporality is CUMULATIVE (nothing in this file configures a
+ * `temporalitySelector`, so the OTLP exporters' default stands). Every
+ * export carries the running total, which means a later export
+ * SUPERSEDES an earlier one completely and an export that never happened
+ * is never lost data. Under delta temporality this would be wrong, and
+ * that is a standing reason not to switch: delta would trade a bounded
+ * duplicate for an unbounded gap.
+ *
+ * ── Why it is still correct, not merely cheaper ───────────────────────
+ *
+ * Leading + trailing, not debounce. The first call flushes immediately,
+ * so the early-ship intent `RecordOptions.flush` documents is untouched.
+ * A call that arrives while a flush is in flight does not silently ride
+ * that flush — it joins a single QUEUED flush that starts after the
+ * active one settles. So every point is covered by a flush that STARTED
+ * after `counter.add()` recorded it, which is the property a caller
+ * awaiting `recordToolUse` is entitled to.
+ *
+ * Nothing here weakens the crash case either: the reader's own
+ * `PeriodicExportingMetricReader` still ticks every second, and the hooks
+ * still run their budgeted closing `forceFlush()` before `process.exit()`.
+ */
+export function flushMetrics(provider: MeterProvider): Promise<void> {
+  const state = flushStateFor(provider);
+  if (state.active === null) return startFlush(provider, state);
+  if (state.queued !== null) return state.queued;
+
+  const queued = state.active.then(() => {
+    // This flush is the active one from here on; the next caller queues
+    // behind it rather than joining a slot that has already been used.
+    state.queued = null;
+    return startFlush(provider, state);
+  });
+  state.queued = queued;
+  return queued;
+}
+
 export async function recordToolUse(
   provider: MeterProvider,
   toolName: string,
@@ -158,7 +262,7 @@ export async function recordToolUse(
     'nio.event': event,
   });
   if (options.flush === false) return;
-  await provider.forceFlush();
+  await flushMetrics(provider);
 }
 
 
@@ -189,7 +293,7 @@ export async function recordGuardDecision(
     'gen_ai.tool.name': toolName,
   });
 
-  await provider.forceFlush();
+  await flushMetrics(provider);
 }
 
 
@@ -204,5 +308,5 @@ export async function recordTurn(
   });
   counter.add(1);
   if (options.flush === false) return;
-  await provider.forceFlush();
+  await flushMetrics(provider);
 }
