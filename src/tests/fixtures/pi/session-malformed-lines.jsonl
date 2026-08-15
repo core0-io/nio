@@ -1,0 +1,10 @@
+{"type":"session","version":3,"id":"22222222-2222-2222-2222-222222222222","timestamp":"2026-08-06T10:00:00.000Z","cwd":"/work"}
+null
+{"type":"message","id":"n1","parentId":null,"timestamp":"2026-08-06T10:00:01.000Z","message":{"role":"user","content":"list the files","timestamp":1785060001000}}
+[1,2,3]
+{"type":"message","id":"n2","parentId":"n1","timestamp":"2026-08-06T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"I should list them."},{"type":"text","text":"Listing now."},{"type":"toolCall","id":"call_1","name":"bash","arguments":{"command":"ls"}}],"api":"messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":10,"output":20,"cacheRead":5,"cacheWrite":2,"totalTokens":37},"stopReason":"toolUse","timestamp":1785060002000}}
+"str"
+{"type":"model_change","id":"n3","timestamp":"2026-08-06T10:00:03.000Z","model":"claude-opus-4-5"}
+42
+{"type":"message","id":"n4","parentId":"n2","timestamp":"2026-08-06T10:00:04.000Z","message":{"role":"assistant","content":[{"type":"text","text":"There is one file."}],"api":"messages","provider":"anthropic","model":"claude-sonnet-4-5","usage":{"input":30,"output":8,"cacheRead":0,"cacheWrite":0,"totalTokens":38},"stopReason":"stop","timestamp":1785060004000}}
+{"type":"message","id":"n5","parentId":"n4","timestamp":"2026-08-06T10:00:05.000Z","message":{"role":"assistant","content":[{"type":"tex

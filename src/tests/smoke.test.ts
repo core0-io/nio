@@ -6,6 +6,7 @@ import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { SkillScanner } from '../scanner/index.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // D: guard-hook.js subprocess E2E
@@ -23,7 +24,7 @@ function runGuardHook(input: Record<string, unknown>): Promise<{
 }> {
   return new Promise((resolvePromise) => {
     // Isolate HOME to a temp dir so loadConfig/writeAuditLog don't touch real ~/.nio/
-    const tempHome = mkdtempSync(join(tmpdir(), 'nio-smoke-'));
+    const tempHome = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-smoke-')));
     const child = spawn('node', [GUARD_HOOK_PATH], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, HOME: tempHome },

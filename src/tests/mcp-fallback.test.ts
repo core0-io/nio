@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { evaluateHook, buildMcpEnvelope } from '../adapters/hook-engine.js';
 import type { HookInput } from '../adapters/types.js';
 import { createTestContext } from './helpers/test-utils.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 import { PiAdapter } from '../adapters/pi.js';
 import type { MCPRegistry } from '../adapters/mcp-registry.js';
 
@@ -25,7 +26,7 @@ function emptyRegistry(): MCPRegistry {
 }
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-mcp-fallback-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-mcp-fallback-')));
 }
 
 function readEntries(path: string): Array<Record<string, unknown>> {

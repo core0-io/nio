@@ -9,9 +9,10 @@ import { join } from 'node:path';
 import { writeAuditLog, resolveAuditPath } from '../adapters/common.js';
 import type { AuditHookEntry, AuditGuardEntry } from '../adapters/audit-types.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 function freshDir(): string {
-  return mkdtempSync(join(tmpdir(), 'nio-audit-log-'));
+  return trackTempDir(mkdtempSync(join(tmpdir(), 'nio-audit-log-')));
 }
 
 function readEntries(path: string): Array<Record<string, unknown>> {

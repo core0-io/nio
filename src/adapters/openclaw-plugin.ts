@@ -99,7 +99,26 @@ export function registerOpenClawPlugin(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    // Redundant with the runtime default since eager emission became
+    // universal, and kept explicit anyway: OpenClaw is the one platform
+    // where parking could never have paid for itself even in principle.
+    // Neither of buildSpanTree's channels exists here (no `tool_use`
+    // block, `timing: 'synthetic'`), so a parked span would still land on
+    // the turn root — while becoming losable, since this family holds its
+    // turn state in memory with nothing on disk to replay. Pinned by
+    // openclaw-span-hierarchy.test.ts.
+    eagerToolSpans: true,
   });
+
+  // NOTE — no `defaultCwd`, and no `setSessionCwd` anywhere below, on
+  // purpose. OpenClaw's hook context carries `sessionKey` / `sessionId`
+  // / `runId` and no directory of any kind: a session here is a
+  // conversation, not a checkout, so there is no per-session working
+  // directory to report. Its sessions therefore take `cwdFor`'s
+  // `process.cwd()` fallback — which is the SAME value `/nio monitor on`
+  // stamps its arm with, since that command runs in this very process,
+  // so arming stays consistent. See `InProcessPluginRuntime.cwdFor` for
+  // why the fallback is `process.cwd()` and not a refusal to answer.
 
   /** OpenClaw carries the session id on ctx, with several fallbacks. */
   const sid = (ctx: unknown, event?: { runId?: string }): string => {
@@ -109,6 +128,9 @@ export function registerOpenClawPlugin(
 
   api.on('before_tool_call', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('before_tool_call', { event, ctx });
       const e = event as {
         toolName?: string; params?: Record<string, unknown>;
         runId?: string; toolCallId?: string;
@@ -130,6 +152,9 @@ export function registerOpenClawPlugin(
 
   api.on('after_tool_call', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('after_tool_call', { event, ctx });
       const e = event as {
         toolName?: string; toolCallId?: string; runId?: string;
         result?: unknown; error?: string; durationMs?: number;
@@ -143,6 +168,9 @@ export function registerOpenClawPlugin(
 
   api.on('subagent_spawning', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('subagent_spawning', { event, ctx });
       const e = event as { subagentId?: string; runId?: string };
       await rt.onSubagentStart(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
         subagent_id: e.subagentId, run_id: e.runId,
@@ -152,6 +180,9 @@ export function registerOpenClawPlugin(
 
   api.on('subagent_ended', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('subagent_ended', { event, ctx });
       const e = event as { subagentId?: string; runId?: string };
       await rt.onSubagentEnd(sid(ctx, e), e.subagentId || e.runId || 'unknown', {
         subagent_id: e.subagentId, run_id: e.runId,
@@ -161,6 +192,9 @@ export function registerOpenClawPlugin(
 
   api.on('before_agent_reply', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('before_agent_reply', { event, ctx });
       const e = event as { cleanedBody?: string };
       if (e.cleanedBody) rt.onUserPrompt(sid(ctx), e.cleanedBody);
     } catch { /* non-critical */ }
@@ -168,8 +202,16 @@ export function registerOpenClawPlugin(
 
   api.on('llm_output', async (event: unknown, ctx: unknown) => {
     try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('llm_output', { event, ctx });
       const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const sessionId = sid(ctx);
+      // Kept for the end-of-turn chat-span reconstruction. OpenClaw has
+      // no session file and no whole-conversation payload, so this event
+      // stream is the only record of which LLM call happened when.
+      // `createOpenClawSource` reads a `{ hook, event }` envelope.
+      rt.recordConversationEvent(sessionId, { hook: 'llm_output', event });
       if (e.usage) {
         rt.onLlmUsage(sessionId, {
           input: e.usage['input'], output: e.usage['output'],
@@ -181,17 +223,31 @@ export function registerOpenClawPlugin(
   });
 
   api.on('session_start', async (_e: unknown, ctx: unknown) => {
-    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('session_start', { event: _e, ctx });
+      rt.onSessionStart(sid(ctx));
+    } catch { /* non-critical */ }
   });
 
   api.on('session_end', async (_e: unknown, ctx: unknown) => {
-    try { await rt.onSessionEnd(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('session_end', { event: _e, ctx });
+      await rt.onSessionEnd(sid(ctx));
+    } catch { /* non-critical */ }
   });
 
   api.on('agent_end', async (_e: unknown, ctx: unknown) => {
     try {
-      await rt.onTurnEnd(sid(ctx));
-      await rt.recordTurnMetric();
+      // Debug-only sampling switch — NOT gated by monitor state, see
+      // scripts/lib/payload-dump.ts module doc.
+      rt.dumpEvent('agent_end', { event: _e, ctx });
+      const sessionId = sid(ctx);
+      await rt.onTurnEnd(sessionId);
+      await rt.recordTurnMetric(sessionId);
     } catch { /* non-critical */ }
   });
 

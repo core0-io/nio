@@ -186,7 +186,8 @@ write_hooks_json() {
       { "matcher": "startup|resume|clear",
         "hooks": [
           { "type": "command", "command": "node $scripts/scanner-hook.js --platform codex", "timeout":30,
-            "statusMessage": "Nio: scanning installed skills..." }
+            "statusMessage": "Nio: scanning installed skills..." },
+          { "type": "command", "command": "node $scripts/collector-hook.js --platform codex", "timeout":10 }
         ] }
     ],
     "UserPromptSubmit": [

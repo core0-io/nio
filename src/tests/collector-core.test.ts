@@ -13,13 +13,15 @@ import {
   type HookStdinPayload,
 } from '../scripts/lib/collector-core.js';
 import type { ResolvedMetricsConfig, CollectorLogsConfig } from '../adapters/common.js';
+import type { MeterProvider } from '@opentelemetry/sdk-metrics';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Each test gets its own tmpdir + audit file; we never delete — OS reaps
 // /tmp. Keeps the test file free of fs-destructive calls that Nio's own
 // Phase 4 behavioural analyser would (correctly) flag.
 
 function freshFixture(): { auditPath: string; logsConfig: CollectorLogsConfig } {
-  const dir = mkdtempSync(join(tmpdir(), 'nio-collector-core-'));
+  const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-collector-core-')));
   const auditPath = join(dir, 'audit.jsonl');
   return {
     auditPath,
@@ -41,6 +43,36 @@ const baseConfig: ResolvedMetricsConfig = {
 function readEntries(path: string): Array<Record<string, unknown>> {
   if (!existsSync(path)) return [];
   return readFileSync(path, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+}
+
+/**
+ * Close the turn, so the chat layer and the turn root are exported.
+ *
+ * Tool spans no longer need this — they go out at PostToolUse (see
+ * `eager-tool-spans.test.ts`). It is kept because a turn boundary is
+ * still what reclaims a span whose post-side event never arrived, and
+ * because several cases below assert on the whole finished tree.
+ */
+async function flushTurn(
+  sessionId: string,
+  platform: string,
+  logsConfig: CollectorLogsConfig,
+  tracerProvider: unknown,
+): Promise<void> {
+  await dispatchCollectorEvent({
+    event: 'Stop',
+    input: { session_id: sessionId },
+    platform,
+    config: baseConfig,
+    meterProvider: null,
+    tracerProvider: tracerProvider as never,
+    logsConfig,
+  });
+}
+
+/** Exported tool spans only — drops the turn root emitted by `flushTurn`. */
+function toolSpans<T extends { name: string }>(spans: readonly T[]): T[] {
+  return spans.filter((s) => s.name.startsWith('execute_tool '));
 }
 
 // ── toolSummary — cross-platform tool-name recognition ────────────────
@@ -84,6 +116,72 @@ describe('collector-core: toolSummary', () => {
   it('truncates long summaries to 300 chars', () => {
     const long = 'x'.repeat(500);
     assert.equal(toolSummary('Bash', { command: long }).length, 300);
+  });
+
+  /**
+   * Totality, not cosmetics. `tool_input` is unvalidated `JSON.parse`d
+   * hook stdin, and every reader of this function sits on the GUARD path
+   * between "the guard decided" and "the host was told": a throw here
+   * downgrades a Hermes block to an empty stdout + exit 1, and a Claude
+   * Code exit-2 deny to a non-blocking exit 1. Both were reproduced
+   * end-to-end — see guard-decision-survives-malformed-tool-input.test.ts.
+   *
+   * Every field this function reads is covered, because each `as string`
+   * cast was its own latent throw site.
+   */
+  describe('is total for non-string argument values', () => {
+    const NON_STRINGS: ReadonlyArray<[string, unknown]> = [
+      ['number', 123],
+      ['boolean', true],
+      ['object', { argv: ['rm', '-rf', '/'] }],
+      ['array', ['rm', '-rf', '/']],
+      ['null', null],
+    ];
+
+    // Field name per tool, matching the branch that reads it.
+    const CASES: ReadonlyArray<[string, string]> = [
+      ['Bash', 'command'],
+      ['terminal', 'command'],
+      ['exec', 'command'],
+      ['shell', 'command'],
+      ['Write', 'file_path'],
+      ['Edit', 'path'],
+      ['WebFetch', 'url'],
+      ['WebSearch', 'query'],
+      ['write_file', 'path'],
+      ['patch', 'file_path'],
+      ['read_file', 'path'],
+      ['fetch', 'url'],
+      ['http_request', 'url'],
+      ['mystery_tool', 'whatever'],
+    ];
+
+    for (const [tool, field] of CASES) {
+      for (const [label, value] of NON_STRINGS) {
+        it(`${tool} with a ${label} ${field} returns a string instead of throwing`, () => {
+          const out = toolSummary(tool, { [field]: value });
+          assert.equal(typeof out, 'string', `${tool}/${field}/${label} must yield a string`);
+        });
+      }
+    }
+
+    it('keeps the value rather than blanking it — a numeric command is summarised as its digits', () => {
+      assert.equal(toolSummary('Bash', { command: 123 }), '123');
+      assert.equal(toolSummary('terminal', { command: 123 }), '123');
+    });
+
+    it('still truncates a non-string command to 300 chars', () => {
+      assert.equal(toolSummary('Bash', { command: { blob: 'x'.repeat(500) } }).length, 300);
+    });
+
+    it('degrades a circular argument to the empty string rather than throwing', () => {
+      // Reachable from the in-process runtime, which passes live host
+      // objects rather than JSON-parsed ones.
+      const circular: Record<string, unknown> = { name: 'x' };
+      circular['self'] = circular;
+      assert.equal(toolSummary('Bash', { command: circular }), '');
+      assert.equal(toolSummary('mystery_tool', circular), '');
+    });
   });
 });
 
@@ -336,14 +434,14 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
 
     // Simulate the separate guard-hook process parking guard attrs.
     const key = spanKeyFn(preInput);
-    let s = ensureTurn(loadState(logsConfig), sessionId);
+    let s = ensureTurn(loadState(logsConfig, sessionId), sessionId);
     s = setPendingGuardAttrs(s, key, {
       'nio.guard.decision': 'allow',
       'nio.guard.risk_level': 'medium',
       'nio.guard.risk_score': 0.4,
       'nio.guard.eval_ms': 7,
     });
-    saveState(logsConfig, s);
+    saveState(logsConfig, s, sessionId);
 
     // Post: close the span. Guard attrs should be drained + merged in.
     await dispatchCollectorEvent({
@@ -359,7 +457,13 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    assert.equal(
+      toolSpans(tracer.finished()).length, 1,
+      'the tool span goes out at PostToolUse, not at turn close',
+    );
+    await flushTurn(sessionId, 'claude-code', logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1, 'exactly one tool span exported');
     const attrs = spans[0]!.attributes as Record<string, unknown>;
     assert.equal(attrs['nio.guard.decision'], 'allow');
@@ -368,7 +472,7 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
     assert.equal(attrs['nio.guard.eval_ms'], 7);
 
     // And the state file should no longer carry the drained entry.
-    const after = loadState(logsConfig);
+    const after = loadState(logsConfig, sessionId);
     assert.equal(after?.pending_guard_attrs?.[key], undefined);
 
     // Do NOT shutdown — the global tracer is shared across tests, and
@@ -422,7 +526,9 @@ describe('collector-core: PostToolUse drains pending_guard_attrs', () => {
       logsConfig,
     });
 
-    const spans = tracer.finished();
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+
+    const spans = toolSpans(tracer.finished());
     assert.equal(spans.length, 1, 'one execute_tool span should be emitted via composite fallback');
     assert.equal(spans[0]!.name, 'execute_tool terminal');
 
@@ -494,5 +600,339 @@ describe('deny-path one-shot span emit', () => {
 
     // Do NOT shutdown — the global tracer is shared across tests, and
     // shutting it down here would break later tests that re-register.
+  });
+});
+
+// ── SessionEnd after Stop must not mint a phantom empty turn ──────────
+//
+// Regression test for a bug introduced (and fixed in the same pass) while
+// wiring SessionEnd cleanup: Stop / SubagentStop / SessionEnd share one
+// branch in dispatchCollectorEvent. That branch used to call
+// `ensureTurn(prev, sessionId)` unconditionally — which MINTS a fresh
+// turn when the previous one was already closed (turn_trace_id === '').
+// On any platform that fires more than one of these events for the same
+// session (Claude Code fires both Stop and SessionEnd), the second event
+// would manufacture an empty turn and `endTurn` would immediately export
+// it as a real "invoke_agent UserPromptSubmit" span with no children and
+// no user prompt, plus an extra `nio.turn.count` increment. Neither
+// represents a real turn boundary.
+
+describe('collector-core: SessionEnd after Stop does not mint a phantom turn', () => {
+  it('SessionEnd immediately following Stop on the same session emits no extra span and does not bump nio.turn.count', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+
+    const sessionId = 'sess-phantom-turn';
+
+    // Fake meter that only counts adds against the turn-count instrument
+    // by name — recordToolUse (fired by PreToolUse below) creates its own
+    // separate 'nio.tool_use.count' counter and must not be conflated
+    // with 'nio.turn.count'.
+    let turnCounterAdds = 0;
+    const fakeMeterProvider = {
+      getMeter: () => ({
+        createCounter: (name: string) => ({
+          add: (n: number) => {
+            if (name === 'nio.turn.count') turnCounterAdds += n;
+          },
+        }),
+        createHistogram: () => ({ record: () => {} }),
+      }),
+      forceFlush: async () => {},
+    } as unknown as MeterProvider;
+
+    // PreToolUse opens a turn (real activity) but is never closed by a
+    // matching PostToolUse before Stop fires — mirrors the review's own
+    // repro (PreToolUse → Stop → SessionEnd).
+    await dispatchCollectorEvent({
+      event: 'PreToolUse',
+      input: {
+        tool_name: 'Bash',
+        tool_input: { command: 'echo hi' },
+        session_id: sessionId,
+        tool_use_id: 'call-1',
+        cwd: '/tmp',
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    // Stop closes the real turn: exactly one span, one turn-count tick.
+    await dispatchCollectorEvent({
+      event: 'Stop',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    const spansAfterStop = tracer.finished().length;
+    const turnCountAfterStop = turnCounterAdds;
+    assert.equal(spansAfterStop, 1, 'Stop should close exactly one turn span');
+    assert.equal(turnCountAfterStop, 1, 'Stop should bump nio.turn.count exactly once');
+
+    // SessionEnd fires right after, same session, no activity in between
+    // (Claude Code's hooks.json now registers both Stop and SessionEnd
+    // pointing at collector-hook.js).
+    await dispatchCollectorEvent({
+      event: 'SessionEnd',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: fakeMeterProvider,
+      tracerProvider: tracer.provider,
+      logsConfig,
+    });
+
+    assert.equal(
+      tracer.finished().length, spansAfterStop,
+      'SessionEnd after an already-closed turn must not emit a phantom empty turn span',
+    );
+    assert.equal(
+      turnCounterAdds, turnCountAfterStop,
+      'SessionEnd after an already-closed turn must not bump nio.turn.count',
+    );
+
+    // Do NOT shutdown — the global tracer is shared across tests, and
+    // shutting it down here would break later tests that re-register.
+  });
+});
+
+// ── resolveSpanKey — concurrent same-signature composite calls ────────
+//
+// Two or more in-flight calls that share tool_name + tool_summary (the
+// Hermes composite-key case: pre lacks tool_use_id, post has one but it
+// was never recorded against any pending entry) get suffixed keys from
+// allocateSpanKey (`terminal:ls`, `terminal:ls#2`, …). resolveSpanKey
+// must be able to find the `#N` entries too, not just the unsuffixed
+// base — see review I1.
+//
+// No id crosses the pre/post boundary in this fallback path, so nothing
+// here can recover which physical call a given post response *truly*
+// belongs to when completion order doesn't match allocation order. The
+// guaranteed contract is narrower than "always correct": every post, in
+// any arrival order, resolves to a DIFFERENT still-open entry — no span
+// is silently dropped, and pending_spans always drains back to empty.
+
+describe('collector-core: resolveSpanKey — concurrent same-signature composite calls', () => {
+  const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+  function pre(sessionId: string): HookStdinPayload {
+    return {
+      tool_name: 'terminal',
+      tool_input: { command: 'ls' },
+      session_id: sessionId,
+      // tool_use_id intentionally absent — mirrors Hermes's pre_tool_call.
+    };
+  }
+
+  function post(sessionId: string, tag: string): HookStdinPayload {
+    return {
+      tool_name: 'terminal',
+      tool_input: { command: 'ls' },
+      session_id: sessionId,
+      // Present here (mirrors Hermes's post_tool_call), but unrelated to
+      // any pending key since pre never recorded one.
+      tool_use_id: `call_${tag}`,
+      tool_response: { output: tag },
+    };
+  }
+
+  function spanStartMs(span: { startTime: readonly [number, number] }): number {
+    return span.startTime[0] * 1000 + Math.round(span.startTime[1] / 1_000_000);
+  }
+
+  it('FIFO completion: both concurrent spans are emitted with correct, distinct durations; pending_spans drains empty', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-fifo';
+
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await sleep(5);
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const mid = loadState(logsConfig, sessionId);
+    assert.equal(Object.keys(mid!.pending_spans).length, 2, 'two concurrent pending entries expected');
+    assert.ok('terminal:ls' in mid!.pending_spans && 'terminal:ls#2' in mid!.pending_spans);
+
+    // FIFO: the first call's post arrives first.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'first'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'second'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const mid2 = loadState(logsConfig, sessionId);
+    assert.deepEqual(mid2!.pending_spans, {}, 'pending_spans must drain empty — no leaked #N entry');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
+    assert.equal(spans.length, 2, 'both concurrent calls must produce a span (regression: 2nd used to vanish)');
+
+    const starts = spans.map(spanStartMs).sort((a, b) => a - b);
+    assert.ok(starts[1]! > starts[0]!, 'the two spans must carry distinct start times — one per pre entry, none reused');
+
+    const after = loadState(logsConfig, sessionId);
+    assert.deepEqual(after!.deferred_spans, [], 'deferred_spans must drain empty at end of turn');
+  });
+
+  it('LIFO completion: the later-processed post is not dropped, and no start time is reused across the two spans', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-lifo';
+
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await sleep(5);
+    await dispatchCollectorEvent({
+      event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    // LIFO: the second call's post arrives (is processed) before the first's.
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'second'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+    await dispatchCollectorEvent({
+      event: 'PostToolUse', input: post(sessionId, 'first'), platform: 'hermes',
+      config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+    });
+
+    const mid = loadState(logsConfig, sessionId);
+    assert.deepEqual(mid!.pending_spans, {}, 'pending_spans must drain empty even under out-of-order completion');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
+    assert.equal(spans.length, 2,
+      'out-of-order completion must not drop the later-processed post (regression: old code returned durationMs:null for it)');
+
+    const starts = spans.map(spanStartMs).sort((a, b) => a - b);
+    assert.notEqual(starts[0], starts[1],
+      'the second-processed post must not be matched onto the same start time already consumed by the first');
+  });
+
+  it('three concurrent same-signature calls all resolve to distinct spans in FIFO order', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { loadState } = await import('../scripts/lib/traces-state-store.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-triple';
+
+    for (let i = 0; i < 3; i++) {
+      await dispatchCollectorEvent({
+        event: 'PreToolUse', input: pre(sessionId), platform: 'hermes',
+        config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+      });
+      await sleep(5);
+    }
+
+    const mid = loadState(logsConfig, sessionId);
+    assert.deepEqual(
+      Object.keys(mid!.pending_spans).sort(),
+      ['terminal:ls', 'terminal:ls#2', 'terminal:ls#3'],
+    );
+
+    for (const tag of ['a', 'b', 'c']) {
+      await dispatchCollectorEvent({
+        event: 'PostToolUse', input: post(sessionId, tag), platform: 'hermes',
+        config: baseConfig, meterProvider: null, tracerProvider: tracer.provider, logsConfig,
+      });
+    }
+
+    const after = loadState(logsConfig, sessionId);
+    assert.deepEqual(after!.pending_spans, {}, 'pending_spans must drain empty for three concurrent calls too');
+
+    await flushTurn(sessionId, 'hermes', logsConfig, tracer.provider);
+    const spans = toolSpans(tracer.finished());
+    assert.equal(spans.length, 3, 'all three concurrent calls must each produce a span');
+
+    const starts = spans.map(spanStartMs);
+    assert.equal(new Set(starts).size, 3, 'all three spans must carry distinct start times');
+  });
+});
+
+// ── Malformed payload fields: degrade, never lose the whole branch ─────
+
+/**
+ * `dispatchCollectorEvent` catches everything its body throws and reports
+ * a diagnostic, so these are telemetry-quality defects rather than
+ * enforcement ones (unlike the sites in
+ * guard-decision-survives-malformed-payload.test.ts, which run outside
+ * any catch). What made them worth fixing anyway is WHERE the throw was:
+ * both sites run before their branch's `writeAuditLog`, so the whole
+ * event vanished — no audit row, no span — instead of degrading.
+ *
+ * MUTATION: restore `input.tool_name ?? ''` / `(prompt as string)` in
+ * collector-core.ts — the matching case's audit entry disappears.
+ */
+describe('collector-core: malformed payload fields degrade rather than lose the event', () => {
+  it('a non-string tool_name still writes its PostToolUse audit entry', async () => {
+    const { auditPath, logsConfig } = freshFixture();
+    await dispatchCollectorEvent({
+      event: 'PostToolUse',
+      // `tool_name` reaches `parseMcpToolName`, whose first statement is
+      // `toolName.startsWith('mcp__')`.
+      input: {
+        session_id: 'sess-malformed-name',
+        tool_name: 12345 as unknown as string,
+        tool_input: { command: 'ls' },
+        tool_response: { output: 'ok' },
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: null,
+      logsConfig,
+    });
+    const entries = readEntries(auditPath);
+    assert.equal(entries.length, 1, 'the audit entry must survive a non-string tool_name');
+    assert.equal(entries[0]!['event'], 'PostToolUse');
+    assert.equal(entries[0]!['tool_name'], '12345');
+  });
+
+  it('a non-string task_input.prompt still writes its TaskCreated audit entry', async () => {
+    const { auditPath, logsConfig } = freshFixture();
+    await dispatchCollectorEvent({
+      event: 'TaskCreated',
+      input: {
+        session_id: 'sess-malformed-prompt',
+        task_id: 'task-1',
+        task_input: { prompt: { text: 'do a thing' } as unknown as string },
+      },
+      platform: 'claude-code',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: null,
+      logsConfig,
+    });
+    const entries = readEntries(auditPath);
+    assert.equal(entries.length, 1, 'the audit entry must survive a non-string task prompt');
+    assert.equal(entries[0]!['task_id'], 'task-1');
+    assert.equal(
+      entries[0]!['task_summary'], '{"text":"do a thing"}',
+      'the prompt content must still reach the summary, serialised',
+    );
   });
 });

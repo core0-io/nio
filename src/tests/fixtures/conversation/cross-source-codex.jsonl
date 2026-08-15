@@ -1,0 +1,11 @@
+{"type":"turn_context","timestamp":"2026-01-01T00:00:00.000Z","payload":{"turn_id":"turn-cross","model":"codex-cross-placeholder","effort":"medium"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:01.000Z","payload":{"type":"reasoning","id":"reason-cross-a","summary":[{"type":"summary_text","text":"placeholder reasoning: deciding how to search"}]}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:02.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"placeholder reply: I will search the docs"}]}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:03.000Z","payload":{"type":"function_call","id":"fc-cross-a","name":"search_docs","arguments":"{\"query\":\"placeholder\"}","call_id":"call-cross-a"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:04.000Z","payload":{"type":"function_call_output","id":"fco-cross-a","call_id":"call-cross-a","output":"placeholder tool result"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:05.000Z","payload":{"type":"reasoning","id":"reason-cross-b","summary":[{"type":"summary_text","text":"placeholder reasoning: deciding how to patch"}]}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:06.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"placeholder reply: I will apply the patch"}]}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:07.000Z","payload":{"type":"function_call","id":"fc-cross-b","name":"apply_patch","arguments":"{\"path\":\"placeholder.txt\"}","call_id":"call-cross-b"}}
+{"type":"response_item","timestamp":"2026-01-01T00:00:08.000Z","payload":{"type":"function_call_output","id":"fco-cross-b","call_id":"call-cross-b","output":"placeholder tool result 2"}}
+{"type":"event_msg","timestamp":"2026-01-01T00:00:09.000Z","payload":{"type":"task_complete","turn_id":"turn-cross","time_to_first_token_ms":42}}
+not valid json at all

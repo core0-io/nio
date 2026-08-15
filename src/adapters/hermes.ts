@@ -3,6 +3,7 @@
 
 import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping for Hermes.
@@ -72,9 +73,14 @@ export class HermesAdapter implements HookAdapter {
 
   parseInput(raw: unknown): HookInput {
     const event = raw as Record<string, unknown>;
-    const hookEvent = (event.hook_event_name as string) || '';
+    // `asText`, not `as string`: `raw` is unvalidated host input, and both
+    // of these are read by string methods downstream (`checkToolGate`'s
+    // MCP-name parse, the allow/deny-list match, this adapter's own
+    // prefix-matching `mapToolToActionType`). See asText's doc for why a
+    // throw here loses the guard decision rather than just telemetry.
+    const hookEvent = asText(event.hook_event_name);
     return {
-      toolName: (event.tool_name as string) || '',
+      toolName: asText(event.tool_name),
       toolInput: (event.tool_input as Record<string, unknown>) || {},
       eventType: hookEvent.startsWith('post_') ? 'post' : 'pre',
       sessionId: (event.session_id as string) || undefined,
@@ -120,19 +126,24 @@ export class HermesAdapter implements HookAdapter {
     let actionData: Record<string, unknown>;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText`: these are
+      // model-authored, unvalidated values feeding fields the analysers
+      // treat as strings. `content.slice(10_000)` below used to throw on
+      // a non-string content, outside the orchestrator's try/catch,
+      // killing the process before its deny reached the host.
       case 'exec_command':
         actionData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
         };
         break;
 
       case 'write_file': {
-        const content = (input.toolInput.content as string) ||
-                        (input.toolInput.file_text as string) || '';
+        const content = asText(input.toolInput.content) ||
+                        asText(input.toolInput.file_text);
         actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.path) ||
+                asText(input.toolInput.file_path),
           content_preview: content.slice(0, 10_000),
         };
         break;
@@ -140,15 +151,20 @@ export class HermesAdapter implements HookAdapter {
 
       case 'read_file':
         actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.path) ||
+                asText(input.toolInput.file_path),
         };
         break;
 
       case 'network_request':
         actionData = {
+          // NOT `asText`: `method` is only ever JSON.stringify'd
+          // (action-orchestrator.ts's Phase 5 synthetic request.json;
+          // the Phase 2 network analyser destructures it and never reads
+          // it), so no runtime value can make it throw. Left as-is
+          // rather than coerced for uniformity — an unkillable change.
           method: (input.toolInput.method as string) || 'GET',
-          url: (input.toolInput.url as string) || '',
+          url: asText(input.toolInput.url),
           body_preview: input.toolInput.body as string | undefined,
         };
         break;

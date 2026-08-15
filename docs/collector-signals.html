@@ -42,25 +42,30 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Overview</div>
         <h1><em>Collector Signals</em> — what Nio captures while an agent runs</h1>
-        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — covering every tool invocation, every guard decision, every conversation turn. Schemas are aligned across all three host platforms (Claude Code, Hermes, OpenClaw) so the same dashboards work everywhere. This page is the high-level overview; each signal has its own deep-dive page below.</p>
+        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — covering every tool invocation, every guard decision, every conversation turn. Schemas are aligned across all six host platforms (Claude Code, Codex, Hermes, OpenClaw, Pi, opencode) so the same dashboards work everywhere. This page is the high-level overview; each signal has its own deep-dive page below.</p>
       </div>
 
       <div class="doc">
 
+        <div class="callout warn">
+          <div class="title">Nothing is captured until you arm the session</div>
+          <p>Setting <code>collector.endpoint</code> does <strong>not</strong> start collection. Every session is silent by default; all three OTLP signals stay off until someone runs <a href="nio-monitor.html"><code>/nio-monitor on</code></a> (<code>/nio monitor on</code> on OpenClaw and Hermes) <em>inside that session</em>, or until an operator sets <code>collector.monitor_all_sessions: true</code>. See <a href="#gating">Capture gating</a> for the exact rules — including the two things the switch does <em>not</em> control: guard enforcement and the local <code>~/.nio/audit.jsonl</code>.</p>
+        </div>
+
         <h2 id="architecture">Architecture</h2>
-        <p>The three host platforms each have their own runtime model — Claude Code and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.</p>
-        <pre><code>   ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
-   │ Claude Code │     │     Hermes     │     │   OpenClaw    │
-   │             │     │                │     │               │
-   │ per-hook    │     │ per-hook spawn │     │ single daemon │
-   │ spawn       │     │ (node hook-cli)│     │ process       │
-   └──────┬──────┘     └────────┬───────┘     └───────┬───────┘
-          │                     │                     │
-          ▼                     ▼                     ▼
+        <p>The six host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event; OpenClaw, Pi, and opencode load Nio in-process and stay resident — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.</p>
+        <pre><code>   ┌─────────────┐     ┌────────────────┐     ┌────────────────────┐
+   │ Claude Code │     │     Hermes     │     │  OpenClaw · Pi ·   │
+   │   · Codex   │     │                │     │      opencode      │
+   │ per-hook    │     │ per-hook spawn │     │ in-process plugin  │
+   │ spawn       │     │ (node hook-cli)│     │    (resident)      │
+   └──────┬──────┘     └────────┬───────┘     └─────────┬──────────┘
+          │                     │                       │
+          ▼                     ▼                       ▼
    ┌──────────────────────────────────────┐   ┌──────────────┐
    │   on-disk state cache                │   │ in-memory    │
    │   bridges span lifecycle across      │   │ Map&lt;sessionId│
-   │   short-lived hook processes         │   │  ,State&gt;     │
+   │   short-lived hook processes         │   │ ,CollectorS.&gt;│
    └──────────────────┬───────────────────┘   └──────┬───────┘
                       │                              │
                       └──────────────┬───────────────┘
@@ -90,7 +95,7 @@
                     Metrics   Traces       Logs
                     (OTLP)    (OTLP)    (OTLP + local audit log)</code></pre>
 
-        <p style="font-size: 13px; color: var(--fg-2);">Claude Code and Hermes have to bridge span lifecycle across short-lived hook processes — a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B share state via an on-disk cache. OpenClaw's daemon model holds the same state in memory. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.</p>
+        <p style="font-size: 13px; color: var(--fg-2);">Claude Code, Codex, and Hermes have to bridge span lifecycle across short-lived hook processes — a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B share state via an on-disk cache. The in-process platforms (OpenClaw, Pi, opencode) hold the same state in memory, in the <code>Map&lt;sessionId, CollectorState&gt;</code> owned by <code>InProcessPluginRuntime</code>. Both end up calling the same trace-collector helpers; the only difference is where the state lives between events.</p>
 
         <h2 id="naming">Naming conventions</h2>
         <ul>
@@ -107,7 +112,7 @@
             <span class="tag">Metrics</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/metrics</code></span>
           </div>
-          <p>Four instruments — three counters and one histogram — covering tool invocations, turn boundaries, guard decisions, and the risk-score distribution. No local backup; metrics drop on the floor when the OTLP endpoint is empty.</p>
+          <p>Four instruments — three counters and one histogram — covering tool invocations, turn boundaries, guard decisions, and the risk-score distribution. No local backup; metrics drop on the floor when the OTLP endpoint is empty or the session was never armed.</p>
           <p><a href="collector-signals-metrics.html"><strong>Metrics →</strong></a></p>
         </div>
 
@@ -116,7 +121,7 @@
             <span class="tag">Traces</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/traces</code></span>
           </div>
-          <p>One trace per conversation turn, with child spans per tool call and per subagent dispatch. Span names follow GenAI conventions (<code>invoke_agent UserPromptSubmit</code>, <code>execute_tool &lt;name&gt;</code>) where applicable. No local backup.</p>
+          <p>One trace per conversation turn — <code>invoke_agent UserPromptSubmit</code> at the root, one <code>chat &lt;model&gt;</code> span per LLM call, one <code>execute_tool &lt;name&gt;</code> span per tool call, one <code>task:execute</code> per subagent dispatch. The <code>session</code> span is its own trace, and each turn root carries a <strong>span link</strong> back to it. Small conversation content rides these spans (<code>nio.chat.reply</code>, <code>gen_ai.tool.call.arguments</code>, ≤2 KB); anything bigger goes to the logs signal. No local backup.</p>
           <p><a href="collector-signals-traces.html"><strong>Traces →</strong></a></p>
         </div>
 
@@ -125,17 +130,54 @@
             <span class="tag">Logs</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/logs</code> + local <code>~/.nio/audit.jsonl</code></span>
           </div>
-          <p>An audit-log entry per guard decision, per skill scan, per session lifecycle event, and per dispatched hook event. Dual-written: OTEL Logs export and a local JSONL file (offline / air-gapped friendly).</p>
+          <p>Two kinds of record. <strong>Audit entries</strong> — one per guard decision, skill scan, session lifecycle event and dispatched hook event — are dual-written: an OTEL Logs export (gated) and a local JSONL file (never gated, offline / air-gapped friendly). <strong>Content records</strong> — model reasoning, tool output, and any reply or tool arguments too big for the 2 KB span budget — are OTLP-only and never touch the local file; they join back to their span through <code>nio.span_id</code>.</p>
           <p><a href="collector-signals-logs.html"><strong>Logs →</strong></a></p>
         </div>
 
+        <h2 id="gating">Capture gating</h2>
+        <p>Nio exports nothing by default. Each of the three signals is created only for sessions the user explicitly armed, or for every session when <code>collector.monitor_all_sessions: true</code> is set.</p>
+
+        <table>
+          <thead><tr><th>State</th><th>metrics</th><th>traces</th><th>logs (OTLP)</th><th><code>~/.nio/audit.jsonl</code></th><th>guard</th></tr></thead>
+          <tbody>
+            <tr><td>Default (no <code>/nio-monitor</code>)</td><td>off</td><td>off</td><td>off</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+            <tr><td>After <code>/nio-monitor on</code></td><td>on</td><td>on</td><td>on</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+            <tr><td>After <code>/nio-monitor off</code></td><td>off</td><td>off</td><td>off</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+            <tr><td><code>monitor_all_sessions: true</code></td><td>on</td><td>on</td><td>on</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+          </tbody>
+        </table>
+
+        <p>Conversation content is gated by exactly this switch on both signals it uses: the content records need a logger provider, which an unarmed session never builds, and the span attributes that carry small bodies (<code>nio.chat.reply</code>, <code>gen_ai.tool.call.arguments</code>) ride the traces provider, which an unarmed session never builds either.</p>
+
+        <p><strong>Arming</strong> is <code>/nio-monitor on</code> on the platforms that install the focused <code>nio-*</code> skills (Claude Code, Codex, Pi, opencode) and <code>/nio monitor on</code> on OpenClaw and Hermes, which keep the unified <code>/nio</code> as their only entry point. Both forms run the same code. Claude Code is the only host whose session-id environment variable is verified, so everywhere else <code>on</code> leaves a <em>pending arm</em> that the next hook event from the same directory claims (60 s TTL). Full behaviour: <a href="nio-monitor.html"><code>/nio-monitor</code></a>.</p>
+
+        <p>The gate sits <strong>before OTEL provider creation</strong> — an unmonitored session does not initialise exporters at all, so the cost is one small file read per hook event. This includes the SessionStart skill scanner, whose <code>session_scan</code> records would otherwise carry the user's installed-skill inventory and its risk levels off the machine before anything was armed.</p>
+
+        <div class="callout">
+          <div class="title">Two things are outside the gate</div>
+          <ul>
+            <li><strong>Guard enforcement.</strong> Phase 0–6 risk evaluation and blocking run regardless — with capture off the guard still evaluates and still denies. The switch controls reporting, not enforcement. Phases 0–4 are local pattern/AST matching with no network I/O. Phase 5 (<code>guard.llm_analyser</code>) sends the content under evaluation to the Anthropic API when enabled; Phase 6 (<code>guard.external_analyser</code>) issues a GET-only request per configured endpoint to fetch a score, without sending any evaluated content. Both are independent of monitor state and both ship disabled by default.</li>
+            <li><strong>Local audit log.</strong> <code>~/.nio/audit.jsonl</code> is written regardless, since it never leaves the machine and backs <a href="nio-report.html"><code>/nio report</code></a>. Only its OTLP leg is conditional.</li>
+          </ul>
+        </div>
+
+        <div class="callout warn">
+          <div class="title">One limitation, on the in-process hosts (OpenClaw · Pi · opencode)</div>
+          <p>These three load Nio into a long-lived host process, and OTEL counters there are cumulative for the life of that process. A host in which no session has ever been armed creates no providers and exports nothing. But once any session has been armed and recorded a counter, the metrics exporter keeps re-sending its accumulated totals about once a second until the host restarts — disarming, session end and the arm-record deletion all stop <em>new</em> data being collected, but none of them can stop that timer. The three hook platforms (Claude Code, Codex, Hermes) run one process per hook event, so nothing outlives it.</p>
+        </div>
+
+        <p>State lives in <code>${NIO_HOME}/monitored-sessions.json</code>, separate from <code>traces-state-store-&lt;session&gt;.json</code> — session-scoped durable state versus turn-scoped ephemeral state. There is <strong>no backfill</strong>: capture starts at the moment <code>/nio-monitor</code> runs, and nothing that happened before it is captured.</p>
+
         <h2 id="config">Configuration</h2>
-        <p>All three signals are gated by the <code>collector</code> section in <code>~/.nio/config.yaml</code>. Full field-by-field reference: <a href="configuration.html#collector">Configuration · collector</a>.</p>
+        <p>All three signals are gated by the <code>collector</code> section in <code>~/.nio/config.yaml</code> — and, on top of that, by the per-session switch above. Full field-by-field reference: <a href="configuration.html#collector">Configuration · collector</a>.</p>
 
         <details>
           <summary>YAML cheatsheet (click to expand)</summary>
           <pre><code>collector:
   endpoint: ""                      # OTLP base URL; empty = no OTLP export at all
+  monitor_all_sessions: false       # false (default) = every session silent until armed
+                                    #   in-session with /nio-monitor on (/nio monitor on
+                                    #   on OpenClaw + Hermes); true = capture every session
   api_key: ""                       # Bearer token
   timeout: 5000                     # milliseconds
   protocol: http                    # http | grpc
@@ -145,14 +187,21 @@
     enabled: true                   # OTLP traces export on/off
   logs:
     enabled: true                   # OTLP logs export on/off
-    local: true                     # local JSONL backup on/off
-    path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store.json
-    max_size_mb: 100                # rotation threshold for the local file</code></pre>
+    local: true                     # local JSONL backup on/off (audit entries only)
+    path: "~/.nio/audit.jsonl"      # audit log + (sibling) traces-state-store-&lt;session&gt;.json
+    max_size_mb: 100                # rotation threshold for the local file
+  content_limits:                   # per-kind caps for content records, in UTF-8 bytes
+    thinking: 65536
+    text: 65536
+    user_prompt: 32768
+    tool_input: 16384
+    tool_output: 32768</code></pre>
         </details>
 
         <ul>
-          <li>When <code>collector.endpoint</code> is empty, the corresponding provider factory returns <code>null</code> and the platform code skips emit.</li>
-          <li>The audit-log local JSONL still works (controlled by <code>collector.logs.local</code>) even without an endpoint — handy for offline / air-gapped use.</li>
+          <li><strong>Two independent switches.</strong> <code>collector.endpoint</code> says <em>where</em> telemetry could go; the per-session monitor state says <em>whether</em> it is collected at all. A configured endpoint on its own captures nothing.</li>
+          <li>When <code>collector.endpoint</code> is empty, the corresponding provider factory returns <code>null</code> and the platform code skips emit — even for an armed session.</li>
+          <li>The audit-log local JSONL still works (controlled by <code>collector.logs.local</code>) without an endpoint <em>and</em> without arming — handy for offline / air-gapped use.</li>
         </ul>
 
       </div>

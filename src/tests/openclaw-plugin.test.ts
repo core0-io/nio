@@ -8,6 +8,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
+import { writeCaptureOnConfig } from './helpers/capture-on.js';
+
+// See helpers/capture-on.ts: capture is off by default, so a file
+// asserting span wiring has to turn it on or every assertion below
+// collapses into "nothing was emitted". Runs at module scope, before
+// the first cached config read.
+{
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-oc-plugin-tests-')));
+  writeCaptureOnConfig(home);
+  process.env.NIO_HOME = home;
+}
 
 /** Minimal stand-in for OpenClaw's plugin register API. */
 function fakeApi() {
@@ -72,7 +84,9 @@ async function withIsolatedNioHome<T>(
   const prev = process.env.NIO_HOME;
   const nioHome = mkdtempSync(join(tmpdir(), 'nio-oc-plugin-test-'));
   process.env.NIO_HOME = nioHome;
-  if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+  // Capture on: this file asserts span/audit wiring, not the monitor
+  // gate, and the gate is closed by default (see helpers/capture-on.ts).
+  writeCaptureOnConfig(nioHome, configYaml);
   try {
     return await fn(nioHome);
   } finally {
@@ -211,9 +225,21 @@ describe('OpenClaw plugin — characterization', () => {
       await api.handlers.get('agent_end')!({}, CTX);
 
       const spans = tracer.finished();
-      assert.equal(spans.length, 1);
-      assert.equal(spans[0]!.attributes['nio.turn.user_prompt'], 'hello there');
-      assert.equal(spans[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+      // Turn close now ALSO reconstructs a chat span from the
+      // accumulated llm_output event, so a bare `spans.length === 1` no
+      // longer describes this path. What it pinned still holds: exactly
+      // one turn root, carrying the prompt and the usage — plus the
+      // total, kept explicitly, because per-kind counts alone would let
+      // a third kind of span slip in unnoticed.
+      assert.equal(spans.length, 2, 'exactly one turn root and one chat span — nothing else');
+      const turnRoots = spans.filter((s) => s.name.startsWith('invoke_agent'));
+      assert.equal(turnRoots.length, 1);
+      assert.equal(turnRoots[0]!.attributes['nio.turn.user_prompt'], 'hello there');
+      assert.equal(turnRoots[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+      assert.equal(
+        spans.filter((s) => s.name.startsWith('chat')).length, 1,
+        'and the llm_output event the plugin accumulated becomes one chat span',
+      );
     } finally {
       await tracer.shutdown();
     }

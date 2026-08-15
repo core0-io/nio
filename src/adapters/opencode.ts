@@ -6,6 +6,7 @@ import type {
   ExecCommandData, FileOperationData, NetworkRequestData,
 } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping for opencode.
@@ -98,7 +99,10 @@ export class OpenCodeAdapter implements HookAdapter {
   parseInput(raw: unknown): HookInput {
     const event = (raw ?? {}) as Record<string, unknown>;
     return {
-      toolName: (event.tool as string) || '',
+      // `asText`, not `as string`: opencode runs Nio in-process and hands
+      // the plugin a live host object. See asText — `toolName` is read by
+      // string methods downstream (MCP-name parse, deny/allow-list match).
+      toolName: asText(event.tool),
       toolInput: (event.args as Record<string, unknown>) || {},
       // The after-hook payload carries `output`; the before-hook does not.
       eventType: 'output' in event ? 'post' : 'pre',
@@ -136,9 +140,14 @@ export class OpenCodeAdapter implements HookAdapter {
     let actionData: ActionData;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText`: these are
+      // model-authored, unvalidated values feeding fields the analysers
+      // treat as strings. `content.slice(10_000)` below used to throw on
+      // a non-string content, outside the orchestrator's try/catch,
+      // killing the process before its deny reached the host.
       case 'exec_command': {
         const data: ExecCommandData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
           cwd: input.cwd,
         };
@@ -157,13 +166,13 @@ export class OpenCodeAdapter implements HookAdapter {
         // `*** Add|Update|Delete File:` markers). Without extracting
         // them, every apply_patch call would reach the audit log with an
         // empty path and give Phase 3 nothing to scan.
-        const patchText = input.toolInput.patchText as string | undefined;
+        const patchText = asText(input.toolInput.patchText);
         const content =
-          (input.toolInput.content as string) ||
-          (input.toolInput.newString as string) ||
-          patchText || '';
+          asText(input.toolInput.content) ||
+          asText(input.toolInput.newString) ||
+          patchText;
         const data: FileOperationData = {
-          path: (input.toolInput.filePath as string) || firstPatchTarget(patchText) || '',
+          path: asText(input.toolInput.filePath) || firstPatchTarget(patchText) || '',
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
@@ -172,7 +181,7 @@ export class OpenCodeAdapter implements HookAdapter {
 
       case 'read_file': {
         const data: FileOperationData = {
-          path: (input.toolInput.filePath as string) || '',
+          path: asText(input.toolInput.filePath),
         };
         actionData = data;
         break;
@@ -182,8 +191,8 @@ export class OpenCodeAdapter implements HookAdapter {
         const data: NetworkRequestData = {
           method: 'GET',
           url:
-            (input.toolInput.url as string) ||
-            (input.toolInput.query as string) || '',
+            asText(input.toolInput.url) ||
+            asText(input.toolInput.query),
         };
         actionData = data;
         break;

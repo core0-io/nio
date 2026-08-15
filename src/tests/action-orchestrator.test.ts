@@ -8,7 +8,7 @@ import { _setDiagnosticsAuditPathForTests } from '../adapters/diagnostics.js';
 // Sandbox diagnostic writes so tests never touch ~/.nio/audit.jsonl.
 let testAuditDir: string;
 before(() => {
-  testAuditDir = mkdtempSync(join(tmpdir(), 'nio-action-orchestrator-test-'));
+  testAuditDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-action-orchestrator-test-')));
   _setDiagnosticsAuditPathForTests(join(testAuditDir, 'audit.jsonl'));
 });
 after(() => {
@@ -300,6 +300,7 @@ describe('ActionOrchestrator: Phase 5/6 options', () => {
 
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 interface ScorerOpts {
   /**

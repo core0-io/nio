@@ -17,10 +17,27 @@
  * unaffected because that env scope wins inside the child.
  */
 
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 if (!process.env.NIO_HOME) {
-  process.env.NIO_HOME = mkdtempSync(join(tmpdir(), 'nio-test-home-'));
+  const home = mkdtempSync(join(tmpdir(), 'nio-test-home-'));
+  process.env.NIO_HOME = home;
+  // Remove it again on the way out. This module runs via `node --import`,
+  // BEFORE node:test exists, so `after()` is not available here — but a
+  // 'exit' listener is, and it is synchronous, which `rmSync` needs.
+  //
+  // Without this, every test FILE leaves one directory behind: 16 922 of
+  // them had accumulated in $TMPDIR on the author's machine, the single
+  // largest contributor to a 50 918-directory pile (review finding M2).
+  // `trackTempDir` covers the directories tests create for themselves;
+  // this covers the one the harness creates for them.
+  process.on('exit', () => {
+    try {
+      rmSync(home, { recursive: true, force: true });
+    } catch {
+      // Best-effort: a leftover directory is not worth failing a run over.
+    }
+  });
 }

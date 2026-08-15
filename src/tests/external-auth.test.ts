@@ -27,11 +27,12 @@ import {
   _resetOAuthRegistryForTests,
 } from '../core/analysers/external/auth.js';
 import { _setDiagnosticsAuditPathForTests, DiagnosticCollector } from '../adapters/diagnostics.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Sandbox diagnostic writes so tests never touch ~/.nio/audit.jsonl.
 let testAuditDir: string;
 before(() => {
-  testAuditDir = mkdtempSync(join(tmpdir(), 'nio-external-auth-test-'));
+  testAuditDir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-external-auth-test-')));
   _setDiagnosticsAuditPathForTests(join(testAuditDir, 'audit.jsonl'));
 });
 after(() => {
@@ -121,7 +122,7 @@ describe('OAuthAuthStrategy (client_credentials)', () => {
 
   beforeEach(async () => {
     _resetOAuthRegistryForTests();
-    cacheDir = await mkdtemp(join(tmpdir(), 'nio-oauth-test-'));
+    cacheDir = trackTempDir(await mkdtemp(join(tmpdir(), 'nio-oauth-test-')));
   });
 
   afterEach(() => {
@@ -239,7 +240,7 @@ describe('OAuth cross-endpoint sharing via registry', () => {
 
   beforeEach(async () => {
     _resetOAuthRegistryForTests();
-    cacheDir = await mkdtemp(join(tmpdir(), 'nio-oauth-share-test-'));
+    cacheDir = trackTempDir(await mkdtemp(join(tmpdir(), 'nio-oauth-share-test-')));
   });
 
   afterEach(() => {

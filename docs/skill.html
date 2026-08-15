@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Skill · /nio</div>
         <h1>The <em>/nio</em> skill — one umbrella entry, plus focused skills.</h1>
-        <p class="lead">After install, your agent has an umbrella skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>doctor</code>, <code>config</code>, <code>external-score</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>. On Claude Code and Codex each capability is <em>also</em> a focused standalone skill — see <a href="#focused">Focused skills</a>.</p>
+        <p class="lead">After install, your agent has an umbrella skill named <code>nio</code>. It routes on the first argument: <code>scan</code>, <code>action</code>, <code>report</code>, <code>doctor</code>, <code>config</code>, <code>external-score</code>, <code>monitor</code>, or <code>reset</code>. If you pass a path, it defaults to <code>scan</code>. On Claude Code, Codex, Pi and opencode each capability is <em>also</em> a focused standalone skill — see <a href="#focused">Focused skills</a>.</p>
       </div>
 
       <div class="doc">
@@ -51,10 +51,10 @@
         <pre><code>/nio &lt;subcommand&gt; [args...]
 /nio &lt;path&gt;                   # shorthand for `scan &lt;path&gt;`</code></pre>
 
-        <p><strong>Trigger by platform:</strong> Claude Code, OpenClaw, and Hermes route <code>/nio</code> through their slash-command surface. Codex CLI does not currently support custom slash commands — there, the same skill is reachable via Codex's skill-trigger conventions: type <code>$nio</code> to invoke explicitly, or describe the action in natural language and Codex picks the skill from <code>SKILL.md</code>. The subcommand grammar below is identical across all platforms. See <a href="#focused">Focused skills</a> for the per-capability standalone skills on Claude Code and Codex.</p>
+        <p><strong>Trigger by platform:</strong> Claude Code, OpenClaw, Hermes, Pi and opencode route <code>/nio</code> through their slash-command surface. Codex CLI does not currently support custom slash commands — there, the same skill is reachable via Codex's skill-trigger conventions: type <code>$nio</code> to invoke explicitly, or describe the action in natural language and Codex picks the skill from <code>SKILL.md</code>. The subcommand grammar below is identical across all platforms. See <a href="#focused">Focused skills</a> for the per-capability standalone skills.</p>
 
-        <h2 id="focused">Focused skills (Claude Code &amp; Codex)</h2>
-        <p>On <strong>Claude Code</strong> and <strong>Codex</strong>, each capability is <em>also</em> published as a focused, single-purpose skill — so a plain-language request routes straight to the right tool instead of matching the broad umbrella and re-routing. The unified <code>/nio</code> stays the umbrella entry point and full reference.</p>
+        <h2 id="focused">Focused skills (Claude Code · Codex · Pi · opencode)</h2>
+        <p>On <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Pi</strong> and <strong>opencode</strong>, each capability is <em>also</em> published as a focused, single-purpose skill — so a plain-language request routes straight to the right tool instead of matching the broad umbrella and re-routing. The unified <code>/nio</code> stays the umbrella entry point and full reference.</p>
         <table>
           <thead><tr><th>Focused skill</th><th>Does</th><th>Same as</th></tr></thead>
           <tbody>
@@ -64,9 +64,19 @@
             <tr><td><code><a href="nio-config.html">nio-config</a></code></td><td>View / set protection level</td><td><code>/nio config</code></td></tr>
             <tr><td><code><a href="nio-doctor.html">nio-doctor</a></code></td><td>Validate config + connectivity</td><td><code>/nio doctor</code></td></tr>
             <tr><td><code><a href="nio-external-score.html">nio-external-score</a></code></td><td>Snapshot external scoring-endpoint scores</td><td><code>/nio external-score</code></td></tr>
+            <tr><td><code><a href="nio-monitor.html">nio-monitor</a></code></td><td>Turn telemetry capture on/off for this session</td><td><code>/nio monitor</code></td></tr>
           </tbody>
         </table>
-        <p>On Claude Code these are slash commands (<code>/nio-scan</code>, <code>/nio-config</code>, …). Codex has no slash commands — trigger with <code>$nio-scan</code> / <code>$nio-external-score</code> or natural language. <strong>OpenClaw and Hermes</strong> do not ship the focused skills; use the unified <code>/nio &lt;subcommand&gt;</code> there.</p>
+        <p>On Claude Code these are slash commands (<code>/nio-scan</code>, <code>/nio-config</code>, <code>/nio-monitor</code>, …), and the same on Pi and opencode. Codex has no slash commands — trigger with <code>$nio-scan</code> / <code>$nio-monitor</code> or natural language. <strong>OpenClaw and Hermes</strong> do not ship the focused skills; use the unified <code>/nio &lt;subcommand&gt;</code> there — which on those two platforms is the <em>only</em> way to arm a session.</p>
+
+        <hr>
+
+        <h2 id="monitor"><code>monitor</code></h2>
+        <p>Turn telemetry capture on or off for the <strong>current session</strong>. Nio captures nothing by default: every session stays silent until it is explicitly armed here.</p>
+        <pre><code>/nio monitor on       # arm this session
+/nio monitor off      # disarm
+/nio monitor status   # is this session being captured?</code></pre>
+        <p>Arming affects all three OTLP signals (metrics, traces, logs), including the conversation content carried on spans. It does <strong>not</strong> affect guard enforcement, which always runs, and does not affect the local audit log at <code>~/.nio/audit.jsonl</code>, which is always written. Full behaviour — what exactly is captured, the pending-arm model on platforms without a session-id variable, and the known limitation on the in-process hosts — is on the <a href="nio-monitor.html"><code>/nio-monitor</code></a> page.</p>
 
         <hr>
 

@@ -482,12 +482,26 @@ describe('recordUserPrompt', () => {
     assert.equal(next.turn_attributes!['nio.turn.user_prompt'], 'hello world');
   });
 
-  it('redacts sensitive content', () => {
+  it('redacts sensitive JSON-shaped content', () => {
     const next = recordUserPrompt(seed(), JSON.stringify({ api_key: 'sk-x', body: 'hi' }));
     // recordUserPrompt redacts via redactAndTruncate's secret-key filter.
     // Plain strings pass through unchanged; structured JSON-strings
     // remain as-is (redaction operates on object keys, not strings).
     assert.match(next.turn_attributes!['nio.turn.user_prompt'] as string, /api_key/);
+  });
+
+  it('redacts a free-text secret pasted into the prompt itself', () => {
+    // This is the gap redactAndTruncate alone can't close: a plain
+    // string is a passthrough there (it only scans JSON key names), so
+    // "here's my key, sk-ant-..." would ride straight through without
+    // the redactSecrets pass this test pins.
+    const next = recordUserPrompt(
+      seed(),
+      'here is my key sk-ant-api03-AbCdEf1234567890AbCdEf1234567890AbCdEf12 please use it',
+    );
+    const value = next.turn_attributes!['nio.turn.user_prompt'] as string;
+    assert.match(value, /\[REDACTED\]/);
+    assert.doesNotMatch(value, /sk-ant-api03-AbCdEf1234567890AbCdEf1234567890AbCdEf12/);
   });
 });
 
@@ -495,6 +509,16 @@ describe('recordAssistantReply', () => {
   it('writes redacted reply to turn_attributes', () => {
     const next = recordAssistantReply(seed(), 'response text');
     assert.equal(next.turn_attributes!['nio.turn.assistant_reply'], 'response text');
+  });
+
+  it('redacts a free-text secret in the assistant reply itself', () => {
+    const next = recordAssistantReply(
+      seed(),
+      'export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+    );
+    const value = next.turn_attributes!['nio.turn.assistant_reply'] as string;
+    assert.match(value, /\[REDACTED\]/);
+    assert.doesNotMatch(value, /AKIAIOSFODNN7EXAMPLE/);
   });
 });
 
@@ -575,8 +599,16 @@ describe('recordPostToolUse — deny/block path', () => {
     assert.equal(span.status.code, SpanStatusCode.ERROR, 'span status must be ERROR on deny path');
     assert.equal(span.status.message, errorReason, 'span status message must be the block reason');
 
-    // State housekeeping: pending span should be drained
+    // State housekeeping: pending span should be drained, and nothing
+    // should be left parked for the end-of-turn flush — the deny path
+    // emits now, on purpose. A security event that only becomes visible
+    // when the turn closes is not visible when it matters.
     assert.equal(nextState.pending_spans['tc-block-1'], undefined, 'pending span should be removed after post');
+    assert.deepEqual(
+      nextState.deferred_spans ?? [],
+      [],
+      'the deny path must not leave a duplicate span queued for endTurn',
+    );
     assert.ok(durationMs !== null && durationMs >= 0, 'durationMs should be non-null and non-negative');
 
     await shutdown();

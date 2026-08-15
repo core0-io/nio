@@ -463,6 +463,30 @@ Which hosts can actually ask:
   decision unblocked and the binding never calls `resolveConfirm`, so
   `ask` folds to allow.
 
+### When the engine itself throws
+
+If Phases 1–6 throw — a malformed payload, a stack overflow on a
+pathologically nested `tool_input`, a bug — the decision is taken from
+`envelope.action.type` **alone**, a value the adapter resolved before the
+pipeline was entered:
+
+| Action type | Verdict on engine error |
+|-------------|-------------------------|
+| `read_file` | **allow**, with a diagnostic |
+| `exec_command` · `write_file` · `network_request` (and anything a third-party adapter invents) | **deny**, with a diagnostic |
+
+This replaces the earlier blanket fail-open. The asymmetry that motivates
+it: the engine is most likely to fail when its input is strangest, and a
+strange input is one of the shapes an attack takes — so a crash must not
+become a silent allow of a destructive action. Both branches write an
+`engine_error` diagnostic and a guard audit row with
+`risk_tags: ["ENGINE_ERROR"]` (`risk_level: critical`, score `1.0` on the
+deny branch; `low` / `0` on the allow branch), so the failure is visible
+rather than only inferable from an unexplained block. The triage deliberately consults nothing else: no re-run, no rule
+lookup, no re-parse of whatever just threw. Source:
+`ENGINE_ERROR_ALLOWED_ACTIONS` in
+[hook-engine.ts](../src/adapters/hook-engine.ts).
+
 ---
 
 ## Static Scan: Multi-Engine Pipeline
@@ -671,15 +695,34 @@ Captures agent activity as **OpenTelemetry** metrics, traces, and logs. Runs ind
 
 For the full per-signal schema (every metric instrument, every span attribute, every audit entry field) see [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md). The sections below cover architecture, source of truth, and lifecycle.
 
+### Capture gating — off by default
+
+A configured `collector.endpoint` does **not** by itself export anything.
+Every session is silent until the user arms it (`/nio monitor on`, or the
+focused `/nio-monitor` skill) or the operator sets
+`collector.monitor_all_sessions: true`. The verdict is computed by
+[`resolveMonitorGate`](../src/scripts/lib/monitor-gate.ts) against
+`${NIO_HOME}/monitored-sessions.json` and is applied **before any OTEL
+provider is constructed** — an unmonitored session never stands up an
+exporter, so the cost is one small file read per hook event.
+
+All three OTLP signals are behind that gate, including the conversation
+content that rides on spans (`nio.chat.reply`,
+`gen_ai.tool.call.arguments`) as well as the content log records. Outside
+the gate: guard enforcement (Phases 0–6 run regardless), the local
+`~/.nio/audit.jsonl`, and the two opt-in outbound guard paths (Phase 5
+`guard.llm_analyser`, Phase 6 `guard.external_analyser`), which have their
+own switches and ship disabled.
+
 ### Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ Claude Code (cross-process; spawn-per-hook)                         │
+│ Claude Code · Codex (cross-process; spawn-per-hook)                 │
 │                                                                     │
 │   collector-hook.ts (async, runs per hook event)                    │
 │     └─ dispatchCollectorEvent → traces-collector pure functions     │
-│        + state via traces-state-store.json (cross-process bridge)   │
+│        + state via traces-state-store-<session>.json (per session)  │
 │                                                                     │
 │   guard-hook.ts (sync, runs per PreToolUse)                         │
 │     ├─ MeterProvider → guard decision + risk score metrics          │
@@ -722,7 +765,7 @@ Every platform feeds the same `traces-collector` pure-function API and the same 
 
 Nio has **two** integration models.
 
-- **Subprocess hook model — Claude Code, Codex, Hermes.** The host spawns a fresh `node` process per hook event (`guard-hook.ts` / `collector-hook.ts` / `hook-cli.ts`). Nothing survives between events in memory, so a `PreToolUse` in process A and its matching `PostToolUse` in process B bridge state through the on-disk `traces-state-store.json`. Blocking is done by writing a decision to stdout in the host's hook protocol.
+- **Subprocess hook model — Claude Code, Codex, Hermes.** The host spawns a fresh `node` process per hook event (`guard-hook.ts` / `collector-hook.ts` / `hook-cli.ts`). Nothing survives between events in memory, so a `PreToolUse` in process A and its matching `PostToolUse` in process B bridge state through the on-disk, per-session `traces-state-store-<session>.json`. Blocking is done by writing a decision to stdout in the host's hook protocol.
 - **In-process plugin model — OpenClaw, Pi, opencode.** Nio is loaded as a JS module inside the agent process and stays resident, so per-session state lives in an in-memory `Map<sessionId, CollectorState>`. Blocking is done by returning or throwing from a hook the host awaits.
 
 The platform-agnostic half of the in-process model lives in one class, [`InProcessPluginRuntime`](../src/adapters/plugin-runtime.ts). It owns:
@@ -792,11 +835,25 @@ conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where
 applicable; Nio-specific extensions use the `nio.*` prefix.
 
 ```
+Trace: session                        (its own trace; ids minted at SessionStart,
+   ↑ span link                         span emitted at SessionEnd — hook platforms only)
 Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
-  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
-  ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
+  ├─ Span: chat <model>            (one per LLM call, reconstructed at turn close)
+  ├─ Span: execute_tool <name>     (exported the moment the tool finishes)
+  ├─ Span: execute_tool <name>     (sibling of chat — joined to its issuing call
+  │                                 by gen_ai.tool.call.id, not by parentage)
   └─ Span: task:execute             (TaskCreated → TaskCompleted)
 ```
+
+Two emission clocks. A **tool span goes out at its post-side event**, as a
+direct child of the turn root; only the **chat layer and the turn root**
+wait for `Stop` / `SubagentStop` / `SessionEnd`, because they can only be
+rebuilt from the platform's conversation source once the turn is over.
+Nesting tools under their issuing chat call was tried and reverted — it
+required parking every finished span until turn close, which made a long
+turn invisible and a mid-turn crash unreconstructable. See
+[COLLECTOR-SIGNALS.md → Traces](COLLECTOR-SIGNALS.md#traces) for the
+measurements and for the chat/session span attribute tables.
 
 **Turn span (`invoke_agent UserPromptSubmit`) attributes:**
 
@@ -819,13 +876,15 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 
 **Token usage collection** differs by platform:
 - **Claude Code**: `Stop` event reads `transcript_path` JSONL, sums `message.usage` from all assistant entries since turn start.
-- **Hermes**: same code path as Claude Code — when `post_llm_call`'s payload supplies `transcriptPath`, `endTurn` runs `parseTranscriptUsage` against it; when not, the turn span carries no usage.
-- **Codex**: **none today.** `parseTranscriptUsage` is hard-coded to the Claude Code transcript schema — it only counts entries whose `type` is `"assistant"` and reads `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`. Codex's transcript JSONL uses different event types and a different shape (see the note on `CodexAdapter.inferInitiatingSkill`), so even when a transcript path reaches `endTurn` the parser matches nothing and returns null. Codex turn spans therefore carry no `gen_ai.usage.*`; a codex-specific parser is phase-2 work.
+- **Hermes**: no usage on **turn** spans. Hermes has no transcript file at all — the conversation lives only in the raw envelope's `extra.conversation_history`, so `parseTranscriptUsage` has nothing to run against (confirmed by live capture). That history *is* read, by `createHermesSource` for the chat/content pipeline; it simply carries no token counts to lift onto the turn span.
+- **Codex**: no usage on **turn** spans. `parseTranscriptUsage` is hard-coded to the Claude Code transcript schema — it only counts entries whose `type` is `"assistant"` and reads `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`. Codex's transcript JSONL uses different event types and a different shape (see the note on `CodexAdapter.inferInitiatingSkill`), so even when a transcript path reaches `endTurn` the parser matches nothing and returns null. Codex usage is not lost, though: `createCodexSource` reads `last_token_usage` (including `reasoning_output_tokens`) off the rollout, so it lands on the **chat call** spans instead. Lifting it to the turn span would need a codex-specific parser.
 - **OpenClaw**: `llm_output` event payload carries `usage` directly; the OpenClaw plugin accumulates it incrementally into `state.turn_attributes` via `accumulateGenAiUsage`. By the time `agent_end` fires `endTurn`, the usage attrs are already on `state.turn_attributes` and get spread onto the turn span.
 - **Pi**: `message_end` carries `message.usage` (`input` / `output` / `cacheRead` / `cacheWrite`) once per assistant message; accumulated the same way as OpenClaw.
 - **opencode**: `message.updated` carries cumulative `info.tokens`, but it is a **snapshot** republished on every change to the same message rather than a one-shot event. The binding keys the last-seen totals by message id and feeds only the delta into `onLlmUsage`, so a re-publish cannot compound the turn's totals. Messages without an id are skipped rather than risk inflating them.
 
-**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
+**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set), plus the full `nio.guard.*` set from the pre-side decision. `gen_ai.tool.call.result` is set by the **in-process** platforms only — on the hook platforms the result travels as a `tool_output` content record instead (measured p90 7.7 KB, max 32 KB: too large for a span attribute a trace query pays for).
+
+**Chat span (`chat <model>`) attributes:** `gen_ai.operation.name` (= `chat`), `gen_ai.request.model`, `gen_ai.response.id`, per-call `gen_ai.usage.*`, `gen_ai.response.finish_reasons`, `nio.content.thinking_chars` / `text_chars` / `blocks`, `nio.chat.is_sidechain`, `nio.chat.timing` (`exact` / `inferred` / `synthetic`), `nio.chat.tool_call_ids` (the tool-call ids this call issued — the chat → tool edge, since tool spans hang off the turn root), and `nio.chat.reply` (the call's `text` blocks joined, redacted, ≤2 KB).
 
 **Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 
@@ -839,16 +898,20 @@ functions in [src/scripts/lib/traces-collector.ts](../src/scripts/lib/traces-col
 across platforms; what differs is only **where the per-session
 `CollectorState` lives**:
 
-- **Claude Code / Hermes (cross-process)** — each hook fires in a fresh
-  Node process. State is bridged via the JSON file managed by
+- **Claude Code / Codex / Hermes (cross-process)** — each hook fires in a
+  fresh Node process. State is bridged via the JSON file managed by
   [traces-state-store.ts](../src/scripts/lib/traces-state-store.ts):
-  1. `PreToolUse` → writes `{start_ms, span_id}` for the pending tool
-     into `traces-state-store.json`
-  2. `PostToolUse` → reads pending entry, calls `recordPostToolUse`
-     which emits the span retroactively with the original start time
-  3. `Stop` / `SubagentStop` → `endTurn` emits the turn root span
-     (whose span ID was pre-derived as `traceId.slice(0, 16)` so child
-     spans could parent to it before it existed)
+  1. `UserPromptSubmit` → `ensureTurn` opens the turn (fresh
+     `turn_trace_id`, `turn_number + 1`) and records the redacted prompt
+  2. `PreToolUse` → writes `{start_ms, span_id}` for the pending tool
+     into `traces-state-store-<session>.json`
+  3. `PostToolUse` → reads pending entry, calls `recordPostToolUse`
+     which emits the span **immediately**, retroactively stamped with the
+     original start time, as a child of the turn root
+  4. `Stop` / `SubagentStop` → `endTurn` rebuilds the chat layer from the
+     conversation source and emits it plus the turn root span (whose span
+     ID was pre-derived as `traceId.slice(0, 16)` so child spans could
+     parent to it before it existed)
 - **OpenClaw / Pi / opencode (in-process)** — state lives in a per-session
   in-memory `Map<sessionId, CollectorState>` owned by
   [InProcessPluginRuntime](../src/adapters/plugin-runtime.ts). No on-disk
@@ -860,13 +923,18 @@ across platforms; what differs is only **where the per-session
 
 State file location (Claude Code / Codex / Hermes only): derived from
 `collector.logs.path` (sits in the same directory as `audit.jsonl`);
-falls back to `${NIO_HOME ?? ~/.nio}/`.
+falls back to `${NIO_HOME ?? ~/.nio}/`. There is one file PER SESSION —
+`traces-state-store-<session>.json`, the id sanitised to `[A-Za-z0-9_-]`
+and suffixed with a short digest — so two host windows open at once
+cannot write each other's turn state. See
+[COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#traces) for the sharding
+rationale and the shard lifecycle.
 
 ### Local JSONL backup
 
 The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
-Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Codex / Hermes; not user-facing observability data.
+Metrics and traces have **no** local file — they are OTLP-only. The disk files [`traces-state-store-<session>.json`](../src/scripts/lib/traces-state-store.ts) are internal state used to bridge cross-process span lifecycle for Claude Code / Codex / Hermes; not user-facing observability data.
 
 ---
 

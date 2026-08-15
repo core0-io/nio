@@ -17,14 +17,26 @@ export {};
  *
  * Skips skills that are already cached and fresh (< 24h, same hash).
  * Always exits 0 — informational only, never blocks session startup.
+ *
+ * Telemetry gate: like `collector-hook.ts` / `guard-hook.ts` / Hermes's
+ * `hook-cli.ts`, the OTLP leg of this hook's audit writes is gated on
+ * `isSessionMonitored`. Without it this hook would be the one hole in
+ * the session gate — a SessionStart event carries the full inventory of
+ * installed skills plus each one's risk level and risk tags, and it
+ * would leave the machine before the user ever had a chance to arm the
+ * session. The local `audit.jsonl` leg is *not* gated (same rule as
+ * every other hook).
  */
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { loadCollectorConfig, loadAgentName } from './lib/config-loader.js';
+import { loadCollectorConfig, loadAgentName, loadLogsConfig } from './lib/config-loader.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import { createNio, ScanCache } from '../index.js';
 import { loadConfig, writeAuditLog } from '../adapters/index.js';
 
@@ -63,11 +75,82 @@ const SKILLS_DIRS = [
   join(homedir(), '.openclaw', 'skills'),
 ];
 
+// ---------------------------------------------------------------------------
+// Session monitor gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Whether this session's telemetry may be exported. Resolved once in
+ * `main()` from the SessionStart stdin payload, before a single audit
+ * entry is written. It starts `false` so that no code path can create an
+ * OTLP exporter ahead of the decision — the gate fails closed.
+ */
+let MONITORED = false;
+
+/** Shape of the SessionStart payload we care about. */
+interface SessionStartPayload {
+  session_id?: string;
+  cwd?: string;
+}
+
+/**
+ * Budget for reading the hook payload from stdin.
+ *
+ * Deliberately much shorter than the collector hook's 5s: SessionStart
+ * gives this hook a 30s total budget that it also has to spend scanning
+ * every installed skill. Both Claude Code and Codex pipe the payload and
+ * close stdin immediately, so this only ever matters when the hook is
+ * invoked with no payload at all — in which case we fall through to
+ * "unmonitored" and skip the OTLP leg, which is the safe answer.
+ */
+const STDIN_TIMEOUT_MS = 2000;
+
+function readSessionStartPayload(): Promise<SessionStartPayload | null> {
+  return new Promise((resolve) => {
+    // A TTY stdin never ends (someone ran the hook by hand) — don't
+    // stall the scan waiting for an EOF that isn't coming.
+    if (process.stdin.isTTY) {
+      resolve(null);
+      return;
+    }
+    let data = '';
+    let settled = false;
+    const timer = setTimeout(() => finish(null), STDIN_TIMEOUT_MS);
+    function finish(value: SessionStartPayload | null): void {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    }
+    process.stdin.setEncoding('utf-8');
+    process.stdin.on('data', (chunk: string) => (data += chunk));
+    process.stdin.on('end', () => {
+      try {
+        finish(JSON.parse(data) as SessionStartPayload);
+      } catch {
+        finish(null);
+      }
+    });
+    process.stdin.on('error', () => finish(null));
+  });
+}
+
 // LoggerProvider for OTEL audit log export (lazy-initialized).
 // createLoggerProvider already short-circuits on missing endpoint or
-// collector.logs.enabled === false.
+// collector.logs.enabled === false; the MONITORED check in front of it
+// is what keeps an unarmed session from ever constructing an exporter.
 let _loggerProvider: import('@opentelemetry/sdk-logs').LoggerProvider | null | undefined;
+
+// Upper bound on how long the exit path waits for forceFlush()+shutdown()
+// to drain the logs pipeline. `collector.timeout` is honored when it's
+// smaller (a caller who wants a tighter budget can set one), but this is
+// the hard ceiling — see the comment above the shutdown call in main()
+// for why an unroutable endpoint would otherwise block on the OS TCP
+// connect timeout (~75s+). Same backstop-timer pattern as
+// `WRITE_CALLBACK_BACKSTOP_MS` in hook-cli.ts.
+const SHUTDOWN_BACKSTOP_MS = 5000;
 function getLoggerProvider(): import('@opentelemetry/sdk-logs').LoggerProvider | null {
+  if (!MONITORED) return null;
   if (_loggerProvider === undefined) {
     try {
       const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
@@ -149,6 +232,29 @@ function hashSkillDir(skillDir: string): string {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // Resolve the telemetry gate first, from the SessionStart payload.
+  // Everything below this point may write audit entries, and the OTLP
+  // leg of those writes must not be reachable before the decision.
+  // Never let a gate failure break session startup: any throw leaves
+  // MONITORED at its fail-closed default.
+  try {
+    const payload = await readSessionStartPayload();
+    // Debug-only sampling switch — dumps the raw SessionStart payload
+    // (a different shape from the other hooks' PreToolUse/PostToolUse
+    // events). Deliberately NOT behind the MONITORED gate below: see
+    // lib/payload-dump.ts module doc for why. Runtime object may carry
+    // fields beyond the narrow SessionStartPayload type — those are
+    // preserved as-is since the cast above doesn't strip them.
+    if (payload) dumpPayload(PLATFORM, 'SessionStart', payload);
+    MONITORED = isSessionMonitored(
+      payload?.session_id ?? 'unknown',
+      payload?.cwd ?? null,
+      loadLogsConfig(),
+    );
+  } catch {
+    MONITORED = false;
+  }
+
   const skills = discoverSkills();
   if (skills.length === 0) {
     process.exit(0);
@@ -221,6 +327,40 @@ async function main(): Promise<void> {
     if (lines.length > 0) {
       process.stderr.write(lines.join('\n') + '\n');
     }
+  }
+
+  // Drain before exiting, with `forceFlush()` AND `shutdown()`.
+  // `forceFlush()` is what hands the batched records to the exporter at
+  // all (the logs pipeline runs a BatchLogRecordProcessor so a turn's
+  // content burst is not dropped past the exporter's 30-in-flight cap);
+  // `shutdown()` is what awaits the exporter's own request queue
+  // (OTLPExportDelegate.shutdown → forceFlush → promiseQueue.awaitAll),
+  // so a bare `process.exit(0)` after the flush could still tear the
+  // process down mid-POST. Both are needed, and both `.catch()`: a
+  // batched flush rejects once its export times out, and a hung
+  // collector must not fail the scan. Only reachable when a provider was
+  // created at all, i.e. only for a monitored session.
+  //
+  // `shutdown()` is NOT bounded by `collector.timeout` — that config
+  // only governs the request-timeout once a socket is connected; it does
+  // nothing during TCP connect. Against an endpoint that silently drops
+  // packets (firewalled/unroutable IP, VPN torn down) connect() blocks
+  // until the OS-level TCP timeout, which is ~75s on macOS and can be
+  // over 100s on Linux — far past any caller's patience. So this needs
+  // its own external backstop, same pattern as `WRITE_CALLBACK_BACKSTOP_MS`
+  // in hook-cli.ts: race the drain against a timer and exit regardless of
+  // which one wins.
+  if (_loggerProvider) {
+    const collectorConfig = loadCollectorConfig();
+    const endpoint = collectorConfig.endpoint;
+    const budget = Math.min(collectorConfig.timeout ?? SHUTDOWN_BACKSTOP_MS, SHUTDOWN_BACKSTOP_MS);
+    await Promise.race([
+      (async () => {
+        await _loggerProvider!.forceFlush().catch((e) => reportFlushFailure('logs', endpoint, e));
+        await _loggerProvider!.shutdown().catch((e) => reportFlushFailure('logs', endpoint, e));
+      })(),
+      new Promise<void>((resolve) => setTimeout(resolve, budget).unref()),
+    ]);
   }
 
   process.exit(0);

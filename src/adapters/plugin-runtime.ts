@@ -23,12 +23,21 @@ import type { AuditLifecycleEntry } from './audit-types.js';
 import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
-import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
+import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
+import type { ChatCall } from '../scripts/lib/conversation/types.js';
+import {
+  createContentSink,
+  emitToolInputContent,
+  emitToolOutputContent,
+} from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
   recordCacheHitRate,
   recordPostToolUse,
+  deferPostToolUse,
+  overflowDeferredSpans,
   recordPostTaskToolUse,
   recordUserPrompt,
   recordAssistantReply,
@@ -37,7 +46,9 @@ import {
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider } from '../scripts/lib/metrics-collector.js';
-import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
+import { createLoggerProvider, flushLogRecords } from '../scripts/lib/logs-collector.js';
+import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
+import { dumpPayload } from '../scripts/lib/payload-dump.js';
 import { evaluateHook } from './hook-engine.js';
 import {
   ensureTurn,
@@ -84,9 +95,163 @@ export interface PluginRuntimeOptions {
    * disabled) semantics as `tracerProvider`.
    */
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Override the logger provider instead of building one from collector
+   * config. Same `undefined` (build from config) vs `null` (explicitly
+   * disabled) semantics as `tracerProvider`. Tests inject an in-memory
+   * logger so the content pipeline actually runs.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
+  /**
+   * Export a finished tool span the moment the post-side event arrives,
+   * as a direct child of the turn root, instead of parking it for
+   * end-of-turn attribution under the chat call that issued it.
+   *
+   * DEFAULTS TO TRUE, on every platform. Set it to `false` only to
+   * exercise the parking path in a test.
+   *
+   * Deferral was tried and measured. What it bought was real — a tool
+   * span nested under the `chat` call that issued it, on the platforms
+   * whose `ConversationSource` reconstructs `tool_use` blocks (Pi,
+   * opencode) — but the price, on a live session, was:
+   *
+   *  - a 7-minute turn during which the backend showed NOTHING. 38
+   *    finished tool spans sat in the state shard (`deferred: 38`,
+   *    `pending: 0`) while the newest span the backend held belonged to
+   *    the previous turn. A long turn is unobservable, which makes the
+   *    tool unverifiable exactly when it is working hardest;
+   *  - a crash in that window leaving no trace at all — not a truncated
+   *    tree, no record of how far the agent got. Nothing re-sends those
+   *    parked spans either: the recovery path (`hasOrphanedDeferredTree`)
+   *    only adopts a shard whose turn is already CLOSED, so a live turn's
+   *    queue is not salvage material.
+   *
+   * The issuing call therefore survives as DATA rather than as tree
+   * structure: `gen_ai.tool.call.id` stays on the tool span, so a backend
+   * can still join a tool to the call that made it. What is given up is
+   * the parent/child edge, deliberately.
+   *
+   * See `eager-tool-spans.test.ts` (visibility before turn close),
+   * `openclaw-span-hierarchy.test.ts` and
+   * `pi-opencode-span-hierarchy.test.ts`.
+   */
+  eagerToolSpans?: boolean;
+  /**
+   * Directory this runtime instance serves, for sessions whose binding
+   * supplies no per-session cwd of their own.
+   *
+   * opencode passes its plugin input's `directory` here: one plugin
+   * instance is created per project directory, so that IS the working
+   * directory of every session it serves — and it is NOT necessarily
+   * `process.cwd()`, which is wherever the opencode server happened to
+   * be launched from.
+   *
+   * Unset falls back to `process.cwd()`. See `cwdFor`.
+   */
+  defaultCwd?: string;
 }
 
+/**
+ * Oldest conversation events are dropped past this many per session.
+ * See `recordConversationEvent`.
+ *
+ * The unit is a SLOT, not a delivered event: a binding that hands over
+ * repeated snapshots of the same logical thing gives them all one dedup
+ * key and they share one slot. Denominating the cap in raw deliveries
+ * was wrong for any streaming platform — see `recordConversationEvent`.
+ */
+const MAX_CONVERSATION_EVENTS = 200;
+
+/**
+ * Tool spans parked for end-of-turn attribution, past which the oldest
+ * are flushed early. See `onPostTool` and `overflowDeferredSpans`.
+ *
+ * UNREACHABLE UNDER THE DEFAULT and kept anyway. Since `eagerToolSpans`
+ * became the default on every platform, nothing parks: `onPostTool`
+ * drains each span onto the wire as it closes, so the queue this bounds
+ * is permanently empty. The cap survives because the deferral path
+ * itself does — `eagerToolSpans: false` still selects it, and the
+ * crash-recovery machinery in `traces-state-store.ts` still reads and
+ * writes `deferred_spans` on shards written by that path.
+ *
+ * The unit is genuinely one TOOL CALL, on all three platforms in this
+ * family — the mistake `MAX_CONVERSATION_EVENTS` made is not reachable
+ * from this counter. A slot is claimed only by `deferPostToolUse`, which
+ * needs a matching `pending_spans` entry and removes it, so a second
+ * close of the same key adds nothing, and no platform re-publishes a
+ * tool completion. So N here is N tool calls in the currently-open turn,
+ * not N host deliveries.
+ *
+ * Sized well past any real turn: the point is a ceiling on a host that
+ * runs for weeks, not a working limit. What it actually bounds is the
+ * pathological case the review's estimate missed — a turn whose close
+ * never arrives, on a host where each parked span pins its tool's
+ * arguments and result.
+ */
+export const MAX_DEFERRED_SPANS = 500;
+
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
+
+/**
+ * Every OTLP provider the runtime built ITSELF — never an injected one.
+ *
+ * These providers own background export timers
+ * (`PeriodicExportingMetricReader` at 1 s, both BatchProcessors at 1 s)
+ * that run until the provider is shut down or the process dies. In
+ * production that is the documented, deliberate lifetime: one runtime
+ * per host process, and cumulative metric semantics need the reader to
+ * outlive any one session (see the KNOWN RESIDUAL LIMITATION note on
+ * the provider caches below).
+ *
+ * In a TEST process it is a leak with teeth. A test that points the
+ * runtime at a loopback OTLP sink and then closes that sink leaves the
+ * reader exporting once a second into a dead port forever. Each attempt
+ * opens a fresh TCP connect — a REF'D libuv handle — so the event loop
+ * never drains and the `node --test` worker never exits. All its tests
+ * have passed; the process simply hangs, and with it the whole run.
+ * That is not hypothetical: it was the cause of the intermittent
+ * multi-minute `pnpm test` hangs, caught with the worker still spinning
+ * on `ECONNREFUSED` against two already-closed ports.
+ *
+ * The registry exists so a test can undo exactly what it caused. It
+ * holds only runtime-built providers, so shutting it down can never
+ * tear down a provider the test injected and still wants to read.
+ */
+const runtimeBuiltProviders = new Set<{ shutdown(): Promise<void> }>();
+
+/**
+ * Shut down every provider the runtime built itself, and forget them.
+ *
+ * TEST TEARDOWN ONLY. Call it before closing the loopback OTLP sink a
+ * test stood up, so the final export still has somewhere to land and no
+ * export timer outlives the sink. Safe to call when nothing was built —
+ * it is then a no-op — and safe to call twice.
+ *
+ * Failures are swallowed on purpose: teardown must not turn a passing
+ * test red because an exporter could not reach a socket that the test
+ * is in the middle of taking away.
+ */
+export async function shutdownRuntimeBuiltProviders(): Promise<void> {
+  const providers = [...runtimeBuiltProviders];
+  runtimeBuiltProviders.clear();
+  await Promise.all(providers.map(p => p.shutdown().catch(() => undefined)));
+}
+
+/**
+ * How many runtime-built providers are currently live. The invariant a
+ * teardown helper asserts: zero once the sink is gone.
+ */
+export function runtimeBuiltProviderCount(): number {
+  return runtimeBuiltProviders.size;
+}
+
+/** Record a provider the runtime built itself; `null` means none was. */
+function trackRuntimeBuiltProvider<T extends { shutdown(): Promise<void> } | null>(
+  provider: T,
+): T {
+  if (provider) runtimeBuiltProviders.add(provider);
+  return provider;
+}
 
 export interface PreToolResult {
   /** True when the binding layer must stop the tool from running. */
@@ -102,19 +267,102 @@ export class InProcessPluginRuntime {
   readonly adapter: HookAdapter;
   readonly config: ReturnType<typeof loadConfig>;
   readonly confirmAction: 'allow' | 'deny' | 'ask';
-  readonly auditOpts: WriteAuditLogOptions;
 
-  protected readonly tracerProvider: ReturnType<typeof createTracerProvider>;
-  protected readonly meterProvider: ReturnType<typeof createMeterProvider>;
-  protected readonly loggerProvider: ReturnType<typeof createLoggerProvider>;
   protected readonly sessionState = new Map<string, CollectorState>();
 
+  /**
+   * Per-TURN conversation events. Streaming platforms (OpenClaw,
+   * opencode) have no session file to read back, so these events ARE the
+   * conversation.
+   *
+   * Cleared on every exit from `flushSessionTurn` — including the exit
+   * taken when the turn produced no state at all — and again at
+   * `onSessionStart`, so a recycled session id starts empty. Anything
+   * left behind is replayed by the next turn as ITS chat spans; see the
+   * try/finally in `flushSessionTurn` for why no timestamp filter can
+   * make up for a missed clear.
+   */
+  private readonly conversationEvents = new Map<string, Map<string, unknown>>();
+
+  /**
+   * Source of the synthetic slot keys handed to unkeyed events. Process-
+   * wide rather than per-session so no two sessions can ever collide, and
+   * monotonic so `Map` insertion order stays the arrival order.
+   */
+  private conversationSlotSeq = 0;
+
+  /**
+   * Per-session transcript path, for the replay platforms in this family
+   * (Pi). Unlike `conversationEvents` this is deliberately NOT cleared at
+   * the turn boundary: the session file is a property of the SESSION, and
+   * every turn after the first replays the same file, scoped by
+   * `callsSince(turn_start_ms)`. Dropping it in `flushSessionTurn` would
+   * leave turn 2 onwards with no source at all.
+   */
+  private readonly transcriptPaths = new Map<string, string>();
+
+  /**
+   * Per-session working directory, as reported by the binding.
+   *
+   * This class serves MANY sessions from ONE long-running process, so
+   * `process.cwd()` is a process-wide constant that says nothing about
+   * any individual session — it is fixed when the host is launched and
+   * is shared by every session thereafter. cwd is nonetheless a
+   * session-scoped property everywhere it is used here: the monitor gate
+   * matches a pending arm by the directory it was made in (that match is
+   * the only thing stopping one session claiming another's arm), and
+   * `nio.cwd` on a span claims to say where that session's work
+   * happened.
+   *
+   * Populated opportunistically — every entry point that receives a cwd
+   * from the host records it here, so a session is keyed correctly from
+   * its first event rather than only if some particular event arrived
+   * first. Cleared at `onSessionEnd`, after the flush, so a long-running
+   * host does not accumulate one entry per session forever.
+   */
+  private readonly sessionCwds = new Map<string, string>();
+
   private readonly opts: PluginRuntimeOptions;
+  /**
+   * Resolved once, so the default lives in exactly one place. `?? true`
+   * rather than a bare read: `undefined` means "caller expressed no
+   * preference", which is now eager. See `PluginRuntimeOptions`.
+   */
+  private readonly eagerToolSpans: boolean;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
 
+  // ── Lazily-created OTEL providers ──────────────────────────────────
+  //
+  // Created on first *monitored* use, never at registration. This is not
+  // just tidiness: `createMeterProvider` installs a
+  // PeriodicExportingMetricReader with exportIntervalMillis: 1000, whose
+  // background timer lives as long as the process. Building it eagerly
+  // meant every long-running host that loaded this plugin — including
+  // one whose user never ran `/nio monitor on` in their life — stood up
+  // the full OTLP exporter stack and its timer. Deferring means a
+  // never-armed host creates nothing at all.
+  //
+  // KNOWN RESIDUAL LIMITATION, documented in nio-monitor's SKILL.md:
+  // this fixes the never-armed case only. Once *any* session in the
+  // process has been armed and recorded a counter, OTel's cumulative
+  // metric semantics mean that reader keeps exporting the accumulated
+  // totals every second until the process exits — disarming, session_end
+  // and forgetSession all stop *new* data being recorded, but none of
+  // them can stop that timer. Restarting the host does.
+  //
+  // `loadCollectorConfig()` is deferred along with them, for the same
+  // reason (nothing collector-related should happen before a monitored
+  // event) and with the side benefit that an endpoint edited after
+  // startup is picked up rather than frozen at registration.
+  private tracerProviderCache: ReturnType<typeof createTracerProvider> | undefined;
+  private meterProviderCache: ReturnType<typeof createMeterProvider> | undefined;
+  private loggerProviderCache: ReturnType<typeof createLoggerProvider> | undefined;
+  private collectorConfigCache: ReturnType<typeof loadCollectorConfig> | undefined;
+
   constructor(opts: PluginRuntimeOptions) {
     this.opts = opts;
+    this.eagerToolSpans = opts.eagerToolSpans ?? true;
     this.platform = opts.platform;
     this.adapter = opts.adapter;
 
@@ -124,27 +372,186 @@ export class InProcessPluginRuntime {
       guard.protection_level = opts.level as typeof guard.protection_level;
     }
     this.confirmAction = opts.confirmAction ?? guard?.confirm_action ?? 'allow';
+  }
 
-    const collectorConfig = loadCollectorConfig();
-    // Resource-level agent name is only set when the operator configured
-    // one — empty / unset means "no gen_ai.agent.name on the resource".
-    const agentName =
-      this.config.agent_name && this.config.agent_name.length > 0
-        ? this.config.agent_name
-        : undefined;
+  /**
+   * Test seam: have any providers been constructed yet? Deliberately
+   * ignores injected ones — the question it answers is "did the runtime
+   * itself stand up an OTLP client", which is what the monitor gate
+   * exists to prevent.
+   */
+  _providersBuiltForTests(): boolean {
+    return this.tracerProviderCache !== undefined
+      || this.meterProviderCache !== undefined
+      || this.loggerProviderCache !== undefined;
+  }
 
-    this.tracerProvider = opts.tracerProvider !== undefined
-      ? opts.tracerProvider
-      : createTracerProvider(collectorConfig, opts.platform, agentName);
-    this.meterProvider = opts.meterProvider !== undefined
-      ? opts.meterProvider
-      : createMeterProvider(collectorConfig, opts.platform, agentName);
-    const logsConfig = this.config.collector?.logs;
-    this.loggerProvider =
-      logsConfig?.enabled !== false
-        ? createLoggerProvider(collectorConfig, opts.platform, agentName)
-        : null;
-    this.auditOpts = { loggerProvider: this.loggerProvider, logsConfig };
+  /**
+   * Per-session capture gate. Consulted on every event rather than
+   * cached per session: `/nio monitor off` must take effect on the next
+   * event, not at the next session boundary.
+   *
+   * A session id we cannot trust (empty, 'unknown', the platform name)
+   * fails closed inside `isSessionMonitored` — see UNTRUSTED_SESSION_IDS.
+   *
+   * Guard evaluation NEVER consults this. The gate governs telemetry
+   * only; a blocked tool call stays blocked whether or not the session
+   * is armed.
+   */
+  protected isMonitored(sessionId: string): boolean {
+    return isSessionMonitored(sessionId, this.cwdFor(sessionId), this.config.collector?.logs);
+  }
+
+  /**
+   * Record the working directory a binding reports for a session.
+   *
+   * Called from every entry point that gets one, not just session start:
+   * OpenClaw delivers no session-start event a cwd could ride on at all,
+   * and a host is free to deliver a tool call before whatever event the
+   * binding chose to record from. Empty and absent values are ignored
+   * rather than stored — `''` would be compared against a real directory
+   * and match nothing, which is worse than falling back.
+   */
+  setSessionCwd(sessionId: string, cwd: string | null | undefined): void {
+    if (typeof cwd === 'string' && cwd.length > 0) this.sessionCwds.set(sessionId, cwd);
+  }
+
+  /**
+   * This session's working directory, for the monitor gate and for the
+   * `nio.cwd` span attribute.
+   *
+   * Fallback order: what the binding told us for this session, then the
+   * directory this runtime instance serves (`defaultCwd` — opencode's
+   * plugin `directory`), then `process.cwd()`.
+   *
+   * ── Why `process.cwd()` is the last resort, and not "fail closed" ──
+   *
+   * Refusing to answer (passing `null` to the gate) is NOT the safe
+   * choice it looks like. A null cwd cannot match a pending arm, and on
+   * every platform in this family the pending arm is the ONLY way to arm
+   * a session — `resolveSessionId` reads Claude Code's environment
+   * variable and nothing else, so `/nio monitor on` here always writes
+   * `pending_arm` and waits for an event to claim it. A null cwd would
+   * therefore make arming permanently impossible, silently, for any
+   * platform whose binding cannot report a directory.
+   *
+   * OpenClaw is exactly that platform, and not by omission: its hook
+   * context carries `sessionKey` / `sessionId` / `runId` and no
+   * directory, because an OpenClaw session is a conversation rather than
+   * a checkout. Its `/nio monitor on` runs in this same process and
+   * stamps the arm with `process.cwd()`, so `process.cwd()` is both
+   * sides of that comparison and the pairing stays consistent.
+   *
+   * The security property the cwd match exists for is untouched by the
+   * fallback: the comparison still happens, and a session whose
+   * directory does not match a pending arm still fails to claim it. What
+   * the fallback loses is only the ability to TELL two sessions apart
+   * when the host never said where either of them is — which is the
+   * situation that already obtained before any of this existed.
+   */
+  protected cwdFor(sessionId: string): string {
+    return this.sessionCwds.get(sessionId) ?? this.opts.defaultCwd ?? process.cwd();
+  }
+
+  /**
+   * Collector config is read on first monitored use, never at
+   * registration — an operator who never armed a session must not have
+   * their endpoint read, let alone an exporter stood up.
+   */
+  private getCollectorConfig(): ReturnType<typeof loadCollectorConfig> {
+    if (this.collectorConfigCache === undefined) {
+      this.collectorConfigCache = loadCollectorConfig();
+    }
+    return this.collectorConfigCache;
+  }
+
+  /**
+   * Resource-level agent name is only set when the operator configured
+   * one — empty / unset means "no gen_ai.agent.name on the resource".
+   */
+  private get agentName(): string | undefined {
+    return this.config.agent_name && this.config.agent_name.length > 0
+      ? this.config.agent_name
+      : undefined;
+  }
+
+  protected getTracerProvider(): ReturnType<typeof createTracerProvider> {
+    if (this.opts.tracerProvider !== undefined) return this.opts.tracerProvider;
+    if (this.tracerProviderCache === undefined) {
+      try {
+        this.tracerProviderCache = trackRuntimeBuiltProvider(createTracerProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        ));
+      } catch {
+        this.tracerProviderCache = null;
+      }
+    }
+    return this.tracerProviderCache;
+  }
+
+  protected getMeterProvider(): ReturnType<typeof createMeterProvider> {
+    if (this.opts.meterProvider !== undefined) return this.opts.meterProvider;
+    if (this.meterProviderCache === undefined) {
+      try {
+        this.meterProviderCache = trackRuntimeBuiltProvider(createMeterProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        ));
+      } catch {
+        this.meterProviderCache = null;
+      }
+    }
+    return this.meterProviderCache;
+  }
+
+  protected getLoggerProvider(): ReturnType<typeof createLoggerProvider> {
+    if (this.opts.loggerProvider !== undefined) return this.opts.loggerProvider;
+    if (this.config.collector?.logs?.enabled === false) return null;
+    if (this.loggerProviderCache === undefined) {
+      try {
+        this.loggerProviderCache = trackRuntimeBuiltProvider(createLoggerProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        ));
+      } catch {
+        this.loggerProviderCache = null;
+      }
+    }
+    return this.loggerProviderCache;
+  }
+
+  /**
+   * The logger provider only if one already exists — never builds one.
+   * Used by flush paths that must not be the thing that stands an
+   * exporter up.
+   */
+  private existingLoggerProvider(): ReturnType<typeof createLoggerProvider> {
+    if (this.opts.loggerProvider !== undefined) return this.opts.loggerProvider;
+    return this.loggerProviderCache ?? null;
+  }
+
+  /**
+   * Audit options for one event. The local JSONL leg is never gated — it
+   * is the user's own record, written to their own disk. Only the OTLP
+   * leg (`loggerProvider`) is conditional on monitor state.
+   */
+  protected auditOptsFor(monitored: boolean): WriteAuditLogOptions {
+    return {
+      loggerProvider: monitored ? this.getLoggerProvider() : null,
+      logsConfig: this.config.collector?.logs,
+    };
+  }
+
+  /**
+   * Debug-only payload sampling (`NIO_DUMP_PAYLOAD=<dir>`), tagged with
+   * this runtime's platform. Deliberately NOT gated by monitor state:
+   * it writes to a local directory the operator named themselves and
+   * never touches the network — see payload-dump.ts's module doc.
+   *
+   * The event name and the envelope shape are the binding's to choose
+   * (OpenClaw dumps `{ event, ctx }` under its own hook names), so this
+   * is a pass-through rather than something the runtime calls itself.
+   */
+  dumpEvent(eventName: string, payload: unknown): void {
+    dumpPayload(this.platform, eventName, payload);
   }
 
   /** Lazily constructed Phase 1–6 engine. */
@@ -195,9 +602,108 @@ export class InProcessPluginRuntime {
     this.sessionState.set(sessionId, state);
   }
 
-  /** Hard session boundary — drop stale turn numbering, write audit row. */
+  /**
+   * Accumulate one platform conversation event.
+   *
+   * Streaming platforms (OpenClaw, opencode) have no session file to
+   * read back and no whole-conversation payload, so the only way to know
+   * which LLM call issued which tool call is to keep the events as they
+   * arrive. Replay platforms (Pi) leave this untouched and override
+   * `conversationInputFor` to supply a transcript path instead.
+   *
+   * Accumulates regardless of monitor state, deliberately: a session
+   * armed mid-turn should still produce a coherent turn rather than half
+   * of one. Only the export at turn close is gated — and an unmonitored
+   * turn's events are dropped there rather than exported, so nothing
+   * accumulated while unarmed can leak later.
+   *
+   * `dedupKey` collapses SNAPSHOT streams at ingest. opencode publishes
+   * one `message.updated` per change to an assistant message and one
+   * `message.part.updated` per streamed chunk of every part, each
+   * carrying the whole thing so far; its `ConversationSource` already
+   * throws all but the last snapshot of each id away when it rebuilds
+   * the turn. Keeping them all until then is not just waste — it is what
+   * made the cap below count network deliveries instead of LLM calls, so
+   * a 10-call turn streaming 100 chunks per call blew a 200-slot budget
+   * with ~1030 events and lost 8 of its 10 chat spans, orphaning the
+   * tool spans that would have nested under them back onto the turn
+   * root. With a key, a snapshot REPLACES its predecessor in the slot it
+   * first claimed — same collapse the source performs, moved to where
+   * the cap can see it, and `Map.set` on an existing key keeps that
+   * first-seen position so block order is unchanged.
+   *
+   * Omitting the key (OpenClaw, whose `llm_output` is one delivery per
+   * LLM call and never re-published) gives every event its own slot,
+   * i.e. exactly the previous append-and-cap behaviour.
+   */
+  recordConversationEvent(sessionId: string, event: unknown, dedupKey?: string): void {
+    const slots = this.conversationEvents.get(sessionId) ?? new Map<string, unknown>();
+    // Namespaced apart so a binding's key can never collide with a
+    // synthetic one, however the binding chooses to spell it.
+    const key = dedupKey !== undefined ? `k:${dedupKey}` : `#${this.conversationSlotSeq++}`;
+    slots.set(key, event);
+    // Hard cap. These are long-running hosts, and an unbounded
+    // per-session store is a memory leak with extra steps. A turn with
+    // more calls than this loses its earliest chat spans — the tool
+    // spans that would have named them fall back to hanging off the turn
+    // root, the same degraded shape as having no source at all, which is
+    // a better failure than growing without bound.
+    if (slots.size > MAX_CONVERSATION_EVENTS) {
+      for (const k of slots.keys()) {
+        slots.delete(k);
+        if (slots.size <= MAX_CONVERSATION_EVENTS) break;
+      }
+    }
+    this.conversationEvents.set(sessionId, slots);
+  }
+
+  /**
+   * Hand the runtime a session file to replay instead of events.
+   *
+   * Pi is the replay platform in this family: it has a real session JSONL
+   * on disk, so its binding calls this at `session_start` rather than
+   * feeding `recordConversationEvent`. A null path (Pi's ephemeral
+   * sessions, where `getSessionFile()` returns null) clears any prior
+   * entry, so the session degrades to "no source" rather than replaying a
+   * stale file from a recycled id.
+   */
+  setTranscriptPath(sessionId: string, path: string | null): void {
+    if (path) this.transcriptPaths.set(sessionId, path);
+    else this.transcriptPaths.delete(sessionId);
+  }
+
+  /**
+   * Where this platform's conversation comes from. A transcript path
+   * handed over by a replay binding wins; otherwise the streaming shape.
+   */
+  protected conversationInputFor(sessionId: string): SourceInput {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    if (transcriptPath) return { transcriptPath };
+    // Slot values in first-claimed order — the array shape every
+    // streaming `ConversationSource` expects.
+    return { events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
+  }
+
+  /**
+   * Hard session boundary — drop stale turn numbering, write audit row.
+   *
+   * Deliberately takes no cwd. A binding says where a session is either
+   * per session (`setSessionCwd`, which Pi calls off every event's ctx)
+   * or once for the whole runtime (`defaultCwd`, which opencode fills
+   * from its plugin directory); neither needs a session-start event to
+   * have arrived, and both work for the sessions that never produce one
+   * — an opencode sub-agent child, or any session already running when
+   * the plugin loaded.
+   */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
+    // A recycled session id must not inherit the previous session's
+    // calls — they would be replayed as this session's chat spans. Same
+    // reasoning for the transcript path: a new session under a reused id
+    // must not replay the old session's file until its own
+    // setTranscriptPath arrives.
+    this.conversationEvents.delete(sessionId);
+    this.transcriptPaths.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -205,6 +711,18 @@ export class InProcessPluginRuntime {
   async onSessionEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
+    // The session file belongs to the session, so this — not the turn
+    // boundary — is where it stops being ours to replay.
+    this.transcriptPaths.delete(sessionId);
+    // Drop the session's arm record now instead of leaving it for the
+    // 7-day TTL backstop — these are long-running hosts, so a session
+    // that ends here won't get another chance to be reaped until the
+    // process restarts or the backstop fires.
+    forgetSession(sessionId, this.config.collector?.logs);
+    // Last, after every gate consultation above has had the session's
+    // real directory: these hosts run for weeks, so one map entry per
+    // session that ever existed is a leak with extra steps.
+    this.sessionCwds.delete(sessionId);
   }
 
   /**
@@ -223,8 +741,20 @@ export class InProcessPluginRuntime {
    * without this the only reachable entry point was `onTurnEnd`.
    */
   async flushTurnSpans(sessionId: string): Promise<void> {
+    const monitored = this.isMonitored(sessionId);
     await this.flushSessionTurn(sessionId);
-    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+    // Unmonitored: nothing was exported, so there is nothing to flush —
+    // and resolving the provider here would be exactly the "build an
+    // exporter for a session nobody armed" the gate exists to prevent.
+    if (!monitored) return;
+    const loggerProvider = this.getLoggerProvider();
+    // `flushLogRecords`, not a bare `forceFlush()`: the logs provider
+    // runs a BatchLogRecordProcessor (swapped in so a turn's content
+    // burst is not dropped past the OTLP exporter's 30-in-flight cap),
+    // and a batched flush REJECTS once `exportTimeoutMillis` elapses
+    // against a collector that accepts the connection and never answers.
+    // A hung collector is not a reason to fail the host's turn boundary.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /** Per-turn flush. Idempotent: no-op when no state exists. */
@@ -236,8 +766,10 @@ export class InProcessPluginRuntime {
   /** Increment the per-turn counter. Separate from onTurnEnd so
    *  platforms that flush turns and count turns at different events can
    *  call them independently. */
-  async recordTurnMetric(): Promise<void> {
-    if (this.meterProvider) await recordTurn(this.meterProvider);
+  async recordTurnMetric(sessionId: string): Promise<void> {
+    if (!this.isMonitored(sessionId)) return;
+    const meterProvider = this.getMeterProvider();
+    if (meterProvider) await recordTurn(meterProvider);
   }
 
   /**
@@ -249,7 +781,13 @@ export class InProcessPluginRuntime {
     for (const sessionId of [...this.sessionState.keys()]) {
       await this.onSessionEnd(sessionId);
     }
-    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+    // Process-wide teardown has no session id of its own, so it flushes
+    // whatever provider already exists rather than resolving (and thus
+    // possibly building) one.
+    const loggerProvider = this.existingLoggerProvider();
+    // See `flushTurnSpans`: a batched flush can reject on timeout, and
+    // process-wide teardown must not fail because the collector hung.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   protected writeLifecycle(
@@ -265,7 +803,7 @@ export class InProcessPluginRuntime {
       lifecycle_type: lifecycleType,
       ...(details ? { details } : {}),
     };
-    writeAuditLog(entry, this.auditOpts);
+    writeAuditLog(entry, this.auditOptsFor(this.isMonitored(sessionId)));
   }
 
   /**
@@ -274,7 +812,41 @@ export class InProcessPluginRuntime {
    * Idempotent: no-op if no state exists.
    */
   protected async flushSessionTurn(sessionId: string): Promise<void> {
-    if (!this.tracerProvider) {
+    // The accumulated conversation events belong to the TURN that is
+    // ending here, so they are dropped on EVERY exit — including the two
+    // early returns and an unexpected throw out of the export path.
+    // try/finally rather than a delete per exit: the `!state` early
+    // return used to be the one path that kept them, and that path is
+    // routinely taken in production. OpenClaw's binding only calls
+    // `onLlmUsage` / `onAssistantReply` when the undocumented `usage` /
+    // `assistantTexts` fields happen to be present (see
+    // openclaw-source.ts's module doc), so a turn made of
+    // documented-shape `llm_output` events alone reaches `agent_end`
+    // with no turn state at all. Anything left in the map then gets
+    // replayed by the NEXT turn as its own chat spans — and the
+    // `callsSince` timestamp filter cannot catch it, because
+    // `openclaw-source.ts` synthesises `startMs` from `Date.now()` at
+    // read time, making the filter unconditionally true.
+    //
+    // Contrast `transcriptPaths`, which is per-SESSION and deliberately
+    // survives the turn boundary — see its field comment.
+    try {
+      await this.flushSessionTurnInner(sessionId);
+    } finally {
+      this.conversationEvents.delete(sessionId);
+    }
+  }
+
+  private async flushSessionTurnInner(sessionId: string): Promise<void> {
+    // Cleanup and export are separate concerns: an unmonitored session
+    // must still have its state dropped, otherwise state accumulated
+    // while briefly armed (then disarmed before this boundary fired)
+    // would sit in `sessionState` for the rest of the process's life —
+    // and worse, get exported later if the session is re-armed and a
+    // subsequent boundary finds that leftover state still there.
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (!tracerProvider) {
       this.sessionState.delete(sessionId);
       return;
     }
@@ -298,26 +870,73 @@ export class InProcessPluginRuntime {
       //    claiming success), and the span is tagged with explicit
       //    reclaim attrs so a consumer can tell it apart from a span
       //    that was genuinely closed on a successful tool return.
+      // 3. Route it the same way `onPostTool` routes a normal close, so
+      //    the two paths cannot drift. Under the default
+      //    (`eagerToolSpans`) that is an immediate emit under
+      //    `traceId.slice(0,16)` — the turn root — which is where every
+      //    tool span now lands. This loop is what keeps a span whose
+      //    post-side event NEVER ARRIVES from being dropped: on opencode
+      //    that is the normal path for a tool that threw, since
+      //    `tool.execute.after` is not delivered in that case.
       const { state: drained, attrs } = takePendingGuardAttrs(state, k);
       state = drained;
-      const r = await recordPostToolUse(
-        this.tracerProvider,
-        state,
-        k,
-        process.cwd(),
-        { ...attrs, ...nioReclaimedSpanAttributes() },
-        null,
-      );
+      const reclaimAttrs = { ...attrs, ...nioReclaimedSpanAttributes() };
+      const r = this.eagerToolSpans
+        ? await recordPostToolUse(
+            tracerProvider,
+            state,
+            k,
+            this.cwdFor(sessionId),
+            reclaimAttrs,
+            null,
+          )
+        : deferPostToolUse(
+            state,
+            k,
+            this.cwdFor(sessionId),
+            reclaimAttrs,
+            null,
+          );
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {
-      const r = await recordPostTaskToolUse(this.tracerProvider, state, k, process.cwd());
+      const r = await recordPostTaskToolUse(tracerProvider, state, k, this.cwdFor(sessionId));
       state = r.state;
     }
 
-    await endTurn(this.tracerProvider, state, process.cwd());
+    // Reconstruct this turn's LLM calls from whatever the platform
+    // handed us, so tool spans can nest under the call that issued them
+    // and the assistant's own words reach the logs signal. A source that
+    // yields nothing (no events seen, malformed events, a platform with
+    // no source yet) degrades to the flat `turn → tool` shape rather
+    // than failing the flush.
+    let calls: ChatCall[] | undefined;
+    try {
+      const source = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId));
+      calls = source?.callsSince(state.turn_start_ms);
+    } catch {
+      calls = undefined;
+    }
+
+    // No provider (logs disabled) → no sink → structure only, no
+    // content. The monitor gate is already applied: `monitored` guards
+    // every provider resolution in this method.
+    const loggerProvider = this.getLoggerProvider();
+    const contentSink = loggerProvider
+      ? createContentSink(loggerProvider, loadContentLimits())
+      : undefined;
+
+    await endTurn(tracerProvider, state, this.cwdFor(sessionId), null, calls, contentSink);
     this.sessionState.delete(sessionId);
-    await this.tracerProvider.forceFlush();
+    // `.catch()`: `endTurn` already flushed through the collector's own
+    // non-throwing helper. This belt-and-braces second flush must not be
+    // the one that throws — BatchSpanProcessor's forceFlush rejects when
+    // the export fails, and an unreachable collector is not a reason to
+    // fail the host's Stop handler.
+    await tracerProvider.forceFlush().catch(() => { /* audited at the exporter */ });
+    // Same reasoning for the logs leg: a batched flush rejects when it
+    // times out, and this runs on the host's Stop path.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /**
@@ -336,7 +955,16 @@ export class InProcessPluginRuntime {
     rawEvent: unknown,
     opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
-    if (this.tracerProvider) {
+    // Telemetry is gated; the guard evaluation below is NOT. Resolving a
+    // provider is what constructs it, so both resolutions sit behind
+    // `monitored` — an unarmed session leaves them null and nothing is
+    // ever built for it. Pending-span state is gated for the same
+    // reason: nothing downstream would ever drain it.
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    const meterProvider = monitored ? this.getMeterProvider() : null;
+
+    if (tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       // `spanKey` is the internal correlation key (falls back to the tool
       // name when the platform gives no id) — it must never leak onto the
@@ -348,23 +976,43 @@ export class InProcessPluginRuntime {
       };
       state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
       this.sessionState.set(sessionId, state);
+      // The tool span id exists from this moment, so the arguments can go
+      // out already associated with it. Emitted HERE rather than at the
+      // post side (where collector-core's hook path does it) because this
+      // is the only moment they are in hand: `onPostTool` receives an
+      // outcome, not the params. It also means a call the guard is about
+      // to DENY still contributes its arguments — the ones a reviewer
+      // most wants — even though its post-side event never fires.
+      this.emitToolContent(
+        'input',
+        monitored,
+        state.pending_spans[spanKey]?.span_id,
+        state.turn_trace_id,
+        params,
+        opts?.toolCallId,
+      );
     }
-    if (this.meterProvider) {
-      recordToolUse(this.meterProvider, toolName, 'PreToolUse').catch(() => {});
+    if (meterProvider) {
+      recordToolUse(meterProvider, toolName, 'PreToolUse').catch(() => {});
     }
 
+    // Guard evaluation and the block decision below run unconditionally
+    // — the monitor gate only controls telemetry, never enforcement.
+    // Only the OTEL LogRecord leg of any audit entries evaluateHook
+    // writes is suppressed when unmonitored (auditOptsFor); the local
+    // JSONL leg always fires.
     const startMs = Date.now();
     const result = await evaluateHook(
       this.adapter,
       rawEvent,
       { config: this.config, nio: { orchestrator: this.orchestrator } },
-      this.auditOpts,
+      this.auditOptsFor(monitored),
     );
     const evalMs = Date.now() - startMs;
 
-    if (this.meterProvider) {
+    if (meterProvider) {
       recordGuardDecision(
-        this.meterProvider,
+        meterProvider,
         result.decision,
         result.riskLevel || 'low',
         result.riskScore ?? 0,
@@ -415,7 +1063,7 @@ export class InProcessPluginRuntime {
       // variant: the decision to block is already final at this point, so
       // a telemetry failure while closing the span must not cost the
       // caller its deny — see safeCloseSpan's doc comment.
-      await this.safeCloseSpan(sessionId, spanKey, guardAttrs, reason);
+      await this.safeCloseSpan(sessionId, spanKey, guardAttrs, reason, tracerProvider);
       return { block: true, reason, decision };
     }
 
@@ -446,7 +1094,10 @@ export class InProcessPluginRuntime {
       const why = reason || 'Requires confirmation (Nio)';
       // Same reasoning as onPreTool's block path: the user has already
       // refused, so that refusal must survive a telemetry failure here.
-      await this.safeCloseSpan(sessionId, spanKey, merged, why);
+      await this.safeCloseSpan(
+        sessionId, spanKey, merged, why,
+        this.isMonitored(sessionId) ? this.getTracerProvider() : null,
+      );
       return { block: true, reason: why, decision: resolved };
     }
     return { block: false, decision: resolved };
@@ -459,10 +1110,20 @@ export class InProcessPluginRuntime {
     toolName: string,
     outcome: { result?: unknown; error?: string | null; durationMs?: number },
   ): Promise<void> {
-    if (this.tracerProvider) {
-      const state = this.sessionState.get(sessionId);
-      if (state) {
-        const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
+    const monitored = this.isMonitored(sessionId);
+    const state = this.sessionState.get(sessionId);
+    if (state) {
+      // Drain the guard attrs parked for this key by `onPreTool`
+      // REGARDLESS of monitor state, and before the export gate below.
+      // A value stashed while armed must not outlive this tool call: if
+      // the session is disarmed here and re-armed before the span is
+      // finally closed, that stale decision would merge onto a later,
+      // legitimate export of the same span.
+      const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
+      this.sessionState.set(sessionId, drained);
+
+      const tracerProvider = monitored ? this.getTracerProvider() : null;
+      if (tracerProvider) {
         const postAttrs: Record<string, unknown> = {
           ...attrs,
           ...genAiToolCallOutputAttributes({
@@ -471,25 +1132,72 @@ export class InProcessPluginRuntime {
             durationMs: outcome.durationMs,
           }),
         };
-        const r = await recordPostToolUse(
-          this.tracerProvider,
-          drained,
-          spanKey,
-          process.cwd(),
-          postAttrs,
-          outcome.error ?? null,
+        // Read the span id BEFORE the call below removes the pending
+        // entry, so the result record can name the span the backend is
+        // about to receive.
+        const pending = drained.pending_spans[spanKey];
+        this.emitToolContent(
+          'output',
+          monitored,
+          pending?.span_id,
+          drained.turn_trace_id,
+          outcome.result,
+          pending?.attributes?.['gen_ai.tool.call.id'] as string | undefined,
         );
-        this.sessionState.set(sessionId, r.state);
+        // Emit NOW, as a child of the turn root. Parking it until the
+        // turn closes would let `endTurn` nest it under the chat call
+        // that issued it, and that trade was measured and rejected —
+        // see `PluginRuntimeOptions.eagerToolSpans`. The issuing call
+        // still rides along as `gen_ai.tool.call.id`.
+        const r = this.eagerToolSpans
+          ? await recordPostToolUse(
+              tracerProvider,
+              drained,
+              spanKey,
+              this.cwdFor(sessionId),
+              postAttrs,
+              outcome.error ?? null,
+            )
+          : deferPostToolUse(
+              drained,
+              spanKey,
+              this.cwdFor(sessionId),
+              postAttrs,
+              outcome.error ?? null,
+            );
+        // Bound the parked queue. `deferred_spans` is normally emptied at
+        // every turn close, so this only bites on a turn whose close
+        // never arrives — a host that stops delivering `session.idle` /
+        // `agent_end`, or one long enough to run 500 tools in a single
+        // turn. That case is worth bounding because a parked span is not
+        // the ~740 B the review measured against toy payloads: each one
+        // carries this call's arguments and result, and until
+        // `redactAndTruncate` started flattening (see its `flatten`
+        // helper) it pinned them at FULL length rather than truncated.
+        // Measured on the real opencode binding, 5000 calls with 20 KB
+        // arguments and results: 204 MB parked, ~41 KB/span — 60× the
+        // estimate that said a cap would buy nothing.
+        //
+        // Overflow is FLUSHED, never dropped: a dropped span would strand
+        // the `tool_input` / `tool_output` records already emitted under
+        // its id (see `emitToolContent`). The cost is parentage on the
+        // oldest spans only, and it is marked on them.
+        this.sessionState.set(
+          sessionId,
+          overflowDeferredSpans(tracerProvider, r.state, MAX_DEFERRED_SPANS),
+        );
       }
     }
-    if (this.meterProvider) {
-      await recordToolUse(this.meterProvider, toolName, 'PostToolUse');
+    if (monitored) {
+      const meterProvider = this.getMeterProvider();
+      if (meterProvider) await recordToolUse(meterProvider, toolName, 'PostToolUse');
     }
   }
 
   /** Capture the user prompt onto turn state; applied at endTurn time. */
   onUserPrompt(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+    if (!text || !this.isMonitored(sessionId)) return;
+    if (!this.getTracerProvider()) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordUserPrompt(state, text);
     this.sessionState.set(sessionId, state);
@@ -497,7 +1205,8 @@ export class InProcessPluginRuntime {
 
   /** Capture the assistant reply onto turn state. */
   onAssistantReply(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+    if (!text || !this.isMonitored(sessionId)) return;
+    if (!this.getTracerProvider()) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordAssistantReply(state, text);
     this.sessionState.set(sessionId, state);
@@ -508,6 +1217,7 @@ export class InProcessPluginRuntime {
     sessionId: string,
     usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
   ): void {
+    if (!this.isMonitored(sessionId)) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = accumulateGenAiUsage(state, usage);
     this.sessionState.set(sessionId, state);
@@ -520,12 +1230,17 @@ export class InProcessPluginRuntime {
     auditDetails?: Record<string, unknown>,
   ): Promise<void> {
     this.writeLifecycle(sessionId, 'subagent_spawning', auditDetails ?? { subagent_id: taskId });
-    if (this.tracerProvider) {
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       state = recordPreTaskToolUse(state, taskId, '');
       this.sessionState.set(sessionId, state);
     }
-    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCreated');
+    if (monitored) {
+      const meterProvider = this.getMeterProvider();
+      if (meterProvider) await recordToolUse(meterProvider, 'Task', 'TaskCreated');
+    }
   }
 
   /** Sub-agent / Task span close. */
@@ -535,14 +1250,19 @@ export class InProcessPluginRuntime {
     auditDetails?: Record<string, unknown>,
   ): Promise<void> {
     this.writeLifecycle(sessionId, 'subagent_ended', auditDetails ?? { subagent_id: taskId });
-    if (this.tracerProvider) {
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
-        const r = await recordPostTaskToolUse(this.tracerProvider, state, taskId, process.cwd());
+        const r = await recordPostTaskToolUse(tracerProvider, state, taskId, this.cwdFor(sessionId));
         this.sessionState.set(sessionId, r.state);
       }
     }
-    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCompleted');
+    if (monitored) {
+      const meterProvider = this.getMeterProvider();
+      if (meterProvider) await recordToolUse(meterProvider, 'Task', 'TaskCompleted');
+    }
   }
 
   /**
@@ -551,20 +1271,135 @@ export class InProcessPluginRuntime {
    * never blocks and never runs Phase 0–6.
    */
   onUserBash(sessionId: string, command: string, cwd: string): void {
+    // The one event that always carried a real directory. Recording it
+    // costs nothing and means a session whose start event was missed
+    // still gets keyed correctly the first time the user types a shell
+    // command — done BEFORE the audit row, which consults the gate.
+    this.setSessionCwd(sessionId, cwd);
     this.writeLifecycle(sessionId, 'user_bash', { command, cwd, actor: 'user' });
   }
 
-  /** `/nio ...` sub-command router, shared by every platform. */
-  async dispatchCommand(rawArgs: string): Promise<string> {
+  /**
+   * `/nio ...` sub-command router, shared by every platform.
+   *
+   * `opts.cwd` is the directory the command was typed in. It matters for
+   * exactly one subcommand and matters completely there: `monitor on`
+   * stamps a `pending_arm` with it, and the gate will only let a session
+   * claim that arm when the session's own directory matches. Passing the
+   * host process's cwd instead — which is what omitting it does — arms a
+   * directory no session may be working in, and the arm then expires
+   * unclaimed after 60s with capture never starting.
+   */
+  async dispatchCommand(rawArgs: string, opts?: { cwd?: string }): Promise<string> {
     try {
       return await dispatchNioCommand(rawArgs ?? '', {
         orchestrator: this.orchestrator,
         scanner: this.scanner,
+        ...(opts?.cwd ? { cwd: opts.cwd } : {}),
       });
     } catch (err) {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
       return `[nio error] ${msg}`;
     }
+  }
+
+  /**
+   * Put one tool call's arguments or result on the logs signal, against
+   * the tool span id minted at PreToolUse.
+   *
+   * This is the in-process family's half of what `collector-core.ts`
+   * does on the hook path (`emitToolInputContent` /
+   * `emitToolOutputContent`). Without it, OpenClaw / Pi / opencode put
+   * tool arguments on the wire ONLY as the issuing chat call's
+   * `tool_use` block — which means not at all for a call the guard
+   * denied, or in a session with no usable `ConversationSource` (Pi's
+   * ephemeral sessions, an OpenClaw turn whose events never arrived) —
+   * and put tool RESULTS on the wire never, since no `ContentBlock`
+   * carries a tool result. See `buildToolInputRecord`'s doc for why the
+   * overlap with the `tool_use` block is intentional rather than
+   * deduplicated.
+   *
+   * Gated like every other export: `monitored` is computed by the caller
+   * for this event, and no provider is resolved (let alone built) for an
+   * unarmed session. The `!monitored` check below is belt-and-braces and
+   * currently unreachable — both call sites already sit inside
+   * `if (tracerProvider)`, and a tracer provider is only resolved when
+   * `monitored`. It is kept because the day content stops being routed
+   * through the trace path is the day it becomes the only gate.
+   *
+   * KNOWN COUPLING, measured rather than assumed: on this family the
+   * whole content pipeline hangs off the TRACE provider, so a config with
+   * `collector.traces.enabled: false` and `logs.enabled: true` puts no
+   * conversation content on the wire at all. Not just these two records —
+   * `flushSessionTurnInner` returns at its `!tracerProvider` check before
+   * it ever builds a `createContentSink`, so the assistant's words and
+   * the `tool_use` blocks go too. (Probe: 7 content-carrying records with
+   * a tracer provider, 0 without; the audit/guard log records are
+   * unaffected either way.) Ungating only these two would recover two of
+   * the four records and stamp them with a `span_id` for a span that is
+   * never emitted, which is a worse artefact than the omission. Decoupling
+   * content from traces properly is a design change, not a patch here.
+   *
+   * KNOWN AND DELIBERATE: a record emitted here can OUTLIVE the span it
+   * names. Under the deferred default the tool span is parked until turn
+   * close, while `tool_input` goes out at PreToolUse and `tool_output` at
+   * PostToolUse, so between them there is a window in which the backend
+   * holds a record whose `span_id` has not arrived. The window does not
+   * always close. Two paths reach the permanent case, and the second
+   * needs no crash at all — measured against the real `createNioPlugin`
+   * binding, one `bash` call, in-memory logger and tracer:
+   *
+   *  1. the host dies mid-turn (the durability trade `eagerToolSpans`
+   *     documents);
+   *  2. the session is DISARMED mid-turn. `flushSessionTurnInner` takes
+   *     its `!tracerProvider` early return, drops the parked spans, and
+   *     the two content records emitted while the session was still
+   *     armed are left naming a span nobody will ever send. Probed:
+   *     `spans exported = 0`, `dangling content records = 2` (the
+   *     command line and the result body).
+   *
+   * Not fixed, and the alternative is worse. Making the content share the
+   * span's fate means parking it too — which would delete, on exactly the
+   * mid-turn crash of (1), the tool arguments and results that currently
+   * DO survive it. A dangling log record still carries what the tool was
+   * asked to do and what it answered; a parked one carries nothing. So
+   * the join is best-effort by design and the content leg is the durable
+   * one. `pi-opencode-content-span-lifetime.test.ts` pins path (2) so
+   * that a future "fix" which parks content has to argue with this
+   * comment first.
+   */
+  private emitToolContent(
+    kind: 'input' | 'output',
+    monitored: boolean,
+    spanId: string | undefined,
+    traceId: string | undefined,
+    payload: unknown,
+    toolCallId: string | undefined,
+  ): void {
+    if (!monitored || !spanId || !traceId) return;
+    const loggerProvider = this.getLoggerProvider();
+    if (!loggerProvider) return;
+    // Tool params and results come off live host objects on this family
+    // (not off JSON.parse), so a cycle or a BigInt is reachable and
+    // `JSON.stringify` throws on both. Losing one content record is
+    // acceptable; taking the tool call down with it is not.
+    let text: string;
+    try {
+      if (typeof payload === 'string') text = payload;
+      else if (payload === undefined || payload === null) text = '';
+      else {
+        const json = JSON.stringify(payload);
+        // `{}` carries no information and would just cost a record.
+        text = json === undefined || json === '{}' ? '' : json;
+      }
+    } catch {
+      return;
+    }
+    if (!text) return;
+    const limits = loadContentLimits();
+    const opts = { spanId, traceId, ...(toolCallId ? { toolCallId } : {}) };
+    if (kind === 'input') emitToolInputContent(loggerProvider, limits, { input: text, ...opts });
+    else emitToolOutputContent(loggerProvider, limits, { result: text, ...opts });
   }
 
   private stashGuardAttrs(
@@ -582,13 +1417,18 @@ export class InProcessPluginRuntime {
     spanKey: string,
     attrs: Record<string, unknown>,
     error: string | null,
+    tracerProvider: ReturnType<typeof createTracerProvider>,
   ): Promise<void> {
-    if (!this.tracerProvider) return;
+    // The provider is passed in, already gated, rather than resolved
+    // here: every caller has computed `monitored` for this event
+    // already, and re-deriving it would mean a second monitor-store read
+    // on the block path.
+    if (!tracerProvider) return;
     const state = this.sessionState.get(sessionId);
     if (!state) return;
     const { state: drained } = takePendingGuardAttrs(state, spanKey);
     const r = await recordPostToolUse(
-      this.tracerProvider, drained, spanKey, process.cwd(), attrs, error,
+      tracerProvider, drained, spanKey, this.cwdFor(sessionId), attrs, error,
     );
     this.sessionState.set(sessionId, r.state);
   }
@@ -614,9 +1454,10 @@ export class InProcessPluginRuntime {
     spanKey: string,
     attrs: Record<string, unknown>,
     error: string | null,
+    tracerProvider: ReturnType<typeof createTracerProvider>,
   ): Promise<void> {
     try {
-      await this.closeSpan(sessionId, spanKey, attrs, error);
+      await this.closeSpan(sessionId, spanKey, attrs, error, tracerProvider);
     } catch {
       // The decision this call protects must survive regardless.
     }

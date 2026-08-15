@@ -1,0 +1,10 @@
+{"type":"turn_context","timestamp":"2026-08-04T12:00:00.000Z","payload":{"turn_id":"turn_ml","model":"gpt-5-codex","effort":"medium"}}
+{"type":"response_item","timestamp":"2026-08-04T12:00:01.000Z","payload":{"type":"reasoning","id":"rs_ml_1","summary":[{"type":"summary_text","text":"placeholder reasoning A"}]}}
+null
+{"type":"response_item","timestamp":"2026-08-04T12:00:02.000Z","payload":{"type":"function_call","id":"fc_ml_1","name":"exec_command","arguments":"{\"cmd\":\"echo a\"}","call_id":"call_ml_1"}}
+[1,2,3]
+{"type":"response_item","timestamp":"2026-08-04T12:00:03.000Z","payload":{"type":"reasoning","id":"rs_ml_2","summary":[{"type":"summary_text","text":"placeholder reasoning B"}]}}
+"str"
+{"type":"response_item","timestamp":"2026-08-04T12:00:04.000Z","payload":{"type":"function_call","id":"fc_ml_2","name":"exec_command","arguments":"{\"cmd\":\"echo b\"}","call_id":"call_ml_2"}}
+42
+{"type":"response_item","timestamp":"2026-08-04T12:00:05.000Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final reply placeholder"}]}}

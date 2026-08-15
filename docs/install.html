@@ -337,6 +337,7 @@
         <h2>After install</h2>
         <ol>
           <li>Edit <code>~/.nio/config.yaml</code>: set <code>guard.protection_level</code>, optional <code>collector.endpoint</code> for OTLP export.</li>
+          <li>Telemetry stays <strong>off</strong> until you arm it. An endpoint on its own captures nothing — run <code>/nio-monitor on</code> (<code>/nio monitor on</code> on OpenClaw and Hermes) inside a session to start capturing it, or set <code>collector.monitor_all_sessions: true</code> for blanket capture. The guard runs and blocks regardless, and <code>~/.nio/audit.jsonl</code> is written regardless. See <a href="nio-monitor.html"><code>/nio-monitor</code></a>.</li>
           <li>Start a new agent session so the hooks load (if you have a long-running daemon like <code>hermes gateway</code>, restart it).</li>
           <li>The audit log is at <code>~/.nio/audit.jsonl</code>. Read recent entries via <code>/nio report</code> (or <code>$nio report</code> on Codex).</li>
           <li>Full config field reference: <a href="configuration.html">Configuration</a>.</li>

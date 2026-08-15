@@ -11,6 +11,7 @@ import {
   clearMCPRegistryCache,
 } from '../adapters/mcp-registry.js';
 import type { NioConfig } from '../adapters/config-schema.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 let HOME: string;
 let originalXdgConfigHome: string | undefined;
@@ -28,7 +29,7 @@ const emptyConfig = (): NioConfig => ({});
 // file-wide and restore per-test; restore an originally-unset var by
 // deleting it, never by assigning the literal string "undefined".
 beforeEach(() => {
-  HOME = mkdtempSync(join(tmpdir(), 'nio-mcp-registry-'));
+  HOME = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-mcp-registry-')));
   originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
   delete process.env.XDG_CONFIG_HOME;
   originalPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;

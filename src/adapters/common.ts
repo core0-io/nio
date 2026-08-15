@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, sta
 import { dirname, join } from 'node:path';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { homedir } from 'node:os';
+import { createRequire } from 'node:module';
 import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
@@ -126,6 +127,60 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Host-input coercion
+// ---------------------------------------------------------------------------
+
+/**
+ * Coerce one host-supplied value to a string, for ANY runtime value.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────
+ *
+ * Every hook payload Nio sees is either `JSON.parse`d stdin (Claude Code,
+ * Codex, Hermes) or a live host object (the in-process runtimes: OpenClaw,
+ * Pi, opencode). Neither is schema-checked before it reaches an adapter,
+ * so a field the `HookInput` type calls a `string` may at runtime be a
+ * number, `null`, an array, a nested object, or anything else JSON can
+ * express. An `as string` cast asserts a fact nobody checked; the moment
+ * the value reaches `.startsWith` / `.slice` / `.toLowerCase` it throws.
+ *
+ * On the guard path a throw is not a telemetry defect, it is an
+ * ENFORCEMENT defect: `evaluateHook` and its callers run without a
+ * catch-all, so the process dies carrying the decision, and every host
+ * reads a dead hook as "took no action" — Claude Code's exit 1 is its
+ * NON-blocking error code, and Hermes treats empty stdout as no-action.
+ * A `deny` therefore degrades to an allowed dangerous action. See
+ * `src/tests/guard-decision-survives-malformed-payload.test.ts`.
+ *
+ * ── Contract ──────────────────────────────────────────────────────────
+ *
+ * Never throws. Strings pass through byte-identically (including lone
+ * surrogates and empty strings, so no caller's `|| fallback` changes
+ * meaning); `null`/`undefined` become `''` so they stay falsy exactly as
+ * the `as string` casts they replace did; objects and arrays are
+ * serialised so their content still reaches the analysers instead of
+ * arriving as `[object Object]`; everything else goes through `String()`.
+ * A value that cannot be serialised at all (circular live host object,
+ * BigInt) degrades to `''` rather than taking the guard down with it.
+ */
+export function asText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value) ?? '';
+    } catch {
+      return '';
+    }
+  }
+  // number / boolean / symbol / bigint / function
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sensitive path detection
 // ---------------------------------------------------------------------------
 
@@ -198,6 +253,71 @@ const DEFAULT_MAX_AUDIT_BYTES = 10 * 1024 * 1024; // 10 MB
 export interface WriteAuditLogOptions {
   loggerProvider?: LoggerProvider | null;
   logsConfig?: CollectorLogsConfig;
+  /**
+   * (trace, span) to stamp onto the exported LogRecord so the audit
+   * entry joins back to the turn it belongs to. Nio never has an active
+   * OTEL context (spans are built from ROOT_CONTEXT across process
+   * boundaries), so without this the record's built-in trace_id /
+   * span_id fields are empty. Omitted → unassociated record, same as
+   * before. Never touches the local JSONL leg.
+   */
+  spanContext?: { traceId: string; spanId: string };
+}
+
+type EmitAuditLogFn = (
+  p: LoggerProvider,
+  e: AuditEntry,
+  sc?: { traceId: string; spanId: string },
+) => void;
+
+/** Resolved once per process; `null` means "this environment can't reach it". */
+let cachedEmitAuditLog: EmitAuditLogFn | null | undefined;
+
+/**
+ * Get `emitAuditLog` without importing the logs SDK at module load.
+ *
+ * A plain static import would pull `@opentelemetry/sdk-logs` — and
+ * through it the OTLP exporters and `@grpc/grpc-js` — into every
+ * consumer of this module, including the guard path and the scanner,
+ * which have no use for it. So it stays lazy. But `writeAuditLog` is
+ * synchronous and `import()` is not, which leaves two lookups:
+ *
+ *  1. `require(...)` — what the bundled hook scripts run. Bun rewrites
+ *     the call into a direct reference to the bundled module, so this
+ *     is the fast path on every platform's shipped plugin.
+ *  2. `createRequire(import.meta.url)` — the unbundled `dist/` ESM
+ *     build (npm library export, and the test suite), where bare
+ *     `require` is not defined at all. Without this fallback the
+ *     ReferenceError lands in the caller's catch and the OTEL leg of
+ *     every audit entry silently does nothing — entries reach the local
+ *     JSONL and never the collector.
+ *
+ * Both failing leaves `null` and the caller writes JSONL only, which is
+ * the behaviour this function replaced.
+ */
+function resolveEmitAuditLog(): EmitAuditLogFn | null {
+  if (cachedEmitAuditLog !== undefined) return cachedEmitAuditLog;
+  cachedEmitAuditLog = null;
+  try {
+    // The specifier MUST stay a literal here: bun's bundler only rewrites
+    // `require('<literal>')` into a reference to the bundled module. Hoist
+    // it into a variable and the bundled scripts fall through to the
+    // filesystem-relative fallback below, which cannot resolve next to a
+    // bundle — i.e. no OTEL audit records on any shipped platform.
+    cachedEmitAuditLog = (
+      require('../scripts/lib/logs-collector.js') as { emitAuditLog: EmitAuditLogFn }
+    ).emitAuditLog;
+  } catch {
+    try {
+      const req = createRequire(import.meta.url);
+      cachedEmitAuditLog = (
+        req('../scripts/lib/logs-collector.js') as { emitAuditLog: EmitAuditLogFn }
+      ).emitAuditLog;
+    } catch {
+      cachedEmitAuditLog = null;
+    }
+  }
+  return cachedEmitAuditLog;
 }
 
 /**
@@ -215,12 +335,7 @@ export function writeAuditLog(
   // OTEL Logs export (fire-and-forget)
   if (logsConfig?.enabled !== false && opts?.loggerProvider) {
     try {
-      // Dynamic import avoided — emitAuditLog is called from hook scripts
-      // that construct the LoggerProvider themselves.
-      const { emitAuditLog } = require('../scripts/lib/logs-collector.js') as {
-        emitAuditLog: (p: LoggerProvider, e: AuditEntry) => void;
-      };
-      emitAuditLog(opts.loggerProvider, entry);
+      resolveEmitAuditLog()?.(opts.loggerProvider, entry, opts.spanContext);
     } catch {
       // Non-critical — OTEL export failure should not block
     }
@@ -351,6 +466,11 @@ function summariseToolInput(input: HookInput): string {
                 (toolInput as Record<string, unknown>).query;
     if (typeof url === 'string') return url;
   }
-  return JSON.stringify(toolInput).slice(0, 200);
+  // `asText`, not `JSON.stringify`, because this runs on the Phase 0 deny
+  // path (`buildGuardAuditEntry` at hook-engine.ts) OUTSIDE any try/catch:
+  // the in-process runtimes hand the adapters live host objects, and
+  // `JSON.stringify` throws on a circular one. Losing the audit summary is
+  // a data-quality problem; throwing here loses the deny itself.
+  return asText(toolInput).slice(0, 200);
 }
 

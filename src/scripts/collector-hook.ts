@@ -24,6 +24,9 @@ import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
@@ -67,37 +70,78 @@ function readStdin(): Promise<HookStdinPayload | null> {
   });
 }
 
-const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
-const meterProvider = createMeterProvider(config, PLATFORM, resourceAgentName);
-const tracerProvider = createTracerProvider(config, PLATFORM, resourceAgentName);
-const loggerProvider = (config.enabled && logsConfig.enabled !== false)
-  ? createLoggerProvider(config, PLATFORM, resourceAgentName)
-  : null;
-
 async function main(): Promise<void> {
   const input = await readStdin();
   if (!input) process.exit(0);
 
-  await dispatchCollectorEvent({
-    event: input.hook_event_name ?? '',
-    input,
-    platform: PLATFORM,
-    agentName: AGENT_NAME,
-    config,
-    meterProvider,
-    tracerProvider,
-    loggerProvider,
+  // Debug-only sampling switch — see lib/payload-dump.ts module doc for
+  // why this is deliberately NOT behind the monitor gate below.
+  dumpPayload(PLATFORM, input.hook_event_name ?? 'unknown', input);
+
+  // Gate before creating any provider — an unmonitored session must not
+  // even initialise the OTLP exporters. The local audit log is written
+  // regardless (see dispatchCollectorEvent), which is why we still call
+  // dispatch with null providers instead of returning early.
+  const monitored = isSessionMonitored(
+    input.session_id ?? 'unknown',
+    input.cwd ?? null,
     logsConfig,
-  });
+  );
+
+  const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
+  const meterProvider = monitored
+    ? createMeterProvider(config, PLATFORM, resourceAgentName)
+    : null;
+  const tracerProvider = monitored
+    ? createTracerProvider(config, PLATFORM, resourceAgentName)
+    : null;
+  const loggerProvider = (monitored && config.enabled && logsConfig.enabled !== false)
+    ? createLoggerProvider(config, PLATFORM, resourceAgentName)
+    : null;
+
+  // One shared deadline for every OTLP-touching await below — the
+  // dispatch itself included, NOT just the closing Promise.all. Nearly
+  // every dispatch branch ends in a library helper that carries its own
+  // `provider.forceFlush()` (`recordToolUse`, `recordPostToolUse`,
+  // `endTurn`, `emitSessionSpan`, `recoverDeferredTree`), so against an
+  // endpoint that drops packets the hang happens INSIDE dispatch and the
+  // closing flush is never reached. Measured unbounded against
+  // 192.0.2.1:4318 on a PostToolUse event: still alive when killed at
+  // 95s. See lib/flush-budget.ts.
+  //
+  // A dispatch abandoned at the deadline leaves whatever it had already
+  // written to its session's traces-state-store shard intact — every branch saves
+  // state before its metric flush, and the two that flush first
+  // (`endTurn`, `emitSessionSpan`) simply leave the turn open, which the
+  // next event's orphaned-tree recovery is already built to pick up.
+  const withFlushBudget = createFlushBudget(config.timeout);
+
+  await withFlushBudget(
+    dispatchCollectorEvent({
+      event: input.hook_event_name ?? '',
+      input,
+      platform: PLATFORM,
+      agentName: AGENT_NAME,
+      config,
+      meterProvider,
+      tracerProvider,
+      loggerProvider,
+      logsConfig,
+    }),
+    undefined,
+  );
 
   // Force network exporters to flush before the subprocess exits.
   // Without this, span/log/metric records can sit in batchers and never
   // reach OTLP.
-  await Promise.all([
-    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', config.endpoint, e)),
-    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', config.endpoint, e)),
-    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', config.endpoint, e)),
-  ]);
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', config.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', config.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', config.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 
   process.exit(0);
 }

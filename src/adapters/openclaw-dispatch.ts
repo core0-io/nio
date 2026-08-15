@@ -14,6 +14,11 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { dump as yamlDump } from 'js-yaml';
 import { loadConfig, resetConfig } from './common.js';
+import {
+  normaliseMonitorSubcommand,
+  runMonitorCommand,
+  type MonitorResult,
+} from '../scripts/lib/monitor-commands.js';
 import type { NioConfig } from './config-schema.js';
 import type { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { SkillScanner } from '../scanner/index.js';
@@ -38,6 +43,17 @@ type Level = (typeof VALID_LEVELS)[number];
 export interface DispatchDeps {
   orchestrator: ActionOrchestrator;
   scanner: SkillScanner;
+  /**
+   * Directory the command was typed in, when the host knows it.
+   *
+   * Only `monitor` reads it, and only to key the arm it writes. Absent
+   * falls back to `process.cwd()` inside `runMonitorCommand` — correct
+   * for the subprocess CLIs, whose process cwd IS the caller's
+   * directory, and wrong for a long-running host serving sessions from
+   * several directories, which is why the in-process runtime threads it
+   * through.
+   */
+  cwd?: string;
 }
 
 export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promise<string> {
@@ -62,6 +78,8 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
     case 'external-score':
     case 'external':
       return handleExternalScore();
+    case 'monitor':
+      return handleMonitor(restStr, deps.cwd);
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -85,7 +103,86 @@ function usageText(): string {
     '  /nio report                               — recent audit events + diagnostics summary',
     '  /nio doctor                               — dry-run validate config + test OAuth/LLM connectivity',
     '  /nio external-score                       — query all enabled external scoring endpoints and list their current scores',
+    '  /nio monitor [on|off|status]              — turn telemetry capture on/off for this session (off by default)',
   ].join('\n');
+}
+
+// ── monitor ──────────────────────────────────────────────────────────────────
+
+/**
+ * Telemetry capture switch.
+ *
+ * On OpenClaw and Hermes this is the **only** way to arm a session:
+ * neither platform installs the focused `nio-*` skills, so there is no
+ * `/nio-monitor` and no `monitor-cli.js` invocation path — everything
+ * routes through this dispatcher (Hermes via `nio-cli.js`). Without this
+ * case, upgrading to the session-gated collector would leave both
+ * platforms permanently silent with no in-product way back.
+ *
+ * The bodies are `lib/monitor-commands.ts`'s, the same ones
+ * `monitor-cli.js` runs, so Claude Code / Codex and OpenClaw / Hermes
+ * cannot answer differently.
+ */
+function handleMonitor(rest: string, cwd?: string): string {
+  const sub = normaliseMonitorSubcommand(rest);
+  if (sub === null) {
+    return `Unknown monitor subcommand: ${rest.trim()}\n\n${usageText()}`;
+  }
+
+  let result;
+  try {
+    // `cwd` when the host knows which directory the session is in. The
+    // arm this writes is claimed by matching that directory against the
+    // session's own, so on a host that serves several directories from
+    // one process the fallback (`process.cwd()`) keys the arm to a
+    // directory that may belong to no session at all.
+    result = runMonitorCommand(sub, cwd ? { cwd } : {});
+  } catch (err) {
+    return `monitor ${sub} failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+
+  const json = JSON.stringify(result, null, 2);
+  return `${describeMonitorResult(result)}\n\n${json}`;
+}
+
+/** One-line human summary above the machine-readable JSON. */
+function describeMonitorResult(result: MonitorResult): string {
+  if (result.action === 'on') {
+    return result.mode === 'direct'
+      ? `Telemetry capture ON for session ${result.session_id}. It starts with the next tool call.`
+      : 'Telemetry capture ON — pending. The next Nio hook event from ' +
+        `${result.cwd} claims it; the request expires in 60s if nothing happens.`;
+  }
+  if (result.action === 'off') {
+    if (!result.removed) {
+      // Only ever the truth on this platform when the directory sweep
+      // below found nothing: nothing armed here, so nothing to disarm.
+      return 'Nothing was armed for this session or this directory; any pending arm has been cleared.';
+    }
+    return result.matched_by === 'cwd'
+      ? `Telemetry capture OFF. Disarmed ${result.removed_sessions} session(s) armed from this ` +
+        'directory — this platform exposes no session id, so `off` clears the directory it was ' +
+        'run in.'
+      : 'Telemetry capture OFF for this session.';
+  }
+  const lines = [
+    result.monitor_all_sessions
+      ? 'Telemetry capture is ON for every session (collector.monitor_all_sessions is true).'
+      : result.session_undetermined
+        ? 'Telemetry capture state for THIS session cannot be determined — this platform ' +
+          'exposes no session id, and an armed record is keyed by an id only the hooks see. ' +
+          'Run `/nio monitor off` here to disarm anything armed from this directory.'
+        : result.monitored
+          ? 'Telemetry capture is ON for this session.'
+          : 'Telemetry capture is OFF for this session.',
+  ];
+  if (result.pending_arm && !result.monitored) {
+    lines.push(
+      'An arm request is pending: it binds on the next Nio hook event from the directory it was made in.',
+    );
+  }
+  lines.push(`${result.armed_sessions} session(s) armed in total.`);
+  return lines.join(' ');
 }
 
 // ── config ───────────────────────────────────────────────────────────────────

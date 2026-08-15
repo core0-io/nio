@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { load as yamlLoad } from 'js-yaml';
+import { type ContentLimits, DEFAULT_CONTENT_LIMITS } from './content/truncate.js';
 
 export interface CollectorConfig {
   endpoint: string;
@@ -54,17 +55,46 @@ async function reportConfigError(_configDir: string, configPath: string, err: un
   });
 }
 
+function nioDir(): string {
+  // `||` not `??`: an empty NIO_HOME means "unset", matching
+  // adapters/common.ts. With `??` an empty string would resolve the
+  // config to `/config.yaml`, and the two modules would disagree about
+  // the same environment variable.
+  return process.env['NIO_HOME'] || join(homedir(), '.nio');
+}
+
+// Cache keyed by resolved config path. A hook process reads config 4+
+// times (collector / logs / agent name / monitor gate); OpenClaw's
+// long-lived daemon does so twice per tool call. Keying by path rather
+// than caching globally keeps tests that switch NIO_HOME honest.
+//
+// The cache lives for the process lifetime. Per-event platforms (Claude
+// Code, Codex, Hermes) spawn a fresh process per hook, so this is
+// invisible to them. OpenClaw's daemon is long-lived, so editing
+// config.yaml there requires a daemon restart to take effect — but that
+// already matches how the OpenClaw provider reads config once at
+// registration, so this doesn't introduce a new inconsistency.
+const rawConfigCache = new Map<string, Record<string, unknown>>();
+
 function readRawConfig(): Record<string, unknown> {
-  const configDir = process.env['NIO_HOME']
-    ?? join(homedir(), '.nio');
+  const configDir = nioDir();
   const configPath = join(configDir, 'config.yaml');
 
-  if (!existsSync(configPath)) return {};
+  const cached = rawConfigCache.get(configPath);
+  if (cached) return cached;
+
+  if (!existsSync(configPath)) {
+    rawConfigCache.set(configPath, {});
+    return {};
+  }
 
   try {
-    return (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
+    const parsed = (yamlLoad(readFileSync(configPath, 'utf-8')) ?? {}) as Record<string, unknown>;
+    rawConfigCache.set(configPath, parsed);
+    return parsed;
   } catch (err) {
     reportConfigError(configDir, configPath, err);
+    rawConfigCache.set(configPath, {});
     return {};
   }
 }
@@ -134,11 +164,67 @@ export function loadLogsConfig(): LogsConfig {
 
   const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
   const logs = (collector['logs'] ?? {}) as Record<string, unknown>;
+  const rawPath = logs['path'] as string | undefined;
 
   return {
     enabled: (logs['enabled'] as boolean) ?? true,
     local: (logs['local'] as boolean) ?? true,
-    path: expandHome((logs['path'] as string) ?? '~/.nio/audit.jsonl'),
+    // An explicit collector.logs.path is expanded relative to the real
+    // homedir (that's what `~/` means in a value the user typed). The
+    // *default* (no config, or no logs.path set) must instead resolve
+    // under NIO_HOME so anything derived from it — the audit log itself,
+    // plus every store that piggybacks on this path via dirname()
+    // (traces-state-store.json, monitored-sessions.json) — stays inside
+    // an overridden NIO_HOME during tests instead of silently falling
+    // through to the developer's real ~/.nio.
+    path: rawPath ? expandHome(rawPath) : join(nioDir(), 'audit.jsonl'),
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
+  };
+}
+
+/**
+ * Read `collector.monitor_all_sessions`.
+ *
+ * Defaults to `false` — nio's default posture is silence. Telemetry
+ * leaves the machine only for sessions the user explicitly armed via
+ * `/nio-monitor`, unless an operator opts the whole install in.
+ *
+ * Strict boolean check: any non-boolean value (string "yes", number 1)
+ * reads as false. A typo in the config must not silently turn on
+ * blanket capture.
+ */
+export function loadMonitorAllSessions(): boolean {
+  const raw = readRawConfig();
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  return collector['monitor_all_sessions'] === true;
+}
+
+/**
+ * Read `collector.content_limits` — per-content-kind byte caps applied by
+ * `truncateContent` (content/truncate.ts). Each key falls back to
+ * `DEFAULT_CONTENT_LIMITS` independently when unset, non-numeric,
+ * negative, or otherwise malformed (a bad YAML value must never throw or
+ * silently disable the cap for that kind — it just reverts to default).
+ * An explicit `0` is a valid value (the "unlimited" escape hatch) and is
+ * honored as-is, not treated as missing.
+ */
+export function loadContentLimits(): ContentLimits {
+  const raw = readRawConfig();
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  const configured = (collector['content_limits'] ?? {}) as Record<string, unknown>;
+
+  const pick = (key: keyof ContentLimits): number => {
+    const value = configured[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_CONTENT_LIMITS[key];
+  };
+
+  return {
+    thinking: pick('thinking'),
+    text: pick('text'),
+    user_prompt: pick('user_prompt'),
+    tool_input: pick('tool_input'),
+    tool_output: pick('tool_output'),
   };
 }

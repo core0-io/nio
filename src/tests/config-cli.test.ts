@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import { dump as yamlDump } from 'js-yaml';
 
 import { _resetOAuthRegistryForTests } from '../core/analysers/external/auth.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // config-cli.js is shipped bundled (via scripts/build.js) into each plugin's
 // skill dir. Tests run from dist/tests/ so we walk back to the repo root
@@ -48,7 +49,7 @@ let originalNioHome: string | undefined;
 
 before(() => {
   originalNioHome = process.env.NIO_HOME;
-  nioHome = mkdtempSync(join(tmpdir(), 'nio-config-cli-test-'));
+  nioHome = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-config-cli-test-')));
 });
 
 after(() => {

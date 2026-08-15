@@ -9,6 +9,11 @@
             "command": "node ./skills/nio/scripts/scanner-hook.js",
             "timeout": 30,
             "statusMessage": "Nio: scanning installed skills..."
+          },
+          {
+            "type": "command",
+            "command": "node ./skills/nio/scripts/collector-hook.js",
+            "timeout": 10
           }
         ]
       }

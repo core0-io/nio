@@ -25,6 +25,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
 // ---------------------------------------------------------------------------
 // Structural subset of Pi's extension API
@@ -39,7 +40,16 @@ interface PiContext {
   hasUI: boolean;
   cwd: string;
   ui: PiUi;
-  sessionManager: { getSessionId(): string };
+  sessionManager: {
+    getSessionId(): string;
+    /**
+     * Absolute path of the session JSONL under `~/.pi/agent/sessions/`,
+     * or null for an ephemeral session that is never persisted. Optional
+     * because older Pi releases predate it — an absent method degrades to
+     * "no session file", the same as an ephemeral session.
+     */
+    getSessionFile?(): string | null;
+  };
 }
 
 export interface PiExtensionApi {
@@ -78,6 +88,14 @@ export interface PiPluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Same seam for the logs signal. Needed on top of `tracerProvider`
+   * because conversation CONTENT (the assistant's words, the tool
+   * arguments off a `tool_use` block) rides the logs signal, not the
+   * spans — without this a test can see Pi's chat spans but not whether
+   * anything was ever said inside them.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
 /** How long an interactive confirm dialog waits before auto-cancelling. */
@@ -99,10 +117,28 @@ export function registerPiExtension(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    loggerProvider: options.loggerProvider,
   });
 
-  const sid = (ctx: unknown): string =>
-    (ctx as PiContext).sessionManager.getSessionId();
+  /**
+   * This event's session id — and, as a side effect, the directory that
+   * session is working in.
+   *
+   * The cwd recording lives here rather than in `session_start` alone
+   * because every handler already funnels through this helper, so one
+   * line covers the whole binding and no ordering assumption is needed:
+   * Pi is free to deliver a tool call before whatever event we might
+   * otherwise have chosen to read the directory from. It matters because
+   * the runtime serves every Pi session from ONE process, so without it
+   * the monitor gate compares a pending arm against the directory `pi`
+   * was launched in instead of the one this session is in.
+   */
+  const sid = (ctx: unknown): string => {
+    const c = ctx as PiContext;
+    const id = c.sessionManager.getSessionId();
+    rt.setSessionCwd(id, c.cwd);
+    return id;
+  };
 
   // ---- Guard: tool_call can block -----------------------------------------
   pi.on('tool_call', async (event: unknown, ctx: unknown) => {
@@ -210,7 +246,24 @@ export function registerPiExtension(
   });
 
   pi.on('session_start', async (_event: unknown, ctx: unknown) => {
-    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      const sessionId = sid(ctx);
+      rt.onSessionStart(sessionId);
+      // Pi is a replay platform: its conversation lives in the session
+      // JSONL, not in events we accumulate. Hand the runtime the path
+      // once, here — `onSessionStart` has just cleared any stale one, and
+      // every turn in this session replays the same file scoped by its
+      // own turn start.
+      //
+      // An ephemeral session has no file (`getSessionFile()` returns
+      // null), and so does a Pi old enough not to expose the method at
+      // all. Both land on `setTranscriptPath(id, null)`, so the factory
+      // yields no source and the turn degrades to the flat turn → tool
+      // shape — the same graceful degradation any platform without a
+      // transcript gets, not a crash and not an empty chat span.
+      const c = ctx as PiContext;
+      rt.setTranscriptPath(sessionId, c.sessionManager?.getSessionFile?.() ?? null);
+    } catch { /* non-critical */ }
   });
 
   pi.on('session_shutdown', async (_event: unknown, ctx: unknown) => {
@@ -221,7 +274,7 @@ export function registerPiExtension(
     try {
       const sessionId = sid(ctx);
       await rt.onTurnEnd(sessionId);
-      await rt.recordTurnMetric();
+      await rt.recordTurnMetric(sessionId);
     } catch { /* non-critical */ }
   });
 
@@ -256,7 +309,14 @@ export function registerPiExtension(
   pi.registerCommand('nio', {
     description: 'Nio — scan code, evaluate an action, read the audit report, manage config',
     handler: async (args: string, ctx: unknown) => {
-      const text = await rt.dispatchCommand(args ?? '');
+      // `ctx.cwd`, not the process's: `/nio monitor on` keys its arm to
+      // this directory and the gate will only hand that arm to a session
+      // working in the same one. Pi serves every session from one
+      // process, so the process cwd would key the arm to wherever `pi`
+      // was started and the request would expire unclaimed.
+      const text = await rt.dispatchCommand(args ?? '', {
+        cwd: (ctx as PiContext)?.cwd,
+      });
       try {
         (ctx as PiContext).ui.notify(text, 'info');
       } catch {

@@ -44,11 +44,18 @@ import {
   ensureTurn,
   nioGuardAttributes,
   recordPostToolUse,
+  genAiToolCallArgumentAttributes,
   setPendingGuardAttrs,
 } from './lib/traces-collector.js';
+import { buildSpanContent, spanCarriesWholeContent } from './lib/content/span-content.js';
+import { emitToolInputContent } from './lib/content/sink.js';
+import { loadContentLimits } from './lib/config-loader.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
+import { dumpPayload } from './lib/payload-dump.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -131,23 +138,66 @@ const HERMES_COLLECTOR_EVENTS: Record<string, string> = {
 };
 
 /**
+ * A `HookStdinPayload` whose `session_id` is known to be present.
+ *
+ * `HookStdinPayload.session_id` is optional because the Claude Code /
+ * Codex payloads it also describes may genuinely omit it.
+ * `hermesToCollectorInput` never does — it always writes a string, `''`
+ * included — and every call site was compensating for the wider type
+ * with a `?? 'unknown'` that could not fire. Narrowing the return type
+ * here is what lets those fallbacks go: the invariant is now checked by
+ * the compiler instead of asserted three times at runtime and explained
+ * in a comment.
+ *
+ * The distinction matters because `''` is load-bearing: it is what makes
+ * `UNTRUSTED_SESSION_IDS` reject the event (fail closed). Substituting a
+ * placeholder — which is exactly what a `??` "cleaned up" into a `||`
+ * would do — would quietly relabel that event in the audit log.
+ */
+type HermesCollectorInput = HookStdinPayload & { session_id: string };
+
+/**
  * Convert a Hermes-shaped envelope into the HookStdinPayload the
  * collector core consumes. Hermes places event-specific fields
  * (user message, tool result, task id) inside the `extra` object;
  * we lift the ones the dispatcher recognises.
+ *
+ * Pure: same envelope + same canonical event ⇒ same object. Call sites
+ * rely on that to translate once and share the result.
  */
 function hermesToCollectorInput(
   raw: unknown,
   canonicalEvent: string,
-): HookStdinPayload {
+): HermesCollectorInput {
   const r = (raw ?? {}) as Record<string, unknown>;
   const extra = (r.extra ?? {}) as Record<string, unknown>;
+  // `||`, not `??`. Hermes never omits `session_id` — its
+  // `_serialize_payload` writes
+  // `kwargs.get("session_id") or kwargs.get("parent_session_id") or ""`,
+  // so a call site that had no session sends the *empty string*, not
+  // `undefined`. That is not hypothetical: `tools/code_execution_tool.py`
+  // dispatches `handle_function_call(tool_name, tool_args, task_id=...)`
+  // with no `session_id`, so every tool invoked from inside the
+  // code-execution sandbox fires `pre_tool_call` / `post_tool_call` with
+  // `session_id: ""` (verified against the installed Hermes agent).
+  //
+  // Under `??` the empty string is a "present" value, so the
+  // parent_session_id recovery below could never fire — it was dead code.
+  // Matching Hermes's own `or` semantics makes it reachable.
+  //
+  // When nothing is recoverable the id stays `''`, which
+  // `UNTRUSTED_SESSION_IDS` rejects: no OTLP export for that event. That
+  // fail-closed outcome is deliberate and identical on all four
+  // platforms (Claude Code / Codex `?? 'unknown'`, OpenClaw
+  // `|| 'openclaw'`) — a placeholder id shared by every id-less event
+  // would arm every such event globally the moment one user armed one
+  // session. The local audit entry is still written either way.
   const sessionId =
-    (r.session_id as string | undefined) ??
-    (extra.parent_session_id as string | undefined) ??
+    (r.session_id as string | undefined) ||
+    (extra.parent_session_id as string | undefined) ||
     '';
 
-  const input: HookStdinPayload = {
+  const input: HermesCollectorInput = {
     hook_event_name: canonicalEvent,
     session_id: sessionId,
     cwd: r.cwd as string | undefined,
@@ -195,33 +245,70 @@ async function runHermesCollector(
   const resourceAgentName = config.agent_name && config.agent_name.length > 0
     ? config.agent_name
     : undefined;
-  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+
+  // Computed once, up front, so the monitor-gate lookup and the
+  // dispatch below share the same parsed input instead of parsing the
+  // raw Hermes envelope twice.
+  const collectorInput = hermesToCollectorInput(rawPayload, canonicalEvent);
+  const monitored = isSessionMonitored(
+    collectorInput.session_id,
+    collectorInput.cwd ?? null,
+    logsConfig,
+  );
+
+  const meterProvider = (monitored && collectorConfig.enabled)
+    ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const tracerProvider = (monitored && collectorConfig.enabled)
+    ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
-  await dispatchCollectorEvent({
-    event: canonicalEvent,
-    input: hermesToCollectorInput(rawPayload, canonicalEvent),
-    platform: 'hermes',
-    config: collectorConfig,
-    meterProvider,
-    tracerProvider,
-    loggerProvider,
-    logsConfig,
-  });
+  // Shared deadline over the dispatch AND the closing flush — see
+  // lib/flush-budget.ts. Most dispatch branches end in a library helper
+  // that carries its own `provider.forceFlush()`, so an endpoint that
+  // drops packets hangs inside dispatch and the closing flush is never
+  // reached: measured unbounded on a `post_tool_call`, still alive when
+  // killed at 95s. Hermes runs us under `subprocess.run(timeout=60)`, so
+  // without this the observable symptom is a 60s freeze per tool call
+  // followed by the host reporting a hook failure.
+  const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
+  await withFlushBudget(
+    dispatchCollectorEvent({
+      event: canonicalEvent,
+      input: collectorInput,
+      platform: 'hermes',
+      config: collectorConfig,
+      meterProvider,
+      tracerProvider,
+      loggerProvider,
+      logsConfig,
+      // Hermes's conversation lives in the raw envelope, not in the
+      // canonical payload above: `extra.conversation_history` is the only
+      // place the LLM calls of this turn exist, and there is no transcript
+      // file to read them back from. Passed on every event rather than
+      // just `post_llm_call` — `createHermesSource` returns zero calls for
+      // an envelope without a history, so a session_end or tool event
+      // degrades to the same flat tree it produced before.
+      conversationInput: { payload: rawPayload },
+    }),
+    undefined,
+  );
 
   // Every hook-cli invocation is a fresh subprocess that exits right
   // after this returns. PeriodicExportingMetricReader batches metrics
   // on a 1s timer, and the HTTP exporter chunks requests — without an
   // explicit flush here the recorded metric/span/log can sit in-memory
   // and never reach OTLP before the process dies.
-  await Promise.all([
-    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-  ]);
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 }
 
 // ── Platform-specific stdout formatting ────────────────────────────────
@@ -279,6 +366,180 @@ function formatHermesGuardOutput(
   };
 }
 
+// How long the stdio writes may make NO progress before writeAndExit()
+// gives up and exits anyway.
+//
+// The previous version of this was a flat 2s wall-clock deadline, and its
+// own comment called the truncation risk "theoretical". It is not.
+// Measured: a deny whose reason comes from a Phase 6 `external_analyser`
+// endpoint returning a long `reason` produces a 300KB stdout payload
+// (a supported, fully-configured code path), and a consumer that stalls
+// for 3s makes the hook exit at ~2.2s having delivered exactly 131072
+// bytes — one pipe buffer. Hermes then gets truncated JSON, its
+// `_parse_response` hits a JSONDecodeError and returns None, and a
+// `{"decision":"block"}` silently degrades to no-action. A truncated
+// deny is an ALLOWED dangerous action, which is worse than any hang.
+//
+// So the deadline is now measured against *progress*, not wall clock: as
+// long as bytes keep leaving the buffer the write is allowed to take as
+// long as it needs, and only a genuinely stuck stream trips the backstop.
+// A closed pipe — the one case the flat timer actually existed for — is
+// handled deterministically by the 'error' listener instead of by a
+// timer, so this is a true last resort.
+//
+// 10s is chosen against Hermes's own bound: `shell_hooks.py::_spawn` runs
+// us under `subprocess.run(..., timeout=spec.timeout)` with
+// DEFAULT_TIMEOUT_SECONDS = 60, so the host kills a truly wedged hook
+// long before this matters. (That same `subprocess.run(capture_output=
+// True)` drains both pipes concurrently, which is why the real Hermes is
+// never the stalled consumer this bounds.)
+const WRITE_STALL_TIMEOUT_MS = 10_000;
+
+// How often the drain is sampled. Cheap and unref'd, so it never keeps
+// the process alive on its own; it exists only to notice progress.
+const WRITE_POLL_MS = 250;
+
+// Payload chunk size for the stdout write.
+//
+// The payload is written in chunks so that "did anything leave the
+// buffer?" is ANSWERABLE. `writableLength` cannot answer it:
+//
+//  - it counts bytes belonging to writes that have not COMPLETED, and
+//    libuv treats one `write(payload)` as a single request however many
+//    partial writev()s it takes. Measured: a 450 000-byte single write to
+//    a consumer draining 8KB/450ms reported `writableLength=450000` on
+//    all 29 samples over 14.5s, then dropped straight to 0 at the end;
+//  - chunking alone does not fix it either, because with backpressure the
+//    queue simply stays FULL — same measurement, chunked: `pending=65536`
+//    on 24 consecutive samples while the write offset climbed from
+//    212 992 to 409 600. A constant queue depth is not the same thing as
+//    no progress, but `pending !== lastPending` cannot tell them apart.
+//
+// So the progress signal is the per-chunk write CALLBACK: node invokes it
+// when that chunk's request completes, i.e. when those bytes have actually
+// been handed to the OS. One completed chunk = real progress, and the
+// backstop only fires when no chunk has completed for
+// WRITE_STALL_TIMEOUT_MS. That makes the effective "wedged" threshold
+// WRITE_CHUNK_BYTES / WRITE_STALL_TIMEOUT_MS ≈ 1.6 KB/s — anything slower
+// than that is treated as stuck, anything faster is waited out.
+//
+// Before this, the backstop was a flat 10s wall clock in all but name:
+// a 450KB deny payload to a healthy 18KB/s consumer came out cut to
+// 180 224 bytes at 10 301ms.
+const WRITE_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * Write the Hermes response and exit once BOTH stdio streams have
+ * drained.
+ *
+ * An explicit exit is required: when the OTLP endpoint is configured but
+ * unreachable, the meter provider's PeriodicExportingMetricReader keeps
+ * its retry timer alive past forceFlush(), so the event loop never drains
+ * and the process hangs forever. Exiting from the write callback (rather
+ * than immediately after write()) guarantees the response reaches Hermes
+ * first — stdout is a pipe here, so write() is not synchronous.
+ *
+ * stderr has to be waited on too, and it is not covered by stdout's
+ * callback: they are different file descriptors with no ordering between
+ * them, and both are async pipes under Hermes. Everything this process
+ * writes to stderr — the guard's diagnostics block, the
+ * confirm_action:'ask' fallback warning, every `[nio:collector:*]`
+ * export diagnostic — is written BEFORE this function is reached, so an
+ * exit driven by stdout alone truncates whatever of it is still
+ * buffered. Measured through the real CLI: one `external_analyser` entry
+ * with a long endpoint produces a 500248-byte stderr diagnostic, and
+ * exiting on the stdout callback delivered 65536 bytes of it — one pipe
+ * buffer — in 228ms. The diagnostics exist to tell the user their
+ * collector is misconfigured; silently cutting them at 64KB defeats that.
+ */
+function writeAndExit(payload: string): void {
+  let exited = false;
+  let stdoutHandedOff = false;
+
+  const finish = (): void => {
+    if (exited) return;
+    exited = true;
+    process.exit(0);
+  };
+
+  // Exit only when stdout's own callback has fired AND stderr has
+  // nothing left buffered. `writableLength === 0` is the same guarantee
+  // the write callback gives (every chunk handed to the OS), just
+  // observable without owning stderr's call sites — which matters
+  // because they are spread across main() and the diagnostics helpers.
+  const finishIfDrained = (): void => {
+    if (!stdoutHandedOff) return;
+    if (process.stderr.writableLength > 0) return;
+    finish();
+  };
+
+  // Closed/broken pipe (EPIPE). This is the case the old flat timer was
+  // standing in for, and the stream reports it directly — no guessing
+  // from elapsed time. It also has to be handled: with no 'error'
+  // listener an EPIPE is an uncaught exception, which exits non-zero and
+  // makes Hermes log a spurious hook failure.
+  process.stdout.on('error', finish);
+  process.stderr.on('error', finish);
+
+  // Progress, stamped by whatever actually moved bytes: a completed
+  // stdout chunk, or a change in stderr's queue depth.
+  let lastProgressMs = Date.now();
+  const noteProgress = (): void => { lastProgressMs = Date.now(); };
+
+  // Chunked, backpressure-respecting write — see WRITE_CHUNK_BYTES.
+  const buf = Buffer.from(payload, 'utf-8');
+  let offset = 0;
+  const pump = (): void => {
+    if (exited) return;
+    while (offset < buf.length) {
+      const end = Math.min(offset + WRITE_CHUNK_BYTES, buf.length);
+      const chunk = buf.subarray(offset, end);
+      offset = end;
+      const last = offset >= buf.length;
+      const ok = process.stdout.write(chunk, last ? () => {
+        stdoutHandedOff = true;
+        noteProgress();
+        finishIfDrained();
+      } : noteProgress);
+      if (last) return;
+      if (!ok) {
+        // Buffer full: resume from the same offset once it has drained.
+        process.stdout.once('drain', pump);
+        return;
+      }
+    }
+  };
+  if (buf.length === 0) {
+    process.stdout.write('', () => {
+      stdoutHandedOff = true;
+      finishIfDrained();
+    });
+  } else {
+    pump();
+  }
+
+  // Progress-aware backstop, and also the thing that re-checks stderr
+  // after stdout's callback has already fired.
+  let lastPending = process.stderr.writableLength;
+  setInterval(() => {
+    const stderrPending = process.stderr.writableLength;
+    // stderr's call sites are spread across main() and the diagnostics
+    // helpers, so there is no callback to hook there — a change in its
+    // queue depth is the only signal available, and it is a sound one
+    // because nothing enqueues more stderr once writeAndExit is reached.
+    if (stderrPending !== lastPending) {
+      lastPending = stderrPending;
+      noteProgress();
+    }
+    const pending = process.stdout.writableLength + stderrPending;
+    if (pending === 0) {
+      finishIfDrained();
+      return;
+    }
+    if (Date.now() - lastProgressMs >= WRITE_STALL_TIMEOUT_MS) finish();
+  }, WRITE_POLL_MS).unref();
+}
+
 // ── Main ────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
@@ -308,6 +569,12 @@ async function main(): Promise<void> {
   const hookEventName = ((payload ?? {}) as Record<string, unknown>)
     .hook_event_name as string | undefined;
 
+  // Debug-only sampling switch — dumps the full envelope once, ahead of
+  // the guard-path / collector-path branch below, so both are covered by
+  // this single call site. See lib/payload-dump.ts module doc for why
+  // this is deliberately NOT behind the monitor gate either branch uses.
+  dumpPayload(platform!, hookEventName ?? 'unknown', payload);
+
   // Guard path: only pre_tool_call runs through Phase 0–6.
   //
   // On Claude Code, PreToolUse fires both guard-hook.ts (Phase 0–6
@@ -325,16 +592,34 @@ async function main(): Promise<void> {
     const resourceAgentName = config.agent_name && config.agent_name.length > 0
       ? config.agent_name
       : undefined;
-    const meterProvider = collectorConfig.enabled
+    const logsConfig = config.collector?.logs;
+
+    // Translated ONCE and reused by all three consumers below (the
+    // monitor gate, the collector dispatch, and the span bookkeeping).
+    // `hermesToCollectorInput` is a pure function of `payload`, so the
+    // three separate calls this replaces were three identical objects;
+    // the only thing the duplication bought was the chance for one call
+    // site to drift to a different `canonicalEvent` than the others.
+    const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
+
+    // Gate before creating any provider — an unmonitored session must
+    // not get OTLP exporters, even though evaluateHook() and the
+    // guard decision below still run unconditionally.
+    const monitored = isSessionMonitored(
+      collectorInput.session_id,
+      collectorInput.cwd ?? null,
+      logsConfig,
+    );
+
+    const meterProvider = (monitored && collectorConfig.enabled)
       ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-    const tracerProvider = collectorConfig.enabled
+    const tracerProvider = (monitored && collectorConfig.enabled)
       ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
     // LoggerProvider sends guard decisions to OTLP /v1/logs — matches
     // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
     // "Logs" view stays empty for Hermes guard activity even though
     // metrics and traces flow correctly.
-    const logsConfig = config.collector?.logs;
-    const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+    const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
       ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
 
     const evalStartMs = Date.now();
@@ -346,14 +631,30 @@ async function main(): Promise<void> {
 
     const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
 
+    // One shared deadline covering EVERY OTLP-touching await between here
+    // and the guard decision reaching Hermes — see lib/flush-budget.ts.
+    // `recordGuardDecision`, `dispatchCollectorEvent` and
+    // `recordPostToolUse` each end in their own internal
+    // `provider.forceFlush()`, so bounding only the closing Promise.all
+    // would leave the block decision hostage to the OS TCP connect
+    // timeout: measured unbounded against 192.0.2.1:4318, both the allow
+    // and the deny run were still alive when killed at 95s. A deny that
+    // arrives after Hermes's own 60s `subprocess.run` timeout is a
+    // dangerous action allowed through, so this one is an enforcement
+    // bound, not just a latency bound.
+    const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
     // Guard decision metric (nio.decision.count).
     if (meterProvider) {
-      await recordGuardDecision(
-        meterProvider,
-        result.decision,
-        result.riskLevel || 'low',
-        result.riskScore ?? 0,
-        toolName,
+      await withFlushBudget(
+        recordGuardDecision(
+          meterProvider,
+          result.decision,
+          result.riskLevel || 'low',
+          result.riskScore ?? 0,
+          toolName,
+        ).catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        undefined,
       );
     }
 
@@ -361,16 +662,19 @@ async function main(): Promise<void> {
     // saved AND nio.tool_use.count{event=PreToolUse}
     // is emitted, mirroring Claude Code's parallel hook chain.
     if (collectorConfig.enabled || logsConfig?.local !== false) {
-      await dispatchCollectorEvent({
-        event: 'PreToolUse',
-        input: hermesToCollectorInput(payload, 'PreToolUse'),
-        platform: 'hermes',
-        config: collectorConfig,
-        meterProvider,
-        tracerProvider,
-        loggerProvider,
-        logsConfig,
-      });
+      await withFlushBudget(
+        dispatchCollectorEvent({
+          event: 'PreToolUse',
+          input: collectorInput,
+          platform: 'hermes',
+          config: collectorConfig,
+          meterProvider,
+          tracerProvider,
+          loggerProvider,
+          logsConfig,
+        }),
+        undefined,
+      );
     }
 
     // Bridge guard attrs to the eventual PostToolUse span (allow path)
@@ -397,43 +701,79 @@ async function main(): Promise<void> {
       'nio.guard.eval_ms': evalMs,
     };
     if (tracerProvider) {
-      const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
-      const sessionId = collectorInput.session_id ?? 'unknown';
+      const sessionId = collectorInput.session_id;
       const key = spanKey(collectorInput);
-      let state = ensureTurn(loadState(logsConfig), sessionId);
+      let state = ensureTurn(loadState(logsConfig, sessionId), sessionId);
       state = setPendingGuardAttrs(state, key, guardAttrs);
       if (isBlock) {
         const cwd = collectorInput.cwd ?? process.cwd();
         const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-        const r = await recordPostToolUse(
-          tracerProvider, state, key, cwd,
-          guardAttrs,
-          reason,
+        // The blocked call's span is emitted HERE and its PostToolUse
+        // never fires, so this site owns its arguments — exactly as
+        // guard-hook.ts does for Claude Code / Codex. Before this, the
+        // pending entry held identity only (collector-core's PreToolUse
+        // parks no payload), so a denied Hermes call reached the backend
+        // with its span carrying no `gen_ai.tool.call.arguments` at all.
+        const blockedInput = (collectorInput.tool_input ?? {}) as Record<string, unknown>;
+        const spanArgs = buildSpanContent(
+          Object.keys(blockedInput).length > 0 ? JSON.stringify(blockedInput) : '',
         );
-        state = r.state;
+        // Logs carry the arguments only when the span could not — same
+        // rule, same value, as every other span-emitting site.
+        if (spanArgs !== null && !spanCarriesWholeContent(spanArgs)) {
+          emitToolInputContent(loggerProvider, loadContentLimits(), {
+            input: JSON.stringify(blockedInput),
+            spanId: state.pending_spans[key]?.span_id ?? '',
+            traceId: state.turn_trace_id,
+            ...(collectorInput.tool_use_id ? { toolCallId: collectorInput.tool_use_id } : {}),
+          });
+        }
+        // Budgeted like every other OTLP-touching await here: this call
+        // ends in `provider.forceFlush()`. On timeout `state` keeps the
+        // value it had before the call, so `saveState` below still runs
+        // and the queued span is left for deferred recovery rather than
+        // the block decision stalling on an unreachable endpoint.
+        const r = await withFlushBudget(
+          recordPostToolUse(
+            tracerProvider, state, key, cwd,
+            {
+              ...guardAttrs,
+              ...(spanArgs ? genAiToolCallArgumentAttributes(spanArgs) : {}),
+            },
+            reason,
+          ).catch(e => {
+            reportFlushFailure('traces', collectorConfig.endpoint, e);
+            return null;
+          }),
+          null,
+        );
+        if (r) state = r.state;
       }
-      saveState(logsConfig, state);
+      saveState(logsConfig, state, sessionId);
     }
 
     // Make sure network exports complete before the subprocess exits;
     // the PeriodicExportingMetricReader batches by default and would
     // drop the counter we just recorded without an explicit flush.
-    await Promise.all([
-      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-    ]);
+    await withFlushBudget(
+      Promise.all([
+        meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+        loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+      ]).then(() => undefined),
+      undefined,
+    );
 
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
-    process.stdout.write(stdout + '\n');
+    writeAndExit(stdout + '\n');
     return;
   }
 
   // Collector path: post_*, on_session_*, subagent_stop, *_llm_call.
   if (platform === 'hermes' && hookEventName) {
     await runHermesCollector(payload, hookEventName);
-    process.stdout.write('{}\n');
+    writeAndExit('{}\n');
     return;
   }
 
@@ -444,12 +784,12 @@ async function main(): Promise<void> {
     const nio = createNio();
     const adapter = selectAdapter(platform!, config);
     const result = await evaluateHook(adapter, payload, { config, nio });
-    process.stdout.write(JSON.stringify(result) + '\n');
+    writeAndExit(JSON.stringify(result) + '\n');
     return;
   }
 
   // Hermes envelope without hook_event_name — silent no-op.
-  process.stdout.write('{}\n');
+  writeAndExit('{}\n');
 }
 
 main().catch((err: Error) => {
