@@ -72,7 +72,7 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 
 Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
 
-Conversation content is captured on the hook-driven hosts — **Claude Code, Codex and Hermes**. OpenClaw, Pi and opencode still export the turn and tool spans, the metrics and the audit records described above, but not the `chat` layer or any content record.
+Conversation content as described above is captured on the hook-driven hosts — **Claude Code, Codex and Hermes**. **OpenClaw, Pi and opencode** export the turn and tool spans, the metrics and the audit records, and their turn span carries the user prompt (and, on OpenClaw and Pi, the assistant reply) with the same free-text secret scan. What differs there: there is no `chat` span and no content record, so nothing is size-routed to the logs signal — instead each tool span carries **both the arguments it was called with and the result it returned** (`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`), capped at 2048 characters each and redacted only by JSON key name (`api_key`, `token`, `password` and similar). A secret in a command string or in tool output is **not** removed on those three hosts.
 
 When it is not armed, none of the above leave the machine.
 
