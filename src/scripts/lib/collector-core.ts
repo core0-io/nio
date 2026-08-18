@@ -60,6 +60,7 @@ import {
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
+import { lastUserMessageSince } from './conversation/claude-code-source.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
 import { buildSpanContent, spanCarriesWholeContent } from './content/span-content.js';
@@ -124,6 +125,26 @@ export interface DispatchOptions {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * How far BEFORE the turn's start a transcript user message may be
+ * stamped and still count as this turn's prompt.
+ *
+ * Claude Code appends the user line to the transcript before it runs
+ * UserPromptSubmit, so the message this turn is about is always stamped
+ * EARLIER than `turn_start_ms` — which `ensureTurn` takes inside the
+ * hook itself. Measured on a live install (19 UserPromptSubmit audit
+ * entries across 6 transcripts): the transcript line leads the hook by
+ * 164–758 ms, every single time, never after. So a plain
+ * `>= turn_start_ms` filter matches nothing at all, which is exactly how
+ * this attribute stayed empty in production while looking covered.
+ *
+ * The window stays small rather than open-ended so a turn cannot adopt
+ * an unrelated older prompt — a resumed transcript, or a UserPromptSubmit
+ * whose line the host has not written yet. Roughly 7x the largest lead
+ * observed.
+ */
+const PROMPT_TRANSCRIPT_LOOKBACK_MS = 5000;
 
 /**
  * Coerce one tool argument to a string, for ANY runtime value.
@@ -355,10 +376,21 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     if (event === 'UserPromptSubmit') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      if (tracerProvider && input.prompt) {
+      if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
-        state = recordUserPrompt(state, input.prompt);
+        // Prefer the payload when a platform provides the text (OpenClaw,
+        // Pi and opencode do). Claude Code never does — it sends
+        // `prompt_id` — so fall back to the transcript, which is the only
+        // place the text exists. No other platform's session file uses
+        // `type: 'user'` entries, so the fallback cannot mis-fire on one.
+        const promptText = input.prompt
+          ?? (transcriptPath
+            ? lastUserMessageSince(
+                transcriptPath, state.turn_start_ms - PROMPT_TRANSCRIPT_LOOKBACK_MS,
+              )
+            : null);
+        if (promptText) state = recordUserPrompt(state, promptText);
         saveState(logsConfig, state);
       }
 
