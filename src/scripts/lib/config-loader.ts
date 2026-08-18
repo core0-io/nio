@@ -54,9 +54,16 @@ async function reportConfigError(_configDir: string, configPath: string, err: un
   });
 }
 
+function nioDir(): string {
+  // `||` not `??`: an empty NIO_HOME means "unset", matching
+  // adapters/common.ts. With `??` an empty string would resolve the
+  // config to `/config.yaml`, and the two modules would disagree about
+  // the same environment variable.
+  return process.env['NIO_HOME'] || join(homedir(), '.nio');
+}
+
 function readRawConfig(): Record<string, unknown> {
-  const configDir = process.env['NIO_HOME']
-    ?? join(homedir(), '.nio');
+  const configDir = nioDir();
   const configPath = join(configDir, 'config.yaml');
 
   if (!existsSync(configPath)) return {};
@@ -134,11 +141,37 @@ export function loadLogsConfig(): LogsConfig {
 
   const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
   const logs = (collector['logs'] ?? {}) as Record<string, unknown>;
+  const rawPath = logs['path'] as string | undefined;
 
   return {
     enabled: (logs['enabled'] as boolean) ?? true,
     local: (logs['local'] as boolean) ?? true,
-    path: expandHome((logs['path'] as string) ?? '~/.nio/audit.jsonl'),
+    // An explicit collector.logs.path is expanded relative to the real
+    // homedir (that's what `~/` means in a value the user typed). The
+    // *default* (no config, or no logs.path set) must instead resolve
+    // under NIO_HOME so anything derived from it — the audit log itself,
+    // plus every store that piggybacks on this path via dirname()
+    // (traces-state-store.json, monitored-sessions.json) — stays inside
+    // an overridden NIO_HOME during tests instead of silently falling
+    // through to the developer's real ~/.nio.
+    path: rawPath ? expandHome(rawPath) : join(nioDir(), 'audit.jsonl'),
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
   };
+}
+
+/**
+ * Read `collector.monitor_all_sessions`.
+ *
+ * Defaults to `false` — nio's default posture is silence. Telemetry
+ * leaves the machine only for sessions the user explicitly armed via
+ * `/nio-monitor`, unless an operator opts the whole install in.
+ *
+ * Strict boolean check: any non-boolean value (string "yes", number 1)
+ * reads as false. A typo in the config must not silently turn on
+ * blanket capture.
+ */
+export function loadMonitorAllSessions(): boolean {
+  const raw = readRawConfig();
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  return collector['monitor_all_sessions'] === true;
 }

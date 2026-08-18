@@ -3,7 +3,7 @@
 </h1>
 <p align="center"><b>Execution assurance agent guard and observability for autonomous AI agents.</b></p>
 
-<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Built-in collector that captures every tool call as OpenTelemetry metrics and traces.<br/>Works with Claude Code, Codex CLI, OpenClaw, Hermes, Pi, and opencode. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
+<p align="center">Real-time evaluation of every agent action before it executes — built for agents operating in production.<br/>Opt-in collector that captures the agent's turns and tool calls as OpenTelemetry metrics, traces and logs.<br/>Works with Claude Code, Codex CLI, OpenClaw, Hermes, Pi, and opencode. More frameworks coming.<br/>Built by <a href="https://core0.io"><b>Core0</b></a> — execution assurance for production AI agents.</p>
 
 <p align="center">
   <a href="https://core0-io.github.io/nio/"><b>→ View the live Execution Pipeline diagram</b></a>
@@ -99,7 +99,9 @@ Two integration models sit under that: Claude Code and Codex spawn a short-lived
 
 ### Collector
 
-Captures every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`) as **OpenTelemetry** signals — metrics, traces, and logs — exported over OTLP (gRPC or HTTP). Audit log entries are also dual-written to a local JSONL backup at `~/.nio/audit.jsonl`, so you have a queryable record even when no OTLP endpoint is configured.
+**Capture is off by default.** Configuring `collector.endpoint` is not enough — each session stays silent until you arm it with `/nio-monitor on` (`/nio monitor on` on OpenClaw and Hermes). Set `collector.monitor_all_sessions: true` in `~/.nio/config.yaml` to capture every session without arming. Guard enforcement and the local audit log are unaffected by the switch.
+
+Once armed, a session's hook events (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`) become **OpenTelemetry** signals — metrics, traces, and logs — exported over OTLP (gRPC or HTTP). Audit log entries are dual-written to a local JSONL backup at `~/.nio/audit.jsonl` **regardless of the capture switch**, so you have a queryable record even when no OTLP endpoint is configured.
 
 ### Guard
 
@@ -125,6 +127,7 @@ Phase 6 connects Nio's pre-execution gate to an external risk-scoring service of
 /nio doctor                  # Validate config + dry-run OAuth/LLM
 /nio config balanced         # Set protection level
 /nio config import nio.yaml  # Apply a pre-configured file (doctor-gated; auto-backup)
+/nio monitor on              # Arm telemetry capture for this session (off by default)
 ```
 
 ## Compatibility

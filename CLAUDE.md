@@ -13,9 +13,12 @@ This project provides a unified Claude Code skill: `/nio`
 /nio doctor               — Validate config + dry-run OAuth/LLM connectivity
 /nio config <level>       — Set protection level (strict/balanced/permissive)
 /nio external-score       — Snapshot current scores from external scoring endpoints
+/nio monitor [on|off|status] — Arm/disarm OTLP telemetry capture for this session
 ```
 
-Alongside the unified `/nio`, each capability is also exposed as a **focused single-purpose skill** for sharper passive (natural-language) discovery on the LLM-driven platforms (**Claude Code, Codex, Pi, and opencode** — OpenClaw/Hermes keep the unified `/nio`): `nio-scan`, `nio-action`, `nio-report`, `nio-config`, `nio-doctor`, `nio-external-score`. Source of truth: `plugins/shared/skills/<name>/SKILL.md` (synced by `scripts/sync-shared.js`). These are pure LLM-driven skills (no `command-dispatch`/`command-tool`); script-running ones (action/config/doctor/external-score) **sibling-reference** the kept `nio` skill's bundled scripts via `../nio/scripts/<cli>.js` rather than duplicating the bundle.
+**Telemetry capture is off by default.** A configured `collector.endpoint` does not by itself export anything: every session stays silent until `/nio monitor on` arms it (or `collector.monitor_all_sessions: true` is set globally). All three OTLP signals are behind that gate; the local `~/.nio/audit.jsonl` and guard enforcement are not. Gate implementation: `src/scripts/lib/monitor-{store,gate,check,commands}.ts`, consulted at every hook entry point before any OTEL provider is constructed.
+
+Alongside the unified `/nio`, each capability is also exposed as a **focused single-purpose skill** for sharper passive (natural-language) discovery on the LLM-driven platforms (**Claude Code, Codex, Pi, and opencode** — OpenClaw/Hermes keep the unified `/nio`): `nio-scan`, `nio-action`, `nio-report`, `nio-config`, `nio-doctor`, `nio-external-score`, `nio-monitor`. Source of truth: `plugins/shared/skills/<name>/SKILL.md` (synced by `scripts/sync-shared.js`). These are pure LLM-driven skills (no `command-dispatch`/`command-tool`); script-running ones (action/config/doctor/external-score) **sibling-reference** the kept `nio` skill's bundled scripts via `../nio/scripts/<cli>.js` rather than duplicating the bundle.
 
 ## Project Structure
 
@@ -99,6 +102,7 @@ guard:
 
 collector:
   endpoint: ""              # OTLP base URL (appends /v1/traces, /v1/metrics, /v1/logs)
+  monitor_all_sessions: false  # false (default) = capture only sessions armed via /nio monitor on
   api_key: ""
   timeout: 5000
   protocol: http            # http | grpc

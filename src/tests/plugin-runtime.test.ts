@@ -10,7 +10,21 @@ import { InProcessPluginRuntime, type PreToolResult } from '../adapters/plugin-r
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { ensureTurn } from '../scripts/lib/traces-collector.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
+import { trackTempDir } from './helpers/tmp-dirs.js';
+import { writeCaptureOnConfig } from './helpers/capture-on.js';
 import { SpanStatusCode } from '@opentelemetry/api';
+
+// This file is about span/metric/audit WIRING, not about the per-session
+// monitor gate — which is off by default and would otherwise reduce
+// every assertion below to "nothing was emitted". Capture is therefore
+// turned on process-wide for this file, the same way an operator does
+// it, before any test body runs. The gate itself is pinned by
+// plugin-runtime-monitor.test.ts.
+{
+  const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-plugin-runtime-tests-')));
+  writeCaptureOnConfig(home);
+  process.env.NIO_HOME = home;
+}
 
 describe('InProcessPluginRuntime', () => {
   function makeRuntime() {
@@ -685,7 +699,10 @@ describe('registerPiExtension — block path and confirm dialog', () => {
     const prev = process.env.NIO_HOME;
     const nioHome = mkdtempSync(join(tmpdir(), 'nio-pi-plugin-test-'));
     process.env.NIO_HOME = nioHome;
-    if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+    // Capture on, for the same reason the module-scope block above does
+    // it: this helper's fresh home would otherwise start with the gate
+    // closed and every span assertion inside `fn` would vacuously pass.
+    writeCaptureOnConfig(nioHome, configYaml);
     try {
       return await fn();
     } finally {
@@ -950,7 +967,10 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
     const prev = process.env.NIO_HOME;
     const nioHome = mkdtempSync(join(tmpdir(), 'nio-opencode-plugin-test-'));
     process.env.NIO_HOME = nioHome;
-    if (configYaml) writeFileSync(join(nioHome, 'config.yaml'), configYaml);
+    // Capture on, for the same reason the module-scope block above does
+    // it: this helper's fresh home would otherwise start with the gate
+    // closed and every span assertion inside `fn` would vacuously pass.
+    writeCaptureOnConfig(nioHome, configYaml);
     try {
       return await fn();
     } finally {

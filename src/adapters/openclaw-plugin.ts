@@ -190,8 +190,9 @@ export function registerOpenClawPlugin(
 
   api.on('agent_end', async (_e: unknown, ctx: unknown) => {
     try {
-      await rt.onTurnEnd(sid(ctx));
-      await rt.recordTurnMetric();
+      const sessionId = sid(ctx);
+      await rt.onTurnEnd(sessionId);
+      await rt.recordTurnMetric(sessionId);
     } catch { /* non-critical */ }
   });
 

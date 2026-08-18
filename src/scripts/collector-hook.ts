@@ -24,6 +24,7 @@ import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
 import {
   dispatchCollectorEvent,
   type HookStdinPayload,
@@ -67,16 +68,30 @@ function readStdin(): Promise<HookStdinPayload | null> {
   });
 }
 
-const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
-const meterProvider = createMeterProvider(config, PLATFORM, resourceAgentName);
-const tracerProvider = createTracerProvider(config, PLATFORM, resourceAgentName);
-const loggerProvider = (config.enabled && logsConfig.enabled !== false)
-  ? createLoggerProvider(config, PLATFORM, resourceAgentName)
-  : null;
-
 async function main(): Promise<void> {
   const input = await readStdin();
   if (!input) process.exit(0);
+
+  // Gate before creating any provider — an unmonitored session must not
+  // even initialise the OTLP exporters. The local audit log is written
+  // regardless (see dispatchCollectorEvent), which is why we still call
+  // dispatch with null providers instead of returning early.
+  const monitored = isSessionMonitored(
+    input.session_id ?? 'unknown',
+    input.cwd ?? null,
+    logsConfig,
+  );
+
+  const resourceAgentName = AGENT_NAME.length > 0 ? AGENT_NAME : undefined;
+  const meterProvider = monitored
+    ? createMeterProvider(config, PLATFORM, resourceAgentName)
+    : null;
+  const tracerProvider = monitored
+    ? createTracerProvider(config, PLATFORM, resourceAgentName)
+    : null;
+  const loggerProvider = (monitored && config.enabled && logsConfig.enabled !== false)
+    ? createLoggerProvider(config, PLATFORM, resourceAgentName)
+    : null;
 
   await dispatchCollectorEvent({
     event: input.hook_event_name ?? '',

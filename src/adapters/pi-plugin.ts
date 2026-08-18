@@ -221,7 +221,7 @@ export function registerPiExtension(
     try {
       const sessionId = sid(ctx);
       await rt.onTurnEnd(sessionId);
-      await rt.recordTurnMetric();
+      await rt.recordTurnMetric(sessionId);
     } catch { /* non-critical */ }
   });
 

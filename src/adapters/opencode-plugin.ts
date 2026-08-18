@@ -285,7 +285,7 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               // tool.execute.after in that case, so pending spans would
               // otherwise leak. onTurnEnd force-closes them.
               await rt.onTurnEnd(sessionId);
-              await rt.recordTurnMetric();
+              await rt.recordTurnMetric(sessionId);
               return;
             }
             case 'message.updated': {
