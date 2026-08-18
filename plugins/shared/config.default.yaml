@@ -383,6 +383,16 @@ collector:
   # automatically. Leave empty to disable OTLP export entirely.
   # Example: "http://localhost:4318"
   endpoint: ""
+  # Session-level capture switch.
+  #
+  # false (default) — no session exports telemetry until it is explicitly
+  #   armed inside that session: `/nio-monitor on` where the focused skill
+  #   is installed (Claude Code, Codex, Pi, opencode), `/nio monitor on`
+  #   on OpenClaw and Hermes.
+  # true            — every session exports telemetry (CI / team machines).
+  #
+  # Guard enforcement and the local audit log are unaffected either way.
+  monitor_all_sessions: false
   # Bearer token for OTLP endpoint authentication.
   api_key: ""
   # Extra request headers sent to the OTLP endpoint. Values are stringified.

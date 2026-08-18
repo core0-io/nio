@@ -50,6 +50,7 @@ import {
   nioReclaimedSpanAttributes,
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
+import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
 import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 
@@ -84,6 +85,12 @@ export interface PluginRuntimeOptions {
    * disabled) semantics as `tracerProvider`.
    */
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Override the logger provider instead of building one from collector
+   * config. Same `undefined` (build from config) vs `null` (explicitly
+   * disabled) semantics as `tracerProvider`.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
@@ -102,16 +109,36 @@ export class InProcessPluginRuntime {
   readonly adapter: HookAdapter;
   readonly config: ReturnType<typeof loadConfig>;
   readonly confirmAction: 'allow' | 'deny' | 'ask';
-  readonly auditOpts: WriteAuditLogOptions;
 
-  protected readonly tracerProvider: ReturnType<typeof createTracerProvider>;
-  protected readonly meterProvider: ReturnType<typeof createMeterProvider>;
-  protected readonly loggerProvider: ReturnType<typeof createLoggerProvider>;
   protected readonly sessionState = new Map<string, CollectorState>();
 
   private readonly opts: PluginRuntimeOptions;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
+
+  // ── Lazily-created OTEL providers ──────────────────────────────────
+  //
+  // Created on first *monitored* use, never at registration. This is not
+  // just tidiness: `createMeterProvider` installs a
+  // PeriodicExportingMetricReader with exportIntervalMillis: 1000, whose
+  // background timer lives as long as the process. Building it eagerly
+  // meant every long-running host that loaded this plugin — including
+  // one whose user never ran `/nio monitor on` in their life — stood up
+  // the full OTLP exporter stack and its timer. Deferring means a
+  // never-armed host creates nothing at all.
+  //
+  // KNOWN RESIDUAL LIMITATION, documented in nio-monitor's SKILL.md:
+  // this fixes the never-armed case only. Once *any* session in the
+  // process has been armed and recorded a counter, OTel's cumulative
+  // metric semantics mean that reader keeps exporting the accumulated
+  // totals every second until the process exits.
+  //
+  // `loadCollectorConfig()` is deferred along with them, for the same
+  // reason.
+  private tracerProviderCache: ReturnType<typeof createTracerProvider> | undefined;
+  private meterProviderCache: ReturnType<typeof createMeterProvider> | undefined;
+  private loggerProviderCache: ReturnType<typeof createLoggerProvider> | undefined;
+  private collectorConfigCache: ReturnType<typeof loadCollectorConfig> | undefined;
 
   constructor(opts: PluginRuntimeOptions) {
     this.opts = opts;
@@ -124,27 +151,121 @@ export class InProcessPluginRuntime {
       guard.protection_level = opts.level as typeof guard.protection_level;
     }
     this.confirmAction = opts.confirmAction ?? guard?.confirm_action ?? 'allow';
+  }
 
-    const collectorConfig = loadCollectorConfig();
-    // Resource-level agent name is only set when the operator configured
-    // one — empty / unset means "no gen_ai.agent.name on the resource".
-    const agentName =
-      this.config.agent_name && this.config.agent_name.length > 0
-        ? this.config.agent_name
-        : undefined;
+  /**
+   * Test seam: have any providers been constructed yet? Deliberately
+   * ignores injected ones — the question it answers is "did the runtime
+   * itself stand up an OTLP client", which is what the monitor gate
+   * exists to prevent.
+   */
+  _providersBuiltForTests(): boolean {
+    return this.tracerProviderCache !== undefined
+      || this.meterProviderCache !== undefined
+      || this.loggerProviderCache !== undefined;
+  }
 
-    this.tracerProvider = opts.tracerProvider !== undefined
-      ? opts.tracerProvider
-      : createTracerProvider(collectorConfig, opts.platform, agentName);
-    this.meterProvider = opts.meterProvider !== undefined
-      ? opts.meterProvider
-      : createMeterProvider(collectorConfig, opts.platform, agentName);
-    const logsConfig = this.config.collector?.logs;
-    this.loggerProvider =
-      logsConfig?.enabled !== false
-        ? createLoggerProvider(collectorConfig, opts.platform, agentName)
-        : null;
-    this.auditOpts = { loggerProvider: this.loggerProvider, logsConfig };
+  /**
+   * Per-session capture gate. Consulted on every event rather than
+   * cached per session: `/nio monitor off` must take effect on the next
+   * event, not at the next session boundary.
+   *
+   * A session id we cannot trust (empty, 'unknown', the platform name)
+   * fails closed inside `isSessionMonitored` — see UNTRUSTED_SESSION_IDS.
+   *
+   * Guard evaluation NEVER consults this. The gate governs telemetry
+   * only; a blocked tool call stays blocked whether or not the session
+   * is armed.
+   */
+  protected isMonitored(sessionId: string): boolean {
+    return isSessionMonitored(sessionId, process.cwd(), this.config.collector?.logs);
+  }
+
+  /**
+   * Collector config is read on first monitored use, never at
+   * registration — an operator who never armed a session must not have
+   * their endpoint read, let alone an exporter stood up.
+   */
+  private getCollectorConfig(): ReturnType<typeof loadCollectorConfig> {
+    if (this.collectorConfigCache === undefined) {
+      this.collectorConfigCache = loadCollectorConfig();
+    }
+    return this.collectorConfigCache;
+  }
+
+  /**
+   * Resource-level agent name is only set when the operator configured
+   * one — empty / unset means "no gen_ai.agent.name on the resource".
+   */
+  private get agentName(): string | undefined {
+    return this.config.agent_name && this.config.agent_name.length > 0
+      ? this.config.agent_name
+      : undefined;
+  }
+
+  protected getTracerProvider(): ReturnType<typeof createTracerProvider> {
+    if (this.opts.tracerProvider !== undefined) return this.opts.tracerProvider;
+    if (this.tracerProviderCache === undefined) {
+      try {
+        this.tracerProviderCache = createTracerProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        );
+      } catch {
+        this.tracerProviderCache = null;
+      }
+    }
+    return this.tracerProviderCache;
+  }
+
+  protected getMeterProvider(): ReturnType<typeof createMeterProvider> {
+    if (this.opts.meterProvider !== undefined) return this.opts.meterProvider;
+    if (this.meterProviderCache === undefined) {
+      try {
+        this.meterProviderCache = createMeterProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        );
+      } catch {
+        this.meterProviderCache = null;
+      }
+    }
+    return this.meterProviderCache;
+  }
+
+  protected getLoggerProvider(): ReturnType<typeof createLoggerProvider> {
+    if (this.opts.loggerProvider !== undefined) return this.opts.loggerProvider;
+    if (this.config.collector?.logs?.enabled === false) return null;
+    if (this.loggerProviderCache === undefined) {
+      try {
+        this.loggerProviderCache = createLoggerProvider(
+          this.getCollectorConfig(), this.platform, this.agentName,
+        );
+      } catch {
+        this.loggerProviderCache = null;
+      }
+    }
+    return this.loggerProviderCache;
+  }
+
+  /**
+   * The logger provider only if one already exists — never builds one.
+   * Used by flush paths that must not be the thing that stands an
+   * exporter up.
+   */
+  private existingLoggerProvider(): ReturnType<typeof createLoggerProvider> {
+    if (this.opts.loggerProvider !== undefined) return this.opts.loggerProvider;
+    return this.loggerProviderCache ?? null;
+  }
+
+  /**
+   * Audit options for one event. The local JSONL leg is never gated — it
+   * is the user's own record, written to their own disk. Only the OTLP
+   * leg (`loggerProvider`) is conditional on monitor state.
+   */
+  protected auditOptsFor(monitored: boolean): WriteAuditLogOptions {
+    return {
+      loggerProvider: monitored ? this.getLoggerProvider() : null,
+      logsConfig: this.config.collector?.logs,
+    };
   }
 
   /** Lazily constructed Phase 1–6 engine. */
@@ -205,6 +326,11 @@ export class InProcessPluginRuntime {
   async onSessionEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
+    // Drop the session's arm record now instead of leaving it for the
+    // 7-day TTL backstop — these are long-running hosts, so a session
+    // that ends here won't get another chance to be reaped until the
+    // process restarts or the backstop fires.
+    forgetSession(sessionId, this.config.collector?.logs);
   }
 
   /**
@@ -223,8 +349,14 @@ export class InProcessPluginRuntime {
    * without this the only reachable entry point was `onTurnEnd`.
    */
   async flushTurnSpans(sessionId: string): Promise<void> {
+    const monitored = this.isMonitored(sessionId);
     await this.flushSessionTurn(sessionId);
-    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+    // Unmonitored: nothing was exported, so there is nothing to flush —
+    // and resolving the provider here would be exactly the "build an
+    // exporter for a session nobody armed" the gate exists to prevent.
+    if (!monitored) return;
+    const loggerProvider = this.getLoggerProvider();
+    if (loggerProvider) await loggerProvider.forceFlush();
   }
 
   /** Per-turn flush. Idempotent: no-op when no state exists. */
@@ -236,8 +368,10 @@ export class InProcessPluginRuntime {
   /** Increment the per-turn counter. Separate from onTurnEnd so
    *  platforms that flush turns and count turns at different events can
    *  call them independently. */
-  async recordTurnMetric(): Promise<void> {
-    if (this.meterProvider) await recordTurn(this.meterProvider);
+  async recordTurnMetric(sessionId: string): Promise<void> {
+    if (!this.isMonitored(sessionId)) return;
+    const meterProvider = this.getMeterProvider();
+    if (meterProvider) await recordTurn(meterProvider);
   }
 
   /**
@@ -249,7 +383,11 @@ export class InProcessPluginRuntime {
     for (const sessionId of [...this.sessionState.keys()]) {
       await this.onSessionEnd(sessionId);
     }
-    if (this.loggerProvider) await this.loggerProvider.forceFlush();
+    // Process-wide teardown has no session id of its own, so it flushes
+    // whatever provider already exists rather than resolving (and thus
+    // possibly building) one.
+    const loggerProvider = this.existingLoggerProvider();
+    if (loggerProvider) await loggerProvider.forceFlush();
   }
 
   protected writeLifecycle(
@@ -265,7 +403,7 @@ export class InProcessPluginRuntime {
       lifecycle_type: lifecycleType,
       ...(details ? { details } : {}),
     };
-    writeAuditLog(entry, this.auditOpts);
+    writeAuditLog(entry, this.auditOptsFor(this.isMonitored(sessionId)));
   }
 
   /**
@@ -274,7 +412,15 @@ export class InProcessPluginRuntime {
    * Idempotent: no-op if no state exists.
    */
   protected async flushSessionTurn(sessionId: string): Promise<void> {
-    if (!this.tracerProvider) {
+    // Cleanup and export are separate concerns: an unmonitored session
+    // must still have its state dropped, otherwise state accumulated
+    // while briefly armed (then disarmed before this boundary fired)
+    // would sit in `sessionState` for the rest of the process's life —
+    // and worse, get exported later if the session is re-armed and a
+    // subsequent boundary finds that leftover state still there.
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (!tracerProvider) {
       this.sessionState.delete(sessionId);
       return;
     }
@@ -301,7 +447,7 @@ export class InProcessPluginRuntime {
       const { state: drained, attrs } = takePendingGuardAttrs(state, k);
       state = drained;
       const r = await recordPostToolUse(
-        this.tracerProvider,
+        tracerProvider,
         state,
         k,
         process.cwd(),
@@ -311,13 +457,13 @@ export class InProcessPluginRuntime {
       state = r.state;
     }
     for (const k of Object.keys(state.pending_task_spans ?? {})) {
-      const r = await recordPostTaskToolUse(this.tracerProvider, state, k, process.cwd());
+      const r = await recordPostTaskToolUse(tracerProvider, state, k, process.cwd());
       state = r.state;
     }
 
-    await endTurn(this.tracerProvider, state, process.cwd());
+    await endTurn(tracerProvider, state, process.cwd());
     this.sessionState.delete(sessionId);
-    await this.tracerProvider.forceFlush();
+    await tracerProvider.forceFlush();
   }
 
   /**
@@ -336,7 +482,14 @@ export class InProcessPluginRuntime {
     rawEvent: unknown,
     opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
-    if (this.tracerProvider) {
+    // Guard evaluation below runs regardless — the monitor gate only
+    // controls telemetry, never enforcement. An unarmed session leaves
+    // both providers null and nothing is recorded.
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    const meterProvider = monitored ? this.getMeterProvider() : null;
+
+    if (tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       // `spanKey` is the internal correlation key (falls back to the tool
       // name when the platform gives no id) — it must never leak onto the
@@ -349,8 +502,8 @@ export class InProcessPluginRuntime {
       state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
       this.sessionState.set(sessionId, state);
     }
-    if (this.meterProvider) {
-      recordToolUse(this.meterProvider, toolName, 'PreToolUse').catch(() => {});
+    if (meterProvider) {
+      recordToolUse(meterProvider, toolName, 'PreToolUse').catch(() => {});
     }
 
     const startMs = Date.now();
@@ -358,13 +511,13 @@ export class InProcessPluginRuntime {
       this.adapter,
       rawEvent,
       { config: this.config, nio: { orchestrator: this.orchestrator } },
-      this.auditOpts,
+      this.auditOptsFor(monitored),
     );
     const evalMs = Date.now() - startMs;
 
-    if (this.meterProvider) {
+    if (meterProvider) {
       recordGuardDecision(
-        this.meterProvider,
+        meterProvider,
         result.decision,
         result.riskLevel || 'low',
         result.riskScore ?? 0,
@@ -459,7 +612,9 @@ export class InProcessPluginRuntime {
     toolName: string,
     outcome: { result?: unknown; error?: string | null; durationMs?: number },
   ): Promise<void> {
-    if (this.tracerProvider) {
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
         const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
@@ -472,7 +627,7 @@ export class InProcessPluginRuntime {
           }),
         };
         const r = await recordPostToolUse(
-          this.tracerProvider,
+          tracerProvider,
           drained,
           spanKey,
           process.cwd(),
@@ -482,14 +637,15 @@ export class InProcessPluginRuntime {
         this.sessionState.set(sessionId, r.state);
       }
     }
-    if (this.meterProvider) {
-      await recordToolUse(this.meterProvider, toolName, 'PostToolUse');
+    const meterProvider = monitored ? this.getMeterProvider() : null;
+    if (meterProvider) {
+      await recordToolUse(meterProvider, toolName, 'PostToolUse');
     }
   }
 
   /** Capture the user prompt onto turn state; applied at endTurn time. */
   onUserPrompt(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+    if (!text || !this.isMonitored(sessionId) || !this.getTracerProvider()) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordUserPrompt(state, text);
     this.sessionState.set(sessionId, state);
@@ -497,7 +653,7 @@ export class InProcessPluginRuntime {
 
   /** Capture the assistant reply onto turn state. */
   onAssistantReply(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+    if (!text || !this.isMonitored(sessionId) || !this.getTracerProvider()) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordAssistantReply(state, text);
     this.sessionState.set(sessionId, state);
@@ -508,6 +664,7 @@ export class InProcessPluginRuntime {
     sessionId: string,
     usage: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number },
   ): void {
+    if (!this.isMonitored(sessionId)) return;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = accumulateGenAiUsage(state, usage);
     this.sessionState.set(sessionId, state);
@@ -520,12 +677,15 @@ export class InProcessPluginRuntime {
     auditDetails?: Record<string, unknown>,
   ): Promise<void> {
     this.writeLifecycle(sessionId, 'subagent_spawning', auditDetails ?? { subagent_id: taskId });
-    if (this.tracerProvider) {
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
       state = recordPreTaskToolUse(state, taskId, '');
       this.sessionState.set(sessionId, state);
     }
-    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCreated');
+    const meterProvider = monitored ? this.getMeterProvider() : null;
+    if (meterProvider) await recordToolUse(meterProvider, 'Task', 'TaskCreated');
   }
 
   /** Sub-agent / Task span close. */
@@ -535,14 +695,17 @@ export class InProcessPluginRuntime {
     auditDetails?: Record<string, unknown>,
   ): Promise<void> {
     this.writeLifecycle(sessionId, 'subagent_ended', auditDetails ?? { subagent_id: taskId });
-    if (this.tracerProvider) {
+    const monitored = this.isMonitored(sessionId);
+    const tracerProvider = monitored ? this.getTracerProvider() : null;
+    if (tracerProvider) {
       const state = this.sessionState.get(sessionId);
       if (state) {
-        const r = await recordPostTaskToolUse(this.tracerProvider, state, taskId, process.cwd());
+        const r = await recordPostTaskToolUse(tracerProvider, state, taskId, process.cwd());
         this.sessionState.set(sessionId, r.state);
       }
     }
-    if (this.meterProvider) await recordToolUse(this.meterProvider, 'Task', 'TaskCompleted');
+    const meterProvider = monitored ? this.getMeterProvider() : null;
+    if (meterProvider) await recordToolUse(meterProvider, 'Task', 'TaskCompleted');
   }
 
   /**
@@ -583,12 +746,13 @@ export class InProcessPluginRuntime {
     attrs: Record<string, unknown>,
     error: string | null,
   ): Promise<void> {
-    if (!this.tracerProvider) return;
+    const tracerProvider = this.isMonitored(sessionId) ? this.getTracerProvider() : null;
+    if (!tracerProvider) return;
     const state = this.sessionState.get(sessionId);
     if (!state) return;
     const { state: drained } = takePendingGuardAttrs(state, spanKey);
     const r = await recordPostToolUse(
-      this.tracerProvider, drained, spanKey, process.cwd(), attrs, error,
+      tracerProvider, drained, spanKey, process.cwd(), attrs, error,
     );
     this.sessionState.set(sessionId, r.state);
   }

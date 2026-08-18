@@ -100,10 +100,20 @@ const cc = await Bun.build({
     'config-cli',
     'external-score-cli',
     'doctor-cli',
+    'monitor-cli',
     'hook-cli',
   ].map((n) => join(ROOT, `src/scripts/${n}.ts`)),
   outdir: CC_SKILL_SCRIPTS,
   splitting: true,
+  // Pin entry output names to the outdir root. Bun's default entry
+  // naming (`[dir]/[name].[ext]`) infers `[dir]` from the entrypoints'
+  // shared import graph, not just their own directory — with this many
+  // entrypoints sharing lib/ imports, that inference flips to nesting
+  // every output under `src/scripts/` instead of writing flat into
+  // outdir. All entry basenames here are unique, so `[name].[ext]` is
+  // safe and keeps every plugin script at the expected top-level path
+  // (chunk naming, which callers never reference by path, is untouched).
+  naming: { entry: '[name].[ext]' },
 });
 
 if (!cc.success) {

@@ -49,6 +49,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { isSessionMonitored } from './lib/monitor-check.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -131,23 +132,52 @@ const HERMES_COLLECTOR_EVENTS: Record<string, string> = {
 };
 
 /**
+ * A `HookStdinPayload` whose `session_id` is known to be present.
+ *
+ * `HookStdinPayload.session_id` is optional because the Claude Code /
+ * Codex payloads it also describes may genuinely omit it.
+ * `hermesToCollectorInput` never does — it always writes a string, `''`
+ * included. Narrowing the return type is what lets the `?? 'unknown'`
+ * fallbacks at the call sites go: the invariant is checked by the
+ * compiler instead of asserted at runtime.
+ *
+ * The distinction matters because `''` is load-bearing: it is what makes
+ * `UNTRUSTED_SESSION_IDS` reject the event (fail closed). Substituting a
+ * placeholder would quietly relabel that event in the audit log.
+ */
+type HermesCollectorInput = HookStdinPayload & { session_id: string };
+
+/**
  * Convert a Hermes-shaped envelope into the HookStdinPayload the
  * collector core consumes. Hermes places event-specific fields
  * (user message, tool result, task id) inside the `extra` object;
  * we lift the ones the dispatcher recognises.
+ *
+ * Pure: same envelope + same canonical event ⇒ same object. Call sites
+ * rely on that to translate once and share the result.
  */
 function hermesToCollectorInput(
   raw: unknown,
   canonicalEvent: string,
-): HookStdinPayload {
+): HermesCollectorInput {
   const r = (raw ?? {}) as Record<string, unknown>;
   const extra = (r.extra ?? {}) as Record<string, unknown>;
+  // `||`, not `??`. Hermes never omits `session_id` — its
+  // `_serialize_payload` writes
+  // `kwargs.get("session_id") or kwargs.get("parent_session_id") or ""`,
+  // so a call site that had no session sends the *empty string*, not
+  // `undefined`. Under `??` the empty string is a "present" value, so
+  // the parent_session_id recovery below could never fire.
+  //
+  // When nothing is recoverable the id stays `''`, which
+  // `UNTRUSTED_SESSION_IDS` rejects: no OTLP export for that event. The
+  // local audit entry is still written either way.
   const sessionId =
-    (r.session_id as string | undefined) ??
-    (extra.parent_session_id as string | undefined) ??
+    (r.session_id as string | undefined) ||
+    (extra.parent_session_id as string | undefined) ||
     '';
 
-  const input: HookStdinPayload = {
+  const input: HermesCollectorInput = {
     hook_event_name: canonicalEvent,
     session_id: sessionId,
     cwd: r.cwd as string | undefined,
@@ -195,15 +225,27 @@ async function runHermesCollector(
   const resourceAgentName = config.agent_name && config.agent_name.length > 0
     ? config.agent_name
     : undefined;
-  const meterProvider = collectorConfig.enabled ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const tracerProvider = collectorConfig.enabled ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-  const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+  // Computed once, up front, so the monitor-gate lookup and the dispatch
+  // below share the same parsed input instead of parsing the raw Hermes
+  // envelope twice.
+  const collectorInput = hermesToCollectorInput(rawPayload, canonicalEvent);
+  const monitored = isSessionMonitored(
+    collectorInput.session_id,
+    collectorInput.cwd ?? null,
+    logsConfig,
+  );
+
+  const meterProvider = (monitored && collectorConfig.enabled)
+    ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const tracerProvider = (monitored && collectorConfig.enabled)
+    ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
+  const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
   await dispatchCollectorEvent({
     event: canonicalEvent,
-    input: hermesToCollectorInput(rawPayload, canonicalEvent),
+    input: collectorInput,
     platform: 'hermes',
     config: collectorConfig,
     meterProvider,
@@ -325,16 +367,30 @@ async function main(): Promise<void> {
     const resourceAgentName = config.agent_name && config.agent_name.length > 0
       ? config.agent_name
       : undefined;
-    const meterProvider = collectorConfig.enabled
+    const logsConfig = config.collector?.logs;
+
+    // Translated ONCE and reused by all three consumers below (the
+    // monitor gate, the collector dispatch, and the span bookkeeping).
+    const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
+
+    // Gate before creating any provider — an unmonitored session must
+    // not get OTLP exporters, even though evaluateHook() and the guard
+    // decision below still run unconditionally.
+    const monitored = isSessionMonitored(
+      collectorInput.session_id,
+      collectorInput.cwd ?? null,
+      logsConfig,
+    );
+
+    const meterProvider = (monitored && collectorConfig.enabled)
       ? createMeterProvider(collectorConfig, 'hermes', resourceAgentName) : null;
-    const tracerProvider = collectorConfig.enabled
+    const tracerProvider = (monitored && collectorConfig.enabled)
       ? createTracerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
     // LoggerProvider sends guard decisions to OTLP /v1/logs — matches
     // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
     // "Logs" view stays empty for Hermes guard activity even though
     // metrics and traces flow correctly.
-    const logsConfig = config.collector?.logs;
-    const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
+    const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
       ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
 
     const evalStartMs = Date.now();
@@ -363,7 +419,7 @@ async function main(): Promise<void> {
     if (collectorConfig.enabled || logsConfig?.local !== false) {
       await dispatchCollectorEvent({
         event: 'PreToolUse',
-        input: hermesToCollectorInput(payload, 'PreToolUse'),
+        input: collectorInput,
         platform: 'hermes',
         config: collectorConfig,
         meterProvider,
@@ -397,8 +453,7 @@ async function main(): Promise<void> {
       'nio.guard.eval_ms': evalMs,
     };
     if (tracerProvider) {
-      const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
-      const sessionId = collectorInput.session_id ?? 'unknown';
+      const sessionId = collectorInput.session_id;
       const key = spanKey(collectorInput);
       let state = ensureTurn(loadState(logsConfig), sessionId);
       state = setPendingGuardAttrs(state, key, guardAttrs);
