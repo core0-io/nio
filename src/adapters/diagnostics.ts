@@ -17,11 +17,15 @@
  *                          log + stderr — take() returns the collected list
  *                          for embedding in ActionDecision.
  *
- * Writers do NOT dedupe; readers (`/nio report`, `/nio doctor`) aggregate.
+ * The AUDIT leg never dedupes — it is the forensic record, and
+ * `/nio report` / `/nio doctor` aggregate it on read. The STDERR leg is
+ * rate-limited per distinct diagnostic; see `writeStderr` below for why
+ * and exactly what "distinct" means.
  */
 
 import { appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { AuditDiagnosticEntry } from './audit-types.js';
 
 export type Diagnostic = Omit<AuditDiagnosticEntry, 'event' | 'timestamp'>;
@@ -38,11 +42,36 @@ export function _setDiagnosticsAuditPathForTests(path: string | null): void {
 
 function resolveAuditPath(): string {
   if (auditPathOverride) return auditPathOverride;
-  // Avoid circular import with common.ts — re-derive the default path inline.
-  // Mirrors common.ts: ${NIO_HOME ?? ~/.nio}/audit.jsonl.
-  const home = process.env.HOME || process.env.USERPROFILE || '';
-  const root = process.env.NIO_HOME || (home ? `${home}/.nio` : '.nio');
-  return `${root}/audit.jsonl`;
+  // Avoid a circular import with common.ts — re-derive the default path
+  // inline. This MUST agree with common.ts's `defaultAuditPath()`
+  // (`join(NIO_HOME ?? join(homedir(), '.nio'), 'audit.jsonl')`), because a
+  // diagnostic that lands in a different file than the audit entries around
+  // it is a diagnostic nobody will ever find.
+  //
+  // `homedir()`, not `process.env.HOME`: they are the same in a normal
+  // shell, but a host launched by a daemon / launchd / a container entry
+  // point can have HOME unset, and the old fallback chain then resolved to
+  // the RELATIVE path `.nio/audit.jsonl` — i.e. diagnostics scattered into
+  // whichever directory each session happened to start in, while every
+  // other audit entry went to the real `~/.nio/audit.jsonl`. `homedir()`
+  // falls back to the passwd entry, so there is no cwd-relative case left.
+  //
+  // KNOWN GAP (deliberate, documented in the report): a user who points
+  // `collector.logs.path` somewhere other than the default splits the two
+  // legs again — `writeAuditLog` honours that setting and this does not.
+  // Closing it needs a config read from here, which is exactly the import
+  // cycle this function exists to avoid.
+  const root = process.env.NIO_HOME || join(homedir(), '.nio');
+  return join(root, 'audit.jsonl');
+}
+
+/**
+ * Test seam: the path `reportDiagnostic` would append to, resolved
+ * WITHOUT writing anything. Lets a test assert the resolution rule (no
+ * cwd-relative fallback) without creating files in a real home directory.
+ */
+export function _resolveDiagnosticsAuditPathForTests(): string {
+  return resolveAuditPath();
 }
 
 function ensureParentDir(path: string): void {
@@ -52,11 +81,152 @@ function ensureParentDir(path: string): void {
   }
 }
 
+// ── stderr rate limiting ────────────────────────────────────────────────
+//
+// WHY THIS EXISTS
+//
+// stderr is the HOST's terminal. On the fork-per-event platforms
+// (Claude Code, Codex, Hermes) an unthrottled writer is harmless: the
+// process handles one event and exits, so it can only ever print a
+// handful of lines. On the in-process platforms (Pi, opencode, OpenClaw)
+// ONE process serves the whole session, and a collector fault repeats for
+// as long as the fault lasts — a `PeriodicExportingMetricReader` alone
+// re-exports every second, and every recorded event force-flushes on top
+// of that. Measured on a live Pi session: 205 identical
+// `otlp_export_failed` lines in 6 minutes, ~2 per second, which buried
+// the user's actual work until they turned monitoring off.
+//
+// WHAT IS *NOT* THE FIX: lowering the severity, or defaulting diagnostics
+// off. A telemetry fault that nobody can see is worse than one that is
+// noisy — the first occurrence must always reach the terminal.
+//
+// THE RULE
+//
+//   - The FIRST occurrence of a distinct diagnostic always prints, in
+//     full, immediately. No warm-up, no sampling.
+//   - Further occurrences of the SAME diagnostic inside
+//     `STDERR_WINDOW_MS` do not print; they are counted.
+//   - When that window closes, a single summary line reports how many
+//     were suppressed, and the next occurrence prints in full again.
+//   - The AUDIT leg is untouched: every occurrence is still one JSONL
+//     line, so `/nio report` and post-hoc analysis lose nothing.
+//
+// "Distinct" includes `detail`, which is the field that names the actual
+// fault ('Concurrent export limit reached' vs 'Request timed out' are
+// different failures with different fixes). A fault that CHANGES is new
+// information and must not be hidden behind an older fault's window.
+//
+// No timers are used anywhere here: a `setInterval` in this module would
+// be a ref'd handle in every hook subprocess and would keep short-lived
+// processes alive. Expired windows are swept on the next report instead,
+// which is exactly when a flood is still happening.
+
+/** How long one distinct diagnostic occupies its stderr slot. */
+export const STDERR_WINDOW_MS = 60_000;
+
+/**
+ * Ceiling on tracked distinct diagnostics. A pathological caller that
+ * varies `detail` on every call (an embedded timestamp, say) would
+ * otherwise grow this map without bound in a process that runs for weeks.
+ */
+const MAX_TRACKED_KEYS = 256;
+
+interface StderrWindow {
+  /** When this key last printed in full. */
+  openedAt: number;
+  /** Occurrences swallowed since then. */
+  suppressed: number;
+  /** Rendered header, kept so the summary can name what was suppressed. */
+  head: string;
+  /** Severity marker for the summary line. */
+  sev: string;
+}
+
+const stderrWindows = new Map<string, StderrWindow>();
+
+/** Injectable clock so tests can move time without sleeping. */
+let clock: () => number = () => Date.now();
+let windowMs: number = STDERR_WINDOW_MS;
+
+/**
+ * Test seam: pin the clock and/or shrink the suppression window.
+ * Passing `null` for either restores the production behaviour. Always
+ * resets the tracking map, so tests never inherit another test's windows.
+ */
+export function _setDiagnosticsThrottleForTests(
+  opts: { now?: (() => number) | null; windowMs?: number | null } = {},
+): void {
+  if (opts.now !== undefined) clock = opts.now ?? (() => Date.now());
+  if (opts.windowMs !== undefined) windowMs = opts.windowMs ?? STDERR_WINDOW_MS;
+  stderrWindows.clear();
+}
+
+function severityMark(severity: Diagnostic['severity']): string {
+  return severity === 'error' ? '!' : severity === 'warning' ? '~' : 'i';
+}
+
+function diagnosticKey(d: Diagnostic): string {
+  return [d.severity, d.source, d.kind, d.component ?? '', d.message, d.detail ?? ''].join('\u0000');
+}
+
+function emitSummary(w: StderrWindow, elapsedMs: number): void {
+  const secs = Math.max(1, Math.round(elapsedMs / 1000));
+  process.stderr.write(
+    `${w.sev} ${w.head}\n` +
+    `  suppressed ${w.suppressed} more identical in the last ${secs}s ` +
+    `(every one is in the audit log)\n`,
+  );
+}
+
+/**
+ * Emit the pending "suppressed N" summary for every window that has
+ * closed. Called at the top of each report, and exported so an
+ * entrypoint that is about to exit can surface a trailing count.
+ */
+export function flushSuppressedDiagnostics(force = false): void {
+  const now = clock();
+  for (const [key, w] of stderrWindows) {
+    const elapsed = now - w.openedAt;
+    if (!force && elapsed < windowMs) continue;
+    if (w.suppressed > 0) emitSummary(w, elapsed);
+    stderrWindows.delete(key);
+  }
+}
+
 function writeStderr(d: Diagnostic): void {
-  const sev = d.severity === 'error' ? '!' : d.severity === 'warning' ? '~' : 'i';
+  flushSuppressedDiagnostics();
+
+  const key = diagnosticKey(d);
+  const open = stderrWindows.get(key);
+  if (open) {
+    open.suppressed++;
+    return;
+  }
+
+  const sev = severityMark(d.severity);
   const head = `[nio:${d.source}:${d.kind}]${d.component ? ' ' + d.component + ':' : ''} ${d.message}`;
   process.stderr.write(`${sev} ${head}\n`);
+  // `detail` carries the only text that names the actual fault. Omitting
+  // it is how a run of 'Concurrent export limit reached' (the exporter
+  // refusing to send, endpoint untouched) read on screen as an
+  // unreachable endpoint for six minutes.
+  if (d.detail) process.stderr.write(`  detail: ${d.detail}\n`);
   if (d.hint) process.stderr.write(`  hint: ${d.hint}\n`);
+
+  if (stderrWindows.size >= MAX_TRACKED_KEYS) {
+    // Evict the oldest window rather than growing forever. Its count is
+    // reported now instead of at its natural expiry.
+    let oldestKey: string | undefined;
+    let oldest: StderrWindow | undefined;
+    for (const [k, w] of stderrWindows) {
+      if (oldest === undefined || w.openedAt < oldest.openedAt) { oldest = w; oldestKey = k; }
+    }
+    if (oldestKey !== undefined && oldest !== undefined) {
+      if (oldest.suppressed > 0) emitSummary(oldest, clock() - oldest.openedAt);
+      stderrWindows.delete(oldestKey);
+    }
+  }
+  stderrWindows.set(key, { openedAt: clock(), suppressed: 0, head, sev });
 }
 
 function writeAudit(d: Diagnostic): void {

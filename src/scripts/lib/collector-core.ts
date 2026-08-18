@@ -147,6 +147,31 @@ export interface DispatchOptions {
 const PROMPT_TRANSCRIPT_LOOKBACK_MS = 5000;
 
 /**
+ * How every metrics call in this module records its point: land it in the
+ * aggregator, do NOT wait for the wire.
+ *
+ * All three of this module's callers — `collector-hook.ts` (Claude Code /
+ * Codex), `hook-cli.ts`'s Hermes collector path and its Hermes GUARD path
+ * — wrap the whole dispatch in one shared `createFlushBudget` deadline and
+ * then end with their own budgeted `meterProvider.forceFlush()` before
+ * exiting. A metrics flush *inside* dispatch therefore adds no delivery
+ * and spends the shared budget: measured 5.07s (refused endpoint) and
+ * 5.21s (stalled endpoint) per dispatch at the default
+ * `collector.timeout: 5000`, versus ~0.2s once the flush is dropped.
+ *
+ * What that cost bought, end-to-end with metrics stalled and traces
+ * healthy: `Stop`'s `await recordTurn` burned the caller's remaining
+ * budget and the caller abandoned the dispatch, so the work sequenced
+ * after it never ran.
+ *
+ * The in-process runtime (`plugin-runtime.ts`) keeps the default — it is
+ * a long-lived daemon with no process exit to flush at — and so does
+ * `recordGuardDecision` on the guard hooks, which is bounded by
+ * `createFlushBudget` at each of its call sites instead.
+ */
+const NO_EARLY_FLUSH = { flush: false } as const;
+
+/**
  * Coerce one tool argument to a string, for ANY runtime value.
  *
  * The `as string` casts this replaces were TypeScript fictions: every
@@ -411,7 +436,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'PostToolUse') {
@@ -488,7 +513,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCreated') {
@@ -515,7 +540,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCompleted') {
@@ -536,7 +561,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
@@ -569,7 +594,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordTurn(meterProvider);
+        await recordTurn(meterProvider, NO_EARLY_FLUSH);
       }
 
       if (event === 'SessionEnd' && sessionEndDisarms(platform)) {
