@@ -19,7 +19,7 @@ import { SpanStatusCode } from '@opentelemetry/api';
 // every assertion below to "nothing was emitted". Capture is therefore
 // turned on process-wide for this file, the same way an operator does
 // it, before any test body runs. The gate itself is pinned by
-// plugin-runtime-monitor.test.ts and monitor-openclaw*.test.ts.
+// plugin-runtime-monitor.test.ts.
 //
 // Runs at module scope (after imports, before any test) so the fresh
 // home is in place before the first `loadConfig()` — config reads are
@@ -210,7 +210,8 @@ describe('InProcessPluginRuntime span wiring', () => {
       // An allowed tool's span goes out AT the post side, like the deny
       // path below. Parking it until turn close would buy nesting under
       // the chat call that issued it and cost the whole turn's
-      // visibility — see PluginRuntimeOptions.eagerToolSpans.
+      // visibility: nothing would reach a backend until the turn ended,
+      // and a crash before that would leave no trace at all.
       await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
       assert.equal(
         tracer.finished().filter((s) => s.name.startsWith('execute_tool')).length, 1,
@@ -562,14 +563,13 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     });
   }
 
-  // Flushes before reading. The in-memory tracer helper now wires the
-  // same BatchSpanProcessor production does, so a span that has ended is
-  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
-  // by the runtime itself — but a case that hands the runtime a wrapper
-  // whose `forceFlush` never reaches the real provider would otherwise
-  // read zero for the wrong reason.
+  // The chat spans this turn produced. `async` only so every call site
+  // reads the same whether or not the helper has to flush — the
+  // in-memory tracer exports synchronously today, and a case that hands
+  // the runtime a wrapper whose `forceFlush` never reaches the real
+  // provider must not read zero for the wrong reason.
   const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
+    (tracer.finished()).filter(s => s.name.startsWith('chat'));
 
   it('a turn that ended with no state still drops its events (C1)', async () => {
     // The `!state` early return in `flushSessionTurn` used to be the one
@@ -658,18 +658,15 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
    * throws when the TURN ROOT is started — i.e. the export path blowing
    * up after part of the tree already exists.
    *
-   * Why not a rejecting `forceFlush` (what this helper used to be): the
-   * flush is deliberately no longer a throw vector. `traces-collector`'s
-   * `flushSpans` swallows it, and the runtime's trailing flush catches
-   * it, because `BatchSpanProcessor.forceFlush()` REJECTS on a failed
-   * export where `SimpleSpanProcessor`'s resolved — so after the
-   * processor swap an unreachable collector would have started throwing
-   * out of every turn boundary. Telemetry must not do that. The exit
-   * this test exists for is still reachable, just through a different
-   * door: anything raised while the tree is being built (a provider
-   * whose tracer rejects a span, an SDK that throws on a bad attribute)
-   * still propagates out of `endTurn`, and the `finally` is what has to
-   * clear the turn's events.
+   * Why the throw is planted in `startSpan` rather than in
+   * `forceFlush`: the flush is the LAST thing `flushSessionTurnInner`
+   * does, so a flush that rejects leaves the turn's events to be cleared
+   * by the `finally` on a path where nothing else had gone wrong. The
+   * exit this case exists for is the interesting one — anything raised
+   * while the tree is still being BUILT (a provider whose tracer rejects
+   * a span, an SDK that throws on a bad attribute) propagates out of
+   * `endTurn` before `sessionState.delete`, and the `finally` is then
+   * the only thing that clears the turn's events.
    *
    * A plain delegating object rather than a subclass or a Proxy: the
    * runtime and traces-collector only ever call `getTracer` and
@@ -700,114 +697,10 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
   }
 
-  /**
-   * The counterpart: a provider whose FLUSH rejects. This is what the
-   * live OTLP path now does on any failed export — `BatchSpanProcessor`
-   * replaced `SimpleSpanProcessor` so a turn bigger than the exporter's
-   * 30-in-flight cap stops losing its root, and Batch's `forceFlush()`
-   * rejects where Simple's resolved. It must not surface at the host.
-   */
-  function rejectingFlushProvider(
-    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
-  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
-    return {
-      getTracer: (...args: Parameters<typeof provider.getTracer>) => provider.getTracer(...args),
-      forceFlush: async () => { throw new Error('OTLP exporter down'); },
-      shutdown: () => provider.shutdown(),
-      register: () => provider.register(),
-    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
-  }
-
-  it('a rejecting flush does not surface at the turn boundary', async () => {
-    // Two guards stand between the exporter and the host, and this pins
-    // both: `traces-collector`'s `flushSpans` (inside `endTurn`) and the
-    // `.catch()` on the runtime's trailing `tracerProvider.forceFlush()`.
-    // Drop either one and an unreachable collector starts throwing out
-    // of every turn boundary, which every binding's outer catch then
-    // swallows — a silently broken host on a telemetry fault.
-    const tracer = makeInMemoryTracer();
-    try {
-      const rt = new InProcessPluginRuntime({
-        platform: 'openclaw',
-        adapter: new OpenClawAdapter(),
-        tracerProvider: rejectingFlushProvider(tracer.provider),
-        meterProvider: null,
-        loggerProvider: null,
-      });
-
-      rt.onUserPrompt('s-flush', 'turn one');
-      rt.recordConversationEvent('s-flush', llmOutput('t1-a'));
-      await assert.doesNotReject(
-        () => rt.onTurnEnd('s-flush'),
-        'a failed export must never propagate into the host',
-      );
-      assert.equal(
-        (await chatSpans(tracer)).length, 1,
-        'sanity: the turn still built its chat span — the flush is the only thing that failed',
-      );
-    } finally {
-      await tracer.shutdown();
-    }
-  });
-
-  it('a rejecting LOGS flush does not surface at the turn boundary', async () => {
-    // The logs sibling of the case above, and the pin on all three of
-    // the runtime's `loggerProvider` flush sites: the one inside
-    // `flushSessionTurn`, the one in `flushTurnSpans` (reached via
-    // `onTurnEnd`), and the one in `disposeAllSessions`. The logs
-    // pipeline runs a `BatchLogRecordProcessor` — swapped in so a turn's
-    // content burst stops being dropped past the OTLP exporter's
-    // 30-in-flight cap — and a batched flush REJECTS once its export
-    // times out. (Not on a failed export: unlike the traces SDK, the
-    // logs SDK routes that to `globalErrorHandler` and resolves. See
-    // `flushLogRecords`' doc. Which is why the rejection has to be
-    // supplied here rather than produced by a real unreachable
-    // endpoint.) Route any of those three sites through a bare
-    // `forceFlush()` instead of `flushLogRecords` and a hung collector
-    // starts throwing out of the host's Stop handler: an observability
-    // fault turned into a host fault.
-    const tracer = makeInMemoryTracer();
-    try {
-      // Minimal LoggerProvider surface: the runtime only ever calls
-      // `getLogger` (through the content sink) and `forceFlush`.
-      const rejectingLogs = {
-        getLogger: () => ({ emit: () => {} }),
-        forceFlush: async () => { throw new Error('OTLP logs exporter down'); },
-        shutdown: async () => {},
-      } as unknown as NonNullable<
-        ConstructorParameters<typeof InProcessPluginRuntime>[0]['loggerProvider']
-      >;
-
-      const rt = new InProcessPluginRuntime({
-        platform: 'openclaw',
-        adapter: new OpenClawAdapter(),
-        tracerProvider: tracer.provider,
-        meterProvider: null,
-        loggerProvider: rejectingLogs,
-      });
-
-      rt.onUserPrompt('s-logs-flush', 'turn one');
-      rt.recordConversationEvent('s-logs-flush', llmOutput('t1-a'));
-      await assert.doesNotReject(
-        () => rt.onTurnEnd('s-logs-flush'),
-        'a failed LOGS export must never propagate into the host',
-      );
-      await assert.doesNotReject(
-        () => rt.disposeAllSessions(),
-        'nor at process-wide teardown',
-      );
-      assert.equal(
-        (await chatSpans(tracer)).length, 1,
-        'sanity: the turn still built its chat span — the logs flush is the only thing that failed',
-      );
-    } finally {
-      await tracer.shutdown();
-    }
-  });
-
   it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
-    // The third exit `flushSessionTurn`'s try/finally exists for, and the
-    // only one the two cases above cannot reach. It is not hypothetical:
+    // The third exit `flushSessionTurn`'s try/finally exists for, after
+    // the normal close and the no-state early return pinned above, and
+    // the only one those two cannot reach. It is not hypothetical:
     // `endTurn` and `recordPostToolUse` drive an OTEL SDK that can raise
     // mid-tree, and every binding's outer catch swallows the rejection —
     // so a broken exporter would leave the turn's events in the map to
@@ -862,14 +755,13 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
 // thing standing between a torn-down session and a later turn under the
 // same id replaying its file.
 describe('InProcessPluginRuntime transcript-path lifecycle', () => {
-  // Flushes before reading. The in-memory tracer helper now wires the
-  // same BatchSpanProcessor production does, so a span that has ended is
-  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
-  // by the runtime itself — but a case that hands the runtime a wrapper
-  // whose `forceFlush` never reaches the real provider would otherwise
-  // read zero for the wrong reason.
+  // The chat spans this turn produced. `async` only so every call site
+  // reads the same whether or not the helper has to flush — the
+  // in-memory tracer exports synchronously today, and a case that hands
+  // the runtime a wrapper whose `forceFlush` never reaches the real
+  // provider must not read zero for the wrong reason.
   const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
+    (tracer.finished()).filter(s => s.name.startsWith('chat'));
 
   it('onSessionEnd stops the session file being ours to replay (M1)', async () => {
     const tracer = makeInMemoryTracer();
@@ -1243,9 +1135,10 @@ describe('registerPiExtension — block path and confirm dialog', () => {
         { toolName: 'bash', toolCallId: 'call-77', content: 'ok' }, ctx,
       );
 
-      // Pi parks its tool spans for end-of-turn attribution (see
-      // PluginRuntimeOptions.eagerToolSpans), so the turn has to close
-      // before anything reaches the exporter.
+      // Closing the turn is not what makes the two spans visible — they
+      // were exported at their own `tool_result` — but it is the boundary
+      // the binding is meant to survive, so the read below happens after
+      // it rather than in the middle of an open turn.
       await pi.handlers.get('agent_end')!({}, ctx);
 
       const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
@@ -1538,9 +1431,9 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { tool: 'bash', sessionID: 's1', callID: 'call-77', args: { command: 'ls' } } as never,
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
-      // opencode parks its tool spans for end-of-turn attribution (see
-      // PluginRuntimeOptions.eagerToolSpans), so the session's idle has
-      // to fire before anything reaches the exporter.
+      // Same as the Pi case above: the span went out at
+      // `tool.execute.after`, and idle is driven here only so the read
+      // below happens past the turn boundary.
       await hooks.event!(
         { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
       );

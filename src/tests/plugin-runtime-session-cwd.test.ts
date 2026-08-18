@@ -15,7 +15,7 @@
  * degenerates to "every session matches" or "no session matches",
  * depending only on where the host happened to be launched.
  *
- * ── Why 2341 green tests could not see it ────────────────────────────
+ * ── Why a green suite could not see it ───────────────────────────────
  *
  * Every existing test in this area arms with `process.cwd()` and then
  * asserts against a runtime whose gate also reads `process.cwd()` — the
@@ -115,7 +115,7 @@ async function runOneTurn(
   });
   await rt.onPostTool(sessionId, 'call-1', 'bash', { result: 'a.txt', error: null });
   await rt.onTurnEnd(sessionId);
-  return tracer.flushed();
+  return tracer.finished();
 }
 
 function makeRuntime(tracer: InMemoryTracer, defaultCwd?: string): InProcessPluginRuntime {

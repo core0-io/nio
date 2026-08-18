@@ -214,14 +214,15 @@ describe('opencode conversation-event cap counts LLM calls, not streamed snapsho
           );
           const tool = tools.find((s) => s.attributes['gen_ai.tool.call.id'] === `call_cap_${i}`);
           assert.ok(tool, `tool span for call_cap_${i} must exist`);
-          // Tool spans are eager now, so the parent is the turn root for
-          // all of them and carries no information about which call
-          // issued them — `gen_ai.tool.call.id`, asserted by the `find`
-          // above, is the surviving link. Pinned so a reader does not
-          // mistake the flat shape here for the eviction this test hunts.
+          // Tool spans are exported as they close, so the parent is the
+          // turn root for all of them and carries no information about
+          // which call issued them — `gen_ai.tool.call.id`, asserted by
+          // the `find` above, is the surviving link. Pinned so a reader
+          // does not mistake the flat shape here for the eviction this
+          // test hunts.
           assert.equal(
             parentOf(tool!), turnRootId,
-            'every tool span hangs off the turn root — see eager-tool-spans.test.ts',
+            'every tool span hangs off the turn root, not its chat call',
           );
         }
       } finally {

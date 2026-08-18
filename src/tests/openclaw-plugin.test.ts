@@ -14,7 +14,7 @@ import { writeCaptureOnConfig } from './helpers/capture-on.js';
 // See helpers/capture-on.ts: capture is off by default, so a file
 // asserting span wiring has to turn it on or every assertion below
 // collapses into "nothing was emitted". Runs at module scope, before
-// the first cached config read.
+// the first config read.
 {
   const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-oc-plugin-tests-')));
   writeCaptureOnConfig(home);
@@ -84,8 +84,10 @@ async function withIsolatedNioHome<T>(
   const prev = process.env.NIO_HOME;
   const nioHome = mkdtempSync(join(tmpdir(), 'nio-oc-plugin-test-'));
   process.env.NIO_HOME = nioHome;
-  // Capture on: this file asserts span/audit wiring, not the monitor
-  // gate, and the gate is closed by default (see helpers/capture-on.ts).
+  // Capture on: this helper's fresh home would otherwise start with the
+  // monitor gate closed, and every span/audit assertion inside `fn`
+  // would vacuously pass. The gate itself is pinned by
+  // plugin-runtime-monitor.test.ts.
   writeCaptureOnConfig(nioHome, configYaml);
   try {
     return await fn(nioHome);

@@ -110,7 +110,50 @@ describe('plugin runtime: chat spans reach the wire', () => {
         chat!.attributes['nio.chat.reply'], 'done',
         'the assistant text must reach the chat span',
       );
-      logger.emitted();
+    } finally {
+      await tracer.shutdown();
+      await logger.shutdown();
+    }
+  });
+
+  it('a reply too big for the span reaches the LOGS signal', async () => {
+    // The case above cannot see the content sink at all: a short reply
+    // is carried whole by the span attribute, and
+    // `spanCarriesWholeContent` then SUPPRESSES the log record — so
+    // `flushSessionTurnInner` passing `undefined` where the sink belongs
+    // looks identical. Past `SPAN_CONTENT_LIMIT` (2048 bytes) the span
+    // keeps a truncated preview and the logs copy becomes the
+    // authoritative one, which is the only shape in which the sink's
+    // presence is observable from outside the runtime.
+    armSession(home, 'sess-big');
+    const tracer = makeInMemoryTracer();
+    const logger = makeInMemoryLogger();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        loggerProvider: logger.provider,
+      });
+
+      const long = 'y'.repeat(4096);
+      rt.onSessionStart('sess-big');
+      rt.onUserPrompt('sess-big', 'say a lot');
+      rt.recordConversationEvent('sess-big', llmOutput('oc-test-model', long, 'call-big'));
+      await rt.onTurnEnd('sess-big');
+
+      const chat = tracer.finished().find((s) => s.name.startsWith('chat'));
+      assert.equal(
+        chat!.attributes['nio.content.truncated'], true,
+        'sanity: the reply must be over the span budget, or the log record is suppressed by design',
+      );
+
+      const records = await logger.flushed();
+      const bodies = records.map((r) => (typeof r.body === 'string' ? r.body : JSON.stringify(r.body)));
+      assert.ok(
+        bodies.some((b) => b.includes(long)),
+        'the full reply must reach the logs signal — the runtime built no content sink otherwise',
+      );
     } finally {
       await tracer.shutdown();
       await logger.shutdown();

@@ -4,18 +4,18 @@
 /**
  * On Pi and opencode too, a tool span is a SIBLING of the chat span.
  *
- * This file used to pin the opposite. Pi and opencode are the two
- * platforms where nesting was actually achievable — Pi's `toolCall`
- * blocks carry an id and its calls are `inferred`; opencode's tool parts
- * carry `callID` and its calls are `exact`, so both of `buildSpanTree`'s
- * attribution channels exist — and it demonstrably worked. It was given
- * up anyway, because it can only be bought by holding every tool span
- * until the turn ends, and that made a long turn invisible and a
- * mid-turn crash unreconstructable. `eager-tool-spans.test.ts` carries
- * the measurement; `PluginRuntimeOptions.eagerToolSpans` carries the
- * reasoning.
+ * Pi and opencode are the two platforms where nesting the tool span
+ * UNDER its issuing chat call would actually have been achievable — Pi's
+ * `toolCall` blocks carry an id and its calls are `inferred`; opencode's
+ * tool parts carry `callID` and its calls are `exact`, so both of
+ * `buildSpanTree`'s attribution channels exist. It is not done, because
+ * that edge can only be bought by holding every tool span until the turn
+ * ends: a long turn would then show a backend nothing at all while it
+ * ran, and a crash in that window would leave no trace of how far the
+ * agent got. `InProcessPluginRuntime.onPostTool` exports each span as it
+ * closes instead.
  *
- * So what these cases now pin is the shape that replaced it, on the two
+ * So what these cases pin is the shape that choice produces, on the two
  * bindings that had the most to lose:
  *
  *  - the tool span hangs off the TURN ROOT, beside the chat span, not
@@ -31,9 +31,9 @@
  * ── Why these cases are not vacuous ──────────────────────────────────
  *
  * Each states the parentage as an equality against the turn root AND an
- * inequality against the chat span, so a regression to the parked path
- * fails both ways round rather than sliding through a `!==` that any
- * shape satisfies. The chat-span assertions are what keep them honest in
+ * inequality against the chat span, so a change that re-parented tool
+ * spans under their chat call fails both ways round rather than sliding
+ * through a `!==` that any shape satisfies. The chat-span assertions are what keep them honest in
  * the other direction: a run that produced no chat span at all would
  * make "the tool is not under the chat span" trivially true, so every
  * case first proves the chat span exists.

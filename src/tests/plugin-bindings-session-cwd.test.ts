@@ -168,7 +168,7 @@ describe('in-process bindings report their session directory', () => {
     );
     await handlers.get('agent_end')!({}, ctx);
 
-    const spans = await tracer.flushed();
+    const spans = tracer.finished();
     assert.ok(
       spans.length > 0,
       'Pi hands a real per-session cwd on every ctx; the gate must use it rather than the ' +
@@ -198,7 +198,7 @@ describe('in-process bindings report their session directory', () => {
     await handlers.get('agent_end')!({}, ctx);
 
     assert.ok(
-      (await tracer.flushed()).length > 0,
+      (tracer.finished()).length > 0,
       'the first event carrying a ctx must be enough to key the session',
     );
   });
@@ -234,7 +234,7 @@ describe('in-process bindings report their session directory', () => {
     await handlers.get('agent_end')!({}, ctx);
 
     assert.ok(
-      (await tracer.flushed()).length > 0,
+      (tracer.finished()).length > 0,
       'arming from a session and then using that session must capture it',
     );
   });
@@ -270,7 +270,7 @@ describe('in-process bindings report their session directory', () => {
       event: { type: 'session.idle', properties: { sessionID: 'oc-cwd-session' } },
     });
 
-    const spans = await tracer.flushed();
+    const spans = tracer.finished();
     assert.ok(
       spans.length > 0,
       'the arm was made in the project directory opencode handed the plugin, so a session ' +
@@ -309,7 +309,7 @@ describe('in-process bindings report their session directory', () => {
     });
 
     assert.ok(
-      (await tracer.flushed()).length > 0,
+      (tracer.finished()).length > 0,
       'the plugin directory opencode handed over covers every session this instance serves, ' +
         'including the ones whose creation it never observed',
     );

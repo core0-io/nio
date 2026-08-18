@@ -123,10 +123,10 @@ describe('tool content records and the span they name', () => {
         { event: { type: 'session.idle', properties: { sessionID } } } as never,
       );
 
-      // Flush both signals before reading: the helpers batch exactly as
-      // production does, and a NEGATIVE assertion read off an undrained
-      // queue would pass for the wrong reason.
-      const spans = await tracer.flushed();
+      // Both signals are read only after the idle above has driven the
+      // runtime's own flush, so a NEGATIVE assertion below cannot pass
+      // merely because nothing had been drained yet.
+      const spans = tracer.finished();
       const toolSpans = spans.filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(
         toolSpans.length, 1,
@@ -218,7 +218,7 @@ describe('tool content records and the span they name', () => {
         { event: { type: 'session.idle', properties: { sessionID } } } as never,
       );
 
-      const spans = await tracer.flushed();
+      const spans = tracer.finished();
       assert.equal(
         spans.length, 0,
         'the post side found the session unmonitored and resolved no provider — if this ever ' +
