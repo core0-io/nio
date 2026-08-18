@@ -72,6 +72,8 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 
 Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
 
+Conversation content is captured on the hook-driven hosts — **Claude Code, Codex and Hermes**. OpenClaw, Pi and opencode still export the turn and tool spans, the metrics and the audit records described above, but not the `chat` layer or any content record.
+
 When it is not armed, none of the above leave the machine.
 
 **This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read/wrote, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.

@@ -30,6 +30,10 @@ for secrets in free text too. It previously went through a redactor that
 only inspects JSON key names, so a credential pasted into a prompt passed
 straight through it.
 
+Content is captured on the hook-driven hosts — Claude Code, Codex and
+Hermes. OpenClaw, Pi and opencode keep exporting their turn and tool
+spans, metrics and audit records, and gain no content records here.
+
 None of this is new capture surface for an *unarmed* session — it stays
 exactly as silent as before. It is new for anyone who has already armed
 `/nio-monitor` or set `collector.monitor_all_sessions: true`: your
