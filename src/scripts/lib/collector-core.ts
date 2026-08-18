@@ -58,6 +58,8 @@ import {
   takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
+import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
+import type { ChatCall } from './conversation/types.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -104,6 +106,17 @@ export interface DispatchOptions {
    * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
+  /**
+   * Extra conversation-source input the caller holds and this module
+   * cannot derive from `input`.
+   *
+   * The replay platforms (Claude Code, Codex) need nothing here — their
+   * source is built from `input.transcript_path`. Hermes does: its calls
+   * live in the raw `post_llm_call` envelope, which the canonical
+   * `HookStdinPayload` has no field for. Merged over the transcript
+   * path, so a caller can supply either or both.
+   */
+  conversationInput?: SourceInput;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -180,6 +193,45 @@ function resolveSpanKey(
   const fallback = `${name}:${toolSummary(name, input.tool_input ?? {})}`;
   if (state.pending_spans[fallback]) return fallback;
   return primary;
+}
+
+/**
+ * Reconstruct this turn's LLM calls so `endTurn` can emit one chat span
+ * per call.
+ *
+ * Returns undefined — never throws — whenever the calls can't be had:
+ * a platform with no `ConversationSource`, a source whose input is
+ * missing (no transcript path), or an unreadable session file. The
+ * caller then emits the pre-chat-layer `turn → tool` shape, which is a
+ * degraded trace rather than a broken one.
+ *
+ * The replay platforms (Claude Code, Codex) are served straight from
+ * `transcript_path`. Hermes's calls ride in the raw `post_llm_call`
+ * envelope, which the canonical payload has no field for, so
+ * `hook-cli.ts` passes it through `DispatchOptions.conversationInput`.
+ * OpenClaw never reaches this function: its daemon calls `endTurn`
+ * directly.
+ */
+async function resolveTurnCalls(
+  platform: string,
+  sourceInput: SourceInput,
+  turnStartMs: number,
+): Promise<ChatCall[] | undefined> {
+  try {
+    const source = createSourceForPlatform(platform, sourceInput);
+    if (!source) return undefined;
+    return source.callsSince(turnStartMs);
+  } catch (err) {
+    const { reportDiagnostic } = await import('../../adapters/diagnostics.js');
+    reportDiagnostic({
+      severity: 'warning',
+      source: 'collector',
+      kind: 'conversation_source_error',
+      message: '[nio] could not reconstruct the turn\'s LLM calls; the turn exports without a chat layer',
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
 }
 
 const KNOWN_HOOK_EVENTS: ReadonlySet<HookEventName> = new Set<HookEventName>([
@@ -358,7 +410,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const prev = loadState(logsConfig);
         const state = ensureTurn(prev, sessionId);
         if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
+          const calls = await resolveTurnCalls(
+            platform,
+            { transcriptPath, ...(opts.conversationInput ?? {}) },
+            state.turn_start_ms,
+          );
+          const next = await endTurn(tracerProvider, state, cwd, transcriptPath, calls);
           if (next) saveState(logsConfig, next);
         }
       }

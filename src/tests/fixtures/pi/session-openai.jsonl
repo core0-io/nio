@@ -1,0 +1,2 @@
+{"type":"session","version":3,"id":"33333333-3333-3333-3333-333333333333","timestamp":"2026-08-06T10:00:00.000Z","cwd":"/work"}
+{"type":"message","id":"o1","parentId":null,"timestamp":"2026-08-06T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Checking the directory."},{"type":"text","text":"Done."}],"api":"responses","provider":"openai","model":"gpt-5-codex","usage":{"input":4,"output":6,"totalTokens":10},"stopReason":"stop","timestamp":1785060001000}}

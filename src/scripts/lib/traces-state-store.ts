@@ -44,6 +44,34 @@ export interface PendingTaskSpan {
   span_id: string;
 }
 
+/**
+ * A finished tool/task span, described well enough to be re-emitted
+ * later under a parent chosen after the fact.
+ *
+ * Today this is only a parameter type: it is what `buildSpanTree`
+ * accepts as candidates to nest under a chat call, and every caller
+ * passes an empty list, because tool spans export the moment they
+ * finish. `CollectorState` has no field of this type — a parking path
+ * that holds spans until the turn ends would add one, and would then
+ * owe the constraint below.
+ *
+ * Only metadata, never payload bodies: anything parked in the state
+ * file is rewritten on every hook event, so a per-call payload there is
+ * a per-call re-serialisation of the whole turn.
+ */
+export interface DeferredSpan {
+  kind: 'tool' | 'task';
+  name: string;
+  span_id: string;
+  start_ms: number;
+  end_ms: number;
+  attributes: Record<string, unknown>;
+  /** Sets the span status to ERROR and records an exception. */
+  error?: string;
+  /** Used to attribute this span to the chat call that issued it. */
+  tool_use_id?: string;
+}
+
 export interface CollectorState {
   session_id: string;
   turn_number: number;
