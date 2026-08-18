@@ -3,6 +3,7 @@
 
 import type { ActionEnvelope } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping for OpenClaw.
@@ -44,7 +45,11 @@ export class OpenClawAdapter implements HookAdapter {
   parseInput(raw: unknown): HookInput {
     const event = raw as Record<string, unknown>;
     return {
-      toolName: (event.toolName as string) || '',
+      // `asText`, not `as string`: OpenClaw runs Nio in-process and hands
+      // the adapter a live host object. `toolName` is read by string
+      // methods downstream (MCP-name parse, deny/allow-list match, this
+      // adapter's prefix-matching `mapToolToActionType`); see asText.
+      toolName: asText(event.toolName),
       toolInput: (event.params as Record<string, unknown>) || {},
       eventType: 'pre', // before_tool_call = pre
       raw: event,
@@ -89,19 +94,26 @@ export class OpenClawAdapter implements HookAdapter {
     let actionData: Record<string, unknown>;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText`: these are
+      // model-authored, unvalidated values feeding fields the analysers
+      // treat as strings. `content.slice(0, 10_000)` below used to throw
+      // on a non-string content, before the guard had reached a verdict.
+      // This host runs Nio in-process and its binding catches, so the
+      // throw did not kill anything — it failed OPEN, which is the same
+      // outcome by a different route.
       case 'exec_command':
         actionData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
         };
         break;
 
       case 'write_file': {
-        const content = (input.toolInput.content as string) ||
-                        (input.toolInput.file_text as string) || '';
+        const content = asText(input.toolInput.content) ||
+                        asText(input.toolInput.file_text);
         actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.path) ||
+                asText(input.toolInput.file_path),
           content_preview: content.slice(0, 10_000),
         };
         break;
@@ -109,15 +121,26 @@ export class OpenClawAdapter implements HookAdapter {
 
       case 'read_file':
         actionData = {
-          path: (input.toolInput.path as string) ||
-                (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.path) ||
+                asText(input.toolInput.file_path),
         };
         break;
 
       case 'network_request':
         actionData = {
+          // NOT `asText`. `method` and `body_preview` are never read by a
+          // string method: the Phase 2 network analyser reads `url` only,
+          // and the Phase 5 synthetic `request.json` runs
+          // `JSON.stringify(data, null, 2)` over the whole object
+          // (action-orchestrator.ts). That stringify CAN throw — a
+          // circular or BigInt value handed over by an in-process host —
+          // but the throw then lands in `evaluateHook`'s catch, which
+          // denies a `network_request` outright (see
+          // ENGINE_ERROR_ALLOWED_ACTIONS). So this is a fail-CLOSED
+          // degradation, not an enforcement hole, and coercing here would
+          // be an unkillable change.
           method: (input.toolInput.method as string) || 'GET',
-          url: (input.toolInput.url as string) || '',
+          url: asText(input.toolInput.url),
           body_preview: input.toolInput.body as string | undefined,
         };
         break;

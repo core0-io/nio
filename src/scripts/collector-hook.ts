@@ -24,6 +24,7 @@ import { createMeterProvider } from './lib/metrics-collector.js';
 import { createTracerProvider } from './lib/traces-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import {
   dispatchCollectorEvent,
@@ -93,26 +94,49 @@ async function main(): Promise<void> {
     ? createLoggerProvider(config, PLATFORM, resourceAgentName)
     : null;
 
-  await dispatchCollectorEvent({
-    event: input.hook_event_name ?? '',
-    input,
-    platform: PLATFORM,
-    agentName: AGENT_NAME,
-    config,
-    meterProvider,
-    tracerProvider,
-    loggerProvider,
-    logsConfig,
-  });
+  // One shared deadline for every OTLP-touching await below — the
+  // dispatch itself included, NOT just the closing Promise.all. The
+  // dispatch branches that touch traces end in a library helper carrying
+  // its own `provider.forceFlush()` (`recordPostToolUse`,
+  // `recordPostTaskToolUse`, `endTurn`), so against an endpoint that drops
+  // packets the hang happens INSIDE dispatch and the closing flush is
+  // never reached. Measured unbounded against 192.0.2.1:4318 on a
+  // PostToolUse event: still alive when killed at 95s. See
+  // lib/flush-budget.ts. (The metrics calls no longer flush there at all
+  // — see collector-core's NO_EARLY_FLUSH.)
+  //
+  // A dispatch abandoned at the deadline leaves whatever it had already
+  // written to the traces-state-store intact: `endTurn`, the one helper
+  // that flushes before its state is saved, simply leaves the turn open
+  // for the next boundary event to close.
+  const withFlushBudget = createFlushBudget(config.timeout);
+
+  await withFlushBudget(
+    dispatchCollectorEvent({
+      event: input.hook_event_name ?? '',
+      input,
+      platform: PLATFORM,
+      agentName: AGENT_NAME,
+      config,
+      meterProvider,
+      tracerProvider,
+      loggerProvider,
+      logsConfig,
+    }),
+    undefined,
+  );
 
   // Force network exporters to flush before the subprocess exits.
   // Without this, span/log/metric records can sit in batchers and never
   // reach OTLP.
-  await Promise.all([
-    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', config.endpoint, e)),
-    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', config.endpoint, e)),
-    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', config.endpoint, e)),
-  ]);
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', config.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', config.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', config.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 
   process.exit(0);
 }

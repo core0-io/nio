@@ -20,6 +20,7 @@
       { label: '/nio-config', path: '/docs/nio-config.html' },
       { label: '/nio-doctor', path: '/docs/nio-doctor.html' },
       { label: '/nio-external-score', path: '/docs/nio-external-score.html' },
+      { label: '/nio-monitor', path: '/docs/nio-monitor.html' },
     ]},
     { id: 'configuration', title: 'Configuration', openByDefault: true, items: [
       { label: 'Config reference', path: '/docs/configuration.html' },

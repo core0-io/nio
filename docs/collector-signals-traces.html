@@ -42,17 +42,22 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Traces</div>
         <h1><em>Traces</em> — one trace per conversation turn</h1>
-        <p class="lead">Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> wherever a spec equivalent exists; Nio-specific extensions use the <code>nio.*</code> prefix. Three span shapes — turn root, tool call, subagent task — covered below with their full attribute schemas.</p>
+        <p class="lead">Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> wherever a spec equivalent exists; Nio-specific extensions use the <code>nio.*</code> prefix. Four span shapes — turn root, LLM call, tool call, subagent task — covered below with their full attribute schemas.</p>
       </div>
 
       <div class="doc">
+
+        <div class="callout warn">
+          <div class="title">No spans until the session is armed</div>
+          <p>The traces provider is built only for a session someone armed with <a href="nio-monitor.html"><code>/nio-monitor on</code></a> (<code>/nio monitor on</code> on OpenClaw and Hermes), or when <code>collector.monitor_all_sessions: true</code>. A configured <code>collector.endpoint</code> alone produces no spans. The guard still evaluates and still blocks either way. See <a href="collector-signals.html#gating">Capture gating</a>.</p>
+        </div>
 
         <h2 id="resource-attrs">Resource attributes</h2>
         <p>Every Nio provider (tracer / logger / meter) constructs an OTel <code>Resource</code> with three identity attributes that flow onto <strong>every</strong> span, log record, and metric data point that provider emits. Backends surface them as top-level service selectors / filter columns.</p>
         <table>
           <thead><tr><th>Attribute</th><th>Value</th></tr></thead>
           <tbody>
-            <tr><td><code>service.name</code></td><td><code>nio-&lt;platform&gt;</code> — one independent service per agent runtime: <code>nio-claude-code</code>, <code>nio-codex</code>, <code>nio-hermes</code>, <code>nio-openclaw</code></td></tr>
+            <tr><td><code>service.name</code></td><td><code>nio-&lt;platform&gt;</code> — one independent service per agent runtime: <code>nio-claude-code</code>, <code>nio-codex</code>, <code>nio-hermes</code>, <code>nio-openclaw</code>, <code>nio-pi</code>, <code>nio-opencode</code></td></tr>
             <tr><td><code>nio.platform</code></td><td>Raw platform string, same value as the suffix of <code>service.name</code> (offered separately so backends that don't expose <code>service.name</code> as a queryable attribute still have a filter handle)</td></tr>
             <tr><td><code>gen_ai.agent.name</code></td><td>Operator-set <a href="configuration.html#agent_name"><code>agent_name</code></a> from <code>~/.nio/config.yaml</code>; <strong>absent on the resource when unconfigured</strong> (turn span carries a platform-default fallback as a span attribute instead — see the turn-span table below)</td></tr>
           </tbody>
@@ -60,10 +65,31 @@
         <p style="font-size: 13px; color: var(--fg-2);"><strong>Behaviour change in v2.4.2.</strong> Earlier releases set <code>service.name="nio"</code> for every platform and put <code>nio.platform</code> only on individual spans. Existing dashboards filtered on <code>service.name="nio"</code> will not match new data — re-target to <code>service.name=nio-*</code> (wildcard) or filter on <code>nio.platform</code>. Historical traces / logs / metrics keep their original <code>service.name=nio</code>.</p>
 
         <h2 id="hierarchy">Span hierarchy</h2>
-        <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
-  ├─ Span: execute_tool &lt;name&gt;   (PreToolUse → PostToolUse)
-  ├─ Span: execute_tool &lt;name&gt;   (...)
+        <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at UserPromptSubmit, ends at Stop / SubagentStop)
+                                      (a host that fires no prompt event opens it at the turn's first
+                                       event instead — every branch calls ensureTurn)
+  ├─ Span: chat &lt;model&gt;          (one per LLM call, reconstructed at turn close)
+  ├─ Span: execute_tool &lt;name&gt;   (exported as the tool finishes; joins to its chat call
+  │                               by gen_ai.tool.call.id, not by parentage — see below)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)</code></pre>
+
+        <p><strong>Emission timing.</strong> A tool span is exported the moment the tool finishes, on every platform — <code>PostToolUse</code> on Claude Code / Codex, <code>post_tool_call</code> on Hermes, <code>after_tool_call</code> / <code>tool_result</code> / <code>tool.execute.after</code> on OpenClaw / Pi / opencode — as a direct child of the turn root. So is the guard's deny / confirm-denied span, for which no post-side event ever fires. The <code>chat</code> layer and the turn root are the only things that wait for <code>Stop</code> / <code>SubagentStop</code> / <code>SessionEnd</code>, because they can only be reconstructed from the conversation source once the turn is over.</p>
+
+        <p><strong>Tool spans are siblings of <code>chat</code>, not children.</strong> They used to be parked on disk so they could be nested under the chat call that issued them; that cost a whole long turn's visibility and lost everything on a hard kill. The join key survived the change: a tool span and the <code>chat</code> span that issued it share <code>gen_ai.tool.call.id</code> (the chat side carries the list as <code>nio.chat.tool_call_ids</code>). If the host process dies before the turn closes, the turn root and its chat layer are lost — the tool spans are already on the backend.</p>
+
+        <h2 id="span-content">Where conversation content lives</h2>
+        <p>Content is split by <strong>size</strong>, not by kind. A span attribute is cheap while it is small and expensive when it is not; a log record is cheap to hold but only reachable through a join. So small bodies ride the span and large ones go to the logs signal.</p>
+        <table>
+          <thead><tr><th>Content</th><th>Where</th><th>Cap</th></tr></thead>
+          <tbody>
+            <tr><td>Model reply text</td><td><code>nio.chat.reply</code> on the <code>chat</code> span</td><td>≤2 KB; overflow goes to a <code>text</code> content record</td></tr>
+            <tr><td>Tool arguments</td><td><code>gen_ai.tool.call.arguments</code> on the tool span</td><td>≤2 KB; overflow goes to a <code>tool_input</code> content record</td></tr>
+            <tr><td>User prompt that opened the turn</td><td><code>nio.turn.user_prompt</code> on the turn root</td><td>≤2 KB</td></tr>
+            <tr><td>Model reasoning ("thinking")</td><td><a href="collector-signals-logs.html">logs</a> — always a content record</td><td>≤64 KB</td></tr>
+            <tr><td>Tool output</td><td><a href="collector-signals-logs.html">logs</a> — always a content record. The in-process platforms additionally keep a ≤2 KB copy on the span as <code>gen_ai.tool.call.result</code>; the hook platforms do not set it at all</td><td>≤32 KB</td></tr>
+          </tbody>
+        </table>
+        <p>Both halves are redacted for secrets before truncation, and <strong>one body has one owner</strong>: when the span copy is complete there is no log record at all; when it was cut, the span keeps a preview flagged <code>nio.content.truncated</code> and the full copy lives in the log record. Records carry <code>nio.span_id</code> / <code>nio.trace_id</code>, so the join is a direct key lookup.</p>
 
         <h2 id="span-turn">Span: <code>invoke_agent UserPromptSubmit</code> <span style="color: var(--fg-3); font-weight: 400;">— turn root</span></h2>
         <p>One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.</p>
@@ -79,32 +105,58 @@
             <tr><td><code>gen_ai.usage.output_tokens</code></td><td>Output tokens generated across the turn</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
             <tr><td><code>gen_ai.usage.cache_creation.input_tokens</code></td><td>Cache-creation input tokens</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
             <tr><td><code>gen_ai.usage.cache_read.input_tokens</code></td><td>Cache-read input tokens</td><td>Stop · SubagentStop · SessionEnd</td><td>all</td></tr>
-            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>codex</code> / <code>hermes</code> / <code>openclaw</code> / <code>pi</code> / <code>opencode</code></td><td>turn close</td><td>all</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Per-session counter, starts at 1</td><td>turn close</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at turn start</td><td>turn close (when set)</td><td>all</td></tr>
-            <tr><td><code>nio.turn.user_prompt</code></td><td>First user message of the turn, redacted, ≤2 KB</td><td>UserPromptSubmit</td><td>all</td></tr>
+            <tr><td><code>nio.turn.user_prompt</code></td><td>User message that opened the turn, redacted, ≤2 KB</td><td>UserPromptSubmit</td><td>all</td></tr>
             <tr><td><code>nio.turn.assistant_reply</code></td><td>First assistant reply of the turn, redacted, ≤2 KB</td><td><code>llm_output</code> (OpenClaw-native)</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.turn.cache_hit_rate</code></td><td><code>cache_read / (input + cache_creation + cache_read)</code>, 0–1</td><td>turn close</td><td>all</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads the transcript JSONL and sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as Claude Code if the transcript path is included in the <code>post_llm_call</code> payload; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries usage directly; accumulated incrementally.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code / Codex / Pi</strong>: turn close reads the session file at <code>transcript_path</code> and sums per-call usage from all assistant entries since turn start. <strong>Hermes</strong>: the same code path, from the <code>post_llm_call</code> envelope. <strong>OpenClaw / opencode</strong>: the host's own LLM events carry usage directly; accumulated incrementally.</p>
+
+        <h2 id="span-chat">Span: <code>chat &lt;model&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— LLM call</span></h2>
+        <p>One per LLM call within the turn, reconstructed from the platform's conversation data at turn close (Claude Code / Codex / Pi: the session file at <code>transcript_path</code>; Hermes: the raw <code>post_llm_call</code> envelope; OpenClaw / opencode: the events the resident plugin accumulated). Span name is <code>chat &lt;model&gt;</code>, or plain <code>chat</code> when the source does not report a model.</p>
+        <table>
+          <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
+          <tbody>
+            <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>chat</code></td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.request.model</code></td><td>Model the call was issued against, when the source reports one</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.response.id</code></td><td>Provider-side call id where available, otherwise a synthesised ordinal</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.usage.*</code></td><td>Per-call input / output / cache-read / cache-creation tokens, when the source reports them</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>gen_ai.response.finish_reasons</code></td><td>Stop reason for this call</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.chat.reply</code></td><td>What the model said: this call's <code>text</code> blocks joined in order, redacted, ≤2 KB. Absent when the call said nothing</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.content.truncated</code></td><td><code>true</code> when <code>nio.chat.reply</code> did not fit the 2 KB budget — the full body is then in a <code>text</code> content record</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.content.original_bytes</code> · <code>nio.content.redactions</code></td><td>Pre-truncation byte length (only when truncated) and number of secrets replaced (only when any were)</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.content.thinking_chars</code> · <code>nio.content.text_chars</code> · <code>nio.content.blocks</code></td><td>Character counts and block count for this call — the reasoning text itself goes to logs</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.chat.tool_call_ids</code></td><td>String array: the <code>gen_ai.tool.call.id</code>s this call issued. The chat → tool edge, since tool spans hang off the turn root and not off this span. Absent when the call issued no tool</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.chat.is_sidechain</code></td><td>True when the call belongs to a subagent rather than the main thread</td><td>turn close</td><td>all</td></tr>
+            <tr><td><code>nio.chat.timing</code></td><td><code>exact</code> / <code>inferred</code> / <code>synthetic</code> — how much <code>endMs − startMs</code> can be trusted</td><td>turn close</td><td>all</td></tr>
+          </tbody>
+        </table>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong><code>nio.chat.timing</code> is not decoration.</strong> <code>exact</code> means both ends are platform-reported (Codex, opencode). <code>inferred</code> means the start is real and the end is borrowed from the next call's start (Claude Code, Pi). <code>synthetic</code> means the duration is fabricated (OpenClaw, Hermes, and the last call of a Claude Code batch, which has no successor to borrow from). A consumer that cannot tell them apart reads a synthetic zero-duration span as "the model answered instantly".</p>
+        <div class="callout warn">
+          <div class="title">Known limitation · Hermes replays its history</div>
+          <p>Every <code>post_llm_call</code> payload carries the <em>entire</em> <code>conversation_history</code>, and each one closes a turn — so a call that happened three turns ago is reconstructed again into each later turn's tree. Chat spans and their content records therefore repeat across a Hermes session. Dedupe on <code>gen_ai.response.id</code> at query time when counting calls.</p>
+        </div>
 
         <h2 id="span-tool">Span: <code>execute_tool &lt;name&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— tool span</span></h2>
-        <p>One per tool invocation. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).</p>
+        <p>One per tool invocation, exported the moment the tool finishes and hung directly off the turn root. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on the hook platforms, since the pre-side process is gone).</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
             <tr><td><code>gen_ai.operation.name</code></td><td>Constant <code>execute_tool</code></td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name (<code>Bash</code>, <code>WebFetch</code>, …)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.type</code></td><td>Tool type, when known</td><td>PostToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on Claude Code, <code>toolCallId</code> on OpenClaw)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on Claude Code, <code>toolCallId</code> on OpenClaw / Pi, <code>callID</code> on opencode). Also the join key back to the <code>chat</code> span that issued this call</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
+            <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse (in-process) · PostToolUse (hook platforms)</td><td>all</td></tr>
+            <tr><td><code>nio.content.truncated</code> · <code>nio.content.original_bytes</code> · <code>nio.content.redactions</code></td><td>Set when the arguments did not fit the 2 KB budget — the full body is then in a <code>tool_input</code> content record, and <strong>only</strong> then</td><td>PostToolUse · guard deny path</td><td>hook platforms</td></tr>
+            <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB. <strong>The hook platforms do not set this</strong> — their tool output travels as a <code>tool_output</code> content record instead</td><td>PostToolUse</td><td>in-process platforms only</td></tr>
             <tr><td><code>nio.tool.error</code></td><td>Error message when the tool failed</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.tool.duration_ms</code></td><td>Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use <code>nio.guard.eval_ms</code> instead)</td><td>PostToolUse</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.tool.run_id</code></td><td>OpenClaw-internal run identifier</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PostToolUse</td><td>all</td></tr>
-            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>codex</code> / <code>hermes</code> / <code>openclaw</code> / <code>pi</code> / <code>opencode</code></td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>PostToolUse (when set)</td><td>all</td></tr>
             <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>confirm_allowed</code> / <code>confirm_denied</code></td><td>PreToolUse</td><td>all</td></tr>
@@ -114,19 +166,20 @@
             <tr><td><code>nio.guard.phase_stopped</code></td><td>Phase that produced the verdict (<code>0</code> = tool-gate, <code>1</code>–<code>6</code> = runtime pipeline)</td><td>PreToolUse</td><td>all</td></tr>
             <tr><td><code>nio.guard.top_finding_rule</code></td><td><code>rule_id</code> of the highest-ranked finding (when any fired)</td><td>PreToolUse</td><td>all</td></tr>
             <tr><td><code>nio.guard.eval_ms</code></td><td>Wall-clock cost of the guard evaluation (ms)</td><td>PreToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.span.reclaimed</code> · <code>nio.span.reclaim_reason</code></td><td><code>true</code> / <code>no_post_tool_event</code> on a span the turn flush had to close because the host never delivered a post-side event. Absent otherwise</td><td>turn flush</td><td>in-process platforms (in practice: opencode)</td></tr>
           </tbody>
         </table>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied; <code>OK</code> otherwise.</p>
-        <p style="font-size: 13px; color: var(--fg-2);"><strong>Deny / confirm-denied spans.</strong> When the guard blocks a tool, <code>PostToolUse</code> never fires — so the span is emitted synchronously by the same process that ran the guard (the <code>guard-hook.ts</code> PreToolUse on Claude Code / Codex; the <code>hook-cli.ts</code> <code>pre_tool_call</code> branch on Hermes; the <code>before_tool_call</code> handler in the OpenClaw plugin). Span name is the same <code>execute_tool &lt;tool&gt;</code> as the allow path — the discrimination is on <code>nio.guard.decision</code> + ERROR status + the reason in the exception message. Wall-clock starts at the real <code>evalStartMs</code> so the span duration reflects the guard window, and <code>nio.guard.eval_ms</code> carries the same value as an explicit attribute for filtering.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Span status:</strong> <code>ERROR</code> (with <code>recordException(error)</code>) when the tool failed or the guard denied / confirm-denied. Otherwise the status is left at the OTel default, <code>UNSET</code> — Nio never calls <code>setStatus(OK)</code>, and most backends render <code>UNSET</code> as "ok". A <strong>reclaimed</strong> span is also <code>UNSET</code>, but that does <em>not</em> mean it succeeded: its outcome is genuinely unknown. Treat <code>UNSET</code> as success only for spans without the reclaim marker.</p>
+        <p style="font-size: 13px; color: var(--fg-2);"><strong>Deny / confirm-denied spans.</strong> When the guard blocks a tool, <code>PostToolUse</code> never fires — so the span is emitted synchronously by the same process that ran the guard (the <code>guard-hook.ts</code> PreToolUse on Claude Code / Codex; the <code>hook-cli.ts</code> <code>pre_tool_call</code> branch on Hermes; <code>InProcessPluginRuntime.onPreTool</code>'s block path on OpenClaw / Pi / opencode). Span name is the same <code>execute_tool &lt;tool&gt;</code> as the allow path — the discrimination is on <code>nio.guard.decision</code> + ERROR status + the reason in the exception message. Wall-clock starts at the real <code>evalStartMs</code> so the span duration reflects the guard window, and <code>nio.guard.eval_ms</code> carries the same value as an explicit attribute for filtering.</p>
 
         <h2 id="span-task">Span: <code>task:execute</code> <span style="color: var(--fg-3); font-weight: 400;">— task span</span></h2>
-        <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (Claude Code, Teammates / cloud-agent flows) or <code>subagent_spawning</code> (OpenClaw); closes at the matching completion event.</p>
+        <p>One per subagent dispatch. Opens at <code>TaskCreated</code> (Claude Code, Teammates / cloud-agent flows), <code>subagent_spawning</code> (OpenClaw), or a <code>session.created</code> carrying a <code>parentID</code> (opencode); closes at the matching completion event. <strong>Pi emits no task spans at all</strong> — it has no subagent concept, so an empty task-span set is correct rather than a dropped signal.</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
             <tr><td><code>nio.task_id</code></td><td>Task id from the dispatch event</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.task_summary</code></td><td>Derived from task input (Claude Code: <code>task_input.prompt</code>; OpenClaw: empty)</td><td>TaskCreated</td><td>Claude Code + OpenClaw</td></tr>
-            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>openclaw</code></td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
+            <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>openclaw</code> / <code>opencode</code></td><td>TaskCompleted</td><td>Claude Code + OpenClaw + opencode</td></tr>
             <tr><td><code>nio.session_id</code></td><td>Host session id</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at task start</td><td>TaskCompleted</td><td>Claude Code + OpenClaw</td></tr>
@@ -138,7 +191,8 @@
         </div>
 
         <h2 id="state">Trace state lifecycle</h2>
-        <p>Claude Code and Hermes spawn a fresh node process per hook event, so a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B can't share an OTEL <code>Span</code> object. Both platforms bridge state via an on-disk cache keyed by session id; pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. OpenClaw runs as a single daemon, so the equivalent state lives in an in-memory <code>Map&lt;sessionId, State&gt;</code> instead. All three platforms route through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.</p>
+        <p>Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a <code>PreToolUse</code> in process A and the matching <code>PostToolUse</code> in process B can't share an OTEL <code>Span</code> object. All three bridge state via an on-disk cache (<code>traces-state-store.json</code>): pending spans land there at pre-event time and get materialised retroactively at post-event time with the original start timestamp. The in-process platforms (OpenClaw, Pi, opencode) keep the equivalent state in an in-memory <code>Map&lt;sessionId, CollectorState&gt;</code> instead. All six route through the same trace-collector helper functions — span names and attribute keys are identical regardless of where the state was kept.</p>
+        <p>Nothing bulky is parked in it: every hook event rewrites that file whole, so a payload stored in it would be paid for on every subsequent event. Tool arguments go straight from the live hook payload to the exporter, and tool results never enter it at all.</p>
 
       </div>
 

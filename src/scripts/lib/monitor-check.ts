@@ -110,10 +110,9 @@ export function isSessionMonitored(
  * real teardown makes `forgetSession` disarm a session that is still
  * running, so `/nio monitor on` buys a single turn of capture and then
  * goes silent, leaving a store that looks as though nothing was ever
- * armed. Nothing else in the SessionEnd branch has to change: emitting
- * the session span and discarding the turn state per turn is
- * self-correcting, but deleting the user's arm is not — nothing
- * re-creates it.
+ * armed. Nothing else in the SessionEnd branch has to change: closing
+ * the turn per turn is self-correcting — the next event re-opens one —
+ * but deleting the user's arm is not, because nothing re-creates it.
  *
  * These platforms fall back to `SESSION_TTL_MS`, exactly as Codex already
  * does — it has no session-end hook at all — plus `/nio monitor off`,

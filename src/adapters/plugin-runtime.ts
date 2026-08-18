@@ -44,7 +44,7 @@ import {
   type CollectorState,
 } from '../scripts/lib/traces-collector.js';
 import { createMeterProvider } from '../scripts/lib/metrics-collector.js';
-import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
+import { createLoggerProvider, flushLogRecords } from '../scripts/lib/logs-collector.js';
 import { evaluateHook } from './hook-engine.js';
 import {
   ensureTurn,
@@ -148,6 +148,66 @@ export interface PluginRuntimeOptions {
  * was wrong for any streaming platform — see `recordConversationEvent`.
  */
 const MAX_CONVERSATION_EVENTS = 200;
+
+/**
+ * Every OTLP provider the runtime built ITSELF — never an injected one.
+ *
+ * These providers own background export timers
+ * (`PeriodicExportingMetricReader` at 1 s, both BatchProcessors at 1 s)
+ * that run until the provider is shut down or the process dies. In
+ * production that is the documented, deliberate lifetime: one runtime
+ * per host process, and cumulative metric semantics need the reader to
+ * outlive any one session.
+ *
+ * In a TEST process it is a leak with teeth. A test that points the
+ * runtime at a loopback OTLP sink and then closes that sink leaves the
+ * reader exporting once a second into a dead port forever. Each attempt
+ * opens a fresh TCP connect — a REF'D libuv handle — so the event loop
+ * never drains and the `node --test` worker never exits. All its tests
+ * have passed; the process simply hangs, and with it the whole run.
+ * That is not hypothetical: it was the cause of the intermittent
+ * multi-minute `pnpm test` hangs, caught with the worker still spinning
+ * on `ECONNREFUSED` against two already-closed ports.
+ *
+ * The registry exists so a test can undo exactly what it caused. It
+ * holds only runtime-built providers, so shutting it down can never
+ * tear down a provider the test injected and still wants to read.
+ */
+const runtimeBuiltProviders = new Set<{ shutdown(): Promise<void> }>();
+
+/**
+ * Shut down every provider the runtime built itself, and forget them.
+ *
+ * TEST TEARDOWN ONLY. Call it before closing the loopback OTLP sink a
+ * test stood up, so the final export still has somewhere to land and no
+ * export timer outlives the sink. Safe to call when nothing was built —
+ * it is then a no-op — and safe to call twice.
+ *
+ * Failures are swallowed on purpose: teardown must not turn a passing
+ * test red because an exporter could not reach a socket that the test
+ * is in the middle of taking away.
+ */
+export async function shutdownRuntimeBuiltProviders(): Promise<void> {
+  const providers = [...runtimeBuiltProviders];
+  runtimeBuiltProviders.clear();
+  await Promise.all(providers.map(p => p.shutdown().catch(() => undefined)));
+}
+
+/**
+ * How many runtime-built providers are currently live. The invariant a
+ * teardown helper asserts: zero once the sink is gone.
+ */
+export function runtimeBuiltProviderCount(): number {
+  return runtimeBuiltProviders.size;
+}
+
+/** Record a provider the runtime built itself; `null` means none was. */
+function trackRuntimeBuiltProvider<T extends { shutdown(): Promise<void> } | null>(
+  provider: T,
+): T {
+  if (provider) runtimeBuiltProviders.add(provider);
+  return provider;
+}
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
 
@@ -371,9 +431,9 @@ export class InProcessPluginRuntime {
     if (this.opts.tracerProvider !== undefined) return this.opts.tracerProvider;
     if (this.tracerProviderCache === undefined) {
       try {
-        this.tracerProviderCache = createTracerProvider(
+        this.tracerProviderCache = trackRuntimeBuiltProvider(createTracerProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.tracerProviderCache = null;
       }
@@ -385,9 +445,9 @@ export class InProcessPluginRuntime {
     if (this.opts.meterProvider !== undefined) return this.opts.meterProvider;
     if (this.meterProviderCache === undefined) {
       try {
-        this.meterProviderCache = createMeterProvider(
+        this.meterProviderCache = trackRuntimeBuiltProvider(createMeterProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.meterProviderCache = null;
       }
@@ -400,9 +460,9 @@ export class InProcessPluginRuntime {
     if (this.config.collector?.logs?.enabled === false) return null;
     if (this.loggerProviderCache === undefined) {
       try {
-        this.loggerProviderCache = createLoggerProvider(
+        this.loggerProviderCache = trackRuntimeBuiltProvider(createLoggerProvider(
           this.getCollectorConfig(), this.platform, this.agentName,
-        );
+        ));
       } catch {
         this.loggerProviderCache = null;
       }
@@ -626,7 +686,13 @@ export class InProcessPluginRuntime {
     // exporter for a session nobody armed" the gate exists to prevent.
     if (!monitored) return;
     const loggerProvider = this.getLoggerProvider();
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // `flushLogRecords`, not a bare `forceFlush()`: the logs provider
+    // runs a BatchLogRecordProcessor (swapped in so a turn's content
+    // burst is not dropped past the OTLP exporter's 30-in-flight cap),
+    // and a batched flush REJECTS once `exportTimeoutMillis` elapses
+    // against a collector that accepts the connection and never answers.
+    // A hung collector is not a reason to fail the host's turn boundary.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /** Per-turn flush. Idempotent: no-op when no state exists. */
@@ -657,7 +723,8 @@ export class InProcessPluginRuntime {
     // whatever provider already exists rather than resolving (and thus
     // possibly building) one.
     const loggerProvider = this.existingLoggerProvider();
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // Non-throwing flush — see `flushTurnSpans`.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   protected writeLifecycle(
@@ -781,8 +848,15 @@ export class InProcessPluginRuntime {
 
     await endTurn(tracerProvider, state, this.cwdFor(sessionId), null, calls, contentSink);
     this.sessionState.delete(sessionId);
-    await tracerProvider.forceFlush();
-    if (loggerProvider) await loggerProvider.forceFlush();
+    // `.catch()`: `endTurn` already flushed through the collector's own
+    // non-throwing helper. This belt-and-braces second flush must not be
+    // the one that throws — BatchSpanProcessor's forceFlush rejects when
+    // the export fails, and an unreachable collector is not a reason to
+    // fail the host's Stop handler.
+    await tracerProvider.forceFlush().catch(() => { /* audited at the exporter */ });
+    // Same reasoning for the logs leg: a batched flush rejects when it
+    // times out, and this runs on the host's Stop path.
+    if (loggerProvider) await flushLogRecords(loggerProvider);
   }
 
   /**

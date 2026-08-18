@@ -62,13 +62,22 @@
             </tr>
             <tr>
               <td><strong>Structured stderr</strong></td>
-              <td><code>[nio:&lt;source&gt;:&lt;kind&gt;] &lt;message&gt;</code> on the hook process's stderr, with a <code>hint:</code> continuation line.</td>
+              <td><code>[nio:&lt;source&gt;:&lt;kind&gt;] &lt;message&gt;</code> on the hook process's stderr, with <code>detail:</code> and <code>hint:</code> continuation lines.</td>
               <td>Developer debugging. Visible when running CLIs directly; partly visible inside hook contexts depending on the platform.</td>
             </tr>
           </tbody>
         </table>
 
-        <p>All three are populated unconditionally — there is no write-side deduplication. The <code>/nio report</code> reader collapses repeats. This means an active OAuth misconfig will continue to log on every tool call, but the report will show one row with <code>Count: 47</code> instead of 47 noisy rows.</p>
+        <p>The audit log and the in-band channel are populated unconditionally — there is no write-side deduplication, and the <code>/nio report</code> reader collapses repeats. This means an active OAuth misconfig will continue to log on every tool call, but the report will show one row with <code>Count: 47</code> instead of 47 noisy rows.</p>
+
+        <h3 id="stderr-rate-limit">stderr is rate limited</h3>
+        <p>stderr is the only channel that writes into the <em>host's terminal</em>, and on the in-process platforms (Pi, opencode, OpenClaw) one process serves a whole session — so a fault that lasts repeats for as long as it lasts. A live Pi session produced <strong>205 identical <code>otlp_export_failed</code> lines in six minutes</strong> and buried the user's work.</p>
+        <ul>
+          <li>The <strong>first</strong> occurrence of a distinct diagnostic always prints immediately and in full. Nothing is ever silently swallowed.</li>
+          <li>Repeats within 60&nbsp;s are counted, not printed. When the window closes, one <code>suppressed N more identical in the last 60s</code> line reports the count and the next occurrence prints in full again.</li>
+          <li>&ldquo;Distinct&rdquo; includes <code>detail</code>. A <em>different</em> failure is new information and is never hidden behind an older one's window.</li>
+          <li>The audit log is untouched: every occurrence is still one JSONL line.</li>
+        </ul>
 
         <h2>The <code>Diagnostic</code> shape</h2>
         <pre><code>{
@@ -100,14 +109,15 @@
             <tr id="external_analyser-timeout"><td><code>external_analyser</code></td><td><code>timeout</code></td><td>error</td><td><code>guard.external_analyser[*].timeout</code></td><td>Request exceeded the per-endpoint <code>timeout</code>.</td></tr>
             <tr id="external_analyser-network_error"><td><code>external_analyser</code></td><td><code>network_error</code></td><td>error</td><td><code>guard.external_analyser[*].endpoint</code></td><td>DNS / connection refused / TLS error.</td></tr>
             <tr id="external_analyser-response_invalid"><td><code>external_analyser</code></td><td><code>response_invalid</code></td><td>error</td><td><code>guard.external_analyser[*].endpoint</code></td><td>Endpoint returned 200 but the body didn't match the required schema (<code>{ "score": number, "reason"?: string }</code>). <code>detail</code> includes a body preview so you can compare expected vs actual. See <a href="phases/phase-6-external.html#response-contract">Phase 6 → Response contract</a>.</td></tr>
-            <tr id="collector-otlp_export_failed"><td><code>collector</code></td><td><code>otlp_export_failed</code></td><td>warning</td><td><code>collector.endpoint</code></td><td>OTLP exporter couldn't deliver telemetry.</td></tr>
-            <tr id="collector-collector_core_error"><td><code>collector</code></td><td><code>collector_core_error</code></td><td>warning</td><td>—</td><td>collector-core failed to process a hook event (rare, indicates a bug or malformed input).</td></tr>
+            <tr id="collector-otlp_export_failed"><td><code>collector</code></td><td><code>otlp_export_failed</code></td><td>warning</td><td><code>collector.endpoint</code></td><td>An OTLP export did not succeed. Read <code>detail</code> before <code>hint</code>: <code>Concurrent export limit reached</code> means the exporter refused to send (its 30-slot in-flight queue was full) and no request ever reached the network — the endpoint's health is irrelevant to that failure. <code>Request timed out</code> means the request was sent but unanswered within <code>collector.timeout</code>. Only a connect error (<code>ECONNREFUSED</code>, DNS, TLS) actually implicates reachability.</td></tr>
+                                    <tr id="collector-collector_core_error"><td><code>collector</code></td><td><code>collector_core_error</code></td><td>warning</td><td>—</td><td>collector-core failed to process a hook event (rare, indicates a bug or malformed input).</td></tr>
             <tr id="scanner-file_read_failed"><td><code>scanner</code></td><td><code>file_read_failed</code></td><td>warning</td><td>—</td><td>File walker couldn't read a file. Usually permissions or symlink loops.</td></tr>
           </tbody>
         </table>
 
         <h2 id="nio-doctor"><code>/nio doctor</code></h2>
         <p>Doctor is the canonical place to validate a config change. Unlike <code>/nio report</code> (which reads the audit log), doctor actually executes the network checks live — it acquires a real OAuth token against each enabled <code>external_analyser</code> entry and re-runs schema validation on the on-disk YAML. Run it after every config edit, or when something doesn't behave the way you expect.</p>
+        <p>Collector diagnostics only appear for a session that was armed with <a href="nio-monitor.html"><code>/nio-monitor</code></a> (or under <code>collector.monitor_all_sessions: true</code>) — an unarmed session builds no exporters, so there is nothing that can fail to export. Guard diagnostics (Phases 0–6) are independent of monitor state.</p>
         <p>Collector reachability is intentionally <strong>not</strong> probed — its config correctness is covered by the schema check, and OTLP gateways commonly require routing headers (e.g. <code>x-event-pipeline-id</code>) that a bare probe wouldn't include, producing misleading 401/403 reports. Export failures surface at runtime as <a href="#collector-otlp_export_failed"><code>collector / otlp_export_failed</code></a>.</p>
 
         <pre><code>## Nio Doctor

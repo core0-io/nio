@@ -17,7 +17,7 @@ export {};
  * prefix.
  */
 
-import { LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs';
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import { trace, ROOT_CONTEXT, TraceFlags, type Context } from '@opentelemetry/api';
 import { OTLPLogExporter as OTLPLogExporterHttp } from '@opentelemetry/exporter-logs-otlp-http';
@@ -40,12 +40,50 @@ interface AuditEntry {
 // Severity mapping
 // ---------------------------------------------------------------------------
 
+/**
+ * Nio risk level → OTel severity number. The numeric side of this map has
+ * always been right; what was wrong was writing the *key* of this map into
+ * `severityText` (see `otelSeverityText` below).
+ */
 const RISK_TO_SEVERITY: Record<string, SeverityNumber> = {
   low: SeverityNumber.INFO,
   medium: SeverityNumber.WARN,
   high: SeverityNumber.ERROR,
   critical: SeverityNumber.FATAL,
 };
+
+/**
+ * OTel severity number → the short name the log data model defines for it.
+ *
+ * `severityText` is NOT free-form as far as a backend is concerned. The
+ * OTel logs data model defines the severity range 1–24 with the names
+ * TRACE, DEBUG, INFO, WARN, ERROR, FATAL (plus numbered variants), and
+ * backends build their severity facets and filters from that vocabulary.
+ * A record emitted with `severity_text = 'low'` alongside
+ * `severity_number = 9` is self-contradictory, matches no known level,
+ * and drops out of the severity-driven views entirely — which is how 834
+ * rows sitting in the backend's store showed up as "no logs data" in its
+ * UI.
+ *
+ * Nio's risk level (`low` / `medium` / `high` / `critical`) is a
+ * different dimension: a business classification of an action, not a log
+ * level. It travels as the `nio.risk_level` attribute instead (see
+ * `auditEntryAttributes`), so both dimensions are queryable and neither
+ * pretends to be the other.
+ */
+const SEVERITY_TEXT: Record<number, string> = {
+  [SeverityNumber.TRACE]: 'TRACE',
+  [SeverityNumber.DEBUG]: 'DEBUG',
+  [SeverityNumber.INFO]: 'INFO',
+  [SeverityNumber.WARN]: 'WARN',
+  [SeverityNumber.ERROR]: 'ERROR',
+  [SeverityNumber.FATAL]: 'FATAL',
+};
+
+/** The standard OTel name for `severityNumber`; INFO for anything unmapped. */
+function otelSeverityText(severityNumber: SeverityNumber): string {
+  return SEVERITY_TEXT[severityNumber] ?? 'INFO';
+}
 
 // ---------------------------------------------------------------------------
 // Provider factory
@@ -86,8 +124,60 @@ export function createLoggerProvider(
 
   return new LoggerProvider({
     resource: buildNioResource(platform, agentName),
-    processors: [new SimpleLogRecordProcessor(exporter)],
+    // BatchLogRecordProcessor, not SimpleLogRecordProcessor. Simple
+    // starts one export per `logger.emit()`, and a turn's content sink
+    // emits the whole turn's records — thinking, text, tool_input — in
+    // one synchronous burst (`emitContentRecords`' loop below). So a
+    // turn with more than 30 content records blew straight through the
+    // OTLP exporter's in-flight cap (`otlp-exporter-base`'s
+    // `concurrencyLimit: 30`, not reachable from our config surface).
+    // The overflow was rejected by `otlp-export-delegate` with
+    // 'Concurrent export limit reached' and returned without retry or
+    // requeue — the same defect the traces signal carried until
+    // `SimpleSpanProcessor` was swapped out. Batching turns that burst
+    // into one request, so the cap is never approached.
+    processors: [new BatchLogRecordProcessor(exporter, {
+      // Must hold a whole large turn between flushes. 2048 is the SDK
+      // default and is far above the largest burst observed.
+      maxQueueSize: 2048,
+      // One request per 512 records instead of one per record.
+      maxExportBatchSize: 512,
+      // Every entry point force-flushes at its turn/session boundary, so
+      // this only bounds the worst case where a process exits between
+      // events.
+      scheduledDelayMillis: 1000,
+    })],
   });
+}
+
+/**
+ * Flush the logger provider without ever throwing.
+ *
+ * Note the asymmetry with the traces SDK, because it is easy to get
+ * backwards. `BatchSpanProcessorBase._flushOneBatch` REJECTS on a
+ * non-SUCCESS export result, which is why `traces-collector`'s
+ * `flushSpans` exists. `BatchLogRecordProcessor` does NOT: its `_export`
+ * routes a failed result to `globalErrorHandler` and resolves.
+ *
+ * The rejection vector that DOES exist is the timeout: `_flushOneBatch`
+ * wraps the export in `callWithTimeout(..., exportTimeoutMillis)`, so an
+ * endpoint that accepts the connection and never answers makes
+ * `forceFlush()` reject with 'Operation timed out'. Callers await this
+ * flush on the host's turn and session boundaries, and a collector that
+ * hangs must not take the Stop handler down with it — least of all on
+ * the guard's deny close-out, whose whole point is to survive a broken
+ * collector.
+ *
+ * Nothing is lost by swallowing: the underlying failure is already
+ * audited by `instrumentExporter`, which reports every FAILED export as
+ * an `otlp_export_failed` diagnostic with the endpoint in the hint.
+ */
+export async function flushLogRecords(provider: LoggerProvider): Promise<void> {
+  try {
+    await provider.forceFlush();
+  } catch {
+    // Already audited at the exporter. Telemetry must not throw.
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +225,15 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
   const riskLevel = entry['risk_level'];
   const riskScore = entry['risk_score'];
   const riskTags = entry['risk_tags'];
+
+  // Risk level as its own dimension, independent of the record's severity.
+  // Set ONLY when the entry actually carries one: lifecycle, hook and
+  // diagnostic entries have no risk level, and defaulting them to 'low'
+  // would invent a verdict nio never reached. Distinct from
+  // `nio.guard.risk_level` in coverage, not in meaning — the guard block
+  // below needs a `decision` too, so a `session_scan` entry (risk level,
+  // no decision) reaches an attribute only through this key.
+  if (typeof riskLevel === 'string') attrs['nio.risk_level'] = riskLevel;
   if (typeof decision === 'string' && typeof riskLevel === 'string') {
     const guard = nioGuardAttributes(
       decision,
@@ -200,11 +299,17 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
 
 export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void {
   const logger = provider.getLogger('nio-audit', '1.0.0');
-  const severityLevel = ('risk_level' in entry ? entry.risk_level : 'low') as string;
+  // An entry without a risk level is INFO — not "low risk". Only guard and
+  // scan entries carry a risk level at all; hook, lifecycle and diagnostic
+  // entries do not, and the old `'risk_level' in entry ? … : 'low'` default
+  // stamped a risk verdict on all of them.
+  const riskLevel = typeof entry['risk_level'] === 'string' ? entry['risk_level'] : undefined;
+  const severityNumber = (riskLevel !== undefined ? RISK_TO_SEVERITY[riskLevel] : undefined)
+    ?? SeverityNumber.INFO;
 
   logger.emit({
-    severityNumber: RISK_TO_SEVERITY[severityLevel] ?? SeverityNumber.INFO,
-    severityText: severityLevel,
+    severityNumber,
+    severityText: otelSeverityText(severityNumber),
     body: JSON.stringify(entry),
     attributes: auditEntryAttributes(entry),
   });
@@ -265,10 +370,10 @@ export function emitContentRecords(
   for (const record of records) {
     const context = spanContextFor({ traceId: record.traceId, spanId: record.spanId });
     logger.emit({
-      // Content is not a verdict: it carries no risk level, so it is
-      // plain INFO.
+      // Content is not a verdict: it carries no risk level, so it is plain
+      // INFO and never gets a `nio.risk_level` attribute.
       severityNumber: SeverityNumber.INFO,
-      severityText: 'INFO',
+      severityText: otelSeverityText(SeverityNumber.INFO),
       body: record.body,
       attributes: record.attributes as unknown as Record<string, string | number | boolean>,
       ...(context ? { context } : {}),

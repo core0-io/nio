@@ -127,6 +127,65 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Host-input coercion
+// ---------------------------------------------------------------------------
+
+/**
+ * Coerce one host-supplied value to a string, for ANY runtime value.
+ *
+ * ── Why this exists ──────────────────────────────────────────────────
+ *
+ * Every hook payload Nio sees is either `JSON.parse`d stdin (Claude Code,
+ * Codex, Hermes) or a live host object (the in-process runtimes: OpenClaw,
+ * Pi, opencode). Neither is schema-checked before it reaches an adapter,
+ * so a field the `HookInput` type calls a `string` may at runtime be a
+ * number, `null`, an array, a nested object, or anything else JSON can
+ * express. An `as string` cast asserts a fact nobody checked; the moment
+ * the value reaches `.startsWith` / `.slice` / `.toLowerCase` it throws.
+ *
+ * On the guard path a throw is not a telemetry defect, it is an
+ * ENFORCEMENT defect, by one of two routes. On the fork-per-event hosts
+ * (Claude Code, Codex, Hermes) nothing above `evaluateHook` catches, so
+ * the process dies carrying the decision and every host reads a dead
+ * hook as "took no action" — Claude Code's exit 1 is its NON-blocking
+ * error code, and Hermes treats empty stdout as no-action. On the
+ * in-process hosts (OpenClaw, Pi, opencode) the binding's own catch turns
+ * the same throw into an explicit fail-OPEN. Either way a `deny` degrades
+ * to an allowed dangerous action. See
+ * `src/tests/guard-decision-survives-malformed-payload.test.ts`.
+ *
+ * ── Contract ──────────────────────────────────────────────────────────
+ *
+ * Never throws. Strings pass through byte-identically (including lone
+ * surrogates and empty strings, so no caller's `|| fallback` changes
+ * meaning); `null`/`undefined` become `''` so they stay falsy exactly as
+ * the `as string` casts they replace did; objects and arrays are
+ * serialised so their content still reaches the analysers instead of
+ * arriving as `[object Object]`; everything else goes through `String()`.
+ * A value `JSON.stringify` refuses — a circular live host object, or one
+ * with a BigInt inside it — degrades to `''` rather than taking the guard
+ * down with it. (A top-level BigInt is not an object and stringifies via
+ * `String()`; depth alone never throws, V8's stringify is iterative.)
+ */
+export function asText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (value === undefined || value === null) return '';
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value) ?? '';
+    } catch {
+      return '';
+    }
+  }
+  // number / boolean / symbol / bigint / function
+  try {
+    return String(value);
+  } catch {
+    return '';
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Sensitive path detection
 // ---------------------------------------------------------------------------
 
@@ -399,6 +458,11 @@ function summariseToolInput(input: HookInput): string {
                 (toolInput as Record<string, unknown>).query;
     if (typeof url === 'string') return url;
   }
-  return JSON.stringify(toolInput).slice(0, 200);
+  // `asText`, not `JSON.stringify`, because this runs on the Phase 0 deny
+  // path (`buildGuardAuditEntry` at hook-engine.ts) OUTSIDE any try/catch:
+  // the in-process runtimes hand the adapters live host objects, and
+  // `JSON.stringify` throws on a circular one. Losing the audit summary is
+  // a data-quality problem; throwing here loses the deny itself.
+  return asText(toolInput).slice(0, 200);
 }
 

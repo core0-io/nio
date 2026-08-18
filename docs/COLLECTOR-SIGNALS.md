@@ -4,6 +4,8 @@ What Nio captures while an agent runs, organised by OTEL signal. This is the sch
 
 Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (logs signal) is the only one with a local backup; metrics and traces are OTLP-only.
 
+**All three are off until a session is armed.** Configuring `collector.endpoint` does not start collection — see [Capture gating](#capture-gating).
+
 ## Architecture
 
 The six host platforms each have their own runtime model — Claude Code, Codex, and Hermes spawn a node process per hook event; OpenClaw, Pi, and opencode load Nio in-process and stay resident — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.
@@ -159,6 +161,72 @@ Four honest caveats:
   > the full finding list and per-phase scores, which live in the audit
   > row alone.
 
+## Capture gating
+
+Nio exports nothing by default. Each of the three signals is created only
+for sessions the user explicitly armed, or for every session when
+`collector.monitor_all_sessions: true` is set.
+
+Conversation content is gated by exactly this switch on both signals it
+uses: the content records need a logger provider,
+which an unarmed session never builds, and the span attributes that carry
+small bodies (`nio.chat.reply`, `gen_ai.tool.call.arguments`) ride the
+traces provider, which an unarmed session never builds either.
+
+This gate covers only the three OTLP signals above. The guard pipeline's
+Phase 5 (`guard.llm_analyser`) and Phase 6 (`guard.external_analyser`) have
+their own, independent outbound paths — see "Two things are outside the
+gate" below — and are not affected by monitor state either way. Both ship
+disabled (`llm_analyser.enabled: false`, `external_analyser: []`), so on
+an unmodified config nothing leaves the machine through them either.
+
+Arming is `/nio-monitor on` on the platforms that install the focused
+`nio-*` skills (Claude Code, Codex, Pi, opencode) and `/nio monitor on`
+on OpenClaw and Hermes, which keep the unified `/nio` as their only entry
+point. Both forms run the same code. Claude Code is the only host whose
+session-id environment variable is verified, so everywhere else `on`
+leaves a *pending arm* that the next hook event from the same directory
+claims (60 s TTL).
+
+The gate sits **before OTEL provider creation** — an unmonitored session
+does not initialise exporters at all, so the cost is one small file read
+per hook event. This includes the SessionStart skill scanner, whose
+`session_scan` records would otherwise carry the user's installed-skill
+inventory and its risk levels off the machine before anything was armed.
+
+Two things are outside the gate:
+
+- **Guard enforcement.** Phase 0–6 risk evaluation and blocking run
+  regardless. The switch controls reporting, not enforcement. Phases 0–4
+  are local pattern/AST matching with no network I/O. Phase 5
+  (`guard.llm_analyser`) sends the content under evaluation to the
+  Anthropic API when enabled; Phase 6 (`guard.external_analyser`) issues
+  a GET-only request per configured endpoint to fetch a score, without
+  sending any evaluated content. Both are independent of monitor state
+  and both ship disabled by default (`llm_analyser.enabled: false`,
+  `external_analyser: []`).
+- **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
+  it never leaves the machine and backs `/nio report`.
+
+**One limitation, on the in-process hosts (OpenClaw · Pi · opencode).**
+These three load Nio into a long-lived host process and OTEL counters
+there are cumulative for the life of that process. A host in which no
+session has ever been armed creates no providers and exports nothing. But
+once any session has been armed and recorded a counter, the metrics
+exporter keeps re-sending its accumulated totals about once a second until
+the host restarts — disarming, session end and the arm-record deletion all
+stop *new* data being collected, but none of them can stop that timer. The
+three hook platforms (Claude Code, Codex, Hermes) run one process per hook
+event, so nothing outlives it.
+
+State lives in `${NIO_HOME}/monitored-sessions.json`, separate from
+`traces-state-store.json` — session-scoped durable state versus
+turn-scoped ephemeral state.
+
+There is **no backfill**: capture starts at the moment `/nio-monitor`
+runs. Platforms differ in whether historical session data exists at all
+(Claude Code and Codex keep session files; Hermes and OpenClaw do not),
+so retroactive capture is not offered anywhere, keeping behaviour uniform.
 ## Naming conventions
 
 - `gen_ai.*` — keys that follow the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.
@@ -234,11 +302,28 @@ Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.en
 One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix.
 
 ```text
-Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
-  ├─ Span: execute_tool <name>   (PreToolUse → PostToolUse)
-  ├─ Span: execute_tool <name>   (...)
+Trace: invoke_agent UserPromptSubmit  (root, opens at UserPromptSubmit, ends at Stop / SubagentStop)
+                                      (a host that fires no prompt event opens it at the turn's
+                                       first event instead — every branch calls ensureTurn)
+  ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
+  ├─ Span: execute_tool <name>   (exported the moment the tool finishes; a SIBLING of chat,
+  │                               joined to its issuing call by gen_ai.tool.call.id)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
 ```
+
+**Two emission clocks.** A tool span goes out at its post-side event, as a
+direct child of the turn root; only the chat layer and the turn root wait
+for `Stop` / `SubagentStop` / `SessionEnd`, because they can only be
+rebuilt from the platform's conversation source once the turn is over.
+Nesting tools under their issuing chat call was tried and reverted — it
+required parking every finished span until turn close, which made a long
+turn invisible on the backend and a mid-turn crash unreconstructable. The
+issuing call survives as DATA instead: `gen_ai.tool.call.id` on the tool
+span, against `nio.chat.tool_call_ids` on the chat span.
+
+The `chat` span's own attribute table is on the site page
+([Traces → chat](collector-signals-traces.html#span-chat)); this file
+still documents only the turn, tool and task spans.
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
@@ -417,7 +502,27 @@ Discriminator is the canonical hook event name itself: `UserPromptSubmit`, `PreT
 The flat attribute set used for OTEL Logs indexing. Same key names as the matching trace span attributes wherever a concept overlaps (tool name, conversation id, guard decision, …) — same query keys work across logs and traces.
 
 - `body` = JSON-stringified entry (full content of the JSONL line)
-- `severityNumber` / `severityText` derived from `risk_level`: `low`→INFO, `medium`→WARN, `high`→ERROR, `critical`→FATAL; INFO when no `risk_level`
+- `severityNumber` / `severityText` — always an **OTel severity**, never a nio risk level. `severityText` is one of `INFO` / `WARN` / `ERROR` / `FATAL`, and always the standard name of the record's own `severityNumber`
+- `nio.risk_level` — the nio risk level, when the entry has one
+
+**Severity and risk level are two different dimensions.** `severityNumber` /
+`severityText` are the OTel log level, and backends build their severity
+facets and filters from the names the OTel logs data model defines. Nio's
+risk level (`low` / `medium` / `high` / `critical`) is a classification of
+the *action*, not of the log record, so it travels as its own attribute:
+
+| entry carries | `severityNumber` | `severityText` | `nio.risk_level` |
+| --- | --- | --- | --- |
+| `risk_level: low` | 9 | `INFO` | `low` |
+| `risk_level: medium` | 13 | `WARN` | `medium` |
+| `risk_level: high` | 17 | `ERROR` | `high` |
+| `risk_level: critical` | 21 | `FATAL` | `critical` |
+| any other / unrecognised `risk_level` | 9 | `INFO` | the value as-is |
+| no `risk_level` (hook, lifecycle, diagnostic) | 9 | `INFO` | *absent* |
+
+An entry without a risk level is `INFO` because nio reached no verdict on
+it — not because the verdict was "low". Filter on `nio.risk_level`, not on
+severity, to find low-risk actions.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
@@ -427,6 +532,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+| `nio.risk_level` | Nio risk level of the entry — same values, but present on **any** entry carrying one, including a `session_scan` entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above | guard decision · session scan | all |
 | `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
 | `nio.guard.risk_tags` | Comma-joined rule IDs that fired | guard decision | all |
 | `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |

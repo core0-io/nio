@@ -42,7 +42,7 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import type { ResolvedMetricsConfig as CollectorConfig } from '../../adapters/common.js';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
-import { writeAuditLog } from '../../adapters/common.js';
+import { writeAuditLog, asText } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
 import { forgetSession, sessionEndDisarms } from './monitor-check.js';
 import {
@@ -60,6 +60,7 @@ import {
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
+import { lastUserMessageSince } from './conversation/claude-code-source.js';
 import type { ChatCall } from './conversation/types.js';
 import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
 import { buildSpanContent, spanCarriesWholeContent } from './content/span-content.js';
@@ -126,35 +127,124 @@ export interface DispatchOptions {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /**
+ * How far BEFORE the turn's start a transcript user message may be
+ * stamped and still count as this turn's prompt.
+ *
+ * Claude Code appends the user line to the transcript before it runs
+ * UserPromptSubmit, so the message this turn is about is always stamped
+ * EARLIER than `turn_start_ms` — which `ensureTurn` takes inside the
+ * hook itself. Measured on a live install (19 UserPromptSubmit audit
+ * entries across 6 transcripts): the transcript line leads the hook by
+ * 164–758 ms, every single time, never after. So a plain
+ * `>= turn_start_ms` filter matches nothing at all, which is exactly how
+ * this attribute stayed empty in production while looking covered.
+ *
+ * The window stays small rather than open-ended so a turn cannot adopt
+ * an unrelated older prompt — a resumed transcript, or a UserPromptSubmit
+ * whose line the host has not written yet. Roughly 7x the largest lead
+ * observed.
+ */
+const PROMPT_TRANSCRIPT_LOOKBACK_MS = 5000;
+
+/**
+ * How every metrics call in this module records its point: land it in the
+ * aggregator, do NOT wait for the wire.
+ *
+ * All three of this module's callers — `collector-hook.ts` (Claude Code /
+ * Codex), `hook-cli.ts`'s Hermes collector path and its Hermes GUARD path
+ * — wrap the whole dispatch in one shared `createFlushBudget` deadline and
+ * then end with their own budgeted `meterProvider.forceFlush()` before
+ * exiting. A metrics flush *inside* dispatch therefore adds no delivery
+ * and spends the shared budget: measured 5.07s (refused endpoint) and
+ * 5.21s (stalled endpoint) per dispatch at the default
+ * `collector.timeout: 5000`, versus ~0.2s once the flush is dropped.
+ *
+ * What that cost bought, end-to-end with metrics stalled and traces
+ * healthy: `Stop`'s `await recordTurn` burned the caller's remaining
+ * budget and the caller abandoned the dispatch, so the work sequenced
+ * after it never ran.
+ *
+ * The in-process runtime (`plugin-runtime.ts`) keeps the default — it is
+ * a long-lived daemon with no process exit to flush at — and so does
+ * `recordGuardDecision` on the guard hooks, which is bounded by
+ * `createFlushBudget` at each of its call sites instead.
+ */
+const NO_EARLY_FLUSH = { flush: false } as const;
+
+/**
+ * Coerce one tool argument to a string, for ANY runtime value.
+ *
+ * The `as string` casts this replaces were TypeScript fictions: every
+ * `tool_input` reaching this module is either `JSON.parse`d hook stdin
+ * (Claude Code / Codex / Hermes) or a live host object (the in-process
+ * runtime), and neither is schema-checked before it gets here. A model
+ * that emits `{"command": 123}` instead of `{"command": "123"}` used to
+ * reach `(123 || '').slice(0, 300)` and throw a TypeError out of
+ * `toolSummary` — see the block comment on {@link toolSummary} for what
+ * that cost.
+ *
+ * One definition, shared with the adapters: `adapters/common.ts`'s
+ * `asText` covers the same defect class on the guard-DECISION side of
+ * the same payload (`parseInput` / `buildEnvelope`). Two copies of a
+ * coercion this load-bearing would be two things to keep in step.
+ */
+const argText = asText;
+
+/**
  * Best-effort summary of a tool invocation, suitable for span attributes
  * and audit log entries. Recognises Claude Code, OpenClaw, and Hermes
  * tool names; falls back to a JSON-stringified preview for unknowns.
+ *
+ * ── This function is on the GUARD path, so it must be total ───────────
+ *
+ * On the fork-per-event hosts it is reached from three places that all
+ * run *after* the guard has decided and *before* that decision is handed
+ * to the host: `guard-hook.ts` (Claude Code / Codex, directly and through
+ * `spanKey()`), `hook-cli.ts`'s `spanKey()` (Hermes), and
+ * `dispatchCollectorEvent`'s `baseFields`, which is built OUTSIDE that
+ * function's own try/catch. A throw from any of them does not degrade
+ * telemetry — it kills the process carrying a `deny`, and every host
+ * reads a dead hook as "no action":
+ *
+ *   hermes      `{"decision":"block",…}` on stdout, exit 0
+ *                 → empty stdout, exit 1      (measured)
+ *   claude code  exit 2 + reason on stderr
+ *                 → exit 1 + a Node stack     (measured; exit 1 is
+ *                    Claude Code's NON-blocking error code)
+ *
+ * Both were reproduced end-to-end against the shipped bundles with
+ * `tool_input: { command: 123 | true | {…} }` on a `blocked_tools` deny.
+ * The in-process runtime calls it too (`plugin-runtime.ts`, on the pre
+ * side, BEFORE `evaluateHook`), where its binding's catch turns the same
+ * throw into a fail-OPEN instead. Hence `argText` on every field read: a
+ * malformed tool argument is a telemetry-quality problem, never an
+ * enforcement one.
  */
 export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
   switch (toolName) {
     // Claude Code
     case 'Bash':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'Write':
     case 'Edit':
-      return (toolInput['file_path'] as string) || (toolInput['path'] as string) || '';
+      return argText(toolInput['file_path']) || argText(toolInput['path']);
     case 'WebFetch':
     case 'WebSearch':
-      return (toolInput['url'] as string) || (toolInput['query'] as string) || '';
+      return argText(toolInput['url']) || argText(toolInput['query']);
     // Hermes
     case 'terminal':
     case 'exec':
     case 'shell':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'write_file':
     case 'patch':
     case 'read_file':
-      return (toolInput['path'] as string) || (toolInput['file_path'] as string) || '';
+      return argText(toolInput['path']) || argText(toolInput['file_path']);
     case 'fetch':
     case 'http_request':
-      return (toolInput['url'] as string) || '';
+      return argText(toolInput['url']);
     default:
-      return JSON.stringify(toolInput).slice(0, 300);
+      return argText(toolInput).slice(0, 300);
   }
 }
 
@@ -271,7 +361,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     loggerProvider = null, logsConfig,
   } = opts;
 
-  const toolName = input.tool_name ?? '';
+  // `argText`, not `?? ''`: `tool_name` is unvalidated host input and this
+  // value is read by string methods downstream. That throw is caught by
+  // this function's own try/catch, so it costs enforcement nothing — but
+  // it costs the WHOLE branch: no audit entry, no span opened or closed,
+  // for every tool call in the session that carries a non-string name.
+  const toolName = argText(input.tool_name);
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
   const transcriptPath = input.transcript_path ?? null;
@@ -310,10 +405,24 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     if (event === 'UserPromptSubmit') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      if (tracerProvider && input.prompt) {
+      if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
-        state = recordUserPrompt(state, input.prompt);
+        // Prefer the payload when the platform provides the text: of the
+        // three hosts that reach this dispatcher, Hermes does (it lifts
+        // `extra.user_message` in `hermesToCollectorInput`). Claude Code
+        // and Codex never do — Claude Code sends `prompt_id` — so fall
+        // back to the transcript, the only place the text exists. No other
+        // platform's session file uses `type: 'user'` entries, so the
+        // fallback cannot mis-fire on one. (The in-process hosts never get
+        // here: they call `recordUserPrompt` directly.)
+        const promptText = input.prompt
+          ?? (transcriptPath
+            ? lastUserMessageSince(
+                transcriptPath, state.turn_start_ms - PROMPT_TRANSCRIPT_LOOKBACK_MS,
+              )
+            : null);
+        if (promptText) state = recordUserPrompt(state, promptText);
         saveState(logsConfig, state);
       }
 
@@ -334,7 +443,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'PostToolUse') {
@@ -411,13 +520,19 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, toolName, event);
+        await recordToolUse(meterProvider, toolName, event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCreated') {
       const taskId = input.task_id ?? spanKey(input);
-      const prompt = input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {});
-      const summary = (prompt as string).slice(0, 300);
+      // `argText`, not `as string`: a `task_input.prompt` that is not a
+      // string used to throw here. Caught by this function's try/catch, so
+      // again no enforcement cost — but the throw happens BEFORE
+      // `writeAuditLog`, so the whole TaskCreated record and its span were
+      // lost rather than degraded.
+      const summary = argText(
+        input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {}),
+      ).slice(0, 300);
 
       writeAuditLog(
         { event, ...baseFields, task_id: taskId, task_summary: summary },
@@ -432,7 +547,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'TaskCompleted') {
@@ -453,7 +568,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordToolUse(meterProvider, 'Task', event);
+        await recordToolUse(meterProvider, 'Task', event, NO_EARLY_FLUSH);
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
@@ -486,7 +601,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
       if (meterProvider) {
-        await recordTurn(meterProvider);
+        await recordTurn(meterProvider, NO_EARLY_FLUSH);
       }
 
       if (event === 'SessionEnd' && sessionEndDisarms(platform)) {
