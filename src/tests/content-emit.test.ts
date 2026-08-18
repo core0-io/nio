@@ -3,7 +3,9 @@
 
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { buildContentRecords, buildToolInputRecord } from '../scripts/lib/content/emit.js';
+import {
+  buildContentRecords, buildToolInputRecord, buildToolOutputRecord,
+} from '../scripts/lib/content/emit.js';
 import type { ChatCall, ContentBlock } from '../scripts/lib/conversation/types.js';
 import type { ContentLimits } from '../scripts/lib/content/truncate.js';
 
@@ -90,12 +92,9 @@ describe('buildContentRecords — shape and ordering', () => {
   });
 
   it('a tool_use block produces no record at all — its arguments belong to the tool span', () => {
-    // The defect this pins: while these blocks produced records, a tool
-    // call in a session with a conversation source shipped its arguments
-    // THREE times — the tool span attribute, the out-of-band record its
-    // post-side event emits, and this. This module runs at end of turn
-    // from replayed history and cannot see whether a span carried them,
-    // so it emits nothing and the span site decides (see emit.ts).
+    // This module replays history at end of turn and cannot see whether
+    // a span carried the arguments, so it emits nothing and the span
+    // site decides (see emit.ts).
     const call = makeCall([
       { type: 'text', index: 0, content: LONG_TEXT },
       {
@@ -108,8 +107,7 @@ describe('buildContentRecords — shape and ordering', () => {
         type: 'tool_use',
         index: 2,
         // Over the 2 KB span budget: size does not resurrect the block
-        // producer either. The out-of-band record is the log-side owner
-        // at every size.
+        // producer either.
         content: 'a'.repeat(9_000),
         toolUse: { id: 'tool-big', name: 'Bash', input: '{}' },
       },
@@ -222,6 +220,25 @@ describe('buildContentRecords — redact-before-truncate ordering', () => {
       !rec!.body.includes('AKIA'),
       `expected no secret fragment in truncated body, got: ${rec!.body}`
     );
+  });
+
+  it('applies the same order on the out-of-band tool records', () => {
+    // Same geometry as above, against the other builder: the hook-driven
+    // path has its own redact/truncate pair, so it has to be pinned
+    // separately or reversing it there goes unnoticed.
+    const content = `${'x'.repeat(5)}${SECRET}${'y'.repeat(3_000)}`;
+    const limits: ContentLimits = { ...GENEROUS_LIMITS, tool_input: 29, tool_output: 29 };
+
+    for (const rec of [
+      buildToolInputRecord(content, 's', 't', limits, 'tool-1'),
+      buildToolOutputRecord(content, 's', 't', limits, 'tool-1'),
+    ]) {
+      assert.equal(rec!.attributes['nio.content.truncated'], true);
+      assert.ok(
+        !rec!.body.includes('AKIA'),
+        `expected no secret fragment in truncated body, got: ${rec!.body}`
+      );
+    }
   });
 });
 

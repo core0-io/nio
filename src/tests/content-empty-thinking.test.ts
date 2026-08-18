@@ -4,18 +4,12 @@
 /**
  * Regression: content records with an empty body must not be emitted.
  *
- * Measured live on 2026-08-06 against SigNoz: every `thinking` content
- * record on the wire had a zero-length body (21/21), while `text`,
- * `tool_input` and `tool_output` had none. The cause is upstream of nio —
- * that Claude Code session's transcript held 382 `thinking` blocks, all
- * with `thinking: ""` and only `signature` populated — but the behaviour
- * here was still wrong: the record went out carrying
- * `nio.content.fidelity = 'full'`, which reads downstream as "the model
- * reasoned, and its reasoning was blank".
- *
- * The fixtures below therefore use the shape the host actually writes —
- * a thinking block whose `content` is `''` — because the pre-existing
- * emit tests could not express it: every fixture block had text.
+ * Claude Code writes `thinking` blocks with `thinking: ""` and only
+ * `signature` populated. Emitted as-is, each carried
+ * `nio.content.fidelity = 'full'` and read downstream as "the model
+ * reasoned, and its reasoning was blank". The fixtures below use that
+ * shape — a block whose `content` is `''` — which the other emit tests
+ * cannot express, since every fixture block there has text.
  */
 
 import assert from 'node:assert/strict';
@@ -49,7 +43,6 @@ function makeCall(blocks: ContentBlock[]): ChatCall {
 
 describe('empty content records are not emitted', () => {
   it('emits no record for a thinking block with no text', () => {
-    // Exactly what Claude Code writes: signature only, body empty.
     const call = makeCall([
       { type: 'thinking', index: 0, content: '', fidelity: 'full' },
       { type: 'text', index: 1, content: LONG_TEXT },

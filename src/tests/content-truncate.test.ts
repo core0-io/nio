@@ -29,6 +29,9 @@ function withNioHome<T>(yamlBody: string, fn: () => T): T {
   }
 }
 
+/** Same suffix `truncateContent` appends; 14 UTF-8 bytes. */
+const MARKER = '…[truncated]';
+
 describe('truncateContent', () => {
   it('returns text unchanged when under the limit', () => {
     const s = 'hello world';
@@ -63,13 +66,26 @@ describe('truncateContent', () => {
   });
 
   it('never splits a multi-byte character', () => {
-    // 每个中文字 3 字节；把上限设在字符边界之间
+    // Each CJK character is 3 UTF-8 bytes and the marker is 14, so these
+    // limits put the remaining budget at 4..8 bytes — deliberately not a
+    // multiple of 3, so a byte-slicing implementation is forced to cut
+    // mid-sequence at least once.
+    //
+    // Asserting a UTF-8 round-trip would NOT catch that: a split
+    // sequence decodes to U+FFFD, and U+FFFD itself round-trips
+    // happily. The kept text has to be checked against the input.
     const s = '中'.repeat(10); // 30 bytes
-    const { text, truncated } = truncateContent(s, 20);
-    assert.equal(truncated, true);
-    // 截断结果必须能安全地往返一次 UTF-8 编解码
-    assert.equal(Buffer.from(text, 'utf-8').toString('utf-8'), text);
-    assert.ok(Buffer.byteLength(text, 'utf-8') <= 20);
+    for (const limit of [18, 19, 20, 21, 22]) {
+      const { text, truncated } = truncateContent(s, limit);
+      assert.equal(truncated, true, `limit ${limit}: expected truncation`);
+      const kept = text.slice(0, text.length - MARKER.length);
+      assert.ok(!kept.includes('�'), `limit ${limit}: cut fell mid-character`);
+      assert.ok(s.startsWith(kept), `limit ${limit}: kept text must be a prefix of the input`);
+      assert.ok(
+        Buffer.byteLength(text, 'utf-8') <= limit,
+        `limit ${limit}: got ${Buffer.byteLength(text, 'utf-8')} bytes`,
+      );
+    }
   });
 
   it('handles empty string', () => {

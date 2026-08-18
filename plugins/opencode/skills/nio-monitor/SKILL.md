@@ -66,13 +66,15 @@ The CLI prints JSON.
 
 When a session is armed, these are exported to the configured OTLP endpoint:
 
-- **traces** — one turn span per prompt and one span per tool call, carrying the redacted user prompt that opened the turn (`nio.turn.user_prompt`), the tool arguments, and the guard decision
+- **traces** — one turn span per prompt, one `chat` span per LLM call, and one span per tool call. These carry the redacted user prompt that opened the turn (`nio.turn.user_prompt`), the model / token usage / finish reason of each LLM call, the guard decision, and — because small content rides the span rather than the logs — **what the model said** (`nio.chat.reply`, ≤2 KB) and **the arguments each tool was called with** (`gen_ai.tool.call.arguments`, ≤2 KB)
 - **metrics** — tool-use, turn, and guard-decision counters plus a risk-score histogram
-- **logs** — audit records (guard, scan, lifecycle and hook events)
+- **logs** — audit records (guard, scan, lifecycle and hook events), **plus the conversation content that does not fit on a span**: model reasoning ("thinking") and tool output always, and the reply / tool arguments whenever they exceeded the 2 KB span budget. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
+
+Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
 
 When it is not armed, none of the above leave the machine.
 
-**This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending the prompt that opened each turn and the arguments every tool was called with, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.
+**This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read/wrote, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.
 
 ## Known Limitation on the In-Process Hosts (OpenClaw · Pi · opencode)
 
