@@ -29,6 +29,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { createLoggerProvider } from '../scripts/lib/logs-collector.js';
 
 /** Thrown to stop a tool call. Must escape the before-hook. */
 export class NioBlockedError extends Error {
@@ -93,6 +94,14 @@ export interface OpenCodePluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /**
+   * Same seam for the logs signal. Needed on top of `tracerProvider`
+   * because conversation CONTENT (the assistant's words, the tool
+   * arguments off a `tool_use` block) rides the logs signal, not the
+   * spans — without this a test can see opencode's chat spans but not
+   * whether anything was ever said inside them.
+   */
+  loggerProvider?: ReturnType<typeof createLoggerProvider>;
 }
 
 export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePlugin {
@@ -108,6 +117,16 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       nioFactory: options.nioFactory,
       tracerProvider: options.tracerProvider,
       meterProvider: options.meterProvider,
+      loggerProvider: options.loggerProvider,
+      // The project directory this plugin instance serves. opencode
+      // builds one plugin per directory and hands it here, so it is the
+      // working directory of every session this runtime sees — unlike
+      // `process.cwd()`, which is wherever the opencode server was
+      // started and is shared by every project it serves. The monitor
+      // gate matches a pending arm by directory, so keying sessions on
+      // the server's launch directory would let one project's session
+      // claim an arm made in another.
+      defaultCwd: input.directory,
     });
 
     /** Guard verdicts parked by callID so permission.ask can reuse them. */
@@ -299,6 +318,20 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                 };
               } | undefined;
               if (info?.role !== 'assistant' || !info.sessionID) return;
+              // opencode has no session file a plugin can read back, so
+              // the assistant envelope is accumulated here and replayed
+              // by createOpenCodeSource at end of turn. It is a snapshot,
+              // republished on every change to the same message, so it is
+              // handed over under a dedup key: the runtime keeps only the
+              // latest snapshot per message id, in the slot the first one
+              // claimed. That is the same collapse createOpenCodeSource
+              // performs at read time — done at ingest so the runtime's
+              // per-session cap counts LLM calls rather than the number
+              // of times opencode happened to republish them.
+              rt.recordConversationEvent(
+                info.sessionID, { kind: 'message', info },
+                info.id ? `message:${info.id}` : undefined,
+              );
               // message.updated is a cumulative SNAPSHOT, republished on
               // every change to the same message — unlike Pi's
               // message_end, which fires once. Without a message id to
@@ -324,6 +357,30 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
               }
               return;
             }
+            case 'message.part.updated': {
+              // The parts ARE the assistant's content — reasoning, text
+              // and tool calls. Like the envelope they are snapshots (a
+              // streaming text part is re-emitted per chunk carrying the
+              // full text so far), so they go over under a `part:<id>`
+              // dedup key for the same reason: this is the stream that
+              // dominates the event count on a real turn — one delivery
+              // per chunk — and letting it consume one cap slot per
+              // chunk is what evicted the turn's earliest chat spans.
+              // Both the runtime and the source collapse by part id, so
+              // the reconstructed blocks are identical either way.
+              //
+              // Routed by `sessionID` (which runtime session owns it) but
+              // grouped by `messageID` inside the source (which call it
+              // belongs to) — a part without a session id has nowhere to
+              // go and is dropped here.
+              const part = props.part as { id?: string; sessionID?: string } | undefined;
+              if (!part?.sessionID) return;
+              rt.recordConversationEvent(
+                part.sessionID, { kind: 'part', part },
+                part.id ? `part:${part.id}` : undefined,
+              );
+              return;
+            }
             default:
               return;
           }
@@ -339,7 +396,12 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
           },
           async execute(args) {
             try {
-              return await rt.dispatchCommand((args.command as string) ?? '');
+              // The project directory, not the server's launch
+              // directory: `monitor on` keys its arm to this, and the
+              // gate hands that arm only to a session working here.
+              return await rt.dispatchCommand((args.command as string) ?? '', {
+                cwd: input.directory,
+              });
             } catch (err) {
               const msg = err instanceof Error ? err.stack || err.message : String(err);
               return `[nio_command error] ${msg}`;
