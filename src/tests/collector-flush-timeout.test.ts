@@ -33,8 +33,8 @@
  * host kills the hook before the block decision is ever written and a
  * dangerous action is allowed through.
  *
- * Environment caveat (same as guard-hook-flush-timeout.test.ts and
- * guard-hook-flush-timeout.test.ts): discriminating power depends on
+ * Environment caveat (same as guard-hook-flush-timeout.test.ts):
+ * discriminating power depends on
  * connect() to 192.0.2.1 actually blocking rather than failing fast. On a
  * host whose network RSTs or ICMP-unreachables it immediately, the
  * unbounded version would also return quickly and these tests pass

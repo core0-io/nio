@@ -277,7 +277,6 @@ Four instruments emitted via OTLP to `<endpoint>/v1/metrics`.
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | every metric | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
-| `nio.risk_level` | Nio risk level of the entry — same values, but present on **any** entry carrying one, including a `session_scan` entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above | guard decision · session scan | all |
 
 ### Label sets per instrument
 
@@ -303,11 +302,28 @@ Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.en
 One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix.
 
 ```text
-Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
-  ├─ Span: execute_tool <name>   (PreToolUse → PostToolUse)
-  ├─ Span: execute_tool <name>   (...)
+Trace: invoke_agent UserPromptSubmit  (root, opens at UserPromptSubmit, ends at Stop / SubagentStop)
+                                      (a host that fires no prompt event opens it at the turn's
+                                       first event instead — every branch calls ensureTurn)
+  ├─ Span: chat <model>          (one per LLM call, reconstructed at turn close)
+  ├─ Span: execute_tool <name>   (exported the moment the tool finishes; a SIBLING of chat,
+  │                               joined to its issuing call by gen_ai.tool.call.id)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
 ```
+
+**Two emission clocks.** A tool span goes out at its post-side event, as a
+direct child of the turn root; only the chat layer and the turn root wait
+for `Stop` / `SubagentStop` / `SessionEnd`, because they can only be
+rebuilt from the platform's conversation source once the turn is over.
+Nesting tools under their issuing chat call was tried and reverted — it
+required parking every finished span until turn close, which made a long
+turn invisible on the backend and a mid-turn crash unreconstructable. The
+issuing call survives as DATA instead: `gen_ai.tool.call.id` on the tool
+span, against `nio.chat.tool_call_ids` on the chat span.
+
+The `chat` span's own attribute table is on the site page
+([Traces → chat](collector-signals-traces.html#span-chat)); this file
+still documents only the turn, tool and task spans.
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
@@ -516,6 +532,7 @@ severity, to find low-risk actions.
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
 | `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
+| `nio.risk_level` | Nio risk level of the entry — same values, but present on **any** entry carrying one, including a `session_scan` entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above | guard decision · session scan | all |
 | `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
 | `nio.guard.risk_tags` | Comma-joined rule IDs that fired | guard decision | all |
 | `nio.tool_summary` | One-line summary derived from tool input | PreToolUse · PostToolUse | all |

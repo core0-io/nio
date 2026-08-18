@@ -27,8 +27,9 @@
  * deadline costs no wall-clock time.
  *
  * A companion end-to-end case lives in `collector-flush-timeout.test.ts`
- * ("honours the backstop even when collector.timeout is far larger"),
- * which spawns the real bundle with `collector.timeout: 30000`.
+ * ("a large collector.timeout does NOT lengthen the freeze — the backstop
+ * still wins"), which spawns the real bundle with
+ * `collector.timeout: 30000`.
  */
 
 import { describe, it } from 'node:test';

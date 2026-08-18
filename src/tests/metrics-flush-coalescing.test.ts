@@ -50,7 +50,7 @@
 import { after, describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import type { AddressInfo, Socket } from 'node:net';
 import { gunzipSync } from 'node:zlib';
 import { mkdtempSync, readFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -97,6 +97,18 @@ interface SinkState {
   requests: number;
   peakInFlight: number;
   bodies: Buffer[];
+  /**
+   * Tear the sink down for real: destroy every socket the exporter's
+   * keep-alive agent is still holding, THEN await `server.close()`.
+   *
+   * A bare `server.close()` neither drops those sockets nor waits, so a
+   * meter provider that outlives it keeps its 1 s
+   * `PeriodicExportingMetricReader` connecting into a dead port — a ref'd
+   * libuv handle per attempt, and the `node --test` worker never exits.
+   * That is the exact leak `plugin-runtime-provider-lifetime.test.ts`
+   * exists to prevent; this file must not reintroduce it.
+   */
+  close(): Promise<void>;
 }
 
 async function startSink(delayMs: number): Promise<SinkState> {
@@ -106,6 +118,7 @@ async function startSink(delayMs: number): Promise<SinkState> {
     bodies: [],
   };
   let inFlight = 0;
+  const sockets = new Set<Socket>();
   const server = createServer((req, res) => {
     inFlight += 1;
     state.requests += 1;
@@ -121,9 +134,17 @@ async function startSink(delayMs: number): Promise<SinkState> {
       }, delayMs);
     });
   });
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   state.server = server;
   state.port = (server.address() as AddressInfo).port;
+  state.close = async (): Promise<void> => {
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  };
   return state as SinkState;
 }
 
@@ -196,61 +217,65 @@ describe('metrics flush coalescing', () => {
   it('does not stack concurrent exports against the exporter concurrency limit', async () => {
     const sink = await startSink(SINK_DELAY_MS);
     const provider = createMeterProvider(configFor(sink.port), 'openclaw', 'coalesce-test');
-    assert.ok(provider, 'meter provider must be built for a configured endpoint');
+    try {
+      assert.ok(provider, 'meter provider must be built for a configured endpoint');
 
-    // The in-process runtime's per-tool-event pattern, with events
-    // overlapping: two unawaited flushes plus one awaited, none of which
-    // waits for the previous event.
-    const pending: Array<Promise<unknown>> = [];
-    for (let i = 0; i < TOOL_EVENTS; i += 1) {
-      pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
-      pending.push(recordGuardDecision(provider!, 'allow', 'low', 0.1, 'Bash').catch(() => {}));
-      pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      // The in-process runtime's per-tool-event pattern, with events
+      // overlapping: two unawaited flushes plus one awaited, none of which
+      // waits for the previous event.
+      const pending: Array<Promise<unknown>> = [];
+      for (let i = 0; i < TOOL_EVENTS; i += 1) {
+        pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
+        pending.push(recordGuardDecision(provider!, 'allow', 'low', 0.1, 'Bash').catch(() => {}));
+        pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      }
+      await Promise.all(pending);
+
+      const lines = diagnosticLines();
+      const concurrencyRejections = lines.filter((l) => l.includes('Concurrent export limit reached'));
+
+      assert.equal(
+        concurrencyRejections.length,
+        0,
+        `exporter refused ${concurrencyRejections.length} export(s) for a full in-flight queue against a healthy sink`,
+      );
+      assert.ok(
+        sink.peakInFlight <= MAX_ACCEPTABLE_IN_FLIGHT,
+        `peak in-flight metrics exports was ${sink.peakInFlight}, expected <= ${MAX_ACCEPTABLE_IN_FLIGHT}`,
+      );
+    } finally {
+      await provider?.shutdown().catch(() => {});
+      await sink.close();
     }
-    await Promise.all(pending);
-
-    const lines = diagnosticLines();
-    const concurrencyRejections = lines.filter((l) => l.includes('Concurrent export limit reached'));
-
-    await provider!.shutdown().catch(() => {});
-    sink.server.close();
-
-    assert.equal(
-      concurrencyRejections.length,
-      0,
-      `exporter refused ${concurrencyRejections.length} export(s) for a full in-flight queue against a healthy sink`,
-    );
-    assert.ok(
-      sink.peakInFlight <= MAX_ACCEPTABLE_IN_FLIGHT,
-      `peak in-flight metrics exports was ${sink.peakInFlight}, expected <= ${MAX_ACCEPTABLE_IN_FLIGHT}`,
-    );
   });
 
   it('still puts every recorded point on the wire', async () => {
     const sink = await startSink(SINK_DELAY_MS);
     const provider = createMeterProvider(configFor(sink.port), 'openclaw', 'coalesce-total');
-    assert.ok(provider);
+    try {
+      assert.ok(provider);
 
-    const pending: Array<Promise<unknown>> = [];
-    for (let i = 0; i < TOOL_EVENTS; i += 1) {
-      pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
-      pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      const pending: Array<Promise<unknown>> = [];
+      for (let i = 0; i < TOOL_EVENTS; i += 1) {
+        pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
+        pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      }
+      await Promise.all(pending);
+
+      const total = lastToolUseTotal(sink.bodies);
+
+      // Cumulative temporality: the last export carries the running total,
+      // so coalescing must not cost a single increment.
+      assert.equal(
+        total,
+        TOOL_EVENTS * 2,
+        `last exported nio.tool_use.count total was ${total}, expected ${TOOL_EVENTS * 2}`,
+      );
+      assert.ok(sink.requests > 0, 'at least one export must reach the sink');
+    } finally {
+      await provider?.shutdown().catch(() => {});
+      await sink.close();
     }
-    await Promise.all(pending);
-
-    const total = lastToolUseTotal(sink.bodies);
-
-    await provider!.shutdown().catch(() => {});
-    sink.server.close();
-
-    // Cumulative temporality: the last export carries the running total,
-    // so coalescing must not cost a single increment.
-    assert.equal(
-      total,
-      TOOL_EVENTS * 2,
-      `last exported nio.tool_use.count total was ${total}, expected ${TOOL_EVENTS * 2}`,
-    );
-    assert.ok(sink.requests > 0, 'at least one export must reach the sink');
   });
 
   it('gives a point recorded during an in-flight export its own flush', async () => {
@@ -262,32 +287,34 @@ describe('metrics flush coalescing', () => {
     // reader tick. Leading+trailing must start a SECOND export instead.
     const sink = await startSink(200);
     const provider = createMeterProvider(configFor(sink.port), 'openclaw', 'coalesce-trailing');
-    assert.ok(provider);
+    try {
+      assert.ok(provider);
 
-    // First point, flush started and deliberately not awaited.
-    const first = recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {});
-    // Let that export collect and reach the sink before recording again.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    assert.ok(sink.requests >= 1, 'the first export should already be in flight');
+      // First point, flush started and deliberately not awaited.
+      const first = recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {});
+      // Let that export collect and reach the sink before recording again.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      assert.ok(sink.requests >= 1, 'the first export should already be in flight');
 
-    // Second point, recorded while the first export is still unanswered.
-    await recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
-    await first;
+      // Second point, recorded while the first export is still unanswered.
+      await recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
+      await first;
 
-    const total = lastToolUseTotal(sink.bodies);
-    const elapsed = sink.bodies.length;
+      const total = lastToolUseTotal(sink.bodies);
+      const elapsed = sink.bodies.length;
 
-    await provider!.shutdown().catch(() => {});
-    sink.server.close();
-
-    // Well inside the reader's 1000 ms interval, so nothing here can be
-    // credited to the periodic tick — only to the trailing flush.
-    assert.equal(
-      total,
-      2,
-      `the second point never reached the wire (last exported total ${total} over ${elapsed} export(s));`
-      + ' a flush that started before it was recorded cannot speak for it',
-    );
+      // Well inside the reader's 1000 ms interval, so nothing here can be
+      // credited to the periodic tick — only to the trailing flush.
+      assert.equal(
+        total,
+        2,
+        `the second point never reached the wire (last exported total ${total} over ${elapsed} export(s));`
+        + ' a flush that started before it was recorded cannot speak for it',
+      );
+    } finally {
+      await provider?.shutdown().catch(() => {});
+      await sink.close();
+    }
   });
 
   it('keeps flushing after a coalesced burst has settled', async () => {
@@ -297,67 +324,72 @@ describe('metrics flush coalescing', () => {
     // the host process's life — which on the in-process hosts is hours.
     const sink = await startSink(SINK_DELAY_MS);
     const provider = createMeterProvider(configFor(sink.port), 'openclaw', 'coalesce-after-burst');
-    assert.ok(provider);
+    try {
+      assert.ok(provider);
 
-    const burst: Array<Promise<unknown>> = [];
-    for (let i = 0; i < TOOL_EVENTS; i += 1) {
-      burst.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
+      const burst: Array<Promise<unknown>> = [];
+      for (let i = 0; i < TOOL_EVENTS; i += 1) {
+        burst.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
+      }
+      await Promise.all(burst);
+
+      const afterBurst = sink.requests;
+
+      // Now repeat the in-flight case from the previous test, but with the
+      // queued slot already used once. This is what distinguishes releasing
+      // the slot from merely filling it: a stale non-null `queued` makes
+      // every later caller receive an already-resolved promise.
+      const leading = recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
+      await leading;
+
+      const total = lastToolUseTotal(sink.bodies);
+      const requests = sink.requests;
+
+      assert.ok(
+        requests > afterBurst,
+        `no export was issued for the points recorded after the burst (${requests} total, ${afterBurst} before them)`,
+      );
+      assert.equal(
+        total,
+        TOOL_EVENTS + 2,
+        `last exported total was ${total}, expected ${TOOL_EVENTS + 2};`
+        + ' the queued flush slot was not released after its flush started',
+      );
+    } finally {
+      await provider?.shutdown().catch(() => {});
+      await sink.close();
     }
-    await Promise.all(burst);
-
-    const afterBurst = sink.requests;
-
-    // Now repeat the in-flight case from the previous test, but with the
-    // queued slot already used once. This is what distinguishes releasing
-    // the slot from merely filling it: a stale non-null `queued` makes
-    // every later caller receive an already-resolved promise.
-    const leading = recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {});
-    await leading;
-
-    const total = lastToolUseTotal(sink.bodies);
-    const requests = sink.requests;
-
-    await provider!.shutdown().catch(() => {});
-    sink.server.close();
-
-    assert.ok(
-      requests > afterBurst,
-      `no export was issued for the points recorded after the burst (${requests} total, ${afterBurst} before them)`,
-    );
-    assert.equal(
-      total,
-      TOOL_EVENTS + 2,
-      `last exported total was ${total}, expected ${TOOL_EVENTS + 2};`
-      + ' the queued flush slot was not released after its flush started',
-    );
   });
 
   it('sends far fewer exports than it received record calls', async () => {
     const sink = await startSink(SINK_DELAY_MS);
     const provider = createMeterProvider(configFor(sink.port), 'openclaw', 'coalesce-count');
-    assert.ok(provider);
+    try {
+      assert.ok(provider);
 
-    const pending: Array<Promise<unknown>> = [];
-    for (let i = 0; i < TOOL_EVENTS; i += 1) {
-      pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
-      pending.push(recordGuardDecision(provider!, 'allow', 'low', 0.1, 'Bash').catch(() => {}));
-      pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      const pending: Array<Promise<unknown>> = [];
+      for (let i = 0; i < TOOL_EVENTS; i += 1) {
+        pending.push(recordToolUse(provider!, 'Bash', 'PreToolUse').catch(() => {}));
+        pending.push(recordGuardDecision(provider!, 'allow', 'low', 0.1, 'Bash').catch(() => {}));
+        pending.push(recordToolUse(provider!, 'Bash', 'PostToolUse').catch(() => {}));
+      }
+      await Promise.all(pending);
+
+      const requests = sink.requests;
+
+      // 60 record calls; without coalescing that is 60 export attempts (30
+      // on the wire, the rest refused). Coalescing collapses the overlapping
+      // ones. The bound is loose on purpose — the property is "collapses",
+      // not an exact count.
+      assert.ok(
+        requests <= 10,
+        `${requests} exports reached the sink for ${TOOL_EVENTS * 3} record calls; expected them to collapse`,
+      );
+    } finally {
+      await provider?.shutdown().catch(() => {});
+      await sink.close();
     }
-    await Promise.all(pending);
-
-    const requests = sink.requests;
-    await provider!.shutdown().catch(() => {});
-    sink.server.close();
-
-    // 60 record calls; without coalescing that is 60 export attempts (30
-    // on the wire, the rest refused). Coalescing collapses the overlapping
-    // ones. The bound is loose on purpose — the property is "collapses",
-    // not an exact count.
-    assert.ok(
-      requests <= 10,
-      `${requests} exports reached the sink for ${TOOL_EVENTS * 3} record calls; expected them to collapse`,
-    );
   });
 });

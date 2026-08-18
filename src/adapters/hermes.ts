@@ -158,11 +158,17 @@ export class HermesAdapter implements HookAdapter {
 
       case 'network_request':
         actionData = {
-          // NOT `asText`: `method` is only ever JSON.stringify'd
-          // (action-orchestrator.ts's Phase 5 synthetic request.json;
-          // the Phase 2 network analyser destructures it and never reads
-          // it), so no runtime value can make it throw. Left as-is
-          // rather than coerced for uniformity — an unkillable change.
+          // NOT `asText`. `method` and `body_preview` are never read by a
+          // string method: the Phase 2 network analyser reads `url` only,
+          // and the Phase 5 synthetic `request.json` runs
+          // `JSON.stringify(data, null, 2)` over the whole object
+          // (action-orchestrator.ts). That stringify CAN throw — a
+          // circular or BigInt value handed over by an in-process host —
+          // but the throw then lands in `evaluateHook`'s catch, which
+          // denies a `network_request` outright (see
+          // ENGINE_ERROR_ALLOWED_ACTIONS). So this is a fail-CLOSED
+          // degradation, not an enforcement hole, and coercing here would
+          // be an unkillable change.
           method: (input.toolInput.method as string) || 'GET',
           url: asText(input.toolInput.url),
           body_preview: input.toolInput.body as string | undefined,

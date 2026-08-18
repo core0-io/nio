@@ -31,15 +31,43 @@ function errMessage(err: unknown): string {
   return String(err);
 }
 
+/**
+ * Turn the failure text into a hint that is actually true.
+ *
+ * The old single hint told every reader to check endpoint reachability.
+ * On a live session that hint was wrong for 86 % of the diagnostics, and
+ * the single largest class — 61 % — was `Concurrent export limit
+ * reached`, where nio's own exporter refused to send and the endpoint was
+ * never touched. Telling someone to debug a healthy collector while the
+ * exporter is the thing refusing is worse than saying nothing.
+ */
+function exportHint(endpoint: string, detail: string): string {
+  const where = endpoint || '<unset>';
+  if (/concurrent export limit/i.test(detail)) {
+    // otlp-exporter-base caps in-flight exports at 30 PER EXPORTER and
+    // rejects the overflow itself — no request is sent, so the endpoint's
+    // health is irrelevant to this failure.
+    return 'The OTLP exporter refused to send: its in-flight limit (30) was full, '
+      + 'so nothing reached the network. Nio is producing exports faster than the '
+      + `endpoint acknowledges them; ${where} may be healthy but slow.`;
+  }
+  if (/timed out|timeout/i.test(detail)) {
+    return `The request to ${where} was sent but not answered within collector.timeout. `
+      + 'Raise collector.timeout, or reduce export volume, before suspecting the endpoint.';
+  }
+  return `Check collector.endpoint (${where}) reachability, auth, and protocol.`;
+}
+
 function reportExportFailure(signal: CollectorSignal, endpoint: string, err: unknown): void {
+  const detail = errMessage(err);
   reportDiagnostic({
     severity: 'warning',
     source: 'collector',
     kind: 'otlp_export_failed',
     component: signal,
     message: `Failed to export ${signal} to the OTLP endpoint`,
-    detail: errMessage(err),
-    hint: `Check collector.endpoint (${endpoint || '<unset>'}) reachability, auth, and protocol.`,
+    detail,
+    hint: exportHint(endpoint, detail),
   });
 }
 
