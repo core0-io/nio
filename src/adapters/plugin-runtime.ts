@@ -109,9 +109,33 @@ export interface PluginRuntimeOptions {
    * `process.cwd()`, which is wherever the opencode server happened to
    * be launched from.
    *
-   * Unset falls back to `process.cwd()`. See `cwdFor`.
+   * Unset, and with no per-session cwd either, the session has no
+   * directory at all unless `processCwdFallback` is set. See `cwdFor`.
    */
   defaultCwd?: string;
+  /**
+   * Answer `process.cwd()` for a session that reported no directory of
+   * its own and whose runtime has no `defaultCwd` either.
+   *
+   * OPT-IN, and only OpenClaw opts in. Its hook context carries
+   * `sessionKey` / `sessionId` / `runId` and no directory of any kind —
+   * an OpenClaw session is a conversation, not a checkout — so NO
+   * OpenClaw session can ever report one, and its `/nio monitor on` runs
+   * in this same process and stamps the arm with `process.cwd()`. Both
+   * sides of the gate's comparison are then the same value and arming
+   * works; without the fallback, arming on OpenClaw would be silently
+   * impossible.
+   *
+   * It must stay opt-in, because on a host that DOES report a directory
+   * per session the fallback is the very defect this option's neighbours
+   * exist to fix: a Pi session whose `ctx.cwd` arrived empty would be
+   * keyed to the `pi` launch directory and could then claim a pending
+   * arm made by a DIFFERENT Pi session working there — and the resulting
+   * `sessions` entry persists for the arm's TTL. Answering "I don't
+   * know" instead costs that one session its capture, which is the
+   * failure the capture switch is defaulted to anyway.
+   */
+  processCwdFallback?: boolean;
 }
 
 /**
@@ -285,35 +309,40 @@ export class InProcessPluginRuntime {
    *
    * Fallback order: what the binding told us for this session, then the
    * directory this runtime instance serves (`defaultCwd` — opencode's
-   * plugin `directory`), then `process.cwd()`.
+   * plugin `directory`), then `process.cwd()` but ONLY for a runtime
+   * that opted into it (`processCwdFallback`, which is OpenClaw and
+   * nothing else). Otherwise `null`: "this session has no directory I
+   * can vouch for".
    *
-   * ── Why `process.cwd()` is the last resort, and not "fail closed" ──
+   * ── Why the last resort is opt-in per runtime, not per session ──
    *
-   * Refusing to answer (passing `null` to the gate) is NOT the safe
-   * choice it looks like. A null cwd cannot match a pending arm, and on
-   * every platform in this family the pending arm is the ONLY way to arm
-   * a session — `resolveSessionId` reads Claude Code's environment
-   * variable and nothing else, so `/nio monitor on` here always writes
-   * `pending_arm` and waits for an event to claim it. A null cwd would
-   * therefore make arming permanently impossible, silently, for any
-   * platform whose binding cannot report a directory.
+   * `process.cwd()` is a process-wide constant on these hosts, so
+   * answering it for a session that did not report a directory is
+   * claiming a directory the session may not be in. That is exactly the
+   * defect this method exists to fix, and applying it per-session would
+   * reintroduce it on the hosts that DO report: a Pi session whose
+   * `ctx.cwd` arrived empty would silently join the pool of sessions
+   * keyed to the `pi` launch directory and could claim an arm belonging
+   * to one of them.
    *
-   * OpenClaw is exactly that platform, and not by omission: its hook
-   * context carries `sessionKey` / `sessionId` / `runId` and no
-   * directory, because an OpenClaw session is a conversation rather than
-   * a checkout. Its `/nio monitor on` runs in this same process and
-   * stamps the arm with `process.cwd()`, so `process.cwd()` is both
-   * sides of that comparison and the pairing stays consistent.
+   * It is nevertheless right for OpenClaw, and per RUNTIME that is
+   * decidable: no OpenClaw session can report a directory, and its
+   * `/nio monitor on` stamps the arm with this same `process.cwd()`, so
+   * both sides of the comparison agree and arming works. Turning the
+   * fallback off there would make arming permanently impossible rather
+   * than merely unselective, because the pending arm is the only way to
+   * arm a session on any platform in this family — `resolveSessionId`
+   * reads Claude Code's environment variable and nothing else.
    *
-   * The security property the cwd match exists for is untouched by the
-   * fallback: the comparison still happens, and a session whose
-   * directory does not match a pending arm still fails to claim it. What
-   * the fallback loses is only the ability to TELL two sessions apart
-   * when the host never said where either of them is — which is the
-   * situation that already obtained before any of this existed.
+   * `null` is safe for every consumer: the gate treats it as matching no
+   * pending arm (`isSessionMonitored` takes `string | null`), and the
+   * span helpers omit `nio.cwd` rather than asserting a directory
+   * nothing established.
    */
-  protected cwdFor(sessionId: string): string {
-    return this.sessionCwds.get(sessionId) ?? this.opts.defaultCwd ?? process.cwd();
+  protected cwdFor(sessionId: string): string | null {
+    return this.sessionCwds.get(sessionId)
+      ?? this.opts.defaultCwd
+      ?? (this.opts.processCwdFallback ? process.cwd() : null);
   }
 
   /**
@@ -1178,10 +1207,12 @@ export class InProcessPluginRuntime {
     error: string | null,
     tracerProvider: ReturnType<typeof createTracerProvider>,
   ): Promise<void> {
-    // The provider is passed in, already gated, rather than resolved
-    // here: every caller has computed `monitored` for this event
-    // already, and re-deriving it would mean a second monitor-store read
-    // on the block path.
+    // The provider is passed in rather than resolved here, so that
+    // `onPreTool`'s deny path — the hot one — spends no second
+    // monitor-store read after already computing `monitored` for this
+    // event. `resolveConfirm` derives its own inline at the call site
+    // and saves nothing; it passes one for uniformity, so this method
+    // has a single contract rather than two.
     if (!tracerProvider) return;
     const state = this.sessionState.get(sessionId);
     if (!state) return;
