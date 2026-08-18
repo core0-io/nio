@@ -53,13 +53,17 @@ import {
   recordPostTaskToolUse,
   endTurn,
   recordUserPrompt,
-  genAiToolCallInputAttributes,
+  genAiToolCallIdAttributes,
+  genAiToolCallArgumentAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import type { ChatCall } from './conversation/types.js';
+import { createContentSink, emitToolInputContent, emitToolOutputContent } from './content/sink.js';
+import { buildSpanContent, spanCarriesWholeContent } from './content/span-content.js';
+import { loadContentLimits } from './config-loader.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -274,6 +278,15 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   const toolInput = input.tool_input ?? {};
   const auditOpts = { loggerProvider, logsConfig };
 
+  // Content limits are read from config lazily and at most once per
+  // dispatch: only the branches that actually emit content need them,
+  // and most events are neither.
+  let cachedLimits: ReturnType<typeof loadContentLimits> | null = null;
+  const contentLimits = (): ReturnType<typeof loadContentLimits> => {
+    if (cachedLimits === null) cachedLimits = loadContentLimits();
+    return cachedLimits;
+  };
+
   // Shared base fields for every audit entry shape. Branches augment with
   // event-specific fields (task_id/task_summary, …) before writing. We
   // include agent_name on the entry only when the user configured an alias
@@ -315,7 +328,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         let state = ensureTurn(prev, sessionId);
         state = recordPreToolUse(
           state, key, toolName, summary,
-          genAiToolCallInputAttributes(toolInput, input.tool_use_id),
+          genAiToolCallIdAttributes(input.tool_use_id),
         );
         saveState(logsConfig, state);
       }
@@ -342,15 +355,61 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         state = drained.state;
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
+        // The tool span's id was minted at PreToolUse, so the content
+        // records below can name it. Read before `recordPostToolUse` —
+        // that call removes the pending entry.
+        const toolSpanId = state.pending_spans[key]?.span_id ?? '';
+        // The arguments come from the live hook payload, not from the
+        // state file: PreToolUse parks identity only, so this is the
+        // first moment the span and the payload are in hand together.
+        // The result is deliberately NOT among these attrs — see the
+        // tool-output emit below.
+        const spanArgs = buildSpanContent(
+          Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '',
+        );
         const result = await recordPostToolUse(
           tracerProvider, state, key, cwd,
           {
             ...drained.attrs,
-            ...genAiToolCallOutputAttributes({ result: resp, error: err ?? null }),
+            ...(spanArgs ? genAiToolCallArgumentAttributes(spanArgs) : {}),
+            ...genAiToolCallOutputAttributes({ error: err ?? null }),
           },
           err ?? null,
         );
+        state = result.state;
         saveState(logsConfig, result.state);
+
+        // A plain `output` string is the common shape and is emitted
+        // verbatim; anything else is serialised whole so structured
+        // responses aren't silently dropped. An absent/empty response
+        // produces '' and `emitToolOutputContent` skips it rather than
+        // shipping an empty record.
+        const resultText = typeof resp['output'] === 'string'
+          ? (resp['output'] as string)
+          : Object.keys(resp).length > 0 ? JSON.stringify(resp) : '';
+        emitToolOutputContent(loggerProvider, contentLimits(), {
+          result: resultText,
+          spanId: toolSpanId,
+          traceId: state.turn_trace_id,
+          ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
+        });
+
+        // Arguments go out on the logs signal ONLY when the span above
+        // could not carry the whole body. Decided from `spanArgs` — the
+        // very value that went onto the span two statements ago — so the
+        // span and the record cannot disagree about who owns the bytes.
+        // `spanCarriesWholeContent` is false for a truncated body and
+        // for no body at all; the latter emits nothing anyway
+        // (`emitToolInputContent` skips an empty input).
+        if (!spanCarriesWholeContent(spanArgs)) {
+          const inputText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
+          emitToolInputContent(loggerProvider, contentLimits(), {
+            input: inputText,
+            spanId: toolSpanId,
+            traceId: state.turn_trace_id,
+            ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),
+          });
+        }
       }
 
       if (meterProvider) {
@@ -415,7 +474,15 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
             { transcriptPath, ...(opts.conversationInput ?? {}) },
             state.turn_start_ms,
           );
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath, calls);
+          // No provider (unmonitored session, logs disabled) → no sink →
+          // endTurn emits the tree and nothing else. This is where the
+          // /nio-monitor master switch gates conversation content.
+          const contentSink = loggerProvider
+            ? createContentSink(loggerProvider, contentLimits())
+            : undefined;
+          const next = await endTurn(
+            tracerProvider, state, cwd, transcriptPath, calls, contentSink,
+          );
           if (next) saveState(logsConfig, next);
         }
       }
