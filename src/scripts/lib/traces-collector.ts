@@ -15,8 +15,16 @@ export {};
  * Trace hierarchy (OTel GenAI semantic conventions):
  *
  *   Trace: "invoke_agent UserPromptSubmit" — one trace per conversation turn
- *     └─ Span: "execute_tool <name>" — one span per tool call (pre→post)
+ *     └─ Span: "chat <model>" — one span per LLM call, rebuilt at turn close
+ *     └─ Span: "execute_tool <name>" — one per tool call, a SIBLING of chat
  *     └─ Span: "task:execute" — one span per task lifecycle
+ *
+ * Tool spans are emitted as they finish, so they cannot be nested under
+ * the LLM call that issued them: that attribution only exists once the
+ * conversation source has reconstructed the turn, which happens at
+ * `endTurn`. The issuing call survives as DATA instead of as a parent
+ * edge — `gen_ai.tool.call.id` on the tool span, joinable against the
+ * chat span's `nio.chat.tool_call_ids`.
  */
 
 import { readFileSync } from 'node:fs';
@@ -30,10 +38,14 @@ import { OTLPTraceExporter as OTLPTraceExporterGrpc } from '@opentelemetry/expor
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
-import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
+import type {
+  CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan,
+} from './traces-state-store.js';
+import type { ChatCall } from './conversation/types.js';
+import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
-export type { CollectorState, PendingToolSpan, PendingTaskSpan };
+export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
@@ -738,17 +750,25 @@ export function parseTranscriptUsage(
 // ---------------------------------------------------------------------------
 
 /**
- * Emits the root span for the full turn duration, then returns a fresh
- * state with the turn marker cleared so the next user message starts a
- * new turn. Returns null if the input state has no active turn — caller
- * should persist nothing in that case (treat as a no-op for idempotency
- * across concurrent Stop/SubagentStop hooks).
+ * Emits the turn's chat spans and then the root span for the full turn
+ * duration, then returns a fresh state with the turn marker cleared so
+ * the next user message starts a new turn. Returns null if the input
+ * state has no active turn — caller should persist nothing in that case
+ * (treat as a no-op for idempotency across concurrent Stop/SubagentStop
+ * hooks).
+ *
+ * `calls` are the LLM calls the conversation source reconstructed for
+ * this turn. Omitted or empty (unrecognised platform, unreadable session
+ * file, a streaming source with nothing gathered) degrades cleanly to
+ * the pre-chat-layer shape: the turn root and its tool spans, no chat
+ * layer.
  */
 export async function endTurn(
   provider: NodeTracerProvider,
   state: CollectorState,
   cwd: string | null,
   transcriptPath?: string | null,
+  calls?: ChatCall[],
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
@@ -770,15 +790,26 @@ export async function endTurn(
 
   const endMs = Date.now();
   const traceId = state.turn_trace_id;
+  const turnSpanId = traceId.slice(0, 16);
 
   // Build a remote parent context with the turn's trace ID so the root span
   // sits at the top of the trace.
   const rootCtx = trace.setSpanContext(ROOT_CONTEXT, {
     traceId,
-    spanId: traceId.slice(0, 16),
+    spanId: turnSpanId,
     traceFlags: TraceFlags.SAMPLED,
     isRemote: true,
   });
+
+  // Chat spans first, then the turn root. Order matters only for the
+  // readability of the exporter's output — every parent link is by id.
+  // The second argument is the set of finished tool spans that were held
+  // back for attribution; on this path nothing is ever held back, so a
+  // tool span is already exported by the time its chat call exists.
+  const tree = buildSpanTree(calls ?? [], []);
+  for (const node of tree.chats) {
+    emitChatSpan(provider, traceId, turnSpanId, node.span_id, node.call);
+  }
 
   // Use provider.getTracer instead of trace.getTracer(global) so that
   // bundled hook scripts emit spans correctly. Bun's hook-cli bundle
@@ -807,7 +838,7 @@ export async function endTurn(
   // the actual parent of its children in the trace tree instead of a sibling
   // under a missing span. Also clear parentSpanId so the turn is a true root.
   const sc = span.spanContext() as { traceId: string; spanId: string };
-  sc.spanId = traceId.slice(0, 16);
+  sc.spanId = turnSpanId;
   // Newer OTEL SDKs expose the parent reference as `parentSpanContext`, older
   // ones as `parentSpanId`. Clear both so the turn span becomes a true root.
   (span as unknown as { parentSpanContext?: unknown }).parentSpanContext = undefined;
@@ -826,4 +857,38 @@ export async function endTurn(
     pending_guard_attrs: {},
     turn_attributes: {},
   };
+}
+
+/**
+ * Emit one `chat` span under the turn.
+ *
+ * Its span id is the one `buildSpanTree` minted, so anything that names
+ * it as a parent lands underneath it.
+ */
+function emitChatSpan(
+  provider: NodeTracerProvider,
+  traceId: string,
+  turnSpanId: string,
+  chatSpanId: string,
+  call: ChatCall,
+): void {
+  const parentCtx = trace.setSpanContext(ROOT_CONTEXT, {
+    traceId,
+    spanId: turnSpanId,
+    traceFlags: TraceFlags.SAMPLED,
+    isRemote: true,
+  });
+
+  // provider.getTracer, not the global — see endTurn.
+  const tracer = provider.getTracer('nio-collector', '1.0.0');
+  const span = tracer.startSpan(
+    chatSpanName(call),
+    {
+      startTime: call.startMs,
+      attributes: chatSpanAttributes(call) as Record<string, string | number | boolean>,
+    },
+    parentCtx,
+  );
+  (span.spanContext() as { spanId: string }).spanId = chatSpanId;
+  span.end(call.endMs);
 }

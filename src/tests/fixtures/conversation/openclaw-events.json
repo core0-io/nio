@@ -1,0 +1,44 @@
+{
+  "_fixture_note": "UNVERIFIED. Constructed from OpenClaw's published documentation only — the OpenClaw install available while building this fixture was broken (MODULE_NOT_FOUND, gateway would not start), so there is no live capture behind this shape. llm_output's fields (runId/callId/provider/model/outcome/durationMs/upstreamRequestIdHash/contextTokenBudget) follow the documented field table. The message-stream envelope (hook/event, and the event's body/text field names), the 'Thinking' prefix convention, and the assistantTexts/usage fields on llm_output are best-effort guesses, not verified facts. All string content is synthetic placeholder text.",
+  "events": [
+    { "hook": "before_message_write", "event": { "body": "Thinking: Step 1 placeholder plan. Step 2 placeholder check." } },
+    { "hook": "llm_output", "event": {
+        "runId": "run-ph-1",
+        "callId": "call-ph-1",
+        "provider": "openai",
+        "model": "gpt-5-reasoning-placeholder",
+        "outcome": "success",
+        "durationMs": 1200,
+        "upstreamRequestIdHash": "hash-ph-1",
+        "contextTokenBudget": 8000
+    } },
+    { "hook": "message_sending", "event": { "text": "Placeholder final answer for call A." } },
+
+    { "hook": "llm_output", "event": {
+        "runId": "run-ph-2",
+        "callId": "call-ph-2",
+        "provider": "openai",
+        "model": "gpt-5-reasoning-placeholder",
+        "outcome": "success",
+        "durationMs": 800,
+        "upstreamRequestIdHash": "hash-ph-2",
+        "contextTokenBudget": 8000,
+        "assistantTexts": ["Placeholder final answer for call B."],
+        "usage": { "input": 120, "output": 45, "cacheRead": 10, "cacheWrite": 0 }
+    } },
+    { "hook": "message_sending", "event": { "text": "Placeholder final answer for call B." } },
+
+    { "hook": "message_sending", "event": { "body": "Thinking: Step 1 placeholder anthropic-style plan." } },
+    { "hook": "llm_output", "event": {
+        "runId": "run-ph-3",
+        "callId": "call-ph-3",
+        "provider": "anthropic",
+        "model": "claude-placeholder",
+        "outcome": "success",
+        "durationMs": 500,
+        "upstreamRequestIdHash": "hash-ph-3",
+        "contextTokenBudget": 8000
+    } },
+    { "hook": "before_message_write", "event": { "body": "Placeholder final answer for call C." } }
+  ]
+}

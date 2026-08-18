@@ -44,6 +44,28 @@ export interface PendingTaskSpan {
   span_id: string;
 }
 
+/**
+ * A tool/task span that has already finished but is being held back
+ * until the turn ends, so it can be nested under the chat call that
+ * issued it.
+ *
+ * Only metadata — never payload bodies. Anything held here is written
+ * to the state file on every hook event, so a per-call growth here is a
+ * per-call re-serialisation of the whole turn.
+ */
+export interface DeferredSpan {
+  kind: 'tool' | 'task';
+  name: string;
+  span_id: string;
+  start_ms: number;
+  end_ms: number;
+  attributes: Record<string, unknown>;
+  /** Sets the span status to ERROR and records an exception. */
+  error?: string;
+  /** Used to attribute this span to the chat call that issued it. */
+  tool_use_id?: string;
+}
+
 export interface CollectorState {
   session_id: string;
   turn_number: number;
