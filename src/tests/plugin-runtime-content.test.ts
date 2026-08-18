@@ -11,7 +11,7 @@
  * gate covers it like everything else.
  */
 
-import { describe, it, beforeEach } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -71,9 +71,18 @@ function piLine(id: string, timestampMs: number, text: string): string {
 
 describe('plugin runtime: chat spans reach the wire', () => {
   let home: string;
+  let previousHome: string | undefined;
   beforeEach(() => {
     home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-runtime-content-')));
+    previousHome = process.env['NIO_HOME'];
     process.env['NIO_HOME'] = home;
+  });
+  afterEach(() => {
+    // Restored, not left pointing at a deleted tmpdir: NIO_HOME is
+    // process-wide, and a later file in the same worker would otherwise
+    // read config out of this suite's home.
+    if (previousHome === undefined) delete process.env['NIO_HOME'];
+    else process.env['NIO_HOME'] = previousHome;
   });
 
   it('reconstructs a chat span from accumulated events on an armed session', async () => {

@@ -6,15 +6,12 @@
  * does not have yet, and what closed most of it.
  *
  * `tool_input` goes out at the pre side and `tool_output` at the post
- * side, each stamped with the tool span's id. While tool spans were
- * PARKED until turn close, that window covered the whole turn and did
- * not always end: a mid-turn disarm (or a mid-turn crash) left both
- * records naming a span nobody would ever send.
+ * side, each stamped with the tool span's id — a span the backend has
+ * not received yet, since it is only exported when the tool finishes.
  *
- * Eager export closes it for a tool that RAN. The span leaves at the
- * post side, immediately after the record that names it, so the first
- * case below — a disarm after the tool completed — now joins cleanly
- * where it used to dangle two records.
+ * For a tool that RAN the window is narrow and closes: the span leaves
+ * at the post side, immediately after the record that names it, so the
+ * first case below — a disarm after the tool completed — joins cleanly.
  *
  * What remains is the narrow case in the second test: a disarm BETWEEN
  * the two sides. The arguments were emitted while armed, the post side
@@ -24,14 +21,15 @@
  * parking the content so it shares the span's fate would delete, on
  * exactly the mid-turn crash that motivated the question, the arguments
  * that survive it today. A dangling record says what the tool was asked
- * to do; a parked one says nothing.
+ * to do; a withheld one says nothing.
  *
  * ── Why these cases are not vacuous ───────────────────────────────────
  *
  * Each asserts both halves against each other on one run — which records
  * exist AND which span ids the tracer actually received — so an
- * implementation that parks content fails one half and one that exports
- * spans for a disarmed session fails the other. The two cases differ by
+ * implementation that withheld content until its span was safe fails one
+ * half, and one that exports spans for a disarmed session fails the
+ * other. The two cases differ by
  * exactly one thing, the position of the disarm relative to
  * `tool.execute.after`, so neither can pass by accident on the other's
  * mechanism.

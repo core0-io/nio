@@ -656,7 +656,8 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
   /**
    * A tracer provider that builds every chat span normally and then
    * throws when the TURN ROOT is started — i.e. the export path blowing
-   * up after part of the tree already exists.
+   * up after part of the tree already exists. Named for where it throws,
+   * because that is load-bearing: see below.
    *
    * Why the throw is planted in `startSpan` rather than in
    * `forceFlush`: the flush is the LAST thing `flushSessionTurnInner`
@@ -674,7 +675,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
    * inheritance risks tripping over its own internals rather than
    * testing ours.
    */
-  function brokenFlushProvider(
+  function throwsOnTurnRootProvider(
     provider: ReturnType<typeof makeInMemoryTracer>['provider'],
   ): ReturnType<typeof makeInMemoryTracer>['provider'] {
     return {
@@ -712,7 +713,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
       const rt = new InProcessPluginRuntime({
         platform: 'openclaw',
         adapter: new OpenClawAdapter(),
-        tracerProvider: brokenFlushProvider(tracer.provider),
+        tracerProvider: throwsOnTurnRootProvider(tracer.provider),
         meterProvider: null,
         loggerProvider: null,
       });
@@ -1171,7 +1172,9 @@ describe('registerPiExtension — block path and confirm dialog', () => {
       await pi.handlers.get('tool_result')!(
         { toolName: 'bash', toolCallId: 'c1', content: 'unique-marker-123' }, ctx,
       );
-      // Deferred until turn close — see the toolCallId test above.
+      // Same as the toolCallId case above: the span was exported at
+      // `tool_result`, and the turn is closed here only so the read
+      // below happens past the boundary.
       await pi.handlers.get('agent_end')!({}, ctx);
 
       const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));

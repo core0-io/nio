@@ -192,7 +192,7 @@ describe('pi + opencode span hierarchy: tool spans are siblings of their chat ca
         assert.notEqual(
           parentOf(tools[0]!),
           chats[0]!.spanContext().spanId,
-          'stated as an inequality too: nesting under the chat call means the span was parked ' +
+          'stated as an inequality too: nesting under the chat call means the span was withheld ' +
             'until turn close again, and with it the whole turn\'s visibility',
         );
         assert.equal(
@@ -319,7 +319,7 @@ describe('pi + opencode span hierarchy: tool spans are siblings of their chat ca
           assert.notEqual(
             parentOf(tool),
             chatSpanId,
-            'stated as an inequality too: a tool under the chat span means the parked path is back',
+            'stated as an inequality too: a tool under the chat span means it was withheld until turn close',
           );
         }
         assert.equal(
@@ -338,9 +338,8 @@ describe('pi + opencode span hierarchy: tool spans are siblings of their chat ca
     // path for every tool call that throws: `tool.execute.after` is
     // simply not delivered, so `session.idle` finds the span still
     // pending and force-closes it in `flushSessionTurnInner`'s reclaim
-    // loop. That loop is the one part of the deferral machinery that is
-    // still load-bearing under eager emission — without it a tool that
-    // threw would produce no span at all.
+    // loop. That loop is the only thing standing between a tool that
+    // threw and no span at all.
     //
     // Not vacuous: the span asserted on here can only come from that
     // loop. No `tool.execute.after` is ever delivered below, so the
@@ -416,7 +415,7 @@ describe('pi + opencode span hierarchy: tool spans are siblings of their chat ca
         );
         assert.equal(
           tools[0]!.attributes['nio.span.reclaim_reason'], 'no_post_tool_event',
-          'and keep the reason — parking the span must not cost the reclaim marking',
+          'and keep the reason — reclaiming the span must not cost the reason it was reclaimed for',
         );
         assert.equal(
           tools[0]!.status.code, SpanStatusCode.UNSET,

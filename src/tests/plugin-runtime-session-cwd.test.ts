@@ -36,8 +36,11 @@
  * the gate cwd-aware makes that check REAL on these platforms for the
  * first time (it was previously inert: every session presented the same
  * directory). `refuses to hand a pending arm to a session in a different
- * directory` and `two sessions, one arm` pin that, and the unarmed case
- * pins that capture is still off by default.
+ * directory` and `gives one arm to the session that matches it, not to
+ * its neighbour` pin that; `a host that DOES report per-session
+ * directories never falls back` pins that the one remaining route to a
+ * process-wide answer stays shut on the hosts that can report; and the
+ * unarmed case pins that capture is still off by default.
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
@@ -129,6 +132,23 @@ function makeRuntime(tracer: InMemoryTracer, defaultCwd?: string): InProcessPlug
     meterProvider: null,
     loggerProvider: null,
     ...(defaultCwd ? { defaultCwd } : {}),
+  });
+}
+
+/**
+ * The OpenClaw shape: the one runtime that opts into answering
+ * `process.cwd()` for a session that reported no directory, because no
+ * OpenClaw session can ever report one.
+ */
+function makeFallbackRuntime(tracer: InMemoryTracer): InProcessPluginRuntime {
+  return new InProcessPluginRuntime({
+    platform: 'openclaw',
+    adapter: new OpenClawAdapter(),
+    nioFactory: stubNioAllow(),
+    tracerProvider: tracer.provider,
+    meterProvider: null,
+    loggerProvider: null,
+    processCwdFallback: true,
   });
 }
 
@@ -264,7 +284,7 @@ describe('in-process runtime: the monitor gate is keyed to the SESSION cwd', () 
     );
   });
 
-  it('falls back to the host process directory when the binding reports none', async () => {
+  it('answers the host process directory for a runtime that opted in', async () => {
     // OpenClaw, and not by omission: its hook context carries session
     // ids and no directory at all, because a session there is a
     // conversation rather than a checkout. Its `/nio monitor on` runs in
@@ -273,7 +293,7 @@ describe('in-process runtime: the monitor gate is keyed to the SESSION cwd', () 
     // "unknown" instead would make OpenClaw unarmable — permanently and
     // silently, since the pending arm is its only route.
     pendingArm(home, realpathSync(process.cwd()));
-    const rt = makeRuntime(tracer);
+    const rt = makeFallbackRuntime(tracer);
 
     rt.onSessionStart('sess-no-cwd');
     const spans = await runOneTurn(rt, 'sess-no-cwd', tracer);
@@ -281,6 +301,34 @@ describe('in-process runtime: the monitor gate is keyed to the SESSION cwd', () 
     assert.ok(
       spans.length > 0,
       'a binding that reports no directory must still be able to arm a session',
+    );
+  });
+
+  it('a host that DOES report per-session directories never falls back', async () => {
+    // The fallback is opt-in per runtime, and Pi does not take it. If it
+    // applied per session instead, a Pi session whose `ctx.cwd` arrived
+    // empty would be keyed to the `pi` launch directory — and could then
+    // claim a pending arm belonging to a DIFFERENT Pi session working
+    // there, which is the defect this whole file exists to close, back
+    // through a side door.
+    //
+    // The arm below is made in the host process's directory precisely so
+    // that a runtime-wide `process.cwd()` answer WOULD claim it. Nothing
+    // else in this file can see that: every other case gives its session
+    // a directory.
+    pendingArm(home, realpathSync(process.cwd()));
+    const rt = makeRuntime(tracer);
+
+    rt.onSessionStart('sess-silent');
+    const spans = await runOneTurn(rt, 'sess-silent', tracer);
+
+    assert.equal(
+      spans.length, 0,
+      'a session that reported no directory must not claim an arm made in the host process\'s',
+    );
+    assert.ok(
+      readStore(home).pending_arm,
+      'and the arm is still unclaimed, waiting for the session it was actually made for',
     );
   });
 
@@ -306,7 +354,7 @@ describe('in-process runtime: the monitor gate is keyed to the SESSION cwd', () 
     // resolver rather than the map so what is pinned is the answer the
     // gate gets.
     class ProbeRuntime extends InProcessPluginRuntime {
-      cwdOf(sessionId: string): string { return this.cwdFor(sessionId); }
+      cwdOf(sessionId: string): string | null { return this.cwdFor(sessionId); }
     }
     const rt = new ProbeRuntime({
       platform: 'pi',
@@ -323,8 +371,9 @@ describe('in-process runtime: the monitor gate is keyed to the SESSION cwd', () 
     await rt.onSessionEnd('sess-ends');
 
     assert.equal(
-      rt.cwdOf('sess-ends'), process.cwd(),
-      'after the session ends its directory is gone and the resolver falls back',
+      rt.cwdOf('sess-ends'), null,
+      'after the session ends its directory is gone, and this runtime did not opt into a ' +
+        'process-wide answer, so the resolver says it does not know',
     );
   });
 

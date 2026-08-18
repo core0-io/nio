@@ -9,10 +9,12 @@
  * session directory, the right session is captured. That is only half the
  * fix. The runtime learns a directory solely from what its binding hands
  * over, so a binding that never calls `setSessionCwd` leaves its whole
- * platform on the `process.cwd()` fallback and the gate stays exactly as
- * broken as before. These cases drive the REAL bindings
- * (`registerPiExtension`, `createNioPlugin`) so the wiring is what is
- * exercised, not a hand-fed runtime.
+ * platform unable to key its sessions at all — either silently unarmable
+ * or, if it declared the process-wide fallback it has no business
+ * declaring, exactly as broken as before. These cases drive the REAL
+ * bindings (`registerPiExtension`, `createNioPlugin`,
+ * `registerOpenClawPlugin`) so the wiring is what is exercised, not a
+ * hand-fed runtime.
  *
  * Both halves have to agree, and both are asserted here:
  *
@@ -24,19 +26,34 @@
  *  - the EVENT side. The session's own events must present the same
  *    directory, or the arm is never claimed.
  *
- * Every case makes the session directory a fresh tmpdir, so it is not the
- * host process's directory — the inequality the defect needs, asserted
- * rather than assumed.
+ * And both sides must agree on the FORM of the directory, not just its
+ * value: the store canonicalises what it writes and the gate
+ * canonicalises what it compares, so a host-supplied path that skips
+ * either one is unclaimable. That is its own case now that the value
+ * comes from the host rather than from `process.cwd()`.
  *
- * OpenClaw has no case here because it has nothing to report: its hook
- * context carries `sessionKey` / `sessionId` / `runId` and no directory
- * of any kind. Its fallback behaviour is pinned in
- * `plugin-runtime-session-cwd.test.ts` instead.
+ * Every case that HAS a session directory makes it a fresh tmpdir, so it
+ * is not the host process's directory — the inequality the defect needs,
+ * asserted rather than assumed in `beforeEach`. The two exceptions say so
+ * in their own comments and are deliberate: the OpenClaw case, whose
+ * whole point is a session with no directory, and the symlink case, whose
+ * fixture supplies a second non-canonical name for one.
+ *
+ * OpenClaw has nothing to REPORT — its hook context carries
+ * `sessionKey` / `sessionId` / `runId` and no directory of any kind — but
+ * it does have something to DECLARE, and that declaration is wiring like
+ * any other: because no OpenClaw session can present a directory, its
+ * binding is the only one that passes `processCwdFallback: true`, and
+ * without it every OpenClaw session becomes permanently unarmable. So it
+ * gets a case here too, driving the real `registerOpenClawPlugin`
+ * through the pending-arm route. `plugin-runtime-session-cwd.test.ts`
+ * pins the runtime option itself; nothing there can see whether the
+ * binding sets it.
  */
 
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, realpathSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempDir } from './helpers/tmp-dirs.js';
@@ -63,6 +80,26 @@ function readStore(home: string): StoreShape {
 
 function freshDir(prefix: string): string {
   return realpathSync(trackTempDir(mkdtempSync(join(tmpdir(), prefix))));
+}
+
+/**
+ * A directory reachable by two names: the canonical one, and a symlink
+ * pointing at it.
+ *
+ * The host, not `process.cwd()`, is what supplies a directory now — Pi's
+ * `ctx.cwd` and opencode's `input.directory` are strings the host chose,
+ * so they arrive in whatever form IT holds. POSIX always reports
+ * `process.cwd()` resolved, which is exactly why every other fixture in
+ * this file (`freshDir` realpaths) cannot express an unresolved one, and
+ * why a symlink is built explicitly rather than relying on macOS's
+ * `/var` → `/private/var`: that trick is a no-op on Linux and would make
+ * the case below vacuous on CI.
+ */
+function linkedDir(prefix: string): { real: string; link: string } {
+  const real = freshDir(`${prefix}real-`);
+  const link = join(freshDir(`${prefix}link-`), 'as-linked');
+  symlinkSync(real, link);
+  return { real, link };
 }
 
 function stubNioAllow(): never {
@@ -115,7 +152,7 @@ describe('in-process bindings report their session directory', () => {
   // ── Pi ───────────────────────────────────────────────────────────────
 
   /** Register the Pi extension against a fake Pi API; return its handlers. */
-  async function registerPi(): Promise<{
+  async function registerPi(cwd?: string): Promise<{
     handlers: Map<string, (e: unknown, c: unknown) => Promise<unknown> | unknown>;
     commands: Map<string, (args: string, ctx: unknown) => Promise<void> | void>;
     ctx: unknown;
@@ -144,7 +181,7 @@ describe('in-process bindings report their session directory', () => {
     const ctx = {
       hasUI: false,
       // Pi's per-session working directory — the field this fix reads.
-      cwd: sessionDir,
+      cwd: cwd ?? sessionDir,
       ui: { async confirm() { return true; }, notify() { /* no-op */ } },
       sessionManager: {
         getSessionId: () => 'pi-cwd-session',
@@ -216,6 +253,46 @@ describe('in-process bindings report their session directory', () => {
     );
   });
 
+  it('pi: monitor on canonicalises the directory the HOST supplied', async () => {
+    // `runMonitorCommand` canonicalises the value that enters the store,
+    // and it has to canonicalise the CALLER'S value, not `process.cwd()`
+    // before falling back to it. The gate canonicalises the event's cwd
+    // before comparing (monitor-check.ts), so an arm stored unresolved
+    // can never be claimed — `/nio monitor on` would report success and
+    // capture would simply never start, with nothing logged.
+    //
+    // This could not bite while every caller passed `process.cwd()`,
+    // which POSIX reports resolved. It can now: Pi hands over whatever
+    // string it holds for the session.
+    const { real, link } = linkedDir('nio-binding-cwd-symlink-');
+    assert.notEqual(link, real, 'sanity: the fixture supplies a non-canonical path');
+
+    const { handlers, commands, ctx } = await registerPi(link);
+    await commands.get('nio')!('monitor on', ctx);
+
+    assert.equal(
+      readStore(home).pending_arm?.cwd, real,
+      'the arm must be stored canonicalised, or the gate can never match it',
+    );
+
+    // And the round trip: the same session, presenting the same
+    // non-canonical path, claims it.
+    await handlers.get('session_start')!({}, ctx);
+    await handlers.get('input')!({ text: 'hello' }, ctx);
+    await handlers.get('tool_call')!(
+      { toolName: 'bash', toolCallId: 'call-sym', input: { command: 'ls' } }, ctx,
+    );
+    await handlers.get('tool_result')!(
+      { toolName: 'bash', toolCallId: 'call-sym', content: 'a.txt', isError: false }, ctx,
+    );
+    await handlers.get('agent_end')!({}, ctx);
+
+    assert.ok(
+      (tracer.finished()).length > 0,
+      'both sides canonicalise, so the arm made through the symlink is claimed through it',
+    );
+  });
+
   it('pi: monitor on, then the session that asked for it gets captured', async () => {
     // The two halves against each other, in one process: nothing in this
     // case knows what directory either side chose, so it fails if they
@@ -236,6 +313,54 @@ describe('in-process bindings report their session directory', () => {
     assert.ok(
       (tracer.finished()).length > 0,
       'arming from a session and then using that session must capture it',
+    );
+  });
+
+  // ── OpenClaw ─────────────────────────────────────────────────────────
+
+  it('openclaw: a session that can report no directory at all is still armable', async () => {
+    // The binding declares `processCwdFallback: true` because no
+    // OpenClaw session can ever present a directory. Drop that
+    // declaration and `cwdFor` answers `null`, which matches no pending
+    // arm — and the pending arm is the ONLY route to arming here, so
+    // OpenClaw would go permanently silent with `/nio monitor on` still
+    // reporting success.
+    //
+    // Armed in the host process's directory on purpose: that is the
+    // value OpenClaw's own `/nio monitor on` stamps, since it runs in
+    // this same process, so both sides of the gate's comparison are it.
+    pendingArm(home, realpathSync(process.cwd()));
+    const { registerOpenClawPlugin } = await import('../adapters/openclaw-plugin.js');
+    const handlers = new Map<string, (e: unknown, c: unknown) => Promise<unknown> | unknown>();
+    registerOpenClawPlugin(
+      {
+        on(name: string, fn: (e: unknown, c: unknown) => Promise<unknown> | unknown) {
+          handlers.set(name, fn);
+        },
+        registerTool() { /* not exercised here */ },
+      } as never,
+      {
+        nioFactory: stubNioAllow(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      },
+    );
+
+    // OpenClaw's ctx: session identity and no directory field anywhere.
+    const ctx = { sessionKey: 'oc-cwd-session' };
+    await handlers.get('session_start')!({}, ctx);
+    await handlers.get('before_agent_reply')!({ cleanedBody: 'hello' }, ctx);
+    await handlers.get('before_tool_call')!(
+      { toolName: 'exec', toolCallId: 'call-oc', params: { command: 'ls' } }, ctx,
+    );
+    await handlers.get('after_tool_call')!(
+      { toolName: 'exec', toolCallId: 'call-oc', result: 'a.txt' }, ctx,
+    );
+    await handlers.get('agent_end')!({}, ctx);
+
+    assert.ok(
+      (tracer.finished()).length > 0,
+      'OpenClaw must stay armable through the pending arm despite reporting no directory',
     );
   });
 
