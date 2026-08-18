@@ -19,7 +19,11 @@ import { SpanStatusCode } from '@opentelemetry/api';
 // every assertion below to "nothing was emitted". Capture is therefore
 // turned on process-wide for this file, the same way an operator does
 // it, before any test body runs. The gate itself is pinned by
-// plugin-runtime-monitor.test.ts.
+// plugin-runtime-monitor.test.ts and monitor-openclaw*.test.ts.
+//
+// Runs at module scope (after imports, before any test) so the fresh
+// home is in place before the first `loadConfig()` — config reads are
+// cached per resolved path, so a later switch would be ignored.
 {
   const home = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-plugin-runtime-tests-')));
   writeCaptureOnConfig(home);
@@ -203,9 +207,19 @@ describe('InProcessPluginRuntime span wiring', () => {
       await rt.onPreTool('s1', 'call-1', 'exec', { command: 'ls' }, preEvent('ls'));
       assert.equal(tracer.finished().length, 0, 'no span before the post side');
 
+      // An allowed tool's span goes out AT the post side, like the deny
+      // path below. Parking it until turn close would buy nesting under
+      // the chat call that issued it and cost the whole turn's
+      // visibility — see PluginRuntimeOptions.eagerToolSpans.
       await rt.onPostTool('s1', 'call-1', 'exec', { result: 'ok' });
-      const spans = tracer.finished();
-      assert.equal(spans.length, 1);
+      assert.equal(
+        tracer.finished().filter((s) => s.name.startsWith('execute_tool')).length, 1,
+        'the allow-path span is exported at the post side, not held for the turn boundary',
+      );
+
+      await rt.onTurnEnd('s1');
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
+      assert.equal(spans.length, 1, 'and the turn boundary must not send it a second time');
       assert.equal(spans[0]!.attributes['nio.guard.decision'], 'allow');
       assert.equal(typeof spans[0]!.attributes['nio.guard.eval_ms'], 'number');
     } finally {
@@ -501,6 +515,413 @@ describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
 
       await rt.onSubagentEnd('s1', 'task-1');
       assert.equal(tracer.finished().length, 1, 'sub-agent span emitted on end');
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});
+
+// ── The accumulated conversation events are PER TURN ──────────────────
+//
+// `recordConversationEvent` is the only conversation source the streaming
+// platforms have (OpenClaw, opencode): there is no session file to read
+// back, so the events themselves ARE the conversation. That makes their
+// lifetime load-bearing — anything still in the map when the next turn
+// closes is replayed as THAT turn's chat spans, with no timestamp
+// backstop to catch it (`openclaw-source.ts` synthesises `startMs` from
+// `Date.now()` at read time, so `callsSince`'s filter is always true).
+//
+// The platform tag matters here: `createSourceForPlatform` only builds an
+// event source for a real platform name, so these use 'openclaw' rather
+// than the 'test-platform' tag the suites above use.
+describe('InProcessPluginRuntime conversation-event lifecycle', () => {
+  /**
+   * An `llm_output` envelope in the shape OpenClaw's docs actually
+   * commit to: metadata only, NO `usage` and NO `assistantTexts`. That
+   * matters — openclaw-plugin.ts calls `onLlmUsage` only when `usage`
+   * is present and `onAssistantReply` only when `assistantTexts` is
+   * non-empty, so an event of this shape creates no turn state at all.
+   */
+  function llmOutput(callId: string) {
+    return {
+      hook: 'llm_output',
+      event: {
+        runId: 'run-1', callId, provider: 'anthropic', model: 'claude-x',
+        outcome: 'success', durationMs: 5,
+      },
+    };
+  }
+
+  function openClawRuntime(tracer: ReturnType<typeof makeInMemoryTracer>) {
+    return new InProcessPluginRuntime({
+      platform: 'openclaw',
+      adapter: new OpenClawAdapter(),
+      tracerProvider: tracer.provider,
+      meterProvider: null,
+      loggerProvider: null,
+    });
+  }
+
+  // Flushes before reading. The in-memory tracer helper now wires the
+  // same BatchSpanProcessor production does, so a span that has ended is
+  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
+  // by the runtime itself — but a case that hands the runtime a wrapper
+  // whose `forceFlush` never reaches the real provider would otherwise
+  // read zero for the wrong reason.
+  const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
+
+  it('a turn that ended with no state still drops its events (C1)', async () => {
+    // The `!state` early return in `flushSessionTurn` used to be the one
+    // exit that kept `conversationEvents` — and it is a routinely-taken
+    // production path, not a theoretical one: a turn made only of
+    // documented-shape `llm_output` events never reaches `onLlmUsage` /
+    // `onAssistantReply`, so `agent_end` finds no turn state. Turn 2
+    // then replayed turn 1's events as its own chat spans.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+
+      rt.recordConversationEvent('s1', llmOutput('t1-a'));
+      rt.recordConversationEvent('s1', llmOutput('t1-b'));
+      rt.recordConversationEvent('s1', llmOutput('t1-c'));
+      await rt.onTurnEnd('s1');
+      assert.equal(
+        tracer.finished().length, 0,
+        'sanity: a turn with no state exports nothing, so turn 1 contributes no span of its own',
+      );
+
+      // Turn 2 DOES have state (a user prompt), so it reaches the export
+      // path and reconstructs chat spans from whatever is in the map.
+      rt.onUserPrompt('s1', 'second turn');
+      rt.recordConversationEvent('s1', llmOutput('t2-a'));
+      await rt.onTurnEnd('s1');
+
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'turn 2 must produce exactly its own chat span — turn 1\'s three events were dropped at ITS boundary',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('a recycled session id does not replay the previous session\'s events (I2)', async () => {
+    // The other clearing site: `onSessionStart`. No turn boundary runs
+    // between the two sessions here, so this pins that delete alone.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+
+      rt.recordConversationEvent('s-recycled', llmOutput('old-a'));
+      rt.recordConversationEvent('s-recycled', llmOutput('old-b'));
+      rt.recordConversationEvent('s-recycled', llmOutput('old-c'));
+
+      // Same id, brand new session.
+      rt.onSessionStart('s-recycled');
+      rt.onUserPrompt('s-recycled', 'fresh session');
+      rt.recordConversationEvent('s-recycled', llmOutput('new-a'));
+      await rt.onTurnEnd('s-recycled');
+
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'a new session under a reused id must not inherit the old session\'s calls',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('caps accumulated events at 200 per session, dropping the oldest (M7)', async () => {
+    // The cap is what stops a long-running host's per-session array from
+    // growing without bound. Nothing pinned the number, so it could be
+    // raised (leak restored) or lowered (chat spans silently lost)
+    // without a single test noticing.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = openClawRuntime(tracer);
+      for (let i = 0; i < 250; i++) rt.recordConversationEvent('s-cap', llmOutput(`c-${i}`));
+      rt.onUserPrompt('s-cap', 'go');
+      await rt.onTurnEnd('s-cap');
+
+      assert.equal(
+        (await chatSpans(tracer)).length, 200,
+        'exactly the last 200 events survive the cap',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  /**
+   * A tracer provider that builds every chat span normally and then
+   * throws when the TURN ROOT is started — i.e. the export path blowing
+   * up after part of the tree already exists.
+   *
+   * Why not a rejecting `forceFlush` (what this helper used to be): the
+   * flush is deliberately no longer a throw vector. `traces-collector`'s
+   * `flushSpans` swallows it, and the runtime's trailing flush catches
+   * it, because `BatchSpanProcessor.forceFlush()` REJECTS on a failed
+   * export where `SimpleSpanProcessor`'s resolved — so after the
+   * processor swap an unreachable collector would have started throwing
+   * out of every turn boundary. Telemetry must not do that. The exit
+   * this test exists for is still reachable, just through a different
+   * door: anything raised while the tree is being built (a provider
+   * whose tracer rejects a span, an SDK that throws on a bad attribute)
+   * still propagates out of `endTurn`, and the `finally` is what has to
+   * clear the turn's events.
+   *
+   * A plain delegating object rather than a subclass or a Proxy: the
+   * runtime and traces-collector only ever call `getTracer` and
+   * `forceFlush` on it, and wrapping the real NodeTracerProvider by
+   * inheritance risks tripping over its own internals rather than
+   * testing ours.
+   */
+  function brokenFlushProvider(
+    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
+  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
+    return {
+      getTracer: (...args: Parameters<typeof provider.getTracer>) => {
+        const tracer = provider.getTracer(...args);
+        return new Proxy(tracer, {
+          get(target, prop, receiver) {
+            if (prop !== 'startSpan') return Reflect.get(target, prop, receiver);
+            return (name: string, ...rest: unknown[]) => {
+              // The turn root, emitted last, after every chat span.
+              if (name.startsWith('invoke_agent')) throw new Error('OTLP exporter down');
+              return (target.startSpan as (...a: unknown[]) => unknown)(name, ...rest);
+            };
+          },
+        });
+      },
+      forceFlush: () => provider.forceFlush(),
+      shutdown: () => provider.shutdown(),
+      register: () => provider.register(),
+    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
+  }
+
+  /**
+   * The counterpart: a provider whose FLUSH rejects. This is what the
+   * live OTLP path now does on any failed export — `BatchSpanProcessor`
+   * replaced `SimpleSpanProcessor` so a turn bigger than the exporter's
+   * 30-in-flight cap stops losing its root, and Batch's `forceFlush()`
+   * rejects where Simple's resolved. It must not surface at the host.
+   */
+  function rejectingFlushProvider(
+    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
+  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
+    return {
+      getTracer: (...args: Parameters<typeof provider.getTracer>) => provider.getTracer(...args),
+      forceFlush: async () => { throw new Error('OTLP exporter down'); },
+      shutdown: () => provider.shutdown(),
+      register: () => provider.register(),
+    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
+  }
+
+  it('a rejecting flush does not surface at the turn boundary', async () => {
+    // Two guards stand between the exporter and the host, and this pins
+    // both: `traces-collector`'s `flushSpans` (inside `endTurn`) and the
+    // `.catch()` on the runtime's trailing `tracerProvider.forceFlush()`.
+    // Drop either one and an unreachable collector starts throwing out
+    // of every turn boundary, which every binding's outer catch then
+    // swallows — a silently broken host on a telemetry fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: rejectingFlushProvider(tracer.provider),
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      rt.onUserPrompt('s-flush', 'turn one');
+      rt.recordConversationEvent('s-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-flush'),
+        'a failed export must never propagate into the host',
+      );
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'sanity: the turn still built its chat span — the flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('a rejecting LOGS flush does not surface at the turn boundary', async () => {
+    // The logs sibling of the case above, and the pin on all three of
+    // the runtime's `loggerProvider` flush sites: the one inside
+    // `flushSessionTurn`, the one in `flushTurnSpans` (reached via
+    // `onTurnEnd`), and the one in `disposeAllSessions`. The logs
+    // pipeline runs a `BatchLogRecordProcessor` — swapped in so a turn's
+    // content burst stops being dropped past the OTLP exporter's
+    // 30-in-flight cap — and a batched flush REJECTS once its export
+    // times out. (Not on a failed export: unlike the traces SDK, the
+    // logs SDK routes that to `globalErrorHandler` and resolves. See
+    // `flushLogRecords`' doc. Which is why the rejection has to be
+    // supplied here rather than produced by a real unreachable
+    // endpoint.) Route any of those three sites through a bare
+    // `forceFlush()` instead of `flushLogRecords` and a hung collector
+    // starts throwing out of the host's Stop handler: an observability
+    // fault turned into a host fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      // Minimal LoggerProvider surface: the runtime only ever calls
+      // `getLogger` (through the content sink) and `forceFlush`.
+      const rejectingLogs = {
+        getLogger: () => ({ emit: () => {} }),
+        forceFlush: async () => { throw new Error('OTLP logs exporter down'); },
+        shutdown: async () => {},
+      } as unknown as NonNullable<
+        ConstructorParameters<typeof InProcessPluginRuntime>[0]['loggerProvider']
+      >;
+
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: rejectingLogs,
+      });
+
+      rt.onUserPrompt('s-logs-flush', 'turn one');
+      rt.recordConversationEvent('s-logs-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-logs-flush'),
+        'a failed LOGS export must never propagate into the host',
+      );
+      await assert.doesNotReject(
+        () => rt.disposeAllSessions(),
+        'nor at process-wide teardown',
+      );
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'sanity: the turn still built its chat span — the logs flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
+    // The third exit `flushSessionTurn`'s try/finally exists for, and the
+    // only one the two cases above cannot reach. It is not hypothetical:
+    // `endTurn` and `recordPostToolUse` drive an OTEL SDK that can raise
+    // mid-tree, and every binding's outer catch swallows the rejection —
+    // so a broken exporter would leave the turn's events in the map to
+    // be replayed by the NEXT turn as its own chat spans, the exact bug
+    // the clearing exists to prevent, now with no error visible anywhere
+    // to explain it.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: brokenFlushProvider(tracer.provider),
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      rt.onUserPrompt('s-throw', 'turn one');
+      rt.recordConversationEvent('s-throw', llmOutput('t1-a'));
+      rt.recordConversationEvent('s-throw', llmOutput('t1-b'));
+      await assert.rejects(
+        () => rt.onTurnEnd('s-throw'),
+        /OTLP exporter down/,
+        'sanity: the export path really did throw, so the finally is what runs',
+      );
+      assert.equal(
+        (await chatSpans(tracer)).length, 2,
+        'sanity: turn 1 built both of its chat spans before the export blew up',
+      );
+
+      rt.onUserPrompt('s-throw', 'turn two');
+      rt.recordConversationEvent('s-throw', llmOutput('t2-a'));
+      await assert.rejects(() => rt.onTurnEnd('s-throw'), /OTLP exporter down/);
+
+      assert.equal(
+        (await chatSpans(tracer)).length, 3,
+        'turn 2 must contribute exactly ONE new chat span — five means turn 1\'s two events ' +
+          'survived its throwing exit and were replayed as turn 2\'s own calls',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+});
+
+// ── The transcript path is PER SESSION, not per turn ──────────────────
+//
+// The mirror image of the block above. `conversationEvents` is dropped at
+// every turn boundary; `transcriptPaths` deliberately survives it, because
+// the replay platforms (Pi) re-read the same session file on every turn
+// scoped by `callsSince(turn_start_ms)`. That makes `onSessionEnd` the
+// only turn-independent place the path stops being ours — and the only
+// thing standing between a torn-down session and a later turn under the
+// same id replaying its file.
+describe('InProcessPluginRuntime transcript-path lifecycle', () => {
+  // Flushes before reading. The in-memory tracer helper now wires the
+  // same BatchSpanProcessor production does, so a span that has ended is
+  // not in the exporter yet. Cases that end via `onTurnEnd` are flushed
+  // by the runtime itself — but a case that hands the runtime a wrapper
+  // whose `forceFlush` never reaches the real provider would otherwise
+  // read zero for the wrong reason.
+  const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
+
+  it('onSessionEnd stops the session file being ours to replay (M1)', async () => {
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'pi',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      const dir = trackTempDir(mkdtempSync(join(tmpdir(), 'nio-transcript-life-')));
+      const sessionFile = join(dir, 'session.jsonl');
+      // Stamped in the future so `callsSince(turn_start_ms)` accepts it
+      // on BOTH turns — otherwise turn 2 would drop the entry on the
+      // timestamp alone and the assertion would hold for the wrong
+      // reason, i.e. pass even with the delete removed.
+      const future = Date.now() + 60_000;
+      writeFileSync(
+        sessionFile,
+        JSON.stringify({
+          type: 'message', id: 'm1', parentId: null,
+          timestamp: new Date(future).toISOString(),
+          message: {
+            role: 'assistant',
+            content: [{ type: 'text', text: 'placeholder reply' }],
+            provider: 'anthropic', model: 'pi-transcript-model',
+            stopReason: 'endTurn', timestamp: future,
+          },
+        }) + '\n',
+        'utf-8',
+      );
+
+      rt.setTranscriptPath('s-file', sessionFile);
+      rt.onUserPrompt('s-file', 'first turn');
+      await rt.onSessionEnd('s-file');
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'sanity: the session file really was readable and really did produce a chat span',
+      );
+
+      // Same id, no `session_start` in between — a host that recycles ids
+      // without re-announcing them, which is exactly the case
+      // onSessionStart\'s own delete cannot cover.
+      rt.onUserPrompt('s-file', 'turn after teardown');
+      await rt.onTurnEnd('s-file');
+
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'no new chat span: the ended session\'s transcript must no longer be ours to replay',
+      );
     } finally {
       await tracer.shutdown();
     }
@@ -822,7 +1243,12 @@ describe('registerPiExtension — block path and confirm dialog', () => {
         { toolName: 'bash', toolCallId: 'call-77', content: 'ok' }, ctx,
       );
 
-      const spans = tracer.finished();
+      // Pi parks its tool spans for end-of-turn attribution (see
+      // PluginRuntimeOptions.eagerToolSpans), so the turn has to close
+      // before anything reaches the exporter.
+      await pi.handlers.get('agent_end')!({}, ctx);
+
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 2);
       assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], undefined);
       assert.equal(spans[1]!.attributes['gen_ai.tool.call.id'], 'call-77');
@@ -852,8 +1278,10 @@ describe('registerPiExtension — block path and confirm dialog', () => {
       await pi.handlers.get('tool_result')!(
         { toolName: 'bash', toolCallId: 'c1', content: 'unique-marker-123' }, ctx,
       );
+      // Deferred until turn close — see the toolCallId test above.
+      await pi.handlers.get('agent_end')!({}, ctx);
 
-      const spans = tracer.finished();
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 1);
       const args = spans[0]!.attributes['gen_ai.tool.call.arguments'];
       assert.equal(typeof args, 'string');
@@ -1110,8 +1538,14 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { tool: 'bash', sessionID: 's1', callID: 'call-77', args: { command: 'ls' } } as never,
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
+      // opencode parks its tool spans for end-of-turn attribution (see
+      // PluginRuntimeOptions.eagerToolSpans), so the session's idle has
+      // to fire before anything reaches the exporter.
+      await hooks.event!(
+        { event: { type: 'session.idle', properties: { sessionID: 's1' } } } as never,
+      );
 
-      const spans = tracer.finished();
+      const spans = tracer.finished().filter((s) => s.name.startsWith('execute_tool'));
       assert.equal(spans.length, 1);
       assert.equal(spans[0]!.attributes['gen_ai.tool.call.id'], 'call-77');
     } finally {
@@ -1297,9 +1731,14 @@ describe('createNioPlugin (opencode) — block path and span wiring', () => {
         { title: 'ls', output: 'ok', metadata: {} } as never,
       );
 
-      // Before the child's idle, only the tool span has been emitted —
-      // the child's turn root is still open.
-      assert.equal(tracer.finished().length, 1);
+      // Before the child's idle the child's tool span is already out
+      // (eager export) but nothing that waits for a turn boundary is:
+      // no turn root, no task span. Those are what this case is about.
+      assert.equal(
+        tracer.finished().filter(s => !s.name.startsWith('execute_tool')).length,
+        0,
+        'the child\'s turn root and the parent-side task span are both still open',
+      );
 
       await hooks.event!(
         { event: { type: 'session.idle', properties: { sessionID: 'sub-3' } } } as never,
