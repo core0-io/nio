@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<title>/nio-monitor — Nio</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Nio's telemetry capture switch. Capture is off by default — /nio-monitor arms the current session, /nio-monitor off disarms it. Guard enforcement and the local audit log are unaffected.">
+<meta name="keywords" content="nio, nio-agent-guard, telemetry, otel, opentelemetry, capture, privacy, monitoring, opt-in, agent observability, claude code, codex, openclaw, hermes, pi, opencode">
+<link rel="stylesheet" href="../assets/shared.css">
+</head>
+<body>
+<!-- source: plugins/shared/skills/nio-monitor/SKILL.md -->
+
+<div class="app">
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="hamburger" aria-label="Toggle navigation">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M1 3h12M1 7h12M1 11h12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>
+      </button>
+      <div class="brand">
+        <a href="../index.html" class="brand-home">
+          <div class="brand-mark">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+              <path d="M7 1 L12 3.5 V7.5 C12 10.5 9.5 12.3 7 13 C4.5 12.3 2 10.5 2 7.5 V3.5 Z" stroke="oklch(0.82 0.012 260)" stroke-width="1.2" fill="none"></path>
+              <path d="M4.8 7 L6.3 8.5 L9.4 5.4" stroke="oklch(0.78 0.16 150)" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"></path>
+            </svg>
+          </div>
+        </a>
+        <span><a href="https://core0.io" class="brand-company"><b>Core0</b></a> <span class="sep">/</span> <a href="../index.html" class="brand-home">Nio</a></span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <a href="https://core0.io" class="pill link">Core0</a>
+      <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.5.1">v2.5.1</a>
+    </div>
+  </div>
+
+  <div class="body-grid">
+    <aside class="sidebar" data-sidebar></aside>
+    <main class="main">
+
+      <div class="doc-hero">
+        <div class="eyebrow">Skill · /nio-monitor</div>
+        <h1><code>/nio-monitor</code> — the telemetry capture switch.</h1>
+        <p class="lead">Nio captures nothing by default. Every session stays silent until it is explicitly armed here. Arming affects all three OTLP signals; it does <strong>not</strong> affect guard enforcement, and it does not affect the local audit log.</p>
+      </div>
+
+      <div class="doc">
+
+        <p><strong>Invoke:</strong> <code>/nio-monitor [on | off | status]</code> (Claude Code · Pi · opencode) · <code>$nio-monitor</code> or natural language (Codex) · <code>/nio monitor [on | off | status]</code> via the umbrella on any platform. On <strong>OpenClaw and Hermes</strong> the umbrella form is the <em>only</em> entry point — they do not ship the focused skills. See <a href="skill.html#focused">Focused skills</a>.</p>
+
+        <h2 id="what">What the switch controls</h2>
+        <table>
+          <thead><tr><th>Behaviour</th><th>Affected by this switch?</th></tr></thead>
+          <tbody>
+            <tr><td>OTLP export of metrics / traces / logs</td><td><strong>Yes</strong> — this is the whole switch</td></tr>
+            <tr><td>Guard blocking dangerous commands</td><td>No — always active</td></tr>
+            <tr><td>Risk scoring, Phases 0–4 (pattern, static rules, behavioural AST)</td><td>No — always active, fully local</td></tr>
+            <tr><td>Phase 5 LLM analyser (sends the content under evaluation to the Anthropic API)</td><td>No — gated by its own switch, <code>guard.llm_analyser.enabled</code>, <strong>off by default</strong></td></tr>
+            <tr><td>Phase 6 external analyser (GET-only request to fetch a score; sends no evaluated content)</td><td>No — gated by its own switch, <code>guard.external_analyser</code> (empty list = off), <strong>off by default</strong></td></tr>
+            <tr><td>Local <code>~/.nio/audit.jsonl</code></td><td>No — always written</td></tr>
+          </tbody>
+        </table>
+        <p><strong>Guard and monitor are orthogonal.</strong> With capture off the guard still evaluates every tool call through Phases 0–6 and still denies the ones that fail. The switch controls reporting, not enforcement — turning capture off does not make your machine less protected, and turning it on does not make it more protected.</p>
+
+        <h2 id="usage">Usage</h2>
+        <pre><code>/nio-monitor on       # arm this session (also: `start`, or no argument)
+/nio-monitor off      # disarm (also: `stop`)
+/nio-monitor status   # is this session being captured right now?</code></pre>
+
+        <h3><code>on</code></h3>
+        <p>Returns a <code>mode</code>:</p>
+        <ul>
+          <li><code>direct</code> — the session id was resolved from the environment. Capture begins on the next tool call.</li>
+          <li><code>pending</code> — the platform does not expose a session id to the CLI, so a <em>pending arm</em> is left in place. It is claimed by the next hook event from the same directory, and expires after <strong>60 seconds</strong> if nothing happens. Claude Code is the only host whose session-id environment variable is verified, so every other platform — Codex included — takes this path.</li>
+        </ul>
+
+        <h3><code>off</code></h3>
+        <p>Returns <code>removed</code>, <code>removed_sessions</code>, and <code>matched_by</code>. <code>matched_by: session</code> means the platform exposed a session id and only that one session was disarmed. <code>matched_by: cwd</code> means it did not, so <code>off</code> disarmed <strong>every</strong> session armed from the current directory — which is the only handle those platforms have on their own record. A live but unclaimed pending arm is always cleared either way, so <code>removed: false</code> does <em>not</em> mean <code>off</code> did nothing.</p>
+
+        <h3><code>status</code></h3>
+        <p>Read-only: it never claims a pending arm and never expires a record. It runs the same gate the hooks run, so its verdict accounts for the 7-day expiry.</p>
+        <table>
+          <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td><code>monitor_all_sessions</code></td><td>The global config flag. When <code>true</code>, every session is captured regardless of per-session state.</td></tr>
+            <tr><td><code>session_undetermined</code></td><td><strong>Read this before <code>monitored</code>.</strong> <code>true</code> means the platform exposes no session id <em>and</em> something is armed — this session's state genuinely cannot be read from here. Not the same as "capture is off".</td></tr>
+            <tr><td><code>monitored</code></td><td>Whether this session is being captured right now. Valid only when <code>session_undetermined</code> is <code>false</code>.</td></tr>
+            <tr><td><code>pending_arm</code></td><td>An <code>on</code> is waiting to bind to a session. Binds on the next hook event from the directory <code>on</code> ran in; expires 60 s after it was made.</td></tr>
+            <tr><td><code>armed_sessions</code></td><td>How many live (unexpired) sessions are armed in total.</td></tr>
+            <tr><td><code>session_id</code></td><td>The session id resolved from the environment, or <code>null</code> when the platform does not expose one.</td></tr>
+          </tbody>
+        </table>
+        <p>On a platform that took the pending path, an immediately following <code>status</code> reports <code>monitored: false</code>, <code>pending_arm: true</code>, <code>armed_sessions: 0</code>. That is not a failure — capture has been requested and has not bound to a session yet, so "not captured" is the honest answer. It starts with the next action.</p>
+
+        <h2 id="scope">Scope of capture</h2>
+        <p>When a session is armed, these are exported to <code>collector.endpoint</code>:</p>
+        <ul>
+          <li><strong>traces</strong> — one turn span per prompt, one <code>chat</code> span per LLM call, and one span per tool call. These carry the redacted user prompt that opened the turn (<code>nio.turn.user_prompt</code>, ≤2 KB), the model / token usage / finish reason of each LLM call, and — because small content rides the span rather than the logs — <strong>what the model said</strong> (<code>nio.chat.reply</code>, ≤2 KB) and <strong>the arguments each tool was called with</strong> (<code>gen_ai.tool.call.arguments</code>, ≤2 KB).</li>
+          <li><strong>metrics</strong> — tool-use, turn, and guard-decision counters plus a risk-score histogram.</li>
+          <li><strong>logs</strong> — audit records, <strong>plus the conversation content that does not fit on a span</strong>: model reasoning ("thinking") and tool output always, and the reply / tool arguments whenever they exceeded the 2 KB span budget. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via <a href="configuration.html#collector.content_limits"><code>collector.content_limits</code></a>).</li>
+        </ul>
+        <p>Content is therefore split by <strong>size</strong>, not by kind: small bodies on the span, large ones in the logs signal, joined back by <code>nio.span_id</code>. A body has one owner — arguments that fit the span budget produce no log record at all, and ones that overflow produce exactly one, next to the truncated span copy. (On OpenClaw, Pi and opencode the tool-argument record is emitted unconditionally, by design: it has to outlive a tool span the host may never let Nio send.) When the session is not armed, none of the above leaves the machine.</p>
+
+        <div class="callout warn">
+          <div class="title">This is the part of arming that matters most for privacy</div>
+          <p>Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read and wrote, redacted but otherwise close to verbatim, to wherever <code>collector.endpoint</code> points. If that destination isn't fully trusted, treat <code>/nio-monitor on</code> accordingly.</p>
+        </div>
+
+        <h2 id="in-process">Known limitation on the in-process hosts (OpenClaw · Pi · opencode)</h2>
+        <p>These three load Nio into a long-lived host process rather than spawning a fresh one per event, and OTEL metric counters there are cumulative for the life of that process.</p>
+        <ul>
+          <li>A host where <strong>no</strong> session has ever been armed exports nothing at all — no exporter is even created.</li>
+          <li>Once <strong>any</strong> session in that process has been armed and recorded a counter, the metrics exporter starts a periodic export and <strong>keeps re-sending its accumulated counter totals roughly once a second until the host restarts</strong> — including after <code>off</code>, after the session ends, and after the arm record is deleted.</li>
+        </ul>
+        <p>What <code>off</code> does guarantee there is that <strong>no new session data is collected</strong>: no new spans, no new audit records, no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the host process clears it. Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.</p>
+
+        <h2 id="notes">Notes</h2>
+        <ul>
+          <li>Capture takes effect from the <strong>next</strong> hook event; the currently executing tool call is not retroactively captured.</li>
+          <li>There is <strong>no backfill</strong>. Anything that happened before <code>on</code> is not captured, on any platform.</li>
+          <li>Arm state lives in <code>${NIO_HOME}/monitored-sessions.json</code>. Records expire after <strong>7 days</strong> as a backstop. Claude Code, OpenClaw and Pi clear the record as soon as the session ends, so the backstop rarely matters there. Three exceptions: Codex has no session-end hook; opencode only sweeps its sessions when the plugin is torn down; and <strong>Hermes fires its session-end event at the end of every turn, not of the session</strong>, so Nio deliberately ignores it here — clearing the record there would silently disarm a session after its first turn.</li>
+          <li>To capture every session without arming each one, set <a href="configuration.html#collector.monitor_all_sessions"><code>collector.monitor_all_sessions: true</code></a>.</li>
+        </ul>
+
+        <p>Where the gate sits in the pipeline, and what each signal carries: <a href="collector-signals.html#gating">Collector Signals · Capture gating</a>.</p>
+      </div>
+
+      <div class="page-nav">
+        <a href="nio-external-score.html">
+          <span class="dir">← Prev</span>
+          <span class="label">/nio-external-score</span>
+        </a>
+        <div class="spacer"></div>
+        <a href="configuration.html" class="next">
+          <span class="dir">Next →</span>
+          <span class="label">Config reference</span>
+        </a>
+      </div>
+
+      <div class="site-footer">
+        <a href="https://core0.io"><span>CORE0 · NIO</span></a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.5.1">v2.5.1</a>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="../assets/shared.js"></script>
+</body></html>

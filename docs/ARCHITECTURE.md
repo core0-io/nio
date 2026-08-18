@@ -463,6 +463,30 @@ Which hosts can actually ask:
   decision unblocked and the binding never calls `resolveConfirm`, so
   `ask` folds to allow.
 
+### When the engine itself throws
+
+If Phases 1–6 throw — a malformed payload, a stack overflow on a
+pathologically nested `tool_input`, a bug — the decision is taken from
+`envelope.action.type` **alone**, a value the adapter resolved before the
+pipeline was entered:
+
+| Action type | Verdict on engine error |
+|-------------|-------------------------|
+| `read_file` | **allow**, with a diagnostic |
+| `exec_command` · `write_file` · `network_request` · `secret_access` · `mcp_tool_call` (and anything a third-party adapter invents) | **deny**, with a diagnostic |
+
+This replaces the earlier blanket fail-open. The asymmetry that motivates
+it: the engine is most likely to fail when its input is strangest, and a
+strange input is one of the shapes an attack takes — so a crash must not
+become a silent allow of a destructive action. Both branches write an
+`engine_error` diagnostic and a guard audit row with
+`risk_tags: ["ENGINE_ERROR"]` (`risk_level: critical`, score `1.0` on the
+deny branch; `low` / `0` on the allow branch), so the failure is visible
+rather than only inferable from an unexplained block. The triage
+deliberately consults nothing else: no re-run, no rule lookup, no re-parse
+of whatever just threw. Source: `ENGINE_ERROR_ALLOWED_ACTIONS` in
+[hook-engine.ts](../src/adapters/hook-engine.ts).
+
 ---
 
 ## Static Scan: Multi-Engine Pipeline
@@ -670,6 +694,24 @@ class ExternalAnalyser {
 Captures agent activity as **OpenTelemetry** metrics, traces, and logs. Runs independently from the guard — never influences allow/deny decisions.
 
 For the full per-signal schema (every metric instrument, every span attribute, every audit entry field) see [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md). The sections below cover architecture, source of truth, and lifecycle.
+
+### Capture gating — off by default
+
+A configured `collector.endpoint` does **not** by itself export anything.
+Every session is silent until the user arms it (`/nio monitor on`, or the
+focused `/nio-monitor` skill) or the operator sets
+`collector.monitor_all_sessions: true`. The verdict is computed against
+`${NIO_HOME}/monitored-sessions.json` and is applied **before any OTEL
+provider is constructed** — an unmonitored session never stands up an
+exporter, so the cost is one small file read per hook event.
+
+All three OTLP signals are behind that gate, including the conversation
+content that rides on spans (`nio.chat.reply`,
+`gen_ai.tool.call.arguments`) as well as the content log records. Outside
+the gate: guard enforcement (Phases 0–6 run regardless), the local
+`~/.nio/audit.jsonl`, and the two opt-in outbound guard paths (Phase 5
+`guard.llm_analyser`, Phase 6 `guard.external_analyser`), which have their
+own switches and ship disabled.
 
 ### Architecture
 

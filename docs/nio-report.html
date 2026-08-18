@@ -51,6 +51,7 @@
 
         <h2 id="report"><code>report</code></h2>
         <p>Reads <code>~/.nio/audit.jsonl</code> and formats the last 50 events as a table, plus a Diagnostics summary aggregated from up to 200 recent events. No arguments.</p>
+        <p>That file is <strong>always</strong> written, whether or not the session was armed with <a href="nio-monitor.html"><code>/nio-monitor</code></a> and whether or not <code>collector.endpoint</code> is set — it never leaves the machine, and it is what backs this command. Only the OTLP leg of the logs signal is gated. Conversation content records are OTLP-only and never appear here.</p>
 
         <h3>Event types</h3>
         <p>Each line is JSON with an <code>event</code> discriminator:</p>

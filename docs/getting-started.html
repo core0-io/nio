@@ -66,6 +66,8 @@
           <li><a href="install.html#tab=codex">Codex CLI</a> — 5/6 lifecycle hooks via <code>~/.codex/config.toml</code> + the <code>codex_hooks</code> feature flag.</li>
           <li><a href="install.html#tab=openclaw">OpenClaw</a> — registered as a bundled plugin with a single <code>plugin.js</code>.</li>
           <li><a href="install.html#tab=hermes">Hermes Agent</a> — seven shell-hook entries in <code>~/.hermes/config.yaml</code> + a small Python plugin for <code>/nio</code>.</li>
+          <li><a href="install.html#tab=pi">Pi</a> — installed as a pi package / extension; the only host where a <strong>confirm</strong> verdict opens a real dialog.</li>
+          <li><a href="install.html#tab=opencode">opencode</a> — a single plugin file under <code>~/.config/opencode/plugins/</code>.</li>
         </ul>
 
         <h2>First commands</h2>
@@ -78,31 +80,40 @@
 /nio action "rm -rf /"        # evaluate a proposed command without running it
 /nio report                   # last 50 guard decisions + diagnostics summary
 /nio doctor                   # validate config + dry-run OAuth/LLM
-/nio external-score           # snapshot scores from external scoring endpoints</code></pre>
+/nio external-score           # snapshot scores from external scoring endpoints
+/nio monitor on               # arm telemetry capture for THIS session (off by default)
+/nio monitor status           # is this session being captured?</code></pre>
 
         <p>See the full command reference at <a href="skill.html">/nio commands</a>.</p>
 
-        <p>On <strong>Claude Code</strong> and <strong>Codex</strong> each capability is also a focused standalone skill (<code>/nio-scan</code>, <code>/nio-config</code>, <code>/nio-external-score</code>, …) — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
+        <p>On <strong>Claude Code</strong>, <strong>Codex</strong>, <strong>Pi</strong> and <strong>opencode</strong> each capability is also a focused standalone skill (<code>/nio-scan</code>, <code>/nio-config</code>, <code>/nio-monitor</code>, …) — or just ask in natural language. See <a href="skill.html#focused">Focused skills</a>.</p>
 
         <p><strong>Already have a team config?</strong> Skip the per-machine tuning and apply an operator-provided <code>nio.yaml</code> at install time with <code>./setup.sh --config /path/to/nio.yaml</code> (or via the curl one-liner). Nio runs <code>/nio doctor</code> against the file first and aborts the install if any probe fails — see <a href="install.html#shared-config">Onboarding with a shared config</a>.</p>
 
         <p><strong>Something doesn't work?</strong> Run <code>/nio doctor</code> first — it validates the config schema, dry-runs OAuth credentials, and sanity-checks the LLM API key, with actionable hints. See <a href="diagnostics.html">Diagnostics</a> for the full failure-surface model.</p>
 
         <h2>Telemetry · OTLP collector</h2>
-        <p>Optional but useful for observability. Every hook event Nio sees is shaped into <strong>OpenTelemetry</strong> data and exported through the bundled async collector. Three signals are emitted:</p>
+        <p>Optional, opt-in, and useful for observability. Every hook event Nio sees can be shaped into <strong>OpenTelemetry</strong> data and exported through the bundled async collector. Three signals are emitted:</p>
         <table>
           <thead><tr><th>Signal</th><th>What's emitted</th></tr></thead>
           <tbody>
             <tr><td><strong>Metrics</strong></td><td><code>nio.tool_use.count</code> · <code>nio.turn.count</code> · <code>nio.decision.count</code> · <code>nio.risk.score</code> (histogram)</td></tr>
-            <tr><td><strong>Traces</strong></td><td>One trace per conversation turn. Spans: <code>invoke_agent UserPromptSubmit</code> (turn root), <code>execute_tool &lt;name&gt;</code> (PreToolUse → PostToolUse), <code>task:execute</code> (subagent dispatch). Span names follow the OTel GenAI semantic conventions.</td></tr>
-            <tr><td><strong>Logs</strong></td><td>Audit entries — guard decisions, skill scans, lifecycle events, hook events. Read via <code>/nio report</code>.</td></tr>
+            <tr><td><strong>Traces</strong></td><td>One trace per conversation turn: <code>invoke_agent UserPromptSubmit</code> (turn root) with a <code>chat &lt;model&gt;</code> span per LLM call, an <code>execute_tool &lt;name&gt;</code> span per tool call (sent as the tool finishes, joined to its chat call by <code>gen_ai.tool.call.id</code>), and <code>task:execute</code> per subagent dispatch. Span names follow the OTel GenAI semantic conventions.</td></tr>
+            <tr><td><strong>Logs</strong></td><td>Audit entries — guard decisions, skill scans, lifecycle events, hook events; read via <code>/nio report</code> — plus conversation content records (model reasoning, tool output, and anything too big for a span).</td></tr>
           </tbody>
         </table>
 
+        <div class="callout warn">
+          <div class="title">Capture is off until you turn it on, per session</div>
+          <p>Configuring <code>collector.endpoint</code> does <strong>not</strong> start collection. Every session is silent by default; all three signals stay off until someone runs <code>/nio-monitor on</code> (<code>/nio monitor on</code> on OpenClaw and Hermes) <em>inside that session</em>. <code>/nio-monitor off</code> stops it again, and <code>collector.monitor_all_sessions: true</code> restores blanket capture for operators who want it.</p>
+          <p>Two things the switch does <strong>not</strong> touch: the <strong>guard</strong> keeps evaluating and blocking with capture off, and the local <code>~/.nio/audit.jsonl</code> is written either way.</p>
+        </div>
+
         <h3>Where the data goes</h3>
         <ul>
-          <li><strong>Audit log is dual-written</strong> — every guard decision and lifecycle event ships to OTLP and a local JSONL at <code>~/.nio/audit.jsonl</code> (rotates at 100 MB). Even with no remote collector you keep a full local trail.</li>
-          <li><strong>Metrics and traces are OTLP-only</strong> — no local file. If <code>collector.endpoint</code> is empty they drop on the floor.</li>
+          <li><strong>Arming is the first switch</strong> — no armed session, no OTLP export of any signal. See <a href="nio-monitor.html"><code>/nio-monitor</code></a> and <a href="collector-signals.html#gating">Capture gating</a>.</li>
+          <li><strong>Audit log is dual-written</strong> — every guard decision and lifecycle event goes to the local JSONL at <code>~/.nio/audit.jsonl</code> (rotates at 100 MB) regardless of monitor state, and to OTLP when armed. Even with no remote collector you keep a full local trail.</li>
+          <li><strong>Metrics and traces are OTLP-only</strong> — no local file. If <code>collector.endpoint</code> is empty, or the session was never armed, they drop on the floor.</li>
           <li><strong>Remote OTLP</strong> — set <code>collector.endpoint</code> and Nio POSTs to <code>/v1/metrics</code>, <code>/v1/traces</code>, <code>/v1/logs</code> on that base URL. Bearer auth via <code>collector.api_key</code>.</li>
           <li><strong>Protocol</strong> — <code>http</code> on port 4318 (default) or <code>grpc</code> on port 4317.</li>
           <li><strong>Per-signal switches</strong> — metrics / traces / logs can be turned on or off independently. Empty endpoint + <code>logs.local: false</code> turns the collector into a no-op.</li>
