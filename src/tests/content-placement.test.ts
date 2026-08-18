@@ -28,7 +28,9 @@ import { join } from 'node:path';
 import type { ReadableSpan } from '@opentelemetry/sdk-trace-node';
 import type { ReadableLogRecord } from '@opentelemetry/sdk-logs';
 
-import { endTurn, type CollectorState } from '../scripts/lib/traces-collector.js';
+import {
+  endTurn, recordUserPrompt, recordAssistantReply, type CollectorState,
+} from '../scripts/lib/traces-collector.js';
 import { dispatchCollectorEvent } from '../scripts/lib/collector-core.js';
 import { createContentSink } from '../scripts/lib/content/sink.js';
 import { DEFAULT_CONTENT_LIMITS } from '../scripts/lib/content/truncate.js';
@@ -285,6 +287,51 @@ describe('tool output placement', () => {
 });
 
 // ── Redaction ordering ──────────────────────────────────────────────────
+
+describe('turn attribute redaction', () => {
+  // Secret-shaped test data is assembled at runtime so GitHub's secret
+  // scanner, which matches source text, does not trip on this file.
+  const PEM = [
+    '-----BEGIN RSA PRIVATE ' + 'KEY-----',
+    'MIIEowIBAAKCAQEA' + 'b'.repeat(200),
+    '-----END RSA PRIVATE ' + 'KEY-----',
+  ].join('\n');
+  const KEY_BODY = 'MIIEowIBAAKCAQEA';
+
+  /**
+   * A prompt/reply whose PEM block BEGINS before `redactAndTruncate`'s
+   * 2048-character cut and ENDS after it. Truncate-then-redact destroys
+   * the `-----END …-----` marker, so the PEM pattern cannot match and
+   * the key body ships on the attribute; redact-then-truncate replaces
+   * the whole block first and never truncates at all.
+   */
+  const straddling = `${'x'.repeat(2_000)} ${PEM} trailing`;
+
+  it('redacts a secret straddling the cut point on nio.turn.user_prompt', () => {
+    assert.ok(
+      straddling.indexOf(PEM) < 2048 && straddling.indexOf(PEM) + PEM.length > 2048,
+      'fixture must actually straddle the cut point or the test proves nothing',
+    );
+    const attrs = recordUserPrompt(turnState(), straddling).turn_attributes!;
+    const value = String(attrs['nio.turn.user_prompt']);
+
+    assert.ok(!value.includes(KEY_BODY), 'no key material may reach the turn span');
+    assert.ok(!value.includes('BEGIN RSA'), 'nor the header of a block that was cut in half');
+    assert.ok(value.includes('[REDACTED]'));
+  });
+
+  it('redacts a secret straddling the cut point on nio.turn.assistant_reply', () => {
+    // Same rule on the reply attribute, which the in-process hosts feed
+    // from `onAssistantReply`. It has its own redact/truncate pair, so
+    // reversing it there would go unnoticed by the prompt case.
+    const attrs = recordAssistantReply(turnState(), straddling).turn_attributes!;
+    const value = String(attrs['nio.turn.assistant_reply']);
+
+    assert.ok(!value.includes(KEY_BODY), 'no key material may reach the turn span');
+    assert.ok(!value.includes('BEGIN RSA'));
+    assert.ok(value.includes('[REDACTED]'));
+  });
+});
 
 describe('span content redaction', () => {
   it('redacts a secret that straddles the truncation cut point', async () => {

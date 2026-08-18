@@ -322,8 +322,10 @@ describe('tool content rides the logs signal, keyed to its tool span', () => {
 describe('the user prompt is scanned for secrets', () => {
   it('redacts a pasted credential before it reaches the turn span', async () => {
     // `redactAndTruncate` only scans JSON key names, so a string prompt
-    // passes straight through it. The prompt is the likeliest place for
-    // a pasted credential, so the free-text scanner runs first.
+    // passes straight through it. This pins that the dispatch path
+    // reaches the free-text scanner at all; that it runs BEFORE the
+    // truncation, which needs an over-2048-character fixture to show,
+    // is pinned in content-placement.test.ts.
     const f = freshFixture();
     const secret = 'sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
     const sessionId = 'sess-prompt-redact';

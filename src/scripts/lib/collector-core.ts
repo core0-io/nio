@@ -364,9 +364,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // first moment the span and the payload are in hand together.
         // The result is deliberately NOT among these attrs — see the
         // tool-output emit below.
-        const spanArgs = buildSpanContent(
-          Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '',
-        );
+        const argumentText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
+        const spanArgs = buildSpanContent(argumentText);
         const result = await recordPostToolUse(
           tracerProvider, state, key, cwd,
           {
@@ -402,9 +401,8 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         // for no body at all; the latter emits nothing anyway
         // (`emitToolInputContent` skips an empty input).
         if (!spanCarriesWholeContent(spanArgs)) {
-          const inputText = Object.keys(toolInput).length > 0 ? JSON.stringify(toolInput) : '';
           emitToolInputContent(loggerProvider, contentLimits(), {
-            input: inputText,
+            input: argumentText,
             spanId: toolSpanId,
             traceId: state.turn_trace_id,
             ...(input.tool_use_id ? { toolCallId: input.tool_use_id } : {}),

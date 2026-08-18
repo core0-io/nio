@@ -65,6 +65,10 @@ const TRUNCATION_MARKER = '…[truncated]';
  * @param limit - max UTF-8 byte length of the returned `text`, inclusive
  *   of the truncation marker. `0` disables truncation entirely (escape
  *   hatch) — the input is returned unchanged no matter how long it is.
+ *   A `limit` below the marker's own 14 bytes leaves no budget for
+ *   content and returns the bare marker, which is longer than `limit` —
+ *   "something was here and it was too big" is still a record, and a
+ *   limit that small is a misconfiguration rather than a size class.
  */
 export function truncateContent(text: string, limit: number): TruncateResult {
   const originalBytes = Buffer.byteLength(text, 'utf-8');

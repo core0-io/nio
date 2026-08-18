@@ -278,21 +278,35 @@ export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 /**
- * Record user prompt onto turn state (UserPromptSubmit / before_agent_reply).
+ * Record user prompt onto turn state. Fed by `collector-core`'s
+ * UserPromptSubmit on the hook hosts, and by `plugin-runtime`'s
+ * `onUserPrompt` on the in-process ones (OpenClaw `before_agent_reply`,
+ * Pi `input`, opencode `chat.message`).
  *
  * `redactAndTruncate` is a straight passthrough on strings — it only
  * scans JSON *key names*, so a prompt like "here's my key, sk-ant-..."
  * would ride straight through untouched. Free-text prose is exactly what
  * `redactSecrets` (content/redact.ts) scans for, and the user prompt is
- * the single most likely place for a pasted credential to show up — so
- * it runs first, same redact-then-truncate order the content pipeline
- * uses everywhere else.
+ * the single most likely place for a pasted credential to show up.
+ *
+ * The ORDER is load-bearing, and this is the one path where truncation
+ * is a plain character cut rather than the content pipeline's UTF-8 one:
+ * `redactAndTruncate` slices at 2048 characters, so a PEM block that
+ * begins before the cut and ends after it loses its `-----END …-----`
+ * marker. Scanned afterwards, the pattern cannot match and up to 2 KB of
+ * key body ships on the attribute. Redacting first replaces the whole
+ * block before anything can cut it.
  */
 export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
   return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(redactSecrets(prompt).text) });
 }
 
-/** Record assistant reply onto turn state (currently OpenClaw llm_output). See recordUserPrompt for why redactSecrets runs first. */
+/**
+ * Record assistant reply onto turn state. In-process hosts only —
+ * OpenClaw's `llm_output` and Pi's `message_end`, both via
+ * `plugin-runtime`'s `onAssistantReply`. See `recordUserPrompt` for why
+ * `redactSecrets` runs first.
+ */
 export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
   return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(redactSecrets(reply).text) });
 }
