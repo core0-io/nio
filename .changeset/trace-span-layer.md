@@ -21,7 +21,7 @@ span's `gen_ai.tool.call.id` against the issuing chat span's
 `nio.chat.tool_call_ids`.
 
 Queries and alerts written against the previous flat shape are unaffected —
-the turn root is still every tool span's parent — but a turn on the three
-covered platforms now also contains `chat` spans, so span counts per trace
-go up accordingly. A turn with no readable conversation record degrades to
+the turn root is still every tool span's parent — but every monitored turn,
+on every host, now also contains `chat` spans, so span counts per trace go
+up accordingly. A turn with no readable conversation record degrades to
 the previous shape rather than failing.

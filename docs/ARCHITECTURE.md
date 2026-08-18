@@ -728,8 +728,11 @@ Nio has **two** integration models.
 The platform-agnostic half of the in-process model lives in one class, [`InProcessPluginRuntime`](../src/adapters/plugin-runtime.ts). It owns:
 
 - config loading and the protection-level / `confirm_action` resolution;
-- construction of all three OTEL providers (tracer / meter / logger) from `collector.*`, with injectable overrides so tests can drive the traced paths with an in-memory tracer;
+- construction of all three OTEL providers (tracer / meter / logger) from `collector.*`, built lazily on the first event the capture gate answers `true` for, with injectable overrides so tests can drive the traced paths with an in-memory tracer;
+- the **capture gate** itself, consulted per event rather than per session so `/nio monitor off` takes effect on the next one, and keyed on the **session's own directory** (`setSessionCwd` / `cwdFor`) rather than `process.cwd()` — one process serves many sessions here, so a process-wide constant cannot decide which of them may claim a pending arm. Only OpenClaw, whose hook context carries no directory at all, opts into a `process.cwd()` answer (`processCwdFallback`);
 - per-session `CollectorState` and turn lifecycle (`onSessionStart` / `onUserPrompt` / `onPreTool` / `onPostTool` / `onLlmUsage` / `onAssistantReply` / `onTurnEnd` / `onSessionEnd` / `disposeAllSessions`);
+- **conversation accumulation and reconstruction.** Streaming hosts hand over their events (`recordConversationEvent`, capped per session and deduplicated by a caller-supplied key so a snapshot stream costs one slot per logical thing, not one per delivery); Pi hands over a transcript path instead (`setTranscriptPath`). At turn close the runtime picks a `ConversationSource` for its platform and turns the turn's LLM calls into `chat` spans;
+- **the content pipeline** — a `ContentSink` handed to `endTurn` so the assistant's reasoning and reply reach the logs signal, plus `tool_input` / `tool_output` records emitted directly at the pre and post sides (the params are only in hand at the pre side, and a denied call has no post side);
 - the guard call itself (`evaluateHook`) and the guard-decision → span-attribute translation (`nio.guard.*` + `nio.guard.eval_ms`);
 - **orphan-span compensation on the block path** — when the guard denies, the host never fires its post-side event, so the runtime closes the `execute_tool` span itself with ERROR status and the recorded reason. It uses a *safe* close: the decision to block is already final, so a telemetry failure while emitting the span must never cost the caller its deny;
 - `resolveConfirm`, for hosts that can actually prompt (Pi), which overwrites the provisional `confirm_allowed` attrs with the real `confirm_allowed` / `confirm_denied` outcome;
@@ -747,6 +750,8 @@ The bindings hold **no telemetry logic of their own** — each is a thin transla
 | `/nio` route | `command-dispatch: tool` → `nio_command` | `pi.registerCommand` (bypasses the LLM) | `commands/nio.md` → `nio_command` tool (goes through the model) |
 | Interactive confirm | no | **yes** — `ctx.ui.confirm` | via `permission.ask` re-forcing a prompt |
 | Sub-agent spans | yes (`subagent_spawning`) | **no — Pi has no subagent concept** | yes (`session.created` with `parentID`) |
+| Session directory | **none** — falls back to `process.cwd()` | `ctx.cwd`, off every event | `input.directory`, one plugin per project |
+| Conversation source | `llm_output` event stream | session JSONL replay | `message.updated` / `message.part.updated` snapshots |
 
 Two host quirks are worth calling out because they shape the runtime's contract:
 
