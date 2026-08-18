@@ -120,11 +120,11 @@ describe('monitor-cli status', () => {
 // ── status must be the gate's answer, not a second implementation ─────
 //
 // `status` is the only reading a user gets of where the privacy
-// boundary currently sits. It used to answer with its own
-// `sessionId in store.sessions` lookup, which knew nothing about
-// SESSION_TTL_MS or pending arms — so it could contradict the hooks in
-// both directions. It now runs the same `resolveMonitorGate` the hooks
-// do, read-only.
+// boundary currently sits, so it must run the same `resolveMonitorGate`
+// the hooks do, read-only. A second implementation — the obvious
+// `sessionId in store.sessions` lookup — knows nothing about
+// SESSION_TTL_MS or pending arms and contradicts the hooks in both
+// directions.
 
 /** Mirrors monitor-gate.ts's SESSION_TTL_MS (7 days). */
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -166,9 +166,10 @@ describe('monitor-cli status agrees with the hook-side gate', () => {
 
   it('surfaces a pending arm instead of looking like `on` never happened', () => {
     // The Codex path: no session-id env var, so `on` leaves a pending
-    // arm. Before this, the immediately-following `status` answered
-    // monitored:false / armed_sessions:0 with nothing else to go on —
-    // indistinguishable from `on` having silently failed.
+    // arm. Without `pending_arm` in the answer, the immediately-following
+    // `status` reads monitored:false / armed_sessions:0 with nothing
+    // else to go on — indistinguishable from `on` having silently
+    // failed.
     const home = freshHome();
     const on = run(['on'], { NIO_HOME: home, CLAUDE_CODE_SESSION_ID: '' }, home);
     assert.equal(on['mode'], 'pending');

@@ -87,9 +87,9 @@ describe('loadMonitorStore corruption reporting', () => {
     // comment) — without draining it here, the write can land AFTER this
     // test has finished, racing against whatever the NEXT test sets
     // `_setDiagnosticsAuditPathForTests` to, and landing in that test's
-    // audit file instead of this one's. That exact leak previously produced
-    // a false positive in "does not report a diagnostic when the file is
-    // simply absent" below.
+    // audit file instead of this one's — which turns the
+    // "does not report a diagnostic when the file is simply absent" case
+    // below into a false positive.
     const { dir, logsConfig } = freshDir();
     const auditPath = join(dir, 'audit.jsonl');
     _setDiagnosticsAuditPathForTests(auditPath);
@@ -110,7 +110,7 @@ describe('loadMonitorStore corruption reporting', () => {
     // whether or not the missing-file branch reports — it's asserting
     // against a path diagnostics never targets in the first place. With the
     // redirect in place, this test actually exercises the "did NOT call
-    // reportDiagnostic" path — see review I2.
+    // reportDiagnostic" path.
     const { dir, logsConfig } = freshDir();
     const auditPath = join(dir, 'audit.jsonl');
     _setDiagnosticsAuditPathForTests(auditPath);

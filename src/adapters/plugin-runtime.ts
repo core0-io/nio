@@ -613,11 +613,19 @@ export class InProcessPluginRuntime {
     outcome: { result?: unknown; error?: string | null; durationMs?: number },
   ): Promise<void> {
     const monitored = this.isMonitored(sessionId);
-    const tracerProvider = monitored ? this.getTracerProvider() : null;
-    if (tracerProvider) {
-      const state = this.sessionState.get(sessionId);
-      if (state) {
-        const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
+    const state = this.sessionState.get(sessionId);
+    if (state) {
+      // Drain the guard attrs parked for this key by `onPreTool`
+      // REGARDLESS of monitor state, and before the export gate below.
+      // A value stashed while armed must not outlive this tool call: if
+      // the session is disarmed here and re-armed before the span is
+      // finally closed, that stale decision would merge onto a later,
+      // legitimate export of the same span.
+      const { state: drained, attrs } = takePendingGuardAttrs(state, spanKey);
+      this.sessionState.set(sessionId, drained);
+
+      const tracerProvider = monitored ? this.getTracerProvider() : null;
+      if (tracerProvider) {
         const postAttrs: Record<string, unknown> = {
           ...attrs,
           ...genAiToolCallOutputAttributes({

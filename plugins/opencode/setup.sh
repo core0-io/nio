@@ -67,7 +67,7 @@ else
   OC_HOME="$HOME/.config/opencode"
 fi
 
-FOCUSED_SKILLS="nio-scan nio-action nio-report nio-config nio-doctor nio-external-score"
+FOCUSED_SKILLS="nio-scan nio-action nio-report nio-config nio-doctor nio-external-score nio-monitor"
 
 echo ""
 echo "  Nio — opencode Plugin Setup"

@@ -182,7 +182,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   fi
   rm -rf "$EXT_DIR" 2>/dev/null && echo "  Removed extension" || true
   rm -rf "${SKILLS_DIR:?}/nio" 2>/dev/null && echo "  Removed skill" || true
-  for s in nio-scan nio-action nio-report nio-config nio-doctor nio-external-score; do
+  for s in nio-scan nio-action nio-report nio-config nio-doctor nio-external-score nio-monitor; do
     rm -rf "${SKILLS_DIR:?}/$s" 2>/dev/null || true
   done
   rm -rf "$NIO_DIR" 2>/dev/null && echo "  Removed config" || true
@@ -243,7 +243,7 @@ else
   mkdir -p "$EXT_DIR"
   cp "$SCRIPT_DIR/extensions/nio/index.js" "$EXT_DIR/index.js"
   mkdir -p "$SKILLS_DIR"
-  for s in nio nio-scan nio-action nio-report nio-config nio-doctor nio-external-score; do
+  for s in nio nio-scan nio-action nio-report nio-config nio-doctor nio-external-score nio-monitor; do
     if [ -d "$SCRIPT_DIR/skills/$s" ]; then
       rm -rf "${SKILLS_DIR:?}/$s"
       cp -r "$SCRIPT_DIR/skills/$s" "$SKILLS_DIR/$s"

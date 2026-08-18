@@ -23,6 +23,7 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 import { InProcessPluginRuntime } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
+import { makeInMemoryTracer } from './helpers/tracer.js';
 
 const STORE = 'monitored-sessions.json';
 
@@ -40,6 +41,11 @@ function armSession(home: string, sessionId: string, cwd: string): void {
     JSON.stringify({ sessions: { [sessionId]: { armed_at: Date.now(), cwd } } }),
     'utf-8',
   );
+}
+
+/** Undo `armSession` the same way `/nio monitor off` does. */
+function disarm(home: string): void {
+  writeFileSync(join(home, STORE), JSON.stringify({ sessions: {} }), 'utf-8');
 }
 
 function readStore(home: string): { sessions: Record<string, unknown> } {
@@ -182,11 +188,11 @@ describe('plugin runtime: providers are lazy and gated', () => {
       });
 
       rt.onSessionStart('sess-armed');
-      // `onSessionStart` is synchronous and does not flush; the helper
-      // batches exactly as production does, so both reads below have to
-      // drain the queue first. The second one especially: without the
-      // flush, "an unarmed session added nothing" would be satisfied by a
-      // leaked record still sitting unexported.
+      // `onSessionStart` is synchronous and does not flush, so both
+      // reads below go through `logger.flushed()`. The second one
+      // especially: reading the exporter directly would let "an unarmed
+      // session added nothing" be satisfied by a record that was emitted
+      // and simply not exported yet.
       const armedRecords = (await logger.flushed()).length;
       assert.ok(armedRecords > 0, 'sanity: an armed session does export its audit rows');
 
@@ -212,7 +218,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
   // exist. Each test below drives only the one code path that resolves
   // its own provider, so it can only go red for its own getter.
 
-  it('an explicit null tracerProvider is never rebuilt from config (I3)', () => {
+  it('an explicit null tracerProvider is never rebuilt from config', () => {
     armSession(home, 'sess-armed', process.cwd());
     writeFileSync(
       join(home, 'config.yaml'),
@@ -232,7 +238,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     );
   });
 
-  it('an explicit null meterProvider is never rebuilt from config (I3)', async () => {
+  it('an explicit null meterProvider is never rebuilt from config', async () => {
     armSession(home, 'sess-armed', process.cwd());
     writeFileSync(
       join(home, 'config.yaml'),
@@ -248,7 +254,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     assert.equal(rt._providersBuiltForTests(), false);
   });
 
-  it('an explicit null loggerProvider is never rebuilt from config (I3)', () => {
+  it('an explicit null loggerProvider is never rebuilt from config', () => {
     armSession(home, 'sess-armed', process.cwd());
     writeFileSync(
       join(home, 'config.yaml'),
@@ -265,7 +271,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     assert.equal(rt._providersBuiltForTests(), false);
   });
 
-  it('resolves each provider once and reuses the instance (M6)', async () => {
+  it('resolves each provider once and reuses the instance', async () => {
     // Without this, a getter that rebuilt on every call would look
     // perfectly healthy: every existing assertion is about whether a
     // provider exists, never about how many were made. The real cost is
@@ -300,7 +306,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     }
   });
 
-  it('writes the local audit log to a custom collector.logs.path (I4)', () => {
+  it('writes the local audit log to a custom collector.logs.path', () => {
     // The path has to differ from the default — `${NIO_HOME}/audit.jsonl`
     // — or the assertion passes even when `auditOptsFor` drops
     // `logsConfig` entirely and the writer falls back to that default.
@@ -324,7 +330,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     );
   });
 
-  it('process-wide dispose never builds a logger provider (I5)', async () => {
+  it('process-wide dispose never builds a logger provider', async () => {
     // opencode calls `dispose()` on every plugin teardown, armed or not.
     // Resolving (rather than merely flushing an existing) logger there
     // would stand up an OTLP client at shutdown for a process whose user
@@ -340,7 +346,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
     );
   });
 
-  it('onLlmUsage accumulates nothing for an unmonitored session (M8)', () => {
+  it('onLlmUsage accumulates nothing for an unmonitored session', () => {
     // The sibling capture methods (onUserPrompt / onAssistantReply) have
     // their gate covered by the "unmonitored session never builds a
     // provider" test above, because they resolve a provider. onLlmUsage
@@ -355,6 +361,43 @@ describe('plugin runtime: providers are lazy and gated', () => {
       rt.hasSessionState('sess-unarmed'), false,
       'an unarmed session must not accumulate turn state',
     );
+  });
+
+  it('drains parked guard attrs at onPostTool even when capture was turned off', async () => {
+    // `onPreTool` parks nio.guard.* in sessionState for the post side to
+    // merge onto the closing span. That park must not survive the tool
+    // call it belongs to: disarm between pre and post, re-arm, and the
+    // reclaim at the turn boundary would otherwise export a guard
+    // decision captured across the capture-off window.
+    const tracer = makeInMemoryTracer();
+    try {
+      armSession(home, 'sess-toggle', process.cwd());
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        loggerProvider: null,
+      });
+
+      await rt.onPreTool('sess-toggle', 'call-1', 'exec', { command: 'ls' }, {
+        toolName: 'exec', params: { command: 'ls' },
+      });
+
+      disarm(home);
+      await rt.onPostTool('sess-toggle', 'call-1', 'exec', { result: 'ok' });
+
+      armSession(home, 'sess-toggle', process.cwd());
+      await rt.flushTurnSpans('sess-toggle');
+
+      const reclaimed = tracer.finished().find(sp => sp.name.startsWith('execute_tool'));
+      assert.ok(reclaimed, 'sanity: the pending span is reclaimed at the turn boundary');
+      assert.equal(
+        reclaimed!.attributes['nio.guard.decision'], undefined,
+        'a guard decision parked before capture was turned off must not ride out later',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
   });
 
   it('still evaluates and blocks a dangerous call on an unmonitored session', async () => {

@@ -43,17 +43,6 @@ type Level = (typeof VALID_LEVELS)[number];
 export interface DispatchDeps {
   orchestrator: ActionOrchestrator;
   scanner: SkillScanner;
-  /**
-   * Directory the command was typed in, when the host knows it.
-   *
-   * Only `monitor` reads it, and only to key the arm it writes. Absent
-   * falls back to `process.cwd()` inside `runMonitorCommand` — correct
-   * for the subprocess CLIs, whose process cwd IS the caller's
-   * directory, and wrong for a long-running host serving sessions from
-   * several directories, which is why the in-process runtime threads it
-   * through.
-   */
-  cwd?: string;
 }
 
 export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promise<string> {
@@ -79,7 +68,7 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
     case 'external':
       return handleExternalScore();
     case 'monitor':
-      return handleMonitor(restStr, deps.cwd);
+      return handleMonitor(restStr);
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -123,7 +112,7 @@ function usageText(): string {
  * `monitor-cli.js` runs, so Claude Code / Codex and OpenClaw / Hermes
  * cannot answer differently.
  */
-function handleMonitor(rest: string, cwd?: string): string {
+function handleMonitor(rest: string): string {
   const sub = normaliseMonitorSubcommand(rest);
   if (sub === null) {
     return `Unknown monitor subcommand: ${rest.trim()}\n\n${usageText()}`;
@@ -131,12 +120,10 @@ function handleMonitor(rest: string, cwd?: string): string {
 
   let result;
   try {
-    // `cwd` when the host knows which directory the session is in. The
-    // arm this writes is claimed by matching that directory against the
-    // session's own, so on a host that serves several directories from
-    // one process the fallback (`process.cwd()`) keys the arm to a
-    // directory that may belong to no session at all.
-    result = runMonitorCommand(sub, cwd ? { cwd } : {});
+    // The arm this writes is keyed to `process.cwd()` and claimed by
+    // matching that directory against the one a hook event reports, so
+    // both sides of the comparison agree by construction.
+    result = runMonitorCommand(sub);
   } catch (err) {
     return `monitor ${sub} failed: ${err instanceof Error ? err.message : String(err)}`;
   }
