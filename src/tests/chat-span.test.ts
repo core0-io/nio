@@ -248,6 +248,9 @@ describe('chatSpanAttributes', () => {
       // hang off the turn root, so this is what says WHICH call decided
       // on `toolu_a`.
       'nio.chat.tool_call_ids': ['toolu_a'],
+      // Small enough for the span budget, so the reply is readable from
+      // the trace alone and emits no log record.
+      'nio.chat.reply': 'hi',
     });
   });
 

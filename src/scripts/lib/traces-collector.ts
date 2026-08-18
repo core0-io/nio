@@ -43,9 +43,32 @@ import type {
 } from './traces-state-store.js';
 import type { ChatCall } from './conversation/types.js';
 import { buildSpanTree, chatSpanAttributes, chatSpanName } from './chat-span.js';
+import { redactSecrets } from './content/redact.js';
+import { spanContentAttributes, type SpanContent } from './content/span-content.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan, DeferredSpan };
+
+/**
+ * Callback invoked once per chat span, with the span id that span was
+ * just given, so the caller can emit that call's content through the
+ * logs signal already associated with its span.
+ *
+ * Declared here (not in `content/sink.ts`, which implements it) so this
+ * module can accept one without importing the logs SDK: traces stays
+ * free of any logs-side dependency, and the two signals only meet in the
+ * layer that owns both providers.
+ *
+ * The sink emits the call's own blocks only. A tool call's arguments are
+ * owned by the site that emits that tool's span (see `content/emit.ts`),
+ * and the chat call's claim on them — "this call issued that tool" —
+ * rides the chat span as `nio.chat.tool_call_ids` instead.
+ */
+export type ChatContentSink = (
+  call: ChatCall,
+  spanId: string,
+  traceId: string,
+) => void;
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
@@ -119,7 +142,45 @@ export function genAiToolAttributes(
 // one place.
 // ---------------------------------------------------------------------------
 
-/** Tool-call input attrs (PreToolUse). Used by both deferred (CC/Hermes) and eager (OpenClaw) flows. */
+/**
+ * Tool-call identity only — no payload.
+ *
+ * Used by the hook flow (`collector-core.ts`) at PreToolUse, where the
+ * span's identity has to survive a process boundary through the on-disk
+ * state file and every hook event rewrites that file whole. Carrying the
+ * tool's arguments there made it grow with each call in a long turn.
+ *
+ * The span still ENDS UP with its arguments: `collector-core.ts`
+ * attaches them at PostToolUse via `genAiToolCallArgumentAttributes`,
+ * off the live hook payload, so they reach the exporter without ever
+ * being written to disk. The in-process runtime has the params in hand
+ * at the pre side and uses `genAiToolCallInputAttributes` below instead;
+ * its state is in memory, so it has no file to keep small.
+ */
+export function genAiToolCallIdAttributes(
+  toolCallId?: string,
+): Record<string, unknown> {
+  return toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {};
+}
+
+/**
+ * Tool-call arguments for a span whose body has already been prepared by
+ * `buildSpanContent` (redacted, byte-capped, with a truncation flag).
+ *
+ * Same attribute key as `genAiToolCallInputAttributes`, so a consumer
+ * reads arguments off one key regardless of which flow produced the
+ * span. The difference is provenance: the placement decision — span or
+ * logs — is made on this very `SpanContent`, and the two must not
+ * disagree.
+ */
+export function genAiToolCallArgumentAttributes(args: SpanContent): Record<string, unknown> {
+  return {
+    'gen_ai.tool.call.arguments': args.text,
+    ...spanContentAttributes(args),
+  };
+}
+
+/** Tool-call input attrs (PreToolUse). In-process runtime + guard block path. */
 export function genAiToolCallInputAttributes(
   toolInput: unknown,
   toolCallId?: string,
@@ -216,14 +277,38 @@ export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
 // Turn-state operation helpers (state-in / state-out)
 // ---------------------------------------------------------------------------
 
-/** Record user prompt onto turn state (UserPromptSubmit / before_agent_reply). */
+/**
+ * Record user prompt onto turn state. Fed by `collector-core`'s
+ * UserPromptSubmit on the hook hosts, and by `plugin-runtime`'s
+ * `onUserPrompt` on the in-process ones (OpenClaw `before_agent_reply`,
+ * Pi `input`, opencode `chat.message`).
+ *
+ * `redactAndTruncate` is a straight passthrough on strings — it only
+ * scans JSON *key names*, so a prompt like "here's my key, sk-ant-..."
+ * would ride straight through untouched. Free-text prose is exactly what
+ * `redactSecrets` (content/redact.ts) scans for, and the user prompt is
+ * the single most likely place for a pasted credential to show up.
+ *
+ * The ORDER is load-bearing, and this is the one path where truncation
+ * is a plain character cut rather than the content pipeline's UTF-8 one:
+ * `redactAndTruncate` slices at 2048 characters, so a PEM block that
+ * begins before the cut and ends after it loses its `-----END …-----`
+ * marker. Scanned afterwards, the pattern cannot match and up to 2 KB of
+ * key body ships on the attribute. Redacting first replaces the whole
+ * block before anything can cut it.
+ */
 export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
-  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(prompt) });
+  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(redactSecrets(prompt).text) });
 }
 
-/** Record assistant reply onto turn state (currently OpenClaw llm_output). */
+/**
+ * Record assistant reply onto turn state. In-process hosts only —
+ * OpenClaw's `llm_output` and Pi's `message_end`, both via
+ * `plugin-runtime`'s `onAssistantReply`. See `recordUserPrompt` for why
+ * `redactSecrets` runs first.
+ */
 export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
-  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(reply) });
+  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(redactSecrets(reply).text) });
 }
 
 /** Add per-event LLM usage delta to state.turn_attributes. */
@@ -596,6 +681,13 @@ export async function recordPostToolUse(
     },
     parentCtx,
   );
+  // Force the span's own id to the one minted at PreToolUse. The
+  // `tool_input` / `tool_output` content records go out from this same
+  // event carrying that id, so without this the record names a span the
+  // backend never receives and the two can never be joined.
+  if (pending.span_id) {
+    (span.spanContext() as { spanId: string }).spanId = pending.span_id;
+  }
   if (error) {
     span.setStatus({ code: SpanStatusCode.ERROR, message: error });
     span.recordException(error);
@@ -762,6 +854,12 @@ export function parseTranscriptUsage(
  * file, a streaming source with nothing gathered) degrades cleanly to
  * the pre-chat-layer shape: the turn root and its tool spans, no chat
  * layer.
+ *
+ * `contentSink` receives every chat call together with the span id it
+ * was just given. This is the earliest moment a chat call HAS a span id
+ * — `buildSpanTree` mints it here — which is why conversation content
+ * goes out with the tree rather than "live". A throwing sink is
+ * contained: content is telemetry and must never cost the span tree.
  */
 export async function endTurn(
   provider: NodeTracerProvider,
@@ -769,6 +867,7 @@ export async function endTurn(
   cwd: string | null,
   transcriptPath?: string | null,
   calls?: ChatCall[],
+  contentSink?: ChatContentSink,
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
@@ -809,6 +908,14 @@ export async function endTurn(
   const tree = buildSpanTree(calls ?? [], []);
   for (const node of tree.chats) {
     emitChatSpan(provider, traceId, turnSpanId, node.span_id, node.call);
+
+    if (contentSink) {
+      try {
+        contentSink(node.call, node.span_id, traceId);
+      } catch {
+        // Content is telemetry; a failure here must not cost the tree.
+      }
+    }
   }
 
   // Use provider.getTracer instead of trace.getTracer(global) so that

@@ -29,6 +29,7 @@ export {};
 import { randomBytes } from 'node:crypto';
 import type { ChatCall } from './conversation/types.js';
 import type { DeferredSpan } from './traces-state-store.js';
+import { buildSpanContent, chatReplyText, spanContentAttributes } from './content/span-content.js';
 
 export interface ChatSpanNode {
   /** Span id minted for this chat call; the parent id of its tool spans. */
@@ -52,6 +53,13 @@ export interface SpanTree {
  * `TimingFidelity`). A consumer that cannot tell the two apart will read
  * synthetic zeros as "the model answered instantly".
  *
+ * `nio.chat.reply` carries what the model actually SAID, when it fits
+ * the span budget (see `content/span-content.ts`) — small replies are
+ * common enough that forcing a log join to read them buys nothing. When
+ * a reply does NOT fit, the attribute holds a truncated preview marked
+ * `nio.content.truncated` and the `text` content records stay
+ * authoritative.
+ *
  * `nio.chat.tool_call_ids` is the attribution edge that parentage does
  * not carry. Tool spans hang off the turn root, so "which call decided
  * on this tool" is only recoverable by matching a tool span's
@@ -70,6 +78,10 @@ export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
       toolCallIds.push(block.toolUse.id);
     }
   }
+
+  // Redact-then-truncate happens inside buildSpanContent; `null` means
+  // the call said nothing, and no empty attribute is invented for it.
+  const reply = buildSpanContent(chatReplyText(call));
 
   const usage = call.usage ?? {};
   return {
@@ -91,6 +103,7 @@ export function chatSpanAttributes(call: ChatCall): Record<string, unknown> {
     'nio.chat.is_sidechain': call.isSidechain,
     'nio.chat.timing': call.timing,
     ...(toolCallIds.length > 0 ? { 'nio.chat.tool_call_ids': toolCallIds } : {}),
+    ...(reply ? { 'nio.chat.reply': reply.text, ...spanContentAttributes(reply) } : {}),
   };
 }
 

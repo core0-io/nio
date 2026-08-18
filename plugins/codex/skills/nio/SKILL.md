@@ -535,7 +535,9 @@ If no endpoints are configured (or all are disabled), the command returns a shor
 
 ## Subcommand: monitor
 
-Turn telemetry capture on or off for the current session. See the focused `nio-monitor` skill for full behaviour details (scope of capture, what the switch does and does not control).
+Turn telemetry capture on or off for the current session. On Claude Code, Codex, Pi and opencode the focused `nio-monitor` skill carries the full behaviour details (scope of capture, what the switch does and does not control). OpenClaw ships only this umbrella skill and Hermes installs no skill surface at all, so the summary below (and the README's Collector section) is what their users have.
+
+**Scope of capture, in short.** Arming a session sends to `collector.endpoint`: the user prompt that opened each turn, the tool calls it made, token usage, guard verdicts, and audit records. On **Hermes** it also sends conversation content — the model's reasoning, its reply, tool arguments and tool output — each scanned for secret-shaped strings and size-capped, with small bodies riding the span and large ones going to the logs signal. On **OpenClaw** there are no content records and no `chat` span: the turn span carries the prompt and the assistant reply (both free-text scanned), and each tool span carries the arguments and the result, capped at 2048 characters and redacted by JSON key name only — so a secret inside a command string or in tool output is **not** removed there. While a session is unarmed, none of it leaves the machine.
 
 ### Routing
 
