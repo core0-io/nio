@@ -10,10 +10,9 @@ files, Hermes's `post_llm_call` envelope). Each chat span carries the model,
 its token usage, its finish reason, and how much its timestamps can be
 trusted (`nio.chat.timing`: `exact` / `inferred` / `synthetic`).
 
-Pi, opencode and OpenClaw are **not** covered yet. Their conversation
-sources ship in this release but nothing routes a turn through them, so
-those platforms keep the flat `turn → tool` shape until the in-process
-runtime is wired up in a following release.
+Pi, opencode and OpenClaw get the same layer, wired through the shared
+in-process runtime — see "Capture the conversation on OpenClaw, Pi and
+opencode too" for what each of those hosts reconstructs from.
 
 Tool spans still export the instant a tool finishes, so they are siblings
 of the chat spans, not children — both hang off the turn root. Which call

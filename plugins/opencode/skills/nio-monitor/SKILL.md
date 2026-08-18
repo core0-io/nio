@@ -72,7 +72,9 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 
 Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
 
-Conversation content as described above is captured on the hook-driven hosts — **Claude Code, Codex and Hermes**. **OpenClaw, Pi and opencode** export the turn and tool spans, the metrics and the audit records, and their turn span carries the user prompt (and, on OpenClaw and Pi, the assistant reply) with the same free-text secret scan. What differs there: there is no `chat` span and no content record, so nothing is size-routed to the logs signal — instead each tool span carries **both the arguments it was called with and the result it returned** (`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`), capped at 2048 characters each and redacted only by JSON key name (`api_key`, `token`, `password` and similar). A secret in a command string or in tool output is **not** removed on those three hosts.
+Conversation content as described above is captured on all six hosts — the hook-driven **Claude Code, Codex and Hermes** and the in-process **OpenClaw, Pi and opencode**, which reconstruct each turn's LLM calls from the session file (Pi) or from the host's own event stream (OpenClaw, opencode).
+
+One difference remains on those three in-process hosts: **on top of** the size-routed content records, each tool span also carries the arguments it was called with and the result it returned (`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`), capped at 2048 characters each and redacted only by JSON key name (`api_key`, `token`, `password` and similar). So a secret in a command string or in tool output **is** removed from the log record there, and is **not** removed from that span attribute. No hook-driven host puts a tool result on a span at all.
 
 When it is not armed, none of the above leave the machine.
 
