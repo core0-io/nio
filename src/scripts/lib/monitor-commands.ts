@@ -149,7 +149,21 @@ export interface MonitorStatusResult {
 
 export type MonitorResult = MonitorOnResult | MonitorOffResult | MonitorStatusResult;
 
-export function runMonitorCommand(command: MonitorSubcommand): MonitorResult {
+export interface MonitorCommandOptions {
+  /**
+   * Directory a pending arm is keyed to. Defaults to the calling
+   * process's cwd — which is what the subprocess CLIs want, since their
+   * process cwd IS the caller's directory. A long-running host that
+   * serves sessions from several directories has to pass the session's
+   * own; see `DispatchDeps.cwd`.
+   */
+  cwd?: string;
+}
+
+export function runMonitorCommand(
+  command: MonitorSubcommand,
+  options: MonitorCommandOptions = {},
+): MonitorResult {
   const logsConfig = loadLogsConfig();
   const store = loadMonitorStore(logsConfig);
   const sessionId = resolveSessionId();
@@ -159,7 +173,7 @@ export function runMonitorCommand(command: MonitorSubcommand): MonitorResult {
   // (`isSessionMonitored`), so an arm stored in unresolved form can
   // never be claimed — and on macOS anything under `/tmp` or `/var`
   // arrives unresolved from a host that hands us a session directory.
-  const cwd = canonicaliseCwd(process.cwd());
+  const cwd = canonicaliseCwd(options.cwd ?? process.cwd());
   const now = Date.now();
 
   if (command === 'on') {

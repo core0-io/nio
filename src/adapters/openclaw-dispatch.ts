@@ -43,6 +43,17 @@ type Level = (typeof VALID_LEVELS)[number];
 export interface DispatchDeps {
   orchestrator: ActionOrchestrator;
   scanner: SkillScanner;
+  /**
+   * Directory the command was typed in, when the host knows it.
+   *
+   * Only `monitor` reads it, and only to key the arm it writes. Absent
+   * falls back to `process.cwd()` inside `runMonitorCommand` — correct
+   * for the subprocess CLIs, whose process cwd IS the caller's
+   * directory, and wrong for a long-running host serving sessions from
+   * several directories, which is why the in-process runtime threads it
+   * through.
+   */
+  cwd?: string;
 }
 
 export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promise<string> {
@@ -68,7 +79,7 @@ export async function dispatchNioCommand(raw: string, deps: DispatchDeps): Promi
     case 'external':
       return handleExternalScore();
     case 'monitor':
-      return handleMonitor(restStr);
+      return handleMonitor(restStr, deps.cwd);
     default:
       return `Unknown subcommand: ${head}\n\n${usageText()}`;
   }
@@ -112,7 +123,7 @@ function usageText(): string {
  * `monitor-cli.js` runs, so Claude Code / Codex and OpenClaw / Hermes
  * cannot answer differently.
  */
-function handleMonitor(rest: string): string {
+function handleMonitor(rest: string, cwd?: string): string {
   const sub = normaliseMonitorSubcommand(rest);
   if (sub === null) {
     return `Unknown monitor subcommand: ${rest.trim()}\n\n${usageText()}`;
@@ -120,15 +131,13 @@ function handleMonitor(rest: string): string {
 
   let result;
   try {
-    // The arm this writes is keyed to this process's cwd, and it is
-    // claimed by matching that directory against whatever cwd the
-    // claiming hook EVENT carries. Those are the same value only on the
-    // in-process runtime, which passes `process.cwd()` to the gate as
-    // well; Hermes passes the hook payload's `cwd`. So on Hermes
-    // `/nio monitor on` has to be run from the directory the session
-    // reports, which is the cwd scoping working as intended rather than
-    // an identity that holds automatically.
-    result = runMonitorCommand(sub);
+    // `cwd` when the host knows which directory the session is in. The
+    // arm this writes is claimed by matching that directory against the
+    // session's own, so on a host that serves several directories from
+    // one process the fallback (`process.cwd()`) keys the arm to a
+    // directory that may belong to no session at all. Pi and opencode
+    // pass it; OpenClaw and Hermes do not, and take the fallback.
+    result = runMonitorCommand(sub, cwd ? { cwd } : {});
   } catch (err) {
     return `monitor ${sub} failed: ${err instanceof Error ? err.message : String(err)}`;
   }

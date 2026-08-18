@@ -31,7 +31,8 @@ import { emitContentRecords } from '../logs-collector.js';
  *
  * Tool arguments do NOT come through here: they are owned by the site
  * that emits the tool's span, which is the only place that can tell
- * whether the span carried the whole body (see `buildToolInputRecord`).
+ * whether the span carried the whole body, and whether it will be sent
+ * at all (see `buildToolInputRecord`).
  *
  * Failures are swallowed here rather than propagated: the caller is in
  * the middle of emitting a span tree, and losing the tree because one
@@ -92,10 +93,11 @@ export function emitToolOutputContent(
  *
  * Deliberately independent of `ConversationSource`: this is what keeps
  * tool arguments on the wire when a session has no transcript to replay.
- * Callers must only reach here when the tool span could NOT carry the
- * whole body — see `buildToolInputRecord` for the contract. Same gating
- * as `emitToolOutputContent` — no provider, no ids, or nothing to say
- * means nothing is emitted.
+ * WHEN a caller may reach here differs by family — the hook path only
+ * when the span could not carry the whole body, the in-process path
+ * unconditionally; see `buildToolInputRecord` for both rules and why
+ * they differ. Same gating as `emitToolOutputContent` — no provider, no
+ * ids, or nothing to say means nothing is emitted.
  */
 export function emitToolInputContent(
   provider: LoggerProvider | null | undefined,

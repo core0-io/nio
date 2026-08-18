@@ -99,6 +99,17 @@ export function registerOpenClawPlugin(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    // OpenClaw's hook context carries `sessionKey` / `sessionId` /
+    // `runId` and no directory of any kind: a session here is a
+    // conversation, not a checkout, so no OpenClaw session can report a
+    // working directory and there is no `defaultCwd` or `setSessionCwd`
+    // anywhere below. This is the one runtime that therefore takes
+    // `cwdFor`'s `process.cwd()` answer — the SAME value
+    // `/nio monitor on` stamps its arm with, since that command runs in
+    // this very process, so arming stays consistent. See
+    // `PluginRuntimeOptions.processCwdFallback` for why it is opt-in
+    // rather than the default.
+    processCwdFallback: true,
   });
 
   /** OpenClaw carries the session id on ctx, with several fallbacks. */
@@ -170,6 +181,11 @@ export function registerOpenClawPlugin(
     try {
       const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
       const sessionId = sid(ctx);
+      // Kept for the end-of-turn chat-span reconstruction. OpenClaw has
+      // no session file and no whole-conversation payload, so this event
+      // stream is the only record of which LLM call happened when.
+      // `createOpenClawSource` reads a `{ hook, event }` envelope.
+      rt.recordConversationEvent(sessionId, { hook: 'llm_output', event });
       if (e.usage) {
         rt.onLlmUsage(sessionId, {
           input: e.usage['input'], output: e.usage['output'],

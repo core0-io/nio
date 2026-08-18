@@ -70,9 +70,17 @@ When a session is armed, these are exported to the configured OTLP endpoint:
 - **metrics** — tool-use, turn, and guard-decision counters plus a risk-score histogram
 - **logs** — audit records (guard, scan, lifecycle and hook events), **plus the conversation content that does not fit on a span**: model reasoning ("thinking") and tool output always, and the reply / tool arguments whenever they exceeded the 2 KB span budget. Each is redacted for secrets and then truncated to a per-kind cap — thinking ≤64 KB, reply text ≤64 KB, tool arguments ≤16 KB, tool output ≤32 KB (configurable via `collector.content_limits`)
 
-Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. A body has one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
+Content is therefore split by **size**, not by kind: small bodies on the span, large ones in the logs signal, joined back by span id. On the hook-driven hosts a body has exactly one owner — arguments that fit the span budget produce no log record at all, and one that overflows produces exactly one, next to the truncated span copy. Both signals are armed and disarmed by this same switch.
 
-Conversation content as described above is captured on the hook-driven hosts — **Claude Code, Codex and Hermes**. **OpenClaw, Pi and opencode** export the turn and tool spans, the metrics and the audit records, and their turn span carries the user prompt (and, on OpenClaw and Pi, the assistant reply) with the same free-text secret scan. What differs there: there is no `chat` span and no content record, so nothing is size-routed to the logs signal — instead each tool span carries **both the arguments it was called with and the result it returned** (`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`), capped at 2048 characters each and redacted only by JSON key name (`api_key`, `token`, `password` and similar). A secret in a command string or in tool output is **not** removed on those three hosts.
+Conversation content as described above is captured on all six hosts — the hook-driven **Claude Code, Codex and Hermes** and the in-process **OpenClaw, Pi and opencode**, which reconstruct each turn's LLM calls from the session file (Pi) or from the host's own event stream (OpenClaw, opencode).
+
+Two differences remain on those three in-process hosts.
+
+**The one-owner rule does not hold there.** Each tool span carries the arguments it was called with *and* the result it returned (`gen_ai.tool.call.arguments` / `gen_ai.tool.call.result`), and the matching `tool_input` / `tool_output` log records are emitted **unconditionally**, not only on overflow — so a tool call with small arguments ships that body twice, once on the span and once in the logs signal. That is deliberate: those hosts hold turn state in memory with nothing on disk to replay, so the log record is the copy that survives a mid-turn crash or a mid-turn `off`, and it is emitted as the call happens rather than waiting for a span that may never be sent.
+
+**The span copy is not free-text scanned.** Both span attributes are capped at 2048 characters and redacted only by JSON key name (`api_key`, `token`, `password` and similar), so a secret in a command string or in tool output **is** removed from the log record there, and is **not** removed from that span attribute. No hook-driven host puts a tool result on a span at all.
+
+Model reasoning ("thinking") depends on what the host publishes: Pi and opencode expose reasoning blocks and emit them; **OpenClaw does not publish reasoning to any hook Nio subscribes to, so no thinking record is produced there**.
 
 When it is not armed, none of the above leave the machine.
 

@@ -11,13 +11,15 @@ export {};
  * two files, `--platform codex`) call this before creating any OTEL
  * provider — each hook event is a fresh process, so the gate can be
  * decided once, up front. Hermes (`hook-cli.ts`) does the same: also a
- * fresh process per event. OpenClaw (`openclaw-plugin.ts`) is a
- * long-running daemon: it creates its providers lazily, on the first
- * event this function answers `true` for, and then shares them across
- * every session for the process's lifetime. So it calls this inside
- * each event handler instead, keyed by that event's session id, and
- * skips only the OTEL-writing part of the handler when unmonitored.
- * All four platforms are wired in.
+ * fresh process per event. OpenClaw, Pi and opencode share one
+ * long-running host process and one `InProcessPluginRuntime`, which
+ * creates its providers lazily — on the first event this function
+ * answers `true` for — and then shares them across every session for
+ * the process's lifetime. So the runtime calls this inside each event
+ * handler instead, keyed by that event's session id AND that session's
+ * own directory (`cwdFor`, not `process.cwd()`, since one process
+ * serves many sessions), and skips only the OTEL-writing part of the
+ * handler when unmonitored. All six platforms are wired in.
  * Keeping the check in a single module means the load → decide →
  * persist sequence cannot drift between platforms regardless of which
  * of the two call patterns they use.

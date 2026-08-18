@@ -36,9 +36,11 @@ count, a PEM block straddling its 2048-character cut would have lost the
 `-----END …-----` marker that makes it recognisable. The scan runs first,
 so the block is replaced before anything can cut it.
 
-Content is captured on the hook-driven hosts — Claude Code, Codex and
-Hermes. OpenClaw, Pi and opencode keep exporting their turn and tool
-spans, metrics and audit records, and gain no content records here.
+Content is captured on all six hosts. The pipeline above describes the
+hook-driven ones (Claude Code, Codex, Hermes); OpenClaw, Pi and opencode
+run the same pipeline through the shared in-process runtime, with one
+residual difference documented in "Capture the conversation on OpenClaw,
+Pi and opencode too".
 
 None of this is new capture surface for an *unarmed* session — it stays
 exactly as silent as before. It is new for anyone who has already armed

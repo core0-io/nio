@@ -227,9 +227,21 @@ describe('OpenClaw plugin — characterization', () => {
       await api.handlers.get('agent_end')!({}, CTX);
 
       const spans = tracer.finished();
-      assert.equal(spans.length, 1);
-      assert.equal(spans[0]!.attributes['nio.turn.user_prompt'], 'hello there');
-      assert.equal(spans[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+      // Turn close now ALSO reconstructs a chat span from the
+      // accumulated llm_output event, so a bare `spans.length === 1` no
+      // longer describes this path. What it pinned still holds: exactly
+      // one turn root, carrying the prompt and the usage — plus the
+      // total, kept explicitly, because per-kind counts alone would let
+      // a third kind of span slip in unnoticed.
+      assert.equal(spans.length, 2, 'exactly one turn root and one chat span — nothing else');
+      const turnRoots = spans.filter((s) => s.name.startsWith('invoke_agent'));
+      assert.equal(turnRoots.length, 1);
+      assert.equal(turnRoots[0]!.attributes['nio.turn.user_prompt'], 'hello there');
+      assert.equal(turnRoots[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+      assert.equal(
+        spans.filter((s) => s.name.startsWith('chat')).length, 1,
+        'and the llm_output event the plugin accumulated becomes one chat span',
+      );
     } finally {
       await tracer.shutdown();
     }
