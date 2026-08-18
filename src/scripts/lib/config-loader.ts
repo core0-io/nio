@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { load as yamlLoad } from 'js-yaml';
+import { type ContentLimits, DEFAULT_CONTENT_LIMITS } from './content/truncate.js';
 
 export interface CollectorConfig {
   endpoint: string;
@@ -174,4 +175,34 @@ export function loadMonitorAllSessions(): boolean {
   const raw = readRawConfig();
   const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
   return collector['monitor_all_sessions'] === true;
+}
+
+/**
+ * Read `collector.content_limits` — per-content-kind byte caps applied by
+ * `truncateContent` (content/truncate.ts). Each key falls back to
+ * `DEFAULT_CONTENT_LIMITS` independently when unset, non-numeric,
+ * negative, or otherwise malformed: a bad YAML value must never throw or
+ * silently disable the cap for that kind. An explicit `0` is a valid
+ * value (the "unlimited" escape hatch) and is honored as-is, not treated
+ * as missing.
+ */
+export function loadContentLimits(): ContentLimits {
+  const raw = readRawConfig();
+  const collector = (raw['collector'] ?? {}) as Record<string, unknown>;
+  const configured = (collector['content_limits'] ?? {}) as Record<string, unknown>;
+
+  const pick = (key: keyof ContentLimits): number => {
+    const value = configured[key];
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? value
+      : DEFAULT_CONTENT_LIMITS[key];
+  };
+
+  return {
+    thinking: pick('thinking'),
+    text: pick('text'),
+    user_prompt: pick('user_prompt'),
+    tool_input: pick('tool_input'),
+    tool_output: pick('tool_output'),
+  };
 }
