@@ -43,7 +43,9 @@ export {};
  * `span-content.ts`); `thinking` is never span-carried, so it is
  * unconditional here. And `tool_use` blocks, whose arguments belong to
  * the site that emits the tool's span — the only place that can tell
- * whether that span carried the whole body (see `buildToolInputRecord`).
+ * whether that span carried the whole body, and — on the in-process
+ * family — whether it will ever be sent at all (see
+ * `buildToolInputRecord`).
  * This module replays history at the end of the turn and cannot see
  * whether a span was emitted, so any rule it applied would be a guess.
  * What it uniquely knew — which chat call issued which tool call —
@@ -174,25 +176,31 @@ export function buildToolOutputRecord(
  * Build the record carrying a tool call's ARGUMENTS, from the hook
  * payload rather than from a `ChatCall`.
  *
- * This is the ONLY producer of `tool_input` records, and it is the LOG
- * side of the size rule rather than a second copy of it. The contract
- * every caller must honour:
+ * This is the ONLY producer of `tool_input` records. Both callers are
+ * span-emitting sites — which is the point: only such a site holds the
+ * `SpanContent` the size rule is stated against — but they apply
+ * DIFFERENT rules, and the difference is deliberate:
  *
- *   **Emit this only when the tool span you are emitting could not carry
- *   the whole body** — i.e. `!spanCarriesWholeContent(spanArgs)` for the
- *   very `SpanContent` you just put on the span as
- *   `gen_ai.tool.call.arguments`. Same value, same statement, so the two
- *   signals cannot disagree about who owns the bytes.
+ *   - `collector-core.ts` PostToolUse (the hook family) emits this only
+ *     when the span could not carry the whole body, i.e.
+ *     `!spanCarriesWholeContent(spanArgs)` for the very `SpanContent` it
+ *     just put on the span as `gen_ai.tool.call.arguments`. Same value,
+ *     same statement, so the two signals cannot disagree about who owns
+ *     the bytes. There, one body has exactly one owner.
+ *   - `plugin-runtime.ts` PreToolUse (the in-process family) emits this
+ *     UNCONDITIONALLY. The params are only in hand at the pre side, and
+ *     the record is designed to OUTLIVE a span that a mid-turn crash or
+ *     disarm may never send (see `emitToolContent`). So that family
+ *     keeps a bounded second copy of small arguments — the span
+ *     attribute AND the record — where the hook family keeps one. A call
+ *     the guard denies contributes its arguments there for the same
+ *     reason: its post side never fires.
  *
- * The one caller today is `collector-core.ts`'s PostToolUse branch, and
- * it is a span-emitting site — which is the point: only such a site can
- * evaluate the contract above.
- *
- * It needs no `ConversationSource`, which is what keeps arguments on the
- * wire for a session with no readable transcript. It lands on the TOOL
- * span, next to `tool_output`; which chat call issued that tool is
- * carried by the chat span's `nio.chat.tool_call_ids`, not by a second
- * content record.
+ * Whichever rule applies, this needs no `ConversationSource`, which is
+ * what keeps arguments on the wire for a session with no readable
+ * transcript. It lands on the TOOL span, next to `tool_output`; which
+ * chat call issued that tool is carried by the chat span's
+ * `nio.chat.tool_call_ids`, not by a second content record.
  */
 export function buildToolInputRecord(
   input: string,
