@@ -244,16 +244,10 @@ describe('chatSpanAttributes', () => {
       'nio.content.blocks': 3,
       'nio.chat.is_sidechain': true,
       'nio.chat.timing': 'inferred',
-      // The attribution edge that parentage used to carry: tool spans
+      // The attribution edge that parentage does not carry: tool spans
       // hang off the turn root, so this is what says WHICH call decided
-      // on `toolu_a`. It used to be readable only by joining the
-      // `tool_use` content record, which cost a full duplicate of the
-      // arguments for what is a list of ids.
+      // on `toolu_a`.
       'nio.chat.tool_call_ids': ['toolu_a'],
-      // Small enough for the span budget, so the trace is readable on its
-      // own and no `text` content record is emitted — see
-      // content/span-content.ts.
-      'nio.chat.reply': 'hi',
     });
   });
 
@@ -374,21 +368,15 @@ describe('end-to-end: turn → {chat, tool}', () => {
     await runToolPair(logsConfig, tracer.provider, sessionId, 'toolu_e2e_1');
     await runToolPair(logsConfig, tracer.provider, sessionId, 'toolu_e2e_2');
 
-    // Both tool spans are already out, mid-turn. Deferring them would
-    // have bought nesting under their issuing chat call and cost the
-    // whole turn's visibility — see eager-tool-spans.test.ts for the
-    // measurement that settled it.
+    // Both tool spans are already out, mid-turn: nesting them under
+    // their issuing chat call would cost the whole turn's visibility.
     assert.equal(
       tracer.finished().length,
       2,
       'both tool spans go out at PostToolUse, before the turn closes',
     );
 
-    const mid = loadState(logsConfig, sessionId);
-    assert.deepEqual(
-      mid?.deferred_spans ?? [], [],
-      'and nothing is parked in the state file waiting for the turn to end',
-    );
+    const mid = loadState(logsConfig);
 
     // Transcript is written after the turn started so both calls pass the
     // `callsSince(turn_start_ms)` filter.
@@ -487,8 +475,8 @@ describe('end-to-end: turn → {chat, tool}', () => {
       'the last call of a Claude Code transcript has no successor to borrow an end time from',
     );
 
-    const after = loadState(logsConfig, sessionId);
-    assert.deepEqual(after?.deferred_spans, [], 'deferred_spans must drain at end of turn');
+    const after = loadState(logsConfig);
+    assert.equal(after?.turn_trace_id, '', 'the turn marker must be cleared at end of turn');
   });
 
   it('degrades to turn → tool when no conversation calls are available', async () => {

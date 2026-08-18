@@ -23,9 +23,7 @@
 // module doc), not a drift bug, and folding it into the parity
 // assertions would either force a false "structural mismatch" or
 // silently drop tool_use from the comparison for every source. Neither
-// is what this test is for. That gap is also why OpenClaw is the one
-// platform whose tool spans stay siblings of their chat span — see
-// openclaw-span-hierarchy.test.ts and pi-opencode-span-hierarchy.test.ts.
+// is what this test is for.
 //
 // The two calls constructed below (fixtures for Claude Code, Codex and
 // Pi, inline payloads for Hermes and opencode) describe the same
