@@ -30,6 +30,23 @@ describe('createSourceForPlatform', () => {
     assert.equal(source!.name, 'openclaw-event-stream');
   });
 
+  // Pi and opencode both dispatch on a field another platform already
+  // uses — Pi on `transcriptPath` (shared with claude-code and codex),
+  // opencode on `events` (shared with openclaw) — so only the returned
+  // source's name distinguishes a correct branch from a copy-paste of
+  // its neighbour.
+  it('dispatches pi to the pi-session source', () => {
+    const source = createSourceForPlatform('pi', { transcriptPath: '/some/session.jsonl' });
+    assert.ok(source);
+    assert.equal(source!.name, 'pi-session');
+  });
+
+  it('dispatches opencode to the opencode-events source', () => {
+    const source = createSourceForPlatform('opencode', { events: [] });
+    assert.ok(source);
+    assert.equal(source!.name, 'opencode-events');
+  });
+
   it('returns null for claude-code when transcriptPath is missing', () => {
     assert.equal(createSourceForPlatform('claude-code', {}), null);
   });
@@ -44,6 +61,14 @@ describe('createSourceForPlatform', () => {
 
   it('returns null for openclaw when events is missing', () => {
     assert.equal(createSourceForPlatform('openclaw', {}), null);
+  });
+
+  it('returns null for pi when transcriptPath is missing', () => {
+    assert.equal(createSourceForPlatform('pi', {}), null);
+  });
+
+  it('returns null for opencode when events is missing', () => {
+    assert.equal(createSourceForPlatform('opencode', {}), null);
   });
 
   it('returns null for an unknown platform', () => {

@@ -6,9 +6,10 @@ export {};
 /**
  * The normalised shape every platform's conversation data collapses to.
  *
- * Four host platforms expose their LLM turns in four different ways —
- * Claude Code and Codex write session files, Hermes and OpenClaw emit
- * live events. Rather than teach the span layer all four dialects, each
+ * Six host platforms expose their LLM turns in three different ways —
+ * Claude Code, Codex and Pi write session files; Hermes hands over a
+ * hook payload envelope; OpenClaw and opencode hand over an accumulated
+ * event array. Rather than teach the span layer all six dialects, each
  * platform gets a `ConversationSource` implementation that produces this
  * one structure.
  */
@@ -46,10 +47,11 @@ export type ThinkingFidelity = 'full' | 'summary' | 'unknown';
 /**
  * How much the start/end timestamps can be trusted.
  *
- * Only one of the four platforms reports both ends of an LLM call.
- * The span layer needs to know which numbers are real before it draws
- * a duration — a synthetic 0ms span and a measured 0ms span mean very
- * different things.
+ * Two of the six sources report both ends of an LLM call — Codex (real
+ * per-entry rollout timestamps) and opencode (`time.created` /
+ * `time.completed`). The span layer needs to know which numbers are
+ * real before it draws a duration: a synthetic 0ms span and a measured
+ * 0ms span mean very different things.
  */
 export type TimingFidelity =
   /** Both ends come from the platform. */
@@ -110,27 +112,28 @@ export interface ConversationSource {
    * Calls that started at or after `sinceMs`. Returns an empty array
    * when nothing is available — never throws, never partially fails.
    *
-   * `sinceMs` is a REAL filter only on the replay family (Claude Code,
-   * Codex): those sources read a session file with genuine per-line
-   * timestamps, so `callsSince` actually excludes calls that happened
-   * before `sinceMs`.
+   * `sinceMs` is a REAL filter on every source whose `startMs` comes
+   * from the host — the three replay sources (Claude Code, Codex, Pi)
+   * and opencode, which stamps each message with `time.created`. Those
+   * genuinely exclude calls that started before `sinceMs`.
    *
-   * On the streaming family (Hermes, OpenClaw) it filters nothing in
-   * practice, because `startMs` on those sources is synthetic (see
-   * `TimingFidelity`) — Hermes stamps every call in a payload with the
-   * same `Date.now()`, OpenClaw derives it from `Date.now()` plus array
-   * position. Passing a real `sinceMs` to either will not trim history
-   * the way it does for the replay family: expect the full visible set
-   * back, every time.
+   * On Hermes and OpenClaw it filters nothing in practice, because
+   * `startMs` on those two is synthetic (see `TimingFidelity`) — Hermes
+   * stamps every call in a payload with the same `Date.now()`, OpenClaw
+   * derives it from `Date.now()` plus array position. Passing a real
+   * `sinceMs` to either will not trim history: expect the full visible
+   * set back, every time.
    *
    * Hermes's `post_llm_call` also replays the *entire*
    * `conversation_history` on every call, not just what changed. This
    * layer is stateless and cannot deduplicate across invocations, and
    * `callsSince` cannot either, since the timestamps it would filter on
-   * aren't real. Callers on a streaming source MUST deduplicate on
-   * `callId` themselves — which only works if `callId` stays stable as
-   * history is trimmed or compacted (see `stableCallId` in
-   * `hermes-source.ts`).
+   * aren't real. Callers on Hermes MUST deduplicate on `callId`
+   * themselves — and **none currently does**, so a Hermes turn ships
+   * each of its trailing calls roughly `TAIL_CALL_WINDOW` times. Any
+   * caller that takes this on will only get it right if `callId` stays
+   * stable as history is trimmed or compacted, which is what
+   * `stableCallId` in `hermes-source.ts` is for.
    */
   callsSince(sinceMs: number): ChatCall[];
 }

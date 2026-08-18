@@ -111,9 +111,10 @@ describe('opencode-source', () => {
     assert.equal(tool?.toolUse?.input, JSON.stringify({ command: 'ls' }));
   });
 
-  // opencode is the ONLY platform reporting both ends of a call, so it is
-  // the only one that earns 'exact'. Downgrading this to 'synthetic'
-  // silently disables buildSpanTree's time-window tool attribution.
+  // opencode reports both ends of a call, so it earns 'exact' — one of
+  // only two sources that do, Codex being the other. Downgrading this to
+  // 'synthetic' silently disables buildSpanTree's time-window tool
+  // attribution.
   it('reports exact timing from the message time range', () => {
     const [call] = createOpenCodeSource(EVENTS).callsSince(0);
     assert.equal(call.timing, 'exact');
@@ -198,16 +199,16 @@ describe('opencode-source', () => {
     assert.ok(blockOrderIsSane(calls[0]));
   });
 
-  // Unlike every other ConversationSource, this one is NOT reading
-  // `JSON.parse` output: the module doc says so explicitly, and the
-  // binding hands over the live SDK objects opencode published. A
-  // property read on one of those is a call into host code, so a getter
-  // or a Proxy trap can throw where a parsed record never could — and
-  // `callsSince` runs inside a host-blocking hook. `serialiseInput`
-  // already guarded the one place that stringifies; the bare reads
-  // (`info.role`, `part.id`, `p.type`, …) did not, and a throwing getter
-  // on `e.info` or a hostile Proxy part took the whole turn's
-  // reconstruction with it.
+  // This source is not reading `JSON.parse` output: the binding hands
+  // over the live SDK objects opencode published. A property read on one
+  // of those is a call into host code, so a getter or a Proxy trap can
+  // throw where a parsed record never could — and `callsSince` runs
+  // inside a host-blocking hook. `serialiseInput` already guarded the
+  // one place that stringifies; the bare reads (`info.role`, `part.id`,
+  // `p.type`, …) did not, and a throwing getter on `e.info` or a hostile
+  // Proxy part took the whole turn's reconstruction with it. OpenClaw's
+  // source takes live host objects too and has no equivalent guard —
+  // that gap is real and is not this test's subject.
   //
   // The surviving good call is what makes this discriminating: a source
   // that simply returned `[]` on any throw would satisfy "does not

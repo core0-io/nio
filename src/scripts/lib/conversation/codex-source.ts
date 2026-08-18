@@ -153,11 +153,12 @@ function finaliseCall(builder: CallBuilder): ChatCall {
     model: builder.model,
     startMs: builder.startMs,
     endMs: builder.endMs,
-    // Codex's task_complete event carries real started_at/completed_at
-    // timestamps for the turn, and function_call/function_call_output/
-    // token_count entries push endMs forward as the call progresses —
-    // both ends are genuinely platform-reported, unlike the other three
-    // sources (see TimingFidelity in types.ts).
+    // Every rollout entry carries its own timestamp: the reasoning entry
+    // that opens a call sets startMs, and function_call /
+    // function_call_output / token_count / task_complete entries push
+    // endMs forward as it progresses. Both ends are therefore genuinely
+    // platform-reported — one of only two sources that can say that,
+    // opencode being the other (see TimingFidelity in types.ts).
     timing: 'exact',
     usage: builder.usage,
     timeToFirstTokenMs: builder.timeToFirstTokenMs,

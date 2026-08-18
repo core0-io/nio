@@ -394,3 +394,88 @@ describe('hook-cli --platform hermes: collector path', () => {
     assert.equal(stdout.trim(), '{}');
   });
 });
+
+// ── --platform hermes: the conversation envelope reaches the collector ──
+//
+// Hermes is the one platform whose LLM calls exist nowhere the collector
+// can go and read them — no session file, only the raw `post_llm_call`
+// envelope on stdin. `runHermesCollector` is the sole producer of
+// `DispatchOptions.conversationInput`, and nothing else in the suite
+// runs that function: chat-span.test.ts calls `dispatchCollectorEvent`
+// directly and supplies the field itself. Delete the field from
+// hook-cli.ts and, without this test, every suite stays green while
+// Hermes silently loses its entire chat layer.
+//
+// Asserted through a stub OTLP endpoint rather than in-process, because
+// the field only exists on the far side of a bundled subprocess. The
+// exported bytes are searched for the span name as a substring: span
+// names travel as plain UTF-8 inside the OTLP protobuf, so this needs no
+// protobuf decoder and stays honest about what it checks.
+
+describe('hook-cli --platform hermes: conversation envelope', () => {
+  it('feeds extra.conversation_history to the chat layer at post_llm_call', async () => {
+    const { createServer } = await import('node:http');
+
+    const bodies: Buffer[] = [];
+    const server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        if (req.url?.endsWith('/v1/traces')) bodies.push(Buffer.concat(chunks));
+        res.writeHead(200, { 'content-type': 'application/x-protobuf' });
+        res.end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+
+    const home = mkdtempSync(join(tmpdir(), 'nio-hermes-conv-'));
+    try {
+      // monitor_all_sessions so the capture gate lets this session
+      // through without an arming step — the gate has its own tests.
+      writeFileSync(join(home, 'config.yaml'), `collector:
+  endpoint: "http://127.0.0.1:${port}"
+  monitor_all_sessions: true
+  metrics:
+    enabled: false
+  logs:
+    enabled: false
+`);
+
+      const payload = JSON.stringify({
+        hook_event_name: 'post_llm_call',
+        session_id: 'hermes-conv-sess',
+        cwd: '/tmp',
+        extra: {
+          model: 'gpt-test',
+          conversation_history: [
+            { role: 'user', content: 'do the thing' },
+            { role: 'assistant', content: 'hermes assistant reply', finish_reason: 'stop' },
+          ],
+        },
+      });
+
+      const { stdout, code } = await runHookCli(
+        ['--platform', 'hermes', '--stdin'],
+        payload,
+        { NIO_HOME: home },
+      );
+      assert.equal(code, 0);
+      assert.equal(stdout.trim(), '{}', 'telemetry must never change what Hermes sees');
+
+      const exported = Buffer.concat(bodies).toString('utf-8');
+      assert.ok(
+        exported.includes('invoke_agent UserPromptSubmit'),
+        'the turn root must have been exported — otherwise this test proves nothing about the chat layer',
+      );
+      assert.ok(
+        exported.includes('chat gpt-test'),
+        'the assistant entry in extra.conversation_history must become a chat span; '
+          + 'it can only get there through DispatchOptions.conversationInput',
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+});

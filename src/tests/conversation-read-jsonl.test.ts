@@ -1,11 +1,11 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-// read-jsonl.ts is the one shared helper across all replay conversation
-// sources (claude-code-source.ts, codex-source.ts) and the only module
-// in this batch that touches real file I/O with a resource-risk
-// concern (unbounded memory on a huge session file) — yet it had zero
-// dedicated tests. This file closes that gap.
+// read-jsonl.ts is the shared helper behind all three replay
+// conversation sources (claude-code-source.ts, codex-source.ts,
+// pi-source.ts) and the only module in the conversation layer that
+// touches real file I/O with a resource-risk concern: unbounded memory
+// on a huge session file, read from a host-blocking hook.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';

@@ -44,11 +44,13 @@ export {};
  * reasoning contracts. An unrecognised model reports `'unknown'` rather
  * than being defaulted either way.
  *
- * KNOWN GAP — this module never emits a `tool_use` block. The other
- * sources reconstruct it from data the platform hands them directly
- * (Claude Code's `content[]`, Codex's `function_call`, Hermes'
- * `tool_calls`); OpenClaw's equivalent data — `before_tool_call` /
- * `after_tool_call` — lives in `openclaw-plugin.ts`, not in anything
+ * KNOWN GAP — this module never emits a `tool_use` block, and it is the
+ * only one of the six sources that doesn't. The other five reconstruct
+ * it from data the platform hands them directly (Claude Code's
+ * `content[]`, Codex's `function_call`, Hermes's `tool_calls`, Pi's
+ * `toolCall` block, opencode's `tool` part); OpenClaw's equivalent data
+ * — `before_tool_call` / `after_tool_call` — lives in
+ * `openclaw-plugin.ts`, not in anything
  * this module reads, and reattaching it here would require correlating
  * those events back to the right chat call (by `runId`/`callId`) on a
  * platform this module has never seen live. Left out deliberately

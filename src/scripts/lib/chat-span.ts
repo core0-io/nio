@@ -112,11 +112,14 @@ function randomSpanId(): string {
  *     the main path and the only one that is actually evidence.
  *  2. Time containment — `start_ms` inside `[call.startMs, next.startMs)`.
  *     Enabled ONLY when the candidate call's `timing` is not
- *     `'synthetic'`. Three of the four platforms fabricate their
- *     timestamps (Claude Code collapses endMs onto startMs, Hermes gives
- *     every call in a payload one `Date.now()`, OpenClaw adds the array
- *     index to `Date.now()`); interval arithmetic on fabricated numbers
- *     produces a tree that looks structured and is noise.
+ *     `'synthetic'`. Two of the six sources fabricate their timestamps
+ *     outright — Hermes gives every call in a payload one `Date.now()`,
+ *     OpenClaw adds the array index to `Date.now()` — and interval
+ *     arithmetic on fabricated numbers produces a tree that looks
+ *     structured and is noise. Everything else stays eligible,
+ *     `'inferred'` included: Claude Code's endMs is borrowed from the
+ *     next call's start, which is a real host timestamp, and only its
+ *     LAST call in a batch degrades to `'synthetic'`.
  *  3. Orphan — no guessing. The span hangs off the turn, exactly as it
  *     did before this layer existed.
  *

@@ -10,14 +10,11 @@ export {};
  * accumulates `message.updated` (the assistant message envelope) and
  * `message.part.updated` (its parts) and hands the array over here.
  *
- * opencode is the only host that reports BOTH ends of an LLM call:
- * AssistantMessage carries `time.created` and `time.completed`, and
- * reasoning parts carry their own `time.start` / `time.end`. A completed
- * message therefore yields `timing: 'exact'` — every other platform is
- * 'inferred' or 'synthetic'. That is not cosmetic: `buildSpanTree` only
- * enables its time-window tool-attribution channel when
- * `timing !== 'synthetic'`, so this is what lets opencode's tool spans
- * nest under the chat span they actually belong to.
+ * opencode reports BOTH ends of an LLM call: AssistantMessage carries
+ * `time.created` and `time.completed`, and reasoning parts carry their
+ * own `time.start` / `time.end`. A completed message therefore yields
+ * `timing: 'exact'` — one of only two sources that earn it, Codex being
+ * the other. An incomplete message falls back to 'inferred'.
  *
  * BOTH event kinds are SNAPSHOTS, and both have to be collapsed here.
  * `message.updated` republishes the whole assistant message on every

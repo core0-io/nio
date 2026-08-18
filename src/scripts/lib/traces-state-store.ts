@@ -45,13 +45,19 @@ export interface PendingTaskSpan {
 }
 
 /**
- * A tool/task span that has already finished but is being held back
- * until the turn ends, so it can be nested under the chat call that
- * issued it.
+ * A finished tool/task span, described well enough to be re-emitted
+ * later under a parent chosen after the fact.
  *
- * Only metadata — never payload bodies. Anything held here is written
- * to the state file on every hook event, so a per-call growth here is a
- * per-call re-serialisation of the whole turn.
+ * Today this is only a parameter type: it is what `buildSpanTree`
+ * accepts as candidates to nest under a chat call, and every caller
+ * passes an empty list, because tool spans export the moment they
+ * finish. `CollectorState` has no field of this type — a parking path
+ * that holds spans until the turn ends would add one, and would then
+ * owe the constraint below.
+ *
+ * Only metadata, never payload bodies: anything parked in the state
+ * file is rewritten on every hook event, so a per-call payload there is
+ * a per-call re-serialisation of the whole turn.
  */
 export interface DeferredSpan {
   kind: 'tool' | 'task';

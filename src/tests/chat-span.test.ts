@@ -511,4 +511,70 @@ describe('end-to-end: turn → {chat, tool}', () => {
       assert.equal(tool.spanContext().traceId, turn.spanContext().traceId);
     }
   });
+
+  // Hermes is the one platform whose calls exist nowhere the collector
+  // can go and read them: there is no session file, only the raw
+  // `post_llm_call` envelope the hook received on stdin. It reaches
+  // `resolveTurnCalls` through `DispatchOptions.conversationInput`, set
+  // at exactly one production call site (`hook-cli.ts`'s
+  // `runHermesCollector`). Every other case in this file runs
+  // `platform: 'claude-code'`, where the source is built from
+  // `input.transcript_path` — so without this case, deleting that field
+  // leaves the whole suite green while Hermes silently loses its chat
+  // layer.
+  it('builds the Hermes source from conversationInput, not from the canonical payload', async () => {
+    const { makeInMemoryTracer } = await import('./helpers/tracer.js');
+    const { logsConfig } = freshFixture();
+    const tracer = makeInMemoryTracer();
+    const sessionId = 'sess-chat-span-hermes';
+
+    const envelope = {
+      session_id: sessionId,
+      extra: {
+        model: 'gpt-test',
+        assistant_response: 'hermes assistant reply',
+        conversation_history: [
+          { role: 'user', content: 'do the thing' },
+          { role: 'assistant', content: 'hermes assistant reply', finish_reason: 'stop' },
+        ],
+      },
+    };
+
+    // `input` carries no transcript_path, so the ONLY route to a source
+    // is conversationInput.
+    await dispatchCollectorEvent({
+      event: 'PreToolUse',
+      input: { tool_name: 'exec', tool_input: { command: 'ls' }, session_id: sessionId, cwd: '/tmp' },
+      platform: 'hermes',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+      conversationInput: { payload: envelope },
+    });
+    await dispatchCollectorEvent({
+      event: 'Stop',
+      input: { session_id: sessionId, cwd: '/tmp' },
+      platform: 'hermes',
+      config: baseConfig,
+      meterProvider: null,
+      tracerProvider: tracer.provider,
+      logsConfig,
+      conversationInput: { payload: envelope },
+    });
+
+    const chats = byName(tracer.finished(), 'chat gpt-test');
+    assert.equal(chats.length, 1, 'the assistant message in the envelope must become a chat span');
+    assert.equal(chats[0]!.attributes['gen_ai.request.model'], 'gpt-test');
+    assert.equal(
+      chats[0]!.attributes['nio.chat.timing'], 'synthetic',
+      'Hermes stamps a whole payload with one Date.now(); the span must say so',
+    );
+
+    const turn = byName(tracer.finished(), 'invoke_agent UserPromptSubmit')[0]!;
+    assert.equal(
+      parentOf(chats[0]!), turn.spanContext().spanId,
+      'the chat span must hang off the turn root',
+    );
+  });
 });

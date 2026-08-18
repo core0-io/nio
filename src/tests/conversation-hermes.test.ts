@@ -107,14 +107,16 @@ describe('hermes source', () => {
 
   it('gives the same assistant message the same callId whether or not earlier history was trimmed', () => {
     // Hermes replays the *entire* conversation_history on every
-    // post_llm_call (see module doc); the span layer's only defence
-    // against reprocessing the same call twice is deduplicating on
-    // callId. A long session eventually trims/compacts leading history
-    // entries, shifting every surviving index — an index-only callId
-    // (`hermes-{i}`) would silently break dedup at that point. This test
-    // is the dedup contract's only guard: the same assistant message
-    // must yield the same callId whether it sits at index 5 in a full
-    // history or index 0 after the first 5 entries were dropped.
+    // post_llm_call (see module doc). TAIL_CALL_WINDOW bounds the damage
+    // to the trailing two entries; deduplicating on callId is what would
+    // remove it, and NO caller does that today (see ConversationSource's
+    // callsSince doc), so a Hermes turn still ships each of those calls
+    // roughly twice. This test keeps the id side of that future fix
+    // usable: a long session eventually trims/compacts leading history
+    // entries, shifting every surviving index, so an index-only callId
+    // (`hermes-{i}`) could never support dedup at all. The same assistant
+    // message must yield the same callId whether it sits at index 5 in a
+    // full history or index 0 after the first 5 entries were dropped.
     const assistantWithReasoning = {
       role: 'assistant',
       content: 'placeholder reply after trim',
@@ -166,11 +168,10 @@ describe('hermes source', () => {
   //
   // Hermes fires post_llm_call once per LLM CALL and replays the whole
   // conversation_history each time. Without a cap, N calls in a session
-  // produce N(N+1)/2 chat spans (and the same multiple of content log
-  // records), each under a fresh span id in a fresh trace — nothing
-  // downstream dedups them. These tests pin the cap and the two
-  // properties it must not break: which entries survive, and whether
-  // tool attribution still works after the cut.
+  // produce N(N+1)/2 chat spans, each under a fresh span id in a fresh
+  // trace — nothing downstream dedups them. These tests pin the cap and
+  // the two properties it must not break: which entries survive, and
+  // whether tool attribution still works after the cut.
 
   /** History with `n` assistant messages, each preceded by a user one. */
   function historyWithAssistants(n: number): unknown {
