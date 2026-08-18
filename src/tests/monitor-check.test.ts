@@ -110,12 +110,24 @@ describe('isSessionMonitored', () => {
     );
   });
 
-  it('never throws when the store file is corrupt', () => {
+  it('fails closed on a corrupt store that names this very session as armed', () => {
+    // The fixture is TRUNCATED valid JSON, not `'garbage'`, and the
+    // record it names is for the session under test. Both details are
+    // what make the assertion depend on the corrupt branch at all: with
+    // an unrelated (or unparseable-in-every-direction) fixture, an
+    // unarmed session returns false anyway and this stays green under
+    // any implementation — including one that recovers what it can from
+    // a damaged file and reports the session monitored.
     const { home, logsConfig } = freshHome();
-    writeFileSync(join(home, 'monitored-sessions.json'), 'garbage', 'utf-8');
+    writeFileSync(
+      join(home, 'monitored-sessions.json'),
+      `{"sessions": {"sess-1": {"armed_at": ${Date.now()}, "cwd": "/work"}`,
+      'utf-8',
+    );
     assert.equal(
       withNioHome(home, null, () => isSessionMonitored('sess-1', '/work', logsConfig)),
       false,
+      'an unreadable store must never enable capture the user did not ask for',
     );
   });
 
@@ -167,10 +179,13 @@ describe('isSessionMonitored — untrusted sentinel session ids', () => {
         false,
       );
 
-      // The guard must return BEFORE loadMonitorStore, so the arm is
-      // still there for the real session to claim. Moving the check
-      // below the load leaves the claim branch reachable and this goes
-      // red.
+      // The guard must return before `resolveMonitorGate` /
+      // `saveMonitorStore`, so the arm is still there for the real
+      // session to claim; relocating it past those leaves the claim
+      // branch reachable and this goes red. Moving it merely below
+      // `loadMonitorStore` does NOT turn this red — that call only
+      // reads the store; its own side effect is the corrupt-store
+      // diagnostic, which is a different assertion in a different file.
       const raw = readStore(home);
       assert.equal(sentinel in raw.sessions, false);
       assert.equal(raw.pending_arm?.cwd, '/work');

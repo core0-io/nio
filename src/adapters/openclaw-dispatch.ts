@@ -120,9 +120,14 @@ function handleMonitor(rest: string): string {
 
   let result;
   try {
-    // The arm this writes is keyed to `process.cwd()` and claimed by
-    // matching that directory against the one a hook event reports, so
-    // both sides of the comparison agree by construction.
+    // The arm this writes is keyed to this process's cwd, and it is
+    // claimed by matching that directory against whatever cwd the
+    // claiming hook EVENT carries. Those are the same value only on the
+    // in-process runtime, which passes `process.cwd()` to the gate as
+    // well; Hermes passes the hook payload's `cwd`. So on Hermes
+    // `/nio monitor on` has to be run from the directory the session
+    // reports, which is the cwd scoping working as intended rather than
+    // an identity that holds automatically.
     result = runMonitorCommand(sub);
   } catch (err) {
     return `monitor ${sub} failed: ${err instanceof Error ? err.message : String(err)}`;

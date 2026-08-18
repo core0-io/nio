@@ -64,8 +64,20 @@ export function isSessionMonitored(
   logsConfig?: CollectorLogsConfig,
 ): boolean {
   // A session id we cannot trust is never monitored, and never claims a
-  // pending arm. This check must run before loadMonitorStore so such an
-  // event never gets a chance to claim a pending arm either.
+  // pending arm.
+  //
+  // The position of this check is load-bearing, and the boundary that
+  // matters is `resolveMonitorGate` / `saveMonitorStore` below — NOT
+  // `loadMonitorStore`. Relocated past the gate and the save, an id-less
+  // event claims the pending arm and persists that claim, which arms one
+  // shared store key for every id-less event, from any session and any
+  // directory, for the full SESSION_TTL_MS.
+  //
+  // Keeping it above `loadMonitorStore` too is still worth something,
+  // just something smaller: that call is not a pure read. On a corrupt
+  // store it reports a `monitor_store_corrupt` diagnostic to stderr and
+  // the audit log, and below this guard that would fire once per id-less
+  // event.
   if (typeof sessionId !== 'string' || UNTRUSTED_SESSION_IDS.has(sessionId)) {
     return false;
   }
