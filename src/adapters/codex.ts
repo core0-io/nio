@@ -90,6 +90,8 @@ export class CodexAdapter implements HookAdapter {
     switch (actionType) {
       // Every `toolInput` read goes through `asText` — model-authored
       // JSON, unvalidated, feeding fields the analysers treat as strings.
+      // A throw here is outside `evaluateHook`'s try/catch, so it kills
+      // the process before its deny reaches the host.
       case 'exec_command': {
         const data: ExecCommandData = {
           command: asText(input.toolInput.command),

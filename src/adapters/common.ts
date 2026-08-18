@@ -144,11 +144,14 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
  * the value reaches `.startsWith` / `.slice` / `.toLowerCase` it throws.
  *
  * On the guard path a throw is not a telemetry defect, it is an
- * ENFORCEMENT defect: `evaluateHook` and its callers run without a
- * catch-all, so the process dies carrying the decision, and every host
- * reads a dead hook as "took no action" — Claude Code's exit 1 is its
- * NON-blocking error code, and Hermes treats empty stdout as no-action.
- * A `deny` therefore degrades to an allowed dangerous action. See
+ * ENFORCEMENT defect, by one of two routes. On the fork-per-event hosts
+ * (Claude Code, Codex, Hermes) nothing above `evaluateHook` catches, so
+ * the process dies carrying the decision and every host reads a dead
+ * hook as "took no action" — Claude Code's exit 1 is its NON-blocking
+ * error code, and Hermes treats empty stdout as no-action. On the
+ * in-process hosts (OpenClaw, Pi, opencode) the binding's own catch turns
+ * the same throw into an explicit fail-OPEN. Either way a `deny` degrades
+ * to an allowed dangerous action. See
  * `src/tests/guard-decision-survives-malformed-payload.test.ts`.
  *
  * ── Contract ──────────────────────────────────────────────────────────
@@ -159,9 +162,10 @@ export function loadMetricsConfig(): ResolvedMetricsConfig {
  * the `as string` casts they replace did; objects and arrays are
  * serialised so their content still reaches the analysers instead of
  * arriving as `[object Object]`; everything else goes through `String()`.
- * A value that cannot be serialised at all (circular live host object,
- * BigInt, 200k-deep nesting) degrades to `''` rather than taking the
- * guard down with it.
+ * A value `JSON.stringify` refuses — a circular live host object, or one
+ * with a BigInt inside it — degrades to `''` rather than taking the guard
+ * down with it. (A top-level BigInt is not an object and stringifies via
+ * `String()`; depth alone never throws, V8's stringify is iterative.)
  */
 export function asText(value: unknown): string {
   if (typeof value === 'string') return value;

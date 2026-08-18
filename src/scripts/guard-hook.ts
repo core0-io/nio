@@ -194,7 +194,9 @@ async function main(): Promise<void> {
   // helpers below (`recordGuardDecision`, `recordPostToolUse`) each end
   // with their own internal `provider.forceFlush()`, so bounding only the
   // final flush leaves the earlier ones free to block for the full OS TCP
-  // connect timeout. See lib/flush-budget.ts for the measured numbers.
+  // connect timeout. `recordGuardDecision` keeps that flush deliberately
+  // — unlike the collector's counters it has no later flush of its own
+  // guaranteed to run. See lib/flush-budget.ts for the measured numbers.
   const withFlushBudget = createFlushBudget(collectorConfig.timeout);
 
   if (meterProvider) {

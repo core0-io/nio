@@ -347,9 +347,9 @@ function formatHermesGuardOutput(
 // How long the stdio writes may make NO progress before writeAndExit()
 // gives up and exits anyway.
 //
-// The previous version of this was a flat 2s wall-clock deadline, and its
-// own comment called the truncation risk "theoretical". It is not.
-// Measured: a deny whose reason comes from a Phase 6 `external_analyser`
+// The obvious shape for this — a flat wall-clock deadline that exits
+// when it fires, regardless of how much of the payload left the buffer —
+// makes truncation a matter of luck. Measured with a 2s flat timer: a deny whose reason comes from a Phase 6 `external_analyser`
 // endpoint returning a long `reason` produces a 300KB stdout payload
 // (a supported, fully-configured code path), and a consumer that stalls
 // for 3s makes the hook exit at ~2.2s having delivered exactly 131072
@@ -358,12 +358,12 @@ function formatHermesGuardOutput(
 // `{"decision":"block"}` silently degrades to no-action. A truncated
 // deny is an ALLOWED dangerous action, which is worse than any hang.
 //
-// So the deadline is now measured against *progress*, not wall clock: as
+// So the deadline is measured against *progress*, not wall clock: as
 // long as bytes keep leaving the buffer the write is allowed to take as
 // long as it needs, and only a genuinely stuck stream trips the backstop.
-// A closed pipe — the one case the flat timer actually existed for — is
-// handled deterministically by the 'error' listener instead of by a
-// timer, so this is a true last resort.
+// A closed pipe — the one case a timer would genuinely be needed for —
+// is handled deterministically by the 'error' listener instead, so this
+// backstop is a true last resort.
 //
 // 10s is chosen against Hermes's own bound: `shell_hooks.py::_spawn` runs
 // us under `subprocess.run(..., timeout=spec.timeout)` with
@@ -401,9 +401,9 @@ const WRITE_POLL_MS = 250;
 // WRITE_CHUNK_BYTES / WRITE_STALL_TIMEOUT_MS ≈ 1.6 KB/s — anything slower
 // than that is treated as stuck, anything faster is waited out.
 //
-// Before this, the backstop was a flat 10s wall clock in all but name:
-// a 450KB deny payload to a healthy 18KB/s consumer came out cut to
-// 180 224 bytes at 10 301ms.
+// Without per-chunk callbacks the backstop degenerates into a flat 10s
+// wall clock in all but name: measured, a 450KB deny payload to a healthy
+// 18KB/s consumer came out cut to 180 224 bytes at 10 301ms.
 const WRITE_CHUNK_BYTES = 16 * 1024;
 
 /**

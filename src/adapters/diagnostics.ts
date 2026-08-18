@@ -93,8 +93,8 @@ function ensureParentDir(path: string): void {
 // as long as the fault lasts — a `PeriodicExportingMetricReader` alone
 // re-exports every second, and every recorded event force-flushes on top
 // of that. Measured on a live Pi session: 205 identical
-// `otlp_export_failed` lines in 6 minutes, ~2 per second, which buried
-// the user's actual work until they turned monitoring off.
+// `otlp_export_failed` lines in 6 minutes, which buried the user's actual
+// work until they turned monitoring off.
 //
 // WHAT IS *NOT* THE FIX: lowering the severity, or defaulting diagnostics
 // off. A telemetry fault that nobody can see is worse than one that is
@@ -180,8 +180,9 @@ function emitSummary(w: StderrWindow, elapsedMs: number): void {
 
 /**
  * Emit the pending "suppressed N" summary for every window that has
- * closed. Called at the top of each report, and exported so an
- * entrypoint that is about to exit can surface a trailing count.
+ * closed. Called at the top of each report. Exported with a `force`
+ * argument so a caller about to exit could surface a trailing count;
+ * nothing does that yet, and the tests drive it directly.
  */
 export function flushSuppressedDiagnostics(force = false): void {
   const now = clock();

@@ -34,7 +34,7 @@
  * dangerous action is allowed through.
  *
  * Environment caveat (same as guard-hook-flush-timeout.test.ts and
- * scanner-hook-shutdown-timeout.test.ts): discriminating power depends on
+ * guard-hook-flush-timeout.test.ts): discriminating power depends on
  * connect() to 192.0.2.1 actually blocking rather than failing fast. On a
  * host whose network RSTs or ICMP-unreachables it immediately, the
  * unbounded version would also return quickly and these tests pass

@@ -95,18 +95,20 @@ async function main(): Promise<void> {
     : null;
 
   // One shared deadline for every OTLP-touching await below — the
-  // dispatch itself included, NOT just the closing Promise.all. Nearly
-  // every dispatch branch ends in a library helper that carries its own
-  // `provider.forceFlush()` (`recordToolUse`, `recordPostToolUse`,
-  // `endTurn`), so against an endpoint that drops packets the hang
-  // happens INSIDE dispatch and the closing flush is never reached.
-  // Measured unbounded against 192.0.2.1:4318 on a PostToolUse event:
-  // still alive when killed at 95s. See lib/flush-budget.ts.
+  // dispatch itself included, NOT just the closing Promise.all. The
+  // dispatch branches that touch traces end in a library helper carrying
+  // its own `provider.forceFlush()` (`recordPostToolUse`,
+  // `recordPostTaskToolUse`, `endTurn`), so against an endpoint that drops
+  // packets the hang happens INSIDE dispatch and the closing flush is
+  // never reached. Measured unbounded against 192.0.2.1:4318 on a
+  // PostToolUse event: still alive when killed at 95s. See
+  // lib/flush-budget.ts. (The metrics calls no longer flush there at all
+  // — see collector-core's NO_EARLY_FLUSH.)
   //
   // A dispatch abandoned at the deadline leaves whatever it had already
-  // written to the traces-state-store intact — every branch saves state
-  // before its metric flush, and `endTurn`, which flushes first, simply
-  // leaves the turn open for the next boundary event to close.
+  // written to the traces-state-store intact: `endTurn`, the one helper
+  // that flushes before its state is saved, simply leaves the turn open
+  // for the next boundary event to close.
   const withFlushBudget = createFlushBudget(config.timeout);
 
   await withFlushBudget(

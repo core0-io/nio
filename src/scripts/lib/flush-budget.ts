@@ -36,9 +36,9 @@
  *
  * The hang is almost never at the closing `Promise.all([...forceFlush])`.
  * The library helpers reached earlier — `recordGuardDecision`,
- * `recordToolUse`, `recordPostToolUse`, `endTurn`, … — each END with
- * their own internal `provider.forceFlush()`, so control never reaches
- * the closing flush at all. Bounding only that last call is a no-op fix
+ * `recordPostToolUse`, `endTurn`, … — each END with their own internal
+ * `provider.forceFlush()`, so control never reaches the closing flush at
+ * all. Bounding only that last call is a no-op fix
  * (verified: still 40s+). Every OTLP-touching await on the path has to
  * be inside the budget, and they have to SHARE one deadline — N
  * sequential 5s races would be an N×5s ceiling.

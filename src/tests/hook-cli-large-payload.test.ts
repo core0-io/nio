@@ -4,10 +4,10 @@
 /**
  * Regression test for stdout truncation in hook-cli.ts's `writeAndExit`.
  *
- * Before this fix `writeAndExit` armed a flat 2s wall-clock timer and
- * called `process.exit(0)` when it fired, regardless of how much of the
- * payload had actually left the buffer. Its own comment dismissed the
- * resulting truncation as theoretical on the grounds that "Hermes
+ * The naive shape for `writeAndExit` — a flat wall-clock timer that
+ * calls `process.exit(0)` when it fires, regardless of how much of the
+ * payload has actually left the buffer — makes truncation a matter of
+ * luck, and it is tempting to dismiss on the grounds that "Hermes
  * payloads never approach that size". They do:
  *
  *   guard.external_analyser (Phase 6) accepts `{ score, reason }` from a

@@ -23,7 +23,7 @@
  * the closing Promise.all. A fix that bounds only the final flush leaves
  * this test red — which is exactly what the mutation check confirmed.
  *
- * Environment caveat (same as scanner-hook-shutdown-timeout.test.ts):
+ * Environment caveat (same as collector-flush-timeout.test.ts):
  * discriminating power depends on connect() to RFC 5737 TEST-NET-1
  * (192.0.2.1, reserved for documentation, guaranteed unroutable)
  * actually blocking rather than failing fast. On a host whose network
@@ -42,7 +42,7 @@ import { spawn } from 'node:child_process';
 import { trackTempDir } from './helpers/tmp-dirs.js';
 
 // Bundled by bun into plugins/claude-code/skills/nio/scripts/, not
-// dist/scripts/ — same resolution as monitor-guard-hook.test.ts.
+// dist/scripts/ — same resolution as the other spawn-based suites.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI = join(
   HERE, '..', '..', 'plugins', 'claude-code', 'skills', 'nio', 'scripts', 'guard-hook.js',

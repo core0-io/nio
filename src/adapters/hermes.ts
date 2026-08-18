@@ -128,8 +128,8 @@ export class HermesAdapter implements HookAdapter {
     switch (actionType) {
       // Every `toolInput` read goes through `asText`: these are
       // model-authored, unvalidated values feeding fields the analysers
-      // treat as strings. `content.slice(10_000)` below used to throw on
-      // a non-string content, outside the orchestrator's try/catch,
+      // treat as strings. `content.slice(0, 10_000)` below used to throw
+      // on a non-string content, outside `evaluateHook`'s try/catch,
       // killing the process before its deny reached the host.
       case 'exec_command':
         actionData = {

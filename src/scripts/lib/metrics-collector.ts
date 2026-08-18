@@ -126,11 +126,10 @@ export function createMeterProvider(
  * `dispatchCollectorEvent`, `collector.timeout: 5000`). Since the whole
  * dispatch runs inside ONE shared flush budget (lib/flush-budget.ts), a
  * metrics flush sitting mid-branch spends the entire budget and the
- * caller abandons the dispatch before the work AFTER it can run. Measured
- * end-to-end on `SessionEnd` with metrics stalled and traces healthy: the
- * session span never reached `/v1/traces` and the session's state shard
- * was never discarded, because `recordTurn` sits between `endTurn` and
- * `emitSessionSpan` / `discardState`.
+ * caller abandons the dispatch. What the caller abandons with it is its
+ * own closing `Promise.all([...forceFlush])` — so a stalled METRICS
+ * endpoint costs the turn its SPANS on a traces endpoint that is working
+ * perfectly.
  *
  * So: telemetry that is merely *early* must never outrank telemetry that
  * is *correct*. Callers that already own a closing flush pass

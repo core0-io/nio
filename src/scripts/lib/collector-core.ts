@@ -197,13 +197,14 @@ const argText = asText;
  *
  * ── This function is on the GUARD path, so it must be total ───────────
  *
- * It is reached from three places that all run *after* the guard has
- * already decided and *before* that decision is handed to the host:
- * `guard-hook.ts`'s `spanKey()` (Claude Code / Codex), `hook-cli.ts`'s
- * `spanKey()` (Hermes), and `dispatchCollectorEvent`'s `baseFields`,
- * which is built OUTSIDE that function's own try/catch. A throw from
- * here therefore does not degrade telemetry — it kills the process
- * carrying a `deny`, and every host reads a dead hook as "no action":
+ * On the fork-per-event hosts it is reached from three places that all
+ * run *after* the guard has decided and *before* that decision is handed
+ * to the host: `guard-hook.ts` (Claude Code / Codex, directly and through
+ * `spanKey()`), `hook-cli.ts`'s `spanKey()` (Hermes), and
+ * `dispatchCollectorEvent`'s `baseFields`, which is built OUTSIDE that
+ * function's own try/catch. A throw from any of them does not degrade
+ * telemetry — it kills the process carrying a `deny`, and every host
+ * reads a dead hook as "no action":
  *
  *   hermes      `{"decision":"block",…}` on stdout, exit 0
  *                 → empty stdout, exit 1      (measured)
@@ -213,8 +214,11 @@ const argText = asText;
  *
  * Both were reproduced end-to-end against the shipped bundles with
  * `tool_input: { command: 123 | true | {…} }` on a `blocked_tools` deny.
- * Hence `argText` on every field read: a malformed tool argument is a
- * telemetry-quality problem, never an enforcement one.
+ * The in-process runtime calls it too (`plugin-runtime.ts`, on the pre
+ * side, BEFORE `evaluateHook`), where its binding's catch turns the same
+ * throw into a fail-OPEN instead. Hence `argText` on every field read: a
+ * malformed tool argument is a telemetry-quality problem, never an
+ * enforcement one.
  */
 export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
   switch (toolName) {
@@ -404,11 +408,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       if (tracerProvider) {
         const prev = loadState(logsConfig);
         let state = ensureTurn(prev, sessionId);
-        // Prefer the payload when a platform provides the text (OpenClaw,
-        // Pi and opencode do). Claude Code never does — it sends
-        // `prompt_id` — so fall back to the transcript, which is the only
-        // place the text exists. No other platform's session file uses
-        // `type: 'user'` entries, so the fallback cannot mis-fire on one.
+        // Prefer the payload when the platform provides the text: of the
+        // three hosts that reach this dispatcher, Hermes does (it lifts
+        // `extra.user_message` in `hermesToCollectorInput`). Claude Code
+        // and Codex never do — Claude Code sends `prompt_id` — so fall
+        // back to the transcript, the only place the text exists. No other
+        // platform's session file uses `type: 'user'` entries, so the
+        // fallback cannot mis-fire on one. (The in-process hosts never get
+        // here: they call `recordUserPrompt` directly.)
         const promptText = input.prompt
           ?? (transcriptPath
             ? lastUserMessageSince(

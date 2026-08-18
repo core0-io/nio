@@ -142,9 +142,11 @@ export class OpenCodeAdapter implements HookAdapter {
     switch (actionType) {
       // Every `toolInput` read goes through `asText`: these are
       // model-authored, unvalidated values feeding fields the analysers
-      // treat as strings. `content.slice(10_000)` below used to throw on
-      // a non-string content, outside the orchestrator's try/catch,
-      // killing the process before its deny reached the host.
+      // treat as strings. `content.slice(0, 10_000)` below used to throw
+      // on a non-string content, before the guard had reached a verdict.
+      // This host runs Nio in-process and its binding catches, so the
+      // throw did not kill anything — it failed OPEN, which is the same
+      // outcome by a different route.
       case 'exec_command': {
         const data: ExecCommandData = {
           command: asText(input.toolInput.command),

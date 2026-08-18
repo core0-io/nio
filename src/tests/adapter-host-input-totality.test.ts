@@ -32,7 +32,8 @@
  *
  * MUTATION: revert any `asText(...)` in an adapter's `parseInput` or
  * `buildEnvelope` to its old `(x as string) || ''` form — the matching
- * generated case below throws instead of returning.
+ * generated case below goes red (the write-body case by throwing, the
+ * name / path / url cases by failing their `typeof === 'string'`).
  */
 
 import { describe, it } from 'node:test';
@@ -269,9 +270,13 @@ for (const a of ADAPTERS) {
         // `FileOperationData.path` is not merely stringified downstream:
         // `isSensitivePath` calls `.replace` on it and the orchestrator
         // hands it to Phase 3/4 as `phase34Path`, which is regex-tested
-        // for an executable extension. Those throws land in the
-        // orchestrator's own catch, which fails OPEN — so a non-string
-        // path turned a SENSITIVE_PATH deny into a silent allow.
+        // for an executable extension. Those throws land in
+        // `evaluateHook`'s catch — which used to fail OPEN, so a
+        // non-string path turned a SENSITIVE_PATH deny into a silent
+        // allow. That catch now denies a `write_file` (see
+        // guard-engine-error-fails-by-risk.test.ts), so the cost today is
+        // an unexplained ENGINE_ERROR block rather than a silent allow;
+        // coercing here keeps the real SENSITIVE_PATH verdict.
         const adapter = a.make();
         const parsed = adapter.parseInput(a.raw({
           event: 'PreToolUse',
@@ -319,7 +324,7 @@ for (const a of ADAPTERS) {
       // Not just "does not throw": the analysers see the WORDS. Before
       // the fix an array reached `ExecCommandData.command` unchanged and
       // the first `.toLowerCase()` inside the orchestrator threw, which
-      // `evaluateHook` catches as "engine error → fail open".
+      // `evaluateHook` caught and, at the time, turned into an allow.
       const adapter = a.make();
       const parsed = adapter.parseInput(a.raw({
         event: 'PreToolUse', tool: a.execTool, input: { command: ['rm', '-rf', '/'] },

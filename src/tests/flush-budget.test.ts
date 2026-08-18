@@ -4,9 +4,9 @@
 /**
  * Unit tests for `lib/flush-budget.ts`.
  *
- * Review finding I3: this module had ZERO unit tests. The six spawn-based
+ * Review finding I3: this module had ZERO unit tests. The two spawn-based
  * suites that exercise it (`collector-flush-timeout`,
- * `guard-hook-flush-timeout`) all run against fixtures that leave
+ * `guard-hook-flush-timeout`) both run against fixtures that leave
  * `collector.timeout` at its 5000 default — which is *exactly*
  * `FLUSH_BACKSTOP_MS`. With the two operands equal, `Math.min` and
  * `Math.max` are indistinguishable and the backstop constant is inert:

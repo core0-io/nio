@@ -85,8 +85,8 @@ export class ClaudeCodeAdapter implements HookAdapter {
       // Every `toolInput` read goes through `asText`. The values are
       // model-authored JSON — `{"command": 123}` is one token away from
       // `{"command": "123"}` — and they flow straight into fields the
-      // analysers treat as strings. `content.slice(10_000)` below used to
-      // throw on a non-string content, outside the orchestrator's
+      // analysers treat as strings. `content.slice(0, 10_000)` below used
+      // to throw on a non-string content, outside `evaluateHook`'s
       // try/catch, killing the process before its deny reached the host.
       case 'exec_command': {
         const data: ExecCommandData = {

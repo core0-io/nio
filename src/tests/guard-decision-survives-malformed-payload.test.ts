@@ -10,7 +10,7 @@
  * (`toolSummary`), on the sites that run AFTER the decision. Task 1d's
  * report predicted the same "cast an unvalidated host value, then call a
  * method on it" pattern would exist elsewhere on the path. It does, in
- * three more places, and two of them run BEFORE the decision — so they do
+ * three more places, all of which run BEFORE the decision — so they do
  * not merely lose a deny that was already computed, they stop it being
  * computed at all:
  *
