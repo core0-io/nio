@@ -37,6 +37,7 @@ export {};
 import { createNio, HermesAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter, HookOutput } from '../index.js';
 import { formatDiagnosticsForUser } from '../adapters/diagnostics.js';
+import { asText } from '../adapters/common.js';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import {
@@ -49,6 +50,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import {
   dispatchCollectorEvent,
@@ -243,7 +245,17 @@ async function runHermesCollector(
     ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName)
     : null;
 
-  await dispatchCollectorEvent({
+  // Shared deadline over the dispatch AND the closing flush — see
+  // lib/flush-budget.ts. Most dispatch branches end in a library helper
+  // that carries its own `provider.forceFlush()`, so an endpoint that
+  // drops packets hangs inside dispatch and the closing flush is never
+  // reached: measured unbounded on a `post_tool_call`, still alive when
+  // killed at 95s. Hermes runs us under `subprocess.run(timeout=60)`, so
+  // without this the observable symptom is a 60s freeze per tool call
+  // followed by the host reporting a hook failure.
+  const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
+  await withFlushBudget(dispatchCollectorEvent({
     event: canonicalEvent,
     input: collectorInput,
     platform: 'hermes',
@@ -260,18 +272,21 @@ async function runHermesCollector(
     // envelope without a history, so a session_end or tool event
     // degrades to the same flat tree it produced before.
     conversationInput: { payload: rawPayload },
-  });
+  }), undefined);
 
   // Every hook-cli invocation is a fresh subprocess that exits right
   // after this returns. PeriodicExportingMetricReader batches metrics
   // on a 1s timer, and the HTTP exporter chunks requests — without an
   // explicit flush here the recorded metric/span/log can sit in-memory
   // and never reach OTLP before the process dies.
-  await Promise.all([
-    meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-    tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-    loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-  ]);
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 }
 
 // ── Platform-specific stdout formatting ────────────────────────────────
@@ -327,6 +342,180 @@ function formatHermesGuardOutput(
     stderr:
       `guard.confirm_action: 'ask' not supported on Hermes (no confirmation channel); falling back to 'deny'`,
   };
+}
+
+// How long the stdio writes may make NO progress before writeAndExit()
+// gives up and exits anyway.
+//
+// The previous version of this was a flat 2s wall-clock deadline, and its
+// own comment called the truncation risk "theoretical". It is not.
+// Measured: a deny whose reason comes from a Phase 6 `external_analyser`
+// endpoint returning a long `reason` produces a 300KB stdout payload
+// (a supported, fully-configured code path), and a consumer that stalls
+// for 3s makes the hook exit at ~2.2s having delivered exactly 131072
+// bytes — one pipe buffer. Hermes then gets truncated JSON, its
+// `_parse_response` hits a JSONDecodeError and returns None, and a
+// `{"decision":"block"}` silently degrades to no-action. A truncated
+// deny is an ALLOWED dangerous action, which is worse than any hang.
+//
+// So the deadline is now measured against *progress*, not wall clock: as
+// long as bytes keep leaving the buffer the write is allowed to take as
+// long as it needs, and only a genuinely stuck stream trips the backstop.
+// A closed pipe — the one case the flat timer actually existed for — is
+// handled deterministically by the 'error' listener instead of by a
+// timer, so this is a true last resort.
+//
+// 10s is chosen against Hermes's own bound: `shell_hooks.py::_spawn` runs
+// us under `subprocess.run(..., timeout=spec.timeout)` with
+// DEFAULT_TIMEOUT_SECONDS = 60, so the host kills a truly wedged hook
+// long before this matters. (That same `subprocess.run(capture_output=
+// True)` drains both pipes concurrently, which is why the real Hermes is
+// never the stalled consumer this bounds.)
+const WRITE_STALL_TIMEOUT_MS = 10_000;
+
+// How often the drain is sampled. Cheap and unref'd, so it never keeps
+// the process alive on its own; it exists only to notice progress.
+const WRITE_POLL_MS = 250;
+
+// Payload chunk size for the stdout write.
+//
+// The payload is written in chunks so that "did anything leave the
+// buffer?" is ANSWERABLE. `writableLength` cannot answer it:
+//
+//  - it counts bytes belonging to writes that have not COMPLETED, and
+//    libuv treats one `write(payload)` as a single request however many
+//    partial writev()s it takes. Measured: a 450 000-byte single write to
+//    a consumer draining 8KB/450ms reported `writableLength=450000` on
+//    all 29 samples over 14.5s, then dropped straight to 0 at the end;
+//  - chunking alone does not fix it either, because with backpressure the
+//    queue simply stays FULL — same measurement, chunked: `pending=65536`
+//    on 24 consecutive samples while the write offset climbed from
+//    212 992 to 409 600. A constant queue depth is not the same thing as
+//    no progress, but `pending !== lastPending` cannot tell them apart.
+//
+// So the progress signal is the per-chunk write CALLBACK: node invokes it
+// when that chunk's request completes, i.e. when those bytes have actually
+// been handed to the OS. One completed chunk = real progress, and the
+// backstop only fires when no chunk has completed for
+// WRITE_STALL_TIMEOUT_MS. That makes the effective "wedged" threshold
+// WRITE_CHUNK_BYTES / WRITE_STALL_TIMEOUT_MS ≈ 1.6 KB/s — anything slower
+// than that is treated as stuck, anything faster is waited out.
+//
+// Before this, the backstop was a flat 10s wall clock in all but name:
+// a 450KB deny payload to a healthy 18KB/s consumer came out cut to
+// 180 224 bytes at 10 301ms.
+const WRITE_CHUNK_BYTES = 16 * 1024;
+
+/**
+ * Write the Hermes response and exit once BOTH stdio streams have
+ * drained.
+ *
+ * An explicit exit is required: when the OTLP endpoint is configured but
+ * unreachable, the meter provider's PeriodicExportingMetricReader keeps
+ * its retry timer alive past forceFlush(), so the event loop never drains
+ * and the process hangs forever. Exiting from the write callback (rather
+ * than immediately after write()) guarantees the response reaches Hermes
+ * first — stdout is a pipe here, so write() is not synchronous.
+ *
+ * stderr has to be waited on too, and it is not covered by stdout's
+ * callback: they are different file descriptors with no ordering between
+ * them, and both are async pipes under Hermes. Everything this process
+ * writes to stderr — the guard's diagnostics block, the
+ * confirm_action:'ask' fallback warning, every `[nio:collector:*]`
+ * export diagnostic — is written BEFORE this function is reached, so an
+ * exit driven by stdout alone truncates whatever of it is still
+ * buffered. Measured through the real CLI: one `external_analyser` entry
+ * with a long endpoint produces a 500248-byte stderr diagnostic, and
+ * exiting on the stdout callback delivered 65536 bytes of it — one pipe
+ * buffer — in 228ms. The diagnostics exist to tell the user their
+ * collector is misconfigured; silently cutting them at 64KB defeats that.
+ */
+function writeAndExit(payload: string): void {
+  let exited = false;
+  let stdoutHandedOff = false;
+
+  const finish = (): void => {
+    if (exited) return;
+    exited = true;
+    process.exit(0);
+  };
+
+  // Exit only when stdout's own callback has fired AND stderr has
+  // nothing left buffered. `writableLength === 0` is the same guarantee
+  // the write callback gives (every chunk handed to the OS), just
+  // observable without owning stderr's call sites — which matters
+  // because they are spread across main() and the diagnostics helpers.
+  const finishIfDrained = (): void => {
+    if (!stdoutHandedOff) return;
+    if (process.stderr.writableLength > 0) return;
+    finish();
+  };
+
+  // Closed/broken pipe (EPIPE). This is the case the old flat timer was
+  // standing in for, and the stream reports it directly — no guessing
+  // from elapsed time. It also has to be handled: with no 'error'
+  // listener an EPIPE is an uncaught exception, which exits non-zero and
+  // makes Hermes log a spurious hook failure.
+  process.stdout.on('error', finish);
+  process.stderr.on('error', finish);
+
+  // Progress, stamped by whatever actually moved bytes: a completed
+  // stdout chunk, or a change in stderr's queue depth.
+  let lastProgressMs = Date.now();
+  const noteProgress = (): void => { lastProgressMs = Date.now(); };
+
+  // Chunked, backpressure-respecting write — see WRITE_CHUNK_BYTES.
+  const buf = Buffer.from(payload, 'utf-8');
+  let offset = 0;
+  const pump = (): void => {
+    if (exited) return;
+    while (offset < buf.length) {
+      const end = Math.min(offset + WRITE_CHUNK_BYTES, buf.length);
+      const chunk = buf.subarray(offset, end);
+      offset = end;
+      const last = offset >= buf.length;
+      const ok = process.stdout.write(chunk, last ? () => {
+        stdoutHandedOff = true;
+        noteProgress();
+        finishIfDrained();
+      } : noteProgress);
+      if (last) return;
+      if (!ok) {
+        // Buffer full: resume from the same offset once it has drained.
+        process.stdout.once('drain', pump);
+        return;
+      }
+    }
+  };
+  if (buf.length === 0) {
+    process.stdout.write('', () => {
+      stdoutHandedOff = true;
+      finishIfDrained();
+    });
+  } else {
+    pump();
+  }
+
+  // Progress-aware backstop, and also the thing that re-checks stderr
+  // after stdout's callback has already fired.
+  let lastPending = process.stderr.writableLength;
+  setInterval(() => {
+    const stderrPending = process.stderr.writableLength;
+    // stderr's call sites are spread across main() and the diagnostics
+    // helpers, so there is no callback to hook there — a change in its
+    // queue depth is the only signal available, and it is a sound one
+    // because nothing enqueues more stderr once writeAndExit is reached.
+    if (stderrPending !== lastPending) {
+      lastPending = stderrPending;
+      noteProgress();
+    }
+    const pending = process.stdout.writableLength + stderrPending;
+    if (pending === 0) {
+      finishIfDrained();
+      return;
+    }
+    if (Date.now() - lastProgressMs >= WRITE_STALL_TIMEOUT_MS) finish();
+  }, WRITE_POLL_MS).unref();
 }
 
 // ── Main ────────────────────────────────────────────────────────────────
@@ -408,16 +597,35 @@ async function main(): Promise<void> {
     );
     const evalMs = Date.now() - evalStartMs;
 
-    const toolName = ((payload ?? {}) as Record<string, unknown>).tool_name as string || '';
+    // `asText`, not `as string`. Same second, independent read of the raw
+    // stdin payload as guard-hook.ts makes, and the same reasoning: this
+    // one is defence in depth, since `toolSummary` coerces on its own.
+    const toolName = asText(((payload ?? {}) as Record<string, unknown>).tool_name);
+
+    // One shared deadline covering EVERY OTLP-touching await between here
+    // and the guard decision reaching Hermes — see lib/flush-budget.ts.
+    // `recordGuardDecision`, `dispatchCollectorEvent` and
+    // `recordPostToolUse` each end in their own internal
+    // `provider.forceFlush()`, so bounding only the closing Promise.all
+    // would leave the block decision hostage to the OS TCP connect
+    // timeout: measured unbounded against 192.0.2.1:4318, both the allow
+    // and the deny run were still alive when killed at 95s. A deny that
+    // arrives after Hermes's own 60s `subprocess.run` timeout is a
+    // dangerous action allowed through, so this one is an enforcement
+    // bound, not just a latency bound.
+    const withFlushBudget = createFlushBudget(collectorConfig.timeout);
 
     // Guard decision metric (nio.decision.count).
     if (meterProvider) {
-      await recordGuardDecision(
-        meterProvider,
-        result.decision,
-        result.riskLevel || 'low',
-        result.riskScore ?? 0,
-        toolName,
+      await withFlushBudget(
+        recordGuardDecision(
+          meterProvider,
+          result.decision,
+          result.riskLevel || 'low',
+          result.riskScore ?? 0,
+          toolName,
+        ).catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        undefined,
       );
     }
 
@@ -425,16 +633,19 @@ async function main(): Promise<void> {
     // saved AND nio.tool_use.count{event=PreToolUse}
     // is emitted, mirroring Claude Code's parallel hook chain.
     if (collectorConfig.enabled || logsConfig?.local !== false) {
-      await dispatchCollectorEvent({
-        event: 'PreToolUse',
-        input: collectorInput,
-        platform: 'hermes',
-        config: collectorConfig,
-        meterProvider,
-        tracerProvider,
-        loggerProvider,
-        logsConfig,
-      });
+      await withFlushBudget(
+        dispatchCollectorEvent({
+          event: 'PreToolUse',
+          input: collectorInput,
+          platform: 'hermes',
+          config: collectorConfig,
+          meterProvider,
+          tracerProvider,
+          loggerProvider,
+          logsConfig,
+        }),
+        undefined,
+      );
     }
 
     // Bridge guard attrs to the eventual PostToolUse span (allow path)
@@ -468,12 +679,23 @@ async function main(): Promise<void> {
       if (isBlock) {
         const cwd = collectorInput.cwd ?? process.cwd();
         const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-        const r = await recordPostToolUse(
-          tracerProvider, state, key, cwd,
-          guardAttrs,
-          reason,
+        // Budgeted like every other OTLP-touching await here: this call
+        // ends in `provider.forceFlush()`. On timeout `state` keeps the
+        // value it had before the call, so `saveState` below still runs
+        // rather than the block decision stalling on an unreachable
+        // endpoint.
+        const r = await withFlushBudget(
+          recordPostToolUse(
+            tracerProvider, state, key, cwd,
+            guardAttrs,
+            reason,
+          ).catch(e => {
+            reportFlushFailure('traces', collectorConfig.endpoint, e);
+            return null;
+          }),
+          null,
         );
-        state = r.state;
+        if (r) state = r.state;
       }
       saveState(logsConfig, state);
     }
@@ -481,22 +703,25 @@ async function main(): Promise<void> {
     // Make sure network exports complete before the subprocess exits;
     // the PeriodicExportingMetricReader batches by default and would
     // drop the counter we just recorded without an explicit flush.
-    await Promise.all([
-      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
-      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
-      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
-    ]);
+    await withFlushBudget(
+      Promise.all([
+        meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+        tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+        loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+      ]).then(() => undefined),
+      undefined,
+    );
 
     const { stdout, stderr } = formatHermesGuardOutput(result, confirmAction);
     if (stderr) process.stderr.write(stderr + '\n');
-    process.stdout.write(stdout + '\n');
+    writeAndExit(stdout + '\n');
     return;
   }
 
   // Collector path: post_*, on_session_*, subagent_stop, *_llm_call.
   if (platform === 'hermes' && hookEventName) {
     await runHermesCollector(payload, hookEventName);
-    process.stdout.write('{}\n');
+    writeAndExit('{}\n');
     return;
   }
 
@@ -507,12 +732,12 @@ async function main(): Promise<void> {
     const nio = createNio();
     const adapter = selectAdapter(platform!, config);
     const result = await evaluateHook(adapter, payload, { config, nio });
-    process.stdout.write(JSON.stringify(result) + '\n');
+    writeAndExit(JSON.stringify(result) + '\n');
     return;
   }
 
   // Hermes envelope without hook_event_name — silent no-op.
-  process.stdout.write('{}\n');
+  writeAndExit('{}\n');
 }
 
 main().catch((err: Error) => {

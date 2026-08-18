@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
-import { writeAuditLog, buildGuardAuditEntry } from './common.js';
+import { writeAuditLog, buildGuardAuditEntry, asText } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
+import type { Diagnostic } from './diagnostics.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
-import type { ActionEnvelope, McpToolCallData } from '../types/action.js';
+import type { ActionEnvelope, ActionType, McpToolCallData } from '../types/action.js';
 import {
   detectMcpCalls,
   extractCommandString,
@@ -433,6 +434,35 @@ function checkToolGate(
   return null;
 }
 
+/**
+ * The only action types Nio is willing to let through when its own engine
+ * has just failed.
+ *
+ * This is an ALLOW-list, not a deny-list, and that direction is the whole
+ * point. When `orchestrator.evaluate()` throws, nothing the engine computed
+ * can be trusted, and the moment the engine is most likely to fail is the
+ * moment its input is strangest — which is also what an attack looks like.
+ * So the default is deny, and a type earns an exemption only by being
+ * unable to change anything outside Nio's process:
+ *
+ *   - `exec_command`, `write_file`, `network_request` — change the outside
+ *     world. Fail closed.
+ *   - `secret_access` — reads credentials. Not "read-only" in any sense
+ *     that matters here. Fail closed.
+ *   - `mcp_tool_call` — an arbitrary third-party tool whose effect Nio
+ *     cannot know without the analysis that just failed. Fail closed.
+ *   - anything a third-party `HookAdapter` invents — unknown. Fail closed.
+ *   - `read_file` — the one type in `ActionType` that is genuinely
+ *     side-effect-free. Fail open, with a diagnostic.
+ */
+const ENGINE_ERROR_ALLOWED_ACTIONS: ReadonlySet<string> = new Set<ActionType>(['read_file']);
+
+/** Total, bounded rendering of whatever `orchestrator.evaluate()` threw. */
+function describeEngineError(err: unknown): string {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : asText(err);
+  return text.length > 300 ? text.slice(0, 300) + '…' : text;
+}
+
 function denyNotPermitted(toolName: string): HookOutput {
   return {
     decision: 'deny',
@@ -554,12 +584,61 @@ export async function evaluateHook(
     writeAuditLog(entry, auditOpts);
 
     return runtimeDecisionToHookOutput(rd, initiatingSkill);
-  } catch {
-    // Engine error → fail open
-    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, undefined, agentName);
-    entry.decision = 'error';
+  } catch (err) {
+    // Engine error → decide by the action's blast radius, never by anything
+    // the engine produced.
+    //
+    // The ONLY input to this triage is `envelope.action.type`, which the
+    // adapter resolved before the pipeline was entered — so it is already
+    // in hand, needs no analysis, and is unaffected by whatever just threw.
+    // Deliberately nothing else: no re-run, no rule lookup, no re-parse.
+    const actionType = envelope.action.type;
+    const decision: 'allow' | 'deny' =
+      ENGINE_ERROR_ALLOWED_ACTIONS.has(actionType) ? 'allow' : 'deny';
+
+    const outcome = decision === 'deny'
+      ? 'was denied without being analysed'
+      : 'was allowed unanalysed';
+    const diagnostic: Diagnostic = {
+      severity: 'error',
+      source: 'hook',
+      kind: 'engine_error',
+      component: actionType,
+      message:
+        `Guard engine failed during Phase 1-6, so this ${actionType} ${outcome} ` +
+        `(${describeEngineError(err)})`,
+      hint: decision === 'deny'
+        ? 'This is a Nio failure, not a policy violation by your action. ' +
+          'Retry it; if the failure persists, run /nio doctor.'
+        : 'Nio could not analyse this read. Run /nio doctor if it keeps happening.',
+    };
+
+    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, actionType, agentName);
+    entry.decision = decision;
+    entry.risk_level = decision === 'deny' ? 'critical' : 'low';
+    entry.risk_score = decision === 'deny' ? 1.0 : 0;
     entry.risk_tags = ['ENGINE_ERROR'];
+    entry.explanation = diagnostic.message;
     writeAuditLog(entry, auditOpts);
-    return { decision: 'allow' };
+
+    if (decision === 'allow') {
+      return { decision: 'allow', initiatingSkill, diagnostics: [diagnostic] };
+    }
+    return {
+      decision: 'deny',
+      reason: policyHookReason(
+        diagnostic.message,
+        initiatingSkill ? ` (via skill: ${initiatingSkill})` : '',
+        ['ENGINE_ERROR'],
+        'critical',
+        1.0,
+      ),
+      riskLevel: 'critical',
+      riskScore: 1.0,
+      riskTags: ['ENGINE_ERROR'],
+      topFindingRule: 'ENGINE_ERROR',
+      initiatingSkill,
+      diagnostics: [diagnostic],
+    };
   }
 }

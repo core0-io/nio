@@ -36,8 +36,11 @@ import {
   setPendingGuardAttrs,
 } from './lib/traces-collector.js';
 import { loadState, saveState } from './lib/traces-state-store.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { createFlushBudget } from './lib/flush-budget.js';
 import { isSessionMonitored } from './lib/monitor-check.js';
 import { spanKey, toolSummary, type HookStdinPayload } from './lib/collector-core.js';
+import { asText } from '../adapters/common.js';
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
 import { formatDiagnosticsForUser, type Diagnostic } from '../adapters/diagnostics.js';
@@ -177,14 +180,33 @@ async function main(): Promise<void> {
 
   // Record guard decision metrics
   const payload = (input as HookStdinPayload | Record<string, unknown>);
-  const toolName = (payload as Record<string, unknown>).tool_name as string || '';
+  // `asText`, not `as string`. A SECOND, independent read of the raw
+  // stdin payload — the adapter's own coercion never touches it — feeding
+  // a metric attribute and the `toolSummary` switch below, both of which
+  // run AFTER `evaluateHook` has decided and BEFORE the decision is
+  // written. Defence in depth rather than a load-bearing fix: every path
+  // it feeds is already total on its own (`toolSummary` coerces), so no
+  // input distinguishes this line from the `as string` it replaced.
+  const toolName = asText((payload as Record<string, unknown>).tool_name);
+
+  // One shared budget covers EVERY OTLP-touching await between here and
+  // the decision write — not just the closing Promise.all. The library
+  // helpers below (`recordGuardDecision`, `recordPostToolUse`) each end
+  // with their own internal `provider.forceFlush()`, so bounding only the
+  // final flush leaves the earlier ones free to block for the full OS TCP
+  // connect timeout. See lib/flush-budget.ts for the measured numbers.
+  const withFlushBudget = createFlushBudget(collectorConfig.timeout);
+
   if (meterProvider) {
-    await recordGuardDecision(
-      meterProvider,
-      result.decision,
-      result.riskLevel || 'low',
-      result.riskScore ?? 0,
-      toolName,
+    await withFlushBudget(
+      recordGuardDecision(
+        meterProvider,
+        result.decision,
+        result.riskLevel || 'low',
+        result.riskScore ?? 0,
+        toolName,
+      ).catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      undefined,
     );
   }
 
@@ -239,23 +261,40 @@ async function main(): Promise<void> {
         evalStartMs,
       );
       const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
-      const r = await recordPostToolUse(
-        tracerProvider, state, key, cwd,
-        guardAttrs,
-        reason,
+      // Budgeted like every other OTLP-touching await here: this call
+      // ends in `provider.forceFlush()`. On timeout `state` keeps the
+      // value it had before the call, so `saveState` below still runs
+      // rather than the whole hook stalling on an unreachable endpoint.
+      const r = await withFlushBudget(
+        recordPostToolUse(
+          tracerProvider, state, key, cwd,
+          guardAttrs,
+          reason,
+        ).catch(e => {
+          reportFlushFailure('traces', collectorConfig.endpoint, e);
+          return null;
+        }),
+        null,
       );
-      state = r.state;
+      if (r) state = r.state;
     }
 
     saveState(logsConfig, state);
   }
 
-  // Flush OTEL providers before exit
-  await Promise.all([
-    meterProvider?.forceFlush(),
-    tracerProvider?.forceFlush(),
-    loggerProvider?.forceFlush(),
-  ]);
+  // Flush OTEL providers before exit, sharing the deadline above so an
+  // unreachable endpoint can't hold the PreToolUse decision hostage.
+  // Each flush carries its own .catch(): an unhandled rejection here
+  // would reject the Promise.all and abort main() before the decision is
+  // ever written.
+  await withFlushBudget(
+    Promise.all([
+      meterProvider?.forceFlush().catch(e => reportFlushFailure('metrics', collectorConfig.endpoint, e)),
+      tracerProvider?.forceFlush().catch(e => reportFlushFailure('traces', collectorConfig.endpoint, e)),
+      loggerProvider?.forceFlush().catch(e => reportFlushFailure('logs', collectorConfig.endpoint, e)),
+    ]).then(() => undefined),
+    undefined,
+  );
 
   const diags = result.diagnostics;
 

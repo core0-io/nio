@@ -42,7 +42,7 @@ import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import type { ResolvedMetricsConfig as CollectorConfig } from '../../adapters/common.js';
 import type { CollectorLogsConfig } from '../../adapters/config-schema.js';
 import type { AuditHookEntry, HookEventName } from '../../adapters/audit-types.js';
-import { writeAuditLog } from '../../adapters/common.js';
+import { writeAuditLog, asText } from '../../adapters/common.js';
 import { recordToolUse, recordTurn } from './metrics-collector.js';
 import { forgetSession, sessionEndDisarms } from './monitor-check.js';
 import {
@@ -126,35 +126,75 @@ export interface DispatchOptions {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 /**
+ * Coerce one tool argument to a string, for ANY runtime value.
+ *
+ * The `as string` casts this replaces were TypeScript fictions: every
+ * `tool_input` reaching this module is either `JSON.parse`d hook stdin
+ * (Claude Code / Codex / Hermes) or a live host object (the in-process
+ * runtime), and neither is schema-checked before it gets here. A model
+ * that emits `{"command": 123}` instead of `{"command": "123"}` used to
+ * reach `(123 || '').slice(0, 300)` and throw a TypeError out of
+ * `toolSummary` — see the block comment on {@link toolSummary} for what
+ * that cost.
+ *
+ * One definition, shared with the adapters: `adapters/common.ts`'s
+ * `asText` covers the same defect class on the guard-DECISION side of
+ * the same payload (`parseInput` / `buildEnvelope`). Two copies of a
+ * coercion this load-bearing would be two things to keep in step.
+ */
+const argText = asText;
+
+/**
  * Best-effort summary of a tool invocation, suitable for span attributes
  * and audit log entries. Recognises Claude Code, OpenClaw, and Hermes
  * tool names; falls back to a JSON-stringified preview for unknowns.
+ *
+ * ── This function is on the GUARD path, so it must be total ───────────
+ *
+ * It is reached from three places that all run *after* the guard has
+ * already decided and *before* that decision is handed to the host:
+ * `guard-hook.ts`'s `spanKey()` (Claude Code / Codex), `hook-cli.ts`'s
+ * `spanKey()` (Hermes), and `dispatchCollectorEvent`'s `baseFields`,
+ * which is built OUTSIDE that function's own try/catch. A throw from
+ * here therefore does not degrade telemetry — it kills the process
+ * carrying a `deny`, and every host reads a dead hook as "no action":
+ *
+ *   hermes      `{"decision":"block",…}` on stdout, exit 0
+ *                 → empty stdout, exit 1      (measured)
+ *   claude code  exit 2 + reason on stderr
+ *                 → exit 1 + a Node stack     (measured; exit 1 is
+ *                    Claude Code's NON-blocking error code)
+ *
+ * Both were reproduced end-to-end against the shipped bundles with
+ * `tool_input: { command: 123 | true | {…} }` on a `blocked_tools` deny.
+ * Hence `argText` on every field read: a malformed tool argument is a
+ * telemetry-quality problem, never an enforcement one.
  */
 export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
   switch (toolName) {
     // Claude Code
     case 'Bash':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'Write':
     case 'Edit':
-      return (toolInput['file_path'] as string) || (toolInput['path'] as string) || '';
+      return argText(toolInput['file_path']) || argText(toolInput['path']);
     case 'WebFetch':
     case 'WebSearch':
-      return (toolInput['url'] as string) || (toolInput['query'] as string) || '';
+      return argText(toolInput['url']) || argText(toolInput['query']);
     // Hermes
     case 'terminal':
     case 'exec':
     case 'shell':
-      return ((toolInput['command'] as string) || '').slice(0, 300);
+      return argText(toolInput['command']).slice(0, 300);
     case 'write_file':
     case 'patch':
     case 'read_file':
-      return (toolInput['path'] as string) || (toolInput['file_path'] as string) || '';
+      return argText(toolInput['path']) || argText(toolInput['file_path']);
     case 'fetch':
     case 'http_request':
-      return (toolInput['url'] as string) || '';
+      return argText(toolInput['url']);
     default:
-      return JSON.stringify(toolInput).slice(0, 300);
+      return argText(toolInput).slice(0, 300);
   }
 }
 
@@ -271,7 +311,12 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     loggerProvider = null, logsConfig,
   } = opts;
 
-  const toolName = input.tool_name ?? '';
+  // `argText`, not `?? ''`: `tool_name` is unvalidated host input and this
+  // value is read by string methods downstream. That throw is caught by
+  // this function's own try/catch, so it costs enforcement nothing — but
+  // it costs the WHOLE branch: no audit entry, no span opened or closed,
+  // for every tool call in the session that carries a non-string name.
+  const toolName = argText(input.tool_name);
   const sessionId = input.session_id ?? 'unknown';
   const cwd = input.cwd ?? null;
   const transcriptPath = input.transcript_path ?? null;
@@ -416,8 +461,14 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
 
     } else if (event === 'TaskCreated') {
       const taskId = input.task_id ?? spanKey(input);
-      const prompt = input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {});
-      const summary = (prompt as string).slice(0, 300);
+      // `argText`, not `as string`: a `task_input.prompt` that is not a
+      // string used to throw here. Caught by this function's try/catch, so
+      // again no enforcement cost — but the throw happens BEFORE
+      // `writeAuditLog`, so the whole TaskCreated record and its span were
+      // lost rather than degraded.
+      const summary = argText(
+        input.task_input?.prompt ?? JSON.stringify(input.task_input ?? {}),
+      ).slice(0, 300);
 
       writeAuditLog(
         { event, ...baseFields, task_id: taskId, task_summary: summary },

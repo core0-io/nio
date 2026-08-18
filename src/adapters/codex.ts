@@ -3,6 +3,7 @@
 
 import type { ActionEnvelope, ActionData, ActionType, ExecCommandData, FileOperationData, NetworkRequestData } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { asText } from './common.js';
 
 /**
  * Default native-tool → action-type mapping for Codex.
@@ -45,9 +46,12 @@ export class CodexAdapter implements HookAdapter {
 
   parseInput(raw: unknown): HookInput {
     const data = raw as Record<string, unknown>;
-    const hookEvent = (data.hook_event_name as string) || '';
+    // `asText`, not `as string`: see the same note in claude-code.ts and
+    // asText's own doc — both fields are read by string methods, and a
+    // throw here dies carrying the guard decision.
+    const hookEvent = asText(data.hook_event_name);
     return {
-      toolName: (data.tool_name as string) || '',
+      toolName: asText(data.tool_name),
       toolInput: (data.tool_input as Record<string, unknown>) || {},
       eventType: hookEvent.startsWith('Post') ? 'post' : 'pre',
       sessionId: data.session_id as string | undefined,
@@ -84,9 +88,11 @@ export class CodexAdapter implements HookAdapter {
     let actionData: ActionData;
 
     switch (actionType) {
+      // Every `toolInput` read goes through `asText` — model-authored
+      // JSON, unvalidated, feeding fields the analysers treat as strings.
       case 'exec_command': {
         const data: ExecCommandData = {
-          command: (input.toolInput.command as string) || '',
+          command: asText(input.toolInput.command),
           args: [],
           cwd: input.cwd,
         };
@@ -95,10 +101,10 @@ export class CodexAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        const content = (input.toolInput.content as string) ||
-                        (input.toolInput.new_string as string) || '';
+        const content = asText(input.toolInput.content) ||
+                        asText(input.toolInput.new_string);
         const data: FileOperationData = {
-          path: (input.toolInput.file_path as string) || '',
+          path: asText(input.toolInput.file_path),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
@@ -108,7 +114,7 @@ export class CodexAdapter implements HookAdapter {
       case 'network_request': {
         const data: NetworkRequestData = {
           method: 'GET',
-          url: (input.toolInput.url as string) || (input.toolInput.query as string) || '',
+          url: asText(input.toolInput.url) || asText(input.toolInput.query),
         };
         actionData = data;
         break;
