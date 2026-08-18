@@ -4,8 +4,8 @@
 /**
  * Exporter diagnostics — make OTLP send failures auditable.
  *
- * The OTEL SDK swallows export failures: SimpleSpanProcessor /
- * SimpleLogRecordProcessor / PeriodicExportingMetricReader invoke the
+ * The OTEL SDK swallows export failures: BatchSpanProcessor /
+ * BatchLogRecordProcessor / PeriodicExportingMetricReader invoke the
  * exporter's `export(items, cb)` and the FAILED result never bubbles up to
  * our code, so a collector that can't reach its endpoint (connection
  * refused, auth rejected, bad protocol/URL, timeout) fails silently.

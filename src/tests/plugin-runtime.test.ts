@@ -569,7 +569,7 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
   // the runtime a wrapper whose `forceFlush` never reaches the real
   // provider must not read zero for the wrong reason.
   const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    (tracer.finished()).filter(s => s.name.startsWith('chat'));
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
 
   it('a turn that ended with no state still drops its events (C1)', async () => {
     // The `!state` early return in `flushSessionTurn` used to be the one
@@ -698,6 +698,111 @@ describe('InProcessPluginRuntime conversation-event lifecycle', () => {
     } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
   }
 
+  /**
+   * The counterpart: a provider whose FLUSH rejects. This is what the
+   * live OTLP path now does on any failed export — `BatchSpanProcessor`
+   * replaced `SimpleSpanProcessor` so a turn bigger than the exporter's
+   * 30-in-flight cap stops losing its root, and Batch's `forceFlush()`
+   * rejects where Simple's resolved. It must not surface at the host.
+   */
+  function rejectingFlushProvider(
+    provider: ReturnType<typeof makeInMemoryTracer>['provider'],
+  ): ReturnType<typeof makeInMemoryTracer>['provider'] {
+    return {
+      getTracer: (...args: Parameters<typeof provider.getTracer>) => provider.getTracer(...args),
+      forceFlush: async () => { throw new Error('OTLP exporter down'); },
+      shutdown: () => provider.shutdown(),
+      register: () => provider.register(),
+    } as unknown as ReturnType<typeof makeInMemoryTracer>['provider'];
+  }
+
+  it('a rejecting flush does not surface at the turn boundary', async () => {
+    // Two guards stand between the exporter and the host, and this pins
+    // both: `traces-collector`'s `flushSpans` (inside `endTurn`) and the
+    // `.catch()` on the runtime's trailing `tracerProvider.forceFlush()`.
+    // Drop either one and an unreachable collector starts throwing out
+    // of every turn boundary, which every binding's outer catch then
+    // swallows — a silently broken host on a telemetry fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: rejectingFlushProvider(tracer.provider),
+        meterProvider: null,
+        loggerProvider: null,
+      });
+
+      rt.onUserPrompt('s-flush', 'turn one');
+      rt.recordConversationEvent('s-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-flush'),
+        'a failed export must never propagate into the host',
+      );
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'sanity: the turn still built its chat span — the flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
+  it('a rejecting LOGS flush does not surface at the turn boundary', async () => {
+    // The logs sibling of the case above, and the pin on all three of
+    // the runtime's `loggerProvider` flush sites: the one inside
+    // `flushSessionTurn`, the one in `flushTurnSpans` (reached via
+    // `onTurnEnd`), and the one in `disposeAllSessions`. The logs
+    // pipeline runs a `BatchLogRecordProcessor` — swapped in so a turn's
+    // content burst stops being dropped past the OTLP exporter's
+    // 30-in-flight cap — and a batched flush REJECTS once its export
+    // times out. (Not on a failed export: unlike the traces SDK, the
+    // logs SDK routes that to `globalErrorHandler` and resolves. See
+    // `flushLogRecords`' doc. Which is why the rejection has to be
+    // supplied here rather than produced by a real unreachable
+    // endpoint.) Route any of those three sites through a bare
+    // `forceFlush()` instead of `flushLogRecords` and a hung collector
+    // starts throwing out of the host's Stop handler: an observability
+    // fault turned into a host fault.
+    const tracer = makeInMemoryTracer();
+    try {
+      // Minimal LoggerProvider surface: the runtime only ever calls
+      // `getLogger` (through the content sink) and `forceFlush`.
+      const rejectingLogs = {
+        getLogger: () => ({ emit: () => {} }),
+        forceFlush: async () => { throw new Error('OTLP logs exporter down'); },
+        shutdown: async () => {},
+      } as unknown as NonNullable<
+        ConstructorParameters<typeof InProcessPluginRuntime>[0]['loggerProvider']
+      >;
+
+      const rt = new InProcessPluginRuntime({
+        platform: 'openclaw',
+        adapter: new OpenClawAdapter(),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+        loggerProvider: rejectingLogs,
+      });
+
+      rt.onUserPrompt('s-logs-flush', 'turn one');
+      rt.recordConversationEvent('s-logs-flush', llmOutput('t1-a'));
+      await assert.doesNotReject(
+        () => rt.onTurnEnd('s-logs-flush'),
+        'a failed LOGS export must never propagate into the host',
+      );
+      await assert.doesNotReject(
+        () => rt.disposeAllSessions(),
+        'nor at process-wide teardown',
+      );
+      assert.equal(
+        (await chatSpans(tracer)).length, 1,
+        'sanity: the turn still built its chat span — the logs flush is the only thing that failed',
+      );
+    } finally {
+      await tracer.shutdown();
+    }
+  });
+
   it('drops the turn\'s events even when the export path THROWS (C1-throwing-exit)', async () => {
     // The third exit `flushSessionTurn`'s try/finally exists for, after
     // the normal close and the no-state early return pinned above, and
@@ -762,7 +867,7 @@ describe('InProcessPluginRuntime transcript-path lifecycle', () => {
   // the runtime a wrapper whose `forceFlush` never reaches the real
   // provider must not read zero for the wrong reason.
   const chatSpans = async (tracer: ReturnType<typeof makeInMemoryTracer>) =>
-    (tracer.finished()).filter(s => s.name.startsWith('chat'));
+    (await tracer.flushed()).filter(s => s.name.startsWith('chat'));
 
   it('onSessionEnd stops the session file being ours to replay (M1)', async () => {
     const tracer = makeInMemoryTracer();
