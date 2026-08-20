@@ -407,6 +407,8 @@ The audit log is stored at `~/.nio/audit.jsonl`. Each line is a JSON object with
 {"event":"diagnostic","timestamp":"...","severity":"error","source":"oauth","kind":"token_failed","component":"scoring.example.com","message":"client_credentials grant failed at https://scoring.example.com/oauth/token","detail":"HTTP 401 Unauthorized","config_path":"guard.external_analyser[*].auth","hint":"Check client_id / client_secret in guard.external_analyser[].auth, or run /nio doctor."}
 ```
 
+A repeated diagnostic is written once and then collapsed for 60 s. When that window closes, one entry carrying `suppressed_count` and `window_started_at` stands for the repeats it swallowed — and not for itself. **Count occurrences as `suppressed_count ?? 1` per entry, never by counting lines**: a real 34 689-occurrence export failure occupies 12 lines, so a line count under-reports a flood by orders of magnitude.
+
 `source` values: `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`. Common `kind` values:
 
 | Source | Kind | Severity | Meaning |

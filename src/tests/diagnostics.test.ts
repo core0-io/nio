@@ -9,9 +9,11 @@ import { join } from 'node:path';
 
 import {
   DiagnosticCollector,
+  flushSuppressedDiagnostics,
   formatDiagnosticsForUser,
   reportDiagnostic,
   _setDiagnosticsAuditPathForTests,
+  _setDiagnosticsThrottleForTests,
   type Diagnostic,
 } from '../adapters/diagnostics.js';
 
@@ -64,7 +66,15 @@ describe('reportDiagnostic', () => {
     assert.ok(typeof entry.timestamp === 'string', 'timestamp is set');
   });
 
-  it('does NOT deduplicate identical entries (reader-side dedup)', () => {
+  // This used to assert the opposite — three identical reports had to
+  // produce three lines, "reader-side dedup". That contract is what let a
+  // live audit.jsonl reach 34 689 export-failure entries (97 % of the
+  // file) and evict the guard records it exists to hold. Repeats are now
+  // collapsed on both legs; see diagnostics-audit-flood.test.ts for the
+  // full replacement contract. What must NOT change is that no occurrence
+  // is lost, which is what this test now pins.
+  it('collapses identical entries while conserving the count', () => {
+    _setDiagnosticsThrottleForTests();
     const before = readAuditLines().length;
     const d: Diagnostic = {
       severity: 'warning',
@@ -75,8 +85,15 @@ describe('reportDiagnostic', () => {
     reportDiagnostic(d);
     reportDiagnostic(d);
     reportDiagnostic(d);
-    const after = readAuditLines();
-    assert.equal(after.length, before + 3);
+
+    assert.equal(readAuditLines().length, before + 1, 'three reports, one line');
+
+    flushSuppressedDiagnostics(true);
+    const written = readAuditLines().slice(before);
+    const accounted = written.reduce(
+      (n, l) => n + ((l.suppressed_count as number | undefined) ?? 1), 0,
+    );
+    assert.equal(accounted, 3, 'all three occurrences are still accounted for');
   });
 });
 

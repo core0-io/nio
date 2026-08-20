@@ -148,6 +148,24 @@ export interface AuditDiagnosticEntry {
   hint?: string;
   /** Optional session_id for grouping in /nio report. */
   session_id?: string;
+  /**
+   * Repeats this entry stands in for. Present ONLY on a summary entry
+   * written when a flood window closes; absent on a first occurrence,
+   * which stands for itself.
+   *
+   * A summary entry stands for those repeats and NOT for itself — it is
+   * metadata about a run, not another instance of the fault. A reader
+   * counting occurrences must therefore sum `suppressed_count ?? 1` per
+   * entry rather than counting lines. See the flood-control block in
+   * diagnostics.ts for why the audit leg collapses repeats at all.
+   */
+  suppressed_count?: number;
+  /**
+   * When the run this entry summarises began — i.e. the timestamp of the
+   * first occurrence, whose full entry precedes this one. Together with
+   * `timestamp` it bounds the flood in time.
+   */
+  window_started_at?: string;
 }
 
 // ── Hook event entry ────────────────────────────────────────────────────
