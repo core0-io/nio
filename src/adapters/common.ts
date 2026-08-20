@@ -14,7 +14,8 @@ import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsCo
 export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { matchesSensitiveFilePath } from '../core/shared/detection-data.js';
 import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
-import { reportDiagnostic } from './diagnostics.js';
+import { reportDiagnostic, setDiagnosticsAuditLimitMb } from './diagnostics.js';
+import { rotateIfNeeded } from './audit-rotate.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditDiagnosticEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
 export { reportDiagnostic, DiagnosticCollector, type Diagnostic } from './diagnostics.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
@@ -253,7 +254,6 @@ export function shouldAskAtLevel(
 // Audit logging
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_AUDIT_BYTES = 10 * 1024 * 1024; // 10 MB
 
 export interface WriteAuditLogOptions {
   loggerProvider?: LoggerProvider | null;
@@ -338,6 +338,11 @@ export function writeAuditLog(
     try {
       const auditPath = resolveAuditPath(logsConfig);
       ensureDir(dirname(auditPath));
+      // Hand the same ceiling to the diagnostics leg, which appends to
+      // this very file and cannot read the config itself. Without this
+      // the two writers would rotate the shared file at different sizes
+      // and the smaller one would quietly win.
+      setDiagnosticsAuditLimitMb(logsConfig?.max_size_mb);
       rotateIfNeeded(auditPath, logsConfig?.max_size_mb);
       appendFileSync(auditPath, JSON.stringify(entry) + '\n');
     } catch {
@@ -346,19 +351,6 @@ export function writeAuditLog(
   }
 }
 
-function rotateIfNeeded(auditPath: string, maxSizeMb?: number): void {
-  const maxBytes = (maxSizeMb && maxSizeMb > 0)
-    ? maxSizeMb * 1024 * 1024
-    : DEFAULT_MAX_AUDIT_BYTES;
-  try {
-    const stats = statSync(auditPath);
-    if (stats.size >= maxBytes) {
-      renameSync(auditPath, auditPath + '.1');
-    }
-  } catch {
-    // File may not exist yet — that's fine
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Audit entry builders

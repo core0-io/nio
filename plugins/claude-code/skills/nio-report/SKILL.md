@@ -22,7 +22,11 @@ Display recent agent execution events from the Nio audit log. This is the focuse
 
 The audit log is stored at `~/.nio/audit.jsonl` (or `$NIO_HOME/audit.jsonl`). Each line is a JSON object with an `event` discriminator field: `guard` (one per tool-call evaluation), `session_scan`, `lifecycle`, `diagnostic`.
 
-A `diagnostic` entry carries `source` (one of `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`), `kind`, `severity`, `component`, `message`, optional `hint`. Aggregate diagnostics by `(source, kind, component, config_path)` into a Diagnostics summary section. Old-format lines (no `event` field) are guard entries with `event_type: "pre"`.
+A `diagnostic` entry carries `source` (one of `config`, `oauth`, `llm`, `external_analyser`, `collector`, `scanner`, `hook`), `kind`, `severity`, `component`, `message`, optional `hint`. Aggregate diagnostics by `(source, kind, component, config_path)` into a Diagnostics summary section.
+
+**Count occurrences as `suppressed_count ?? 1` per entry — never by counting lines.** A repeated diagnostic is written once and then collapsed for 60 s; when that window closes, one entry carrying `suppressed_count` and `window_started_at` stands for the repeats it swallowed, and NOT for itself. Counting lines under-reports a flood by orders of magnitude — a real 34 689-occurrence export failure occupies 12 lines. Report the occurrence count, and use `window_started_at` → `timestamp` to state how long the fault ran.
+
+Old-format lines (no `event` field) are guard entries with `event_type: "pre"`.
 
 ## How to Display
 

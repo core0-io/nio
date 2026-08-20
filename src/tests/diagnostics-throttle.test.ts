@@ -83,6 +83,20 @@ function auditCount(): number {
   return readFileSync(auditPath, 'utf-8').split('\n').filter(Boolean).length;
 }
 
+/**
+ * Occurrences the log accounts for, which is no longer the same as its
+ * line count: a summary entry stands for the repeats it collapsed and not
+ * for itself.
+ */
+function auditOccurrences(): number {
+  if (!existsSync(auditPath)) return 0;
+  return readFileSync(auditPath, 'utf-8')
+    .split('\n')
+    .filter(Boolean)
+    .map(l => JSON.parse(l) as { suppressed_count?: number })
+    .reduce((n, e) => n + (e.suppressed_count ?? 1), 0);
+}
+
 const exportFailure: Diagnostic = {
   severity: 'warning',
   source: 'collector',
@@ -110,10 +124,19 @@ describe('diagnostics stderr rate limiting', () => {
     assert.equal(headers.length, 1, `205 identical reports produced ${headers.length} stderr headers`);
   });
 
-  it('keeps every occurrence in the audit log while stderr is collapsed', () => {
+  // Was: 205 reports had to produce 205 audit lines. That contract cost
+  // more than it bought — see the header of diagnostics-audit-flood.test.ts
+  // for the measurement that retired it. The legs now collapse together,
+  // and the count survives in the closing summary instead of in the line
+  // count.
+  it('collapses the audit leg in lockstep with stderr', () => {
     for (let i = 0; i < 205; i++) reportDiagnostic(exportFailure);
 
-    assert.equal(auditCount(), 205, 'the forensic record is complete');
+    assert.equal(auditCount(), 1, 'one line, not 205');
+
+    nowMs += 60_001;
+    flushSuppressedDiagnostics();
+    assert.equal(auditOccurrences(), 205, 'the forensic count is complete');
   });
 
   it('reports how many were suppressed once the window closes', () => {
@@ -156,12 +179,14 @@ describe('diagnostics stderr rate limiting', () => {
     assert.equal(headers.length, 3);
   });
 
-  it('a suppressed run does not stop the audit leg from being complete', () => {
+  it('a suppressed run does not stop the audit count from being complete', () => {
     for (let i = 0; i < 30; i++) reportDiagnostic(exportFailure);
     nowMs += 60_001;
     for (let i = 0; i < 30; i++) reportDiagnostic(exportFailure);
+    nowMs += 60_001;
+    flushSuppressedDiagnostics();
 
-    assert.equal(auditCount(), 60);
+    assert.equal(auditOccurrences(), 60);
   });
 
   it('windows are per-diagnostic, so an unrelated diagnostic still prints', () => {
