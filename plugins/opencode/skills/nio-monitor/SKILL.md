@@ -86,16 +86,22 @@ When it is not armed, none of the above leave the machine.
 
 **This is the part of arming that matters most for privacy.** Turning monitoring on does not just start a counter — it starts sending what the model reasoned about and what it read/wrote, redacted but otherwise close to verbatim, to wherever `collector.endpoint` points. If that destination isn't fully trusted, treat `/nio-monitor on` accordingly.
 
-## Known Limitation on the In-Process Hosts (OpenClaw · Pi · opencode)
+## How `off` Behaves on the In-Process Hosts (OpenClaw · Pi · opencode)
 
-OpenClaw, Pi and opencode load Nio into a long-lived host process rather than spawning a fresh one per event, and OTEL metric counters there are cumulative for the life of that process. The practical consequence:
+OpenClaw, Pi and opencode load Nio into a long-lived host process rather than spawning a fresh one per event, and OTEL metric counters there are cumulative for the life of that process. Two things follow:
 
 - A host where **no** session has ever been armed exports nothing at all — no exporter is even created.
-- Once **any** session in that process has been armed and recorded a counter, the metrics exporter starts a periodic export and **keeps re-sending its accumulated counter totals roughly once a second until the host restarts** — including after `off`, after the session ends, and after the arm record is deleted.
+- The periodic metrics export runs only while that process still has **at least one** monitored session. Disarming the last one stops it on the next event, after a final flush so nothing already recorded is stranded.
 
-What `off` does guarantee there is that **no new session data is collected**: no new spans, no new audit records, and no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the host process clears it.
+Because the gate is per session while the exporter is per process, `off` in one session does **not** stop the export while another session in the same process is still armed — that session's data would otherwise go silently missing. The export stops when the last armed session in the process is disarmed or ends.
+
+Arming again resumes the same exporter, and counter totals continue from where they were rather than restarting at zero — so a backend sees one continuous series with a gap, not a reset.
+
+What `off` guarantees either way is that **no new session data is collected**: no new spans, no new audit records, no new counter increments.
 
 Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.
+
+> Older builds (≤ 2.5.1) could not stop that periodic export at all: once any session had been armed, accumulated totals kept going out roughly once a second until the host restarted, `off` notwithstanding. If you are diagnosing traffic that continues after `off`, check the host's version before looking further.
 
 ## What This Does Not Control
 

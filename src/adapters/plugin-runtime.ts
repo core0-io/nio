@@ -58,7 +58,10 @@ import {
 } from '../scripts/lib/traces-collector.js';
 import { toolSummary } from '../scripts/lib/collector-core.js';
 import { isSessionMonitored, forgetSession } from '../scripts/lib/monitor-check.js';
-import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
+import {
+  recordToolUse, recordGuardDecision, recordTurn,
+  pauseMetricsExport, resumeMetricsExport, metricsExportRunning,
+} from '../scripts/lib/metrics-collector.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 
 export interface PluginRuntimeOptions {
@@ -295,11 +298,12 @@ export class InProcessPluginRuntime {
   // the full OTLP exporter stack and its timer. Deferring means a
   // never-armed host creates nothing at all.
   //
-  // KNOWN RESIDUAL LIMITATION, documented in nio-monitor's SKILL.md:
-  // this fixes the never-armed case only. Once *any* session in the
-  // process has been armed and recorded a counter, OTel's cumulative
-  // metric semantics mean that reader keeps exporting the accumulated
-  // totals every second until the process exits.
+  // Deferring construction fixes the never-armed case. The armed-then-
+  // disarmed case is handled separately, by `syncMetricsExport()`: the
+  // reader's timer runs only while this process still has a monitored
+  // session, because OTel's cumulative semantics otherwise keep it
+  // re-sending the accumulated totals every second until the process
+  // exits — which it did, for as long as a live host stayed up.
   //
   // `loadCollectorConfig()` is deferred along with them, for the same
   // reason.
@@ -346,7 +350,64 @@ export class InProcessPluginRuntime {
    * is armed.
    */
   protected isMonitored(sessionId: string): boolean {
-    return isSessionMonitored(sessionId, this.cwdFor(sessionId), this.config.collector?.logs);
+    const monitored = isSessionMonitored(sessionId, this.cwdFor(sessionId), this.config.collector?.logs);
+    this.trackMonitorState(sessionId, monitored);
+    return monitored;
+  }
+
+  /**
+   * Sessions this process currently believes are monitored.
+   *
+   * Exists to answer one question the per-session gate cannot: does this
+   * PROCESS still have any monitored session? The gate is per session,
+   * the MeterProvider and its export timer are per process, and the
+   * in-process hosts serve many sessions from one process — so the timer
+   * cannot follow a single `off` without one session's disarm blinding
+   * another session's arm.
+   */
+  private readonly monitoredSessions = new Set<string>();
+
+  /**
+   * Record what the gate just said and bring the export timer in line.
+   *
+   * Called from `isMonitored`, so the timer re-syncs on exactly the same
+   * cadence the gate is consulted: per event. `/nio monitor off` reaches
+   * the timer on the next event, matching the promise the gate already
+   * makes about taking effect "on the next event, not at the next session
+   * boundary".
+   */
+  private trackMonitorState(sessionId: string, monitored: boolean): void {
+    if (monitored) this.monitoredSessions.add(sessionId);
+    else this.monitoredSessions.delete(sessionId);
+    this.syncMetricsExport();
+  }
+
+  /**
+   * Run the export timer iff something is being monitored.
+   *
+   * Deliberately reads `meterProviderCache` directly instead of calling
+   * `getMeterProvider()`: that getter BUILDS the provider on first use,
+   * and building one here — while disarming, no less — would resurrect
+   * the very "never-armed host stands up an OTLP client" bug the lazy
+   * construction exists to prevent. No provider means no timer to sync.
+   *
+   * The pause is fire-and-forget because it ends in a flush, and a caller
+   * on the event path must not wait on the network to find out whether a
+   * tool call is allowed.
+   */
+  private syncMetricsExport(): void {
+    const provider = this.meterProviderCache;
+    if (!provider) return;
+    if (this.monitoredSessions.size > 0) resumeMetricsExport(provider);
+    else void pauseMetricsExport(provider).catch(() => { /* reported by the exporter */ });
+  }
+
+  /**
+   * Test seam: is the periodic metrics export currently ticking? False
+   * when no provider has been built, which is the never-armed case.
+   */
+  _metricsExportRunningForTests(): boolean {
+    return this.meterProviderCache ? metricsExportRunning(this.meterProviderCache) : false;
   }
 
   /**
@@ -657,6 +718,11 @@ export class InProcessPluginRuntime {
     // that ends here won't get another chance to be reaped until the
     // process restarts or the backstop fires.
     forgetSession(sessionId, this.config.collector?.logs);
+    // A session that has ended can no longer be the reason this process
+    // keeps exporting. Without this the timer would run on until some
+    // OTHER session happened to trigger a gate consultation — and on a
+    // host whose last session just ended, that never comes.
+    this.trackMonitorState(sessionId, false);
     // Last, after every gate consultation above has had the session's
     // real directory: these hosts run for weeks, so one map entry per
     // session that ever existed is a leak with extra steps.
