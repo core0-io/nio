@@ -5,6 +5,8 @@ import { readFileSync, writeFileSync, appendFileSync, mkdirSync, existsSync, sta
 import { dirname, join } from 'node:path';
 import { load as yamlLoad, dump as yamlDump } from 'js-yaml';
 import { homedir } from 'node:os';
+import { guardAuditSchema, type GuardAuditEntry } from '../schemas/index.js';
+import { GuardEvaluation } from '../core/guard-evaluation.js';
 import type { HookInput } from './types.js';
 import type { RiskLevel } from '../types/scanner.js';
 import { riskLevelToNumericScore } from '../types/scanner.js';
@@ -210,6 +212,14 @@ export function writeAuditLog(
   entry: AuditEntry,
   opts?: WriteAuditLogOptions,
 ): void {
+  if (entry.event === 'guard' && 'schema_version' in entry) {
+    const parsed = guardAuditSchema.safeParse(entry);
+    if (!parsed.success) {
+      reportDiagnostic({ severity: 'error', source: 'hook', kind: 'guard_audit_invalid', message: parsed.error.message });
+      return;
+    }
+    entry = parsed.data;
+  }
   const logsConfig = opts?.logsConfig;
 
   // OTEL Logs export (fire-and-forget)
@@ -303,6 +313,24 @@ export function buildGuardAuditEntry(
   }
 
   return entry;
+}
+
+export function buildEvaluatedGuardAuditEntry(
+  input: HookInput, rd: ActionDecision | null, initiatingSkill: string | null | undefined,
+  platform: string, audit: GuardEvaluation, actionType?: string, agentName?: string,
+  overrides: Partial<GuardAuditEntry> = {},
+): GuardAuditEntry {
+  const legacy = buildGuardAuditEntry(input, rd, initiatingSkill, platform, actionType, agentName);
+  return {
+    ...legacy, schema_version: 2, ...audit.identity,
+    duration_ms: performance.now() - audit.started,
+    service_name: `nio-${platform}`, agent_name: agentName || platform,
+    decision: rd?.decision || 'allow', risk_level: rd?.risk_level ?? null,
+    risk_score: rd ? rd.scores.final ?? 0 : null,
+    phase_stopped: rd?.phase_stopped ?? null,
+    explanation: rd?.explanation || audit.termination.reason,
+    ...audit.snapshot(), ...overrides,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -825,3 +825,152 @@ describe('ActionOrchestrator: inline code in exec_command', () => {
     );
   });
 });
+
+describe('structured guard stages', () => {
+  it('records runtime blocking and skips all later stages', async () => {
+    const result = await new ActionOrchestrator().evaluate(makeEnvelope('exec_command', { command: 'rm -rf /' }));
+    const audit = result.audit;
+    assert.ok(audit, 'structured stage metadata must accompany a decision');
+    assert.equal(audit.termination.kind, 'gate_block');
+    assert.equal(audit.termination.blocked_gate, 'runtime');
+    assert.equal(audit.phases[1].status, 'completed');
+    assert.equal(audit.phases[2].status, 'completed');
+    assert.ok(audit.phases.slice(3).every(p => p.skip_reason === 'terminated_earlier'));
+    assert.ok(audit.findings.every(f => f.phase_id === 2));
+  });
+  it('records disabled and inapplicable phases and missing LLM credentials as failure', async () => {
+    const result = await new ActionOrchestrator({ llmEnabled: true }).evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+    const audit = result.audit;
+    assert.ok(audit, 'structured stage metadata must accompany a decision');
+    assert.equal(audit.phases[0].skip_reason, 'not_applicable');
+    assert.equal(audit.phases[3].skip_reason, 'not_applicable');
+    assert.equal(audit.phases[5].status, 'failed');
+    assert.equal(audit.phases[5].score, null);
+    assert.equal(audit.phases[5].duration_ms, null);
+    assert.equal(audit.phases[5].error?.kind, 'api_key_missing');
+    assert.equal(audit.phases[6].skip_reason, 'disabled');
+    assert.equal(audit.termination.kind, 'completed');
+  });
+});
+
+describe('structured guard failure history', () => {
+  it('marks a recoverable LLM failure without changing its existing score or decision', async () => {
+    const orchestrator = new ActionOrchestrator({ llmEnabled: true, llmApiKey: 'fixture-key' });
+    const internals = orchestrator as unknown as { runLLMOnAction: (envelope: ActionEnvelope, reporter: import('../adapters/diagnostics.js').DiagnosticCollector) => Promise<Finding[]> };
+    internals.runLLMOnAction = async (_envelope, reporter) => {
+      reporter.collect({ source: 'llm', severity: 'error', kind: 'api_failed', message: 'Fixture API failed' });
+      return [];
+    };
+    const result = await orchestrator.evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+    assert.equal(result.decision, 'allow');
+    assert.equal(result.scores.llm, 0);
+    assert.equal(result.audit?.phases[5].status, 'failed');
+    assert.equal(result.audit?.phases[5].score, null);
+    assert.equal(result.audit?.phases[5].error?.kind, 'api_failed');
+  });
+  it('retains completed stages and original error when an analyser throws', async () => {
+    const { GuardEvaluation } = await import('../core/guard-evaluation.js');
+    const audit = new GuardEvaluation();
+    const orchestrator = new ActionOrchestrator();
+    const failure = new Error('Static fixture failed');
+    (orchestrator as unknown as { runStaticOnContent: () => Promise<Finding[]> }).runStaticOnContent = async () => { throw failure; };
+    await assert.rejects(orchestrator.evaluate(makeEnvelope('write_file', { path: 'hello.txt', content_preview: 'hello' }), undefined, audit), error => error === failure);
+    assert.equal(audit.phases[1].status, 'completed');
+    assert.equal(audit.phases[2].status, 'completed');
+    assert.equal(audit.phases[3].status, 'failed');
+    assert.equal(audit.phases[3].error?.message, 'Static fixture failed');
+    assert.ok(audit.phases.slice(4).every(p => p.skip_reason === 'terminated_earlier'));
+    assert.equal(audit.termination.kind, 'engine_error');
+  });
+  it('retains individually disabled external services', async () => {
+    const result = await new ActionOrchestrator({ externalAnalysers: [{ name: 'disabled-policy', endpoint: 'http://unused', enabled: false }] }).evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+    assert.equal(result.audit?.phases[6].status, 'skipped');
+    assert.equal(result.audit?.phases[6].external_results?.[0].name, 'disabled-policy');
+    assert.equal(result.audit?.phases[6].external_results?.[0].status, 'skipped');
+  });
+});
+
+describe('structured guard factual policy skips', () => {
+  it('does not claim an LLM analyser ran when its existing scan policy disables it', async () => {
+    const result = await new ActionOrchestrator({ llmEnabled: true, llmApiKey: 'fixture-key' }).evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+    assert.equal(result.scores.llm, 0);
+    assert.equal(result.audit?.phases[5].status, 'skipped');
+    assert.equal(result.audit?.phases[5].skip_reason, 'disabled');
+    assert.equal(result.audit?.phases[5].duration_ms, null);
+  });
+  it('includes the actual numeric deny threshold in block reasons', async () => {
+    const result = await new ActionOrchestrator().evaluate(makeEnvelope('exec_command', { command: 'rm -rf /' }));
+    assert.match(result.audit!.termination.reason, /threshold 0\.8/);
+  });
+});
+
+describe('structured guard decision coverage', () => {
+  const critical: Finding = { id: 'fixture', rule_id: 'FIXTURE_CRITICAL', severity: 'critical', category: 'policy_violation', title: 'Fixture rule', description: 'Fixture evidence', confidence: 1, location: { file: 'fixture', line: 1 }, analyser: 'static' };
+  for (const [method, gate, phase] of [['runStaticOnContent', 'static', 3], ['runBehaviouralOnContent', 'behavioural', 4], ['runLLMOnAction', 'llm', 5]] as const) {
+    it(`identifies ${gate} blocking without truncating structured findings`, async () => {
+      const orchestrator = new ActionOrchestrator({ llmEnabled: gate === 'llm', llmApiKey: 'fixture' });
+      const internals = orchestrator as unknown as Record<string, () => Promise<Finding[]>>;
+      internals.runStaticOnContent = async () => [];
+      internals.runBehaviouralOnContent = async () => [];
+      internals[method] = async () => Array.from({ length: 8 }, (_, index) => ({ ...critical, id: `fixture-${index}` }));
+      const result = await orchestrator.evaluate(makeEnvelope('write_file', { path: 'hello.ts', content_preview: 'const hello = 1;' }));
+      assert.equal(result.decision, 'deny');
+      assert.equal(result.scores.final, 1);
+      assert.equal(result.audit?.termination.blocked_gate, gate);
+      assert.equal(result.audit?.findings.length, 8);
+      assert.ok(result.audit?.findings.every(f => f.phase_id === phase));
+      assert.equal(result.audit?.phases.filter(p => p.triggered_block).length, 1);
+      assert.ok(result.audit?.phases.slice(phase + 1).every(p => p.skip_reason === 'terminated_earlier'));
+    });
+  }
+  it('records allowlist exit distinctly', async () => {
+    const result = await new ActionOrchestrator({ allowlistMode: 'exit' }).evaluate(makeEnvelope('exec_command', { command: 'ls' }));
+    assert.equal(result.decision, 'allow');
+    assert.equal(result.audit?.termination.kind, 'allowlist_allow');
+    assert.ok(result.audit?.phases.slice(2).every(p => p.skip_reason === 'terminated_earlier'));
+  });
+  it('records confirmation as completed rather than blocked', async () => {
+    const orchestrator = new ActionOrchestrator({ scoringWeights: { runtime: 0, static: 1 } });
+    (orchestrator as unknown as { runStaticOnContent: () => Promise<Finding[]> }).runStaticOnContent = async () => [{ ...critical, severity: 'high' }];
+    const result = await orchestrator.evaluate(makeEnvelope('write_file', { path: 'hello.txt', content_preview: 'hello' }));
+    assert.equal(result.decision, 'confirm');
+    assert.equal(result.scores.final, 0.75);
+    assert.equal(result.audit?.termination.kind, 'completed');
+    assert.equal(result.audit?.termination.blocked_gate, null);
+    assert.equal(result.audit?.phases.filter(p => p.triggered_block).length, 0);
+  });
+  it('retains all external results, reasons and failures with partial success', async () => {
+    const success = await startScorer({ score: 0.95 });
+    const failure = await startScorer({ rawBody: 'invalid' });
+    try {
+      const result = await new ActionOrchestrator({ externalAnalysers: [
+        { name: 'success', endpoint: success.url }, { name: 'failure', endpoint: failure.url }, { name: 'disabled', endpoint: '', enabled: false },
+      ] }).evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+      assert.equal(result.decision, 'deny');
+      assert.equal(result.audit?.termination.blocked_gate, 'external');
+      const phase = result.audit!.phases[6];
+      assert.equal(phase.status, 'completed');
+      assert.equal(phase.external_results?.length, 3);
+      assert.equal(phase.external_results?.find(r => r.name === 'success')?.reason, 'scored 0.95');
+      assert.equal(phase.external_results?.find(r => r.name === 'failure')?.status, 'failed');
+      assert.equal(phase.external_results?.find(r => r.name === 'failure')?.score, null);
+      assert.deepEqual(result.scores.external, { success: 0.95 });
+    } finally { await stopScorer(success.server); await stopScorer(failure.server); }
+  });
+});
+
+
+describe('structured all-external failure', () => {
+  it('keeps all failed service results and an explicit failed phase reason', async () => {
+    const failure = await startScorer({ rawBody: 'invalid' });
+    try {
+      const result = await new ActionOrchestrator({ externalAnalysers: [{ name: 'failure', endpoint: failure.url }] }).evaluate(makeEnvelope('exec_command', { command: 'echo hello' }));
+      assert.equal(result.decision, 'allow');
+      assert.equal(result.scores.external, undefined);
+      assert.equal(result.audit?.phases[6].status, 'failed');
+      assert.equal(result.audit?.phases[6].score, null);
+      assert.match(result.audit!.phases[6].reason, /failed/i);
+      assert.equal(result.audit?.phases[6].external_results?.[0].status, 'failed');
+    } finally { await stopScorer(failure.server); }
+  });
+});
