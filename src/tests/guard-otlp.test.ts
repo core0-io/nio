@@ -1,7 +1,7 @@
 import { it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createLoggerProvider } from '../scripts/lib/logs-collector.js';
@@ -88,8 +88,6 @@ it('dual-writes the same validated Guard record through a real HTTP OTLP receive
 });
 
 it('configured native CLI and plugin runtime paths each send exactly one Guard evaluation', async () => {
-  const { spawn } = await import('node:child_process');
-  const { InProcessPluginRuntime } = await import('../adapters/plugin-runtime.js');
   const bodies: any[] = [];
   const captures: unknown[] = [];
   const server = createServer(async (req, res) => {
@@ -110,9 +108,35 @@ it('configured native CLI and plugin runtime paths each send exactly one Guard e
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as { port: number }).port;
   const home = mkdtempSync(join(tmpdir(), 'nio-native-otlp-'));
+  writeFileSync(join(home, 'config.yaml'), `agent_name: native-receiver\ncollector:\n  endpoint: http://127.0.0.1:${port}\n  metrics:\n    enabled: false\n  traces:\n    enabled: false\n  logs:\n    enabled: true\n`);
+  try {
+    await runNativeGuardPaths(home);
+    const deadline = Date.now() + 2000;
+    while (bodies.length < 6 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    const local = readFileSync(join(home, 'audit.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.event === 'guard');
+    assert.equal(local.length, 6);
+    assert.equal(bodies.length, 6, bodies.map(entry => entry.platform).join(','));
+    for (const platform of ['claude-code', 'codex', 'hermes', 'openclaw', 'pi', 'opencode']) {
+      const entries = bodies.filter(entry => entry.platform === platform);
+      assert.equal(entries.length, 1, `${platform} exactly one evaluation`);
+      validateGuardAuditEntry(entries[0]);
+      assert.deepEqual(entries[0], local.find(entry => entry.evaluation_id === entries[0].evaluation_id));
+      assert.equal(entries[0].agent_name, 'native-receiver');
+    }
+    if (process.env.NIO_OTLP_CAPTURE_PATH) writeFileSync(process.env.NIO_OTLP_CAPTURE_PATH, JSON.stringify(captures[0], null, 2) + '\n');
+  } finally {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+const nativePlatforms = ['claude-code', 'codex', 'hermes', 'openclaw', 'pi', 'opencode'];
+
+async function runNativeGuardPaths(home: string): Promise<void> {
+  const { spawn } = await import('node:child_process');
+  const { InProcessPluginRuntime } = await import('../adapters/plugin-runtime.js');
   const prior = process.env.NIO_HOME;
   const raw = { hook_event_name: 'PreToolUse', tool_name: 'unknown', toolName: 'unknown', tool: 'unknown', tool_input: {}, input: {}, args: {}, params: {} };
-  writeFileSync(join(home, 'config.yaml'), `agent_name: native-receiver\ncollector:\n  endpoint: http://127.0.0.1:${port}\n  metrics:\n    enabled: false\n  traces:\n    enabled: false\n  logs:\n    enabled: true\n`);
   const run = (script: string, args: string[], input?: unknown) => new Promise<void>((resolve, reject) => {
     const child = spawn(process.execPath, [script, ...args], { env: { ...process.env, NIO_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'] });
     let errors = '';
@@ -132,21 +156,63 @@ it('configured native CLI and plugin runtime paths each send exactly one Guard e
       await runtime.onPreTool('session', 'call', 'unknown', {}, raw);
       await runtime.disposeAllSessions();
     }
-    const deadline = Date.now() + 2000;
-    while (bodies.length < 6 && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
-    const local = readFileSync(join(home, 'audit.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line)).filter(entry => entry.event === 'guard');
-    assert.equal(local.length, 6);
-    assert.equal(bodies.length, 6, bodies.map(entry => entry.platform).join(','));
-    for (const platform of ['claude-code', 'codex', 'hermes', 'openclaw', 'pi', 'opencode']) {
-      const entries = bodies.filter(entry => entry.platform === platform);
-      assert.equal(entries.length, 1, `${platform} exactly one evaluation`);
-      validateGuardAuditEntry(entries[0]);
-      assert.deepEqual(entries[0], local.find(entry => entry.evaluation_id === entries[0].evaluation_id));
-      assert.equal(entries[0].agent_name, 'native-receiver');
-    }
-    if (process.env.NIO_OTLP_CAPTURE_PATH) writeFileSync(process.env.NIO_OTLP_CAPTURE_PATH, JSON.stringify(captures[0], null, 2) + '\n');
   } finally {
     if (prior === undefined) delete process.env.NIO_HOME; else process.env.NIO_HOME = prior;
+  }
+}
+
+for (const scenario of [
+  { name: 'no collector configuration', config: '{}\n', local: true, failedExport: false },
+  { name: 'no endpoint and logs export disabled', config: 'collector:\n  logs:\n    enabled: false\n', local: true, failedExport: false },
+  { name: 'endpoint configured but logs export disabled', config: 'collector:\n  endpoint: http://127.0.0.1:1\n  metrics:\n    enabled: false\n  traces:\n    enabled: false\n  logs:\n    enabled: false\n', local: true, failedExport: false },
+  { name: 'unreachable remote endpoint', config: 'collector:\n  endpoint: http://127.0.0.1:1\n  timeout: 1000\n  metrics:\n    enabled: false\n  traces:\n    enabled: false\n  logs:\n    enabled: true\n', local: true, failedExport: true },
+  { name: 'explicitly disabled local logging', config: 'collector:\n  logs:\n    local: false\n', local: false, failedExport: false },
+]) {
+  it(`six native paths preserve independent local Guard logging: ${scenario.name}`, async () => {
+    const home = mkdtempSync(join(tmpdir(), 'nio-native-local-'));
+    writeFileSync(join(home, 'config.yaml'), scenario.config);
+    try {
+      await runNativeGuardPaths(home);
+      const path = join(home, 'audit.jsonl');
+      const entries = existsSync(path) ? readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line)) : [];
+      const guards = entries.filter(entry => entry.event === 'guard');
+      assert.equal(guards.length, scenario.local ? 6 : 0);
+      for (const platform of scenario.local ? nativePlatforms : []) {
+        const records = guards.filter(entry => entry.platform === platform);
+        assert.equal(records.length, 1, `${platform} retains one local evaluation`);
+        const record = validateGuardAuditEntry(records[0]);
+        assert.equal(record.decision, 'allow');
+        assert.equal(record.termination.kind, 'unmapped_allow');
+      }
+      const failures = entries.filter(entry => entry.kind === 'otlp_export_failed' && entry.component === 'logs');
+      assert.equal(failures.length > 0, scenario.failedExport);
+      if (scenario.failedExport) assert.match(String(failures[0].detail), /ECONNREFUSED/);
+    } finally { rmSync(home, { recursive: true, force: true }); }
+  });
+}
+
+it('disabled collector with a configured endpoint sends nothing and retains the local Guard record', async () => {
+  const { guardAuditFixture } = await import('./helpers/guard-audit.js');
+  let requests = 0;
+  const server = createServer(async (req, res) => {
+    for await (const chunk of req) void chunk;
+    requests++;
+    res.setHeader('content-type', 'application/json'); res.end('{}');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const port = (server.address() as { port: number }).port;
+  const home = mkdtempSync(join(tmpdir(), 'nio-disabled-collector-'));
+  const path = join(home, 'audit.jsonl');
+  const provider = createLoggerProvider({ endpoint: `http://127.0.0.1:${port}`, protocol: 'http', api_key: '', headers: {}, timeout: 1000, enabled: false, logs_enabled: true, metrics_enabled: false, traces_enabled: false }, 'claude-code');
+  try {
+    const entry = guardAuditFixture();
+    writeAuditLog(entry, { loggerProvider: provider, logsConfig: { path } });
+    await provider?.forceFlush();
+    assert.deepEqual(validateGuardAuditEntry(JSON.parse(readFileSync(path, 'utf8'))), entry);
+    assert.equal(requests, 0);
+    assert.equal(provider, null);
+  } finally {
+    await provider?.shutdown();
     await new Promise<void>(resolve => server.close(() => resolve()));
     rmSync(home, { recursive: true, force: true });
   }

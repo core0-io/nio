@@ -47,6 +47,7 @@ export function createLoggerProvider(
   platform: string,
   agentName?: string,
 ): LoggerProvider | null {
+  if (!config.enabled) return null;
   if (!config.endpoint) return null;
   if (!config.logs_enabled) return null;
 
