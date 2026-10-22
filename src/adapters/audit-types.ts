@@ -192,3 +192,5 @@ export type AuditEntry =
   | AuditLifecycleEntry
   | AuditDiagnosticEntry
   | AuditHookEntry;
+
+export type { GuardAuditEntry, GuardPhase, GuardFinding, GuardTermination, GuardGate, GuardExternalResult } from '../schemas/index.js';

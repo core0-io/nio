@@ -354,3 +354,5 @@ function summariseToolInput(input: HookInput): string {
   return JSON.stringify(toolInput).slice(0, 200);
 }
 
+
+export { buildGuardAuditV2, createGuardEvaluation } from '../schemas/index.js';
