@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
-export const GUARD_AUDIT_SCHEMA_VERSION = 2;
 export const GUARD_GATES = ['tool_gate', 'allowlist', 'runtime', 'static', 'behavioural', 'llm', 'external'] as const;
 export const guardGateSchema = z.enum(GUARD_GATES);
 const phaseId = z.union([
@@ -80,7 +79,6 @@ const scores = z
 export const guardAuditSchema = z
   .object({
     event: z.literal('guard'),
-    schema_version: z.literal(GUARD_AUDIT_SCHEMA_VERSION),
     evaluation_id: z.string().uuid(),
     timestamp: z.string().datetime({ offset: true }),
     duration_ms: z.number().finite().nonnegative(),
@@ -230,9 +228,9 @@ export type GuardAuditEntry = z.infer<typeof guardAuditSchema>;
 export function createGuardEvaluation(): Pick<GuardAuditEntry, 'evaluation_id' | 'timestamp'> {
   return { evaluation_id: randomUUID(), timestamp: new Date().toISOString() };
 }
-export function buildGuardAuditV2(entry: GuardAuditEntry): GuardAuditEntry {
+export function validateGuardAuditEntry(entry: GuardAuditEntry): GuardAuditEntry {
   return guardAuditSchema.parse(entry);
 }
 export function guardAuditJsonSchema() {
-  return zodToJsonSchema(guardAuditSchema, { name: 'GuardAuditV2', target: 'jsonSchema7' });
+  return zodToJsonSchema(guardAuditSchema, { name: 'GuardAudit', target: 'jsonSchema7' });
 }

@@ -1,16 +1,12 @@
 {
-  "$ref": "#/definitions/GuardAuditV2",
+  "$ref": "#/definitions/GuardAudit",
   "definitions": {
-    "GuardAuditV2": {
+    "GuardAudit": {
       "type": "object",
       "properties": {
         "event": {
           "type": "string",
           "const": "guard"
-        },
-        "schema_version": {
-          "type": "number",
-          "const": 2
         },
         "evaluation_id": {
           "type": "string",
@@ -29,16 +25,16 @@
           "minLength": 1
         },
         "service_name": {
-          "$ref": "#/definitions/GuardAuditV2/properties/platform"
+          "$ref": "#/definitions/GuardAudit/properties/platform"
         },
         "agent_name": {
-          "$ref": "#/definitions/GuardAuditV2/properties/platform"
+          "$ref": "#/definitions/GuardAudit/properties/platform"
         },
         "session_id": {
           "type": "string"
         },
         "tool_name": {
-          "$ref": "#/definitions/GuardAuditV2/properties/platform"
+          "$ref": "#/definitions/GuardAudit/properties/platform"
         },
         "action_type": {
           "type": "string"
@@ -70,7 +66,7 @@
         "risk_level": {
           "anyOf": [
             {
-              "$ref": "#/definitions/GuardAuditV2/properties/platform"
+              "$ref": "#/definitions/GuardAudit/properties/platform"
             },
             {
               "type": "null"
@@ -129,7 +125,7 @@
                 ]
               },
               "reason": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "duration_ms": {
                 "anyOf": [
@@ -143,7 +139,7 @@
                 ]
               },
               "score": {
-                "$ref": "#/definitions/GuardAuditV2/properties/risk_score"
+                "$ref": "#/definitions/GuardAudit/properties/risk_score"
               },
               "finding_count": {
                 "type": "integer",
@@ -152,7 +148,7 @@
               "finding_ids": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                  "$ref": "#/definitions/GuardAudit/properties/platform"
                 }
               },
               "triggered_block": {
@@ -162,10 +158,10 @@
                 "type": "object",
                 "properties": {
                   "kind": {
-                    "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                    "$ref": "#/definitions/GuardAudit/properties/platform"
                   },
                   "message": {
-                    "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                    "$ref": "#/definitions/GuardAudit/properties/platform"
                   }
                 },
                 "required": [
@@ -180,7 +176,7 @@
                   "type": "object",
                   "properties": {
                     "name": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                      "$ref": "#/definitions/GuardAudit/properties/platform"
                     },
                     "status": {
                       "type": "string",
@@ -191,19 +187,19 @@
                       ]
                     },
                     "reason": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                      "$ref": "#/definitions/GuardAudit/properties/platform"
                     },
                     "duration_ms": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/duration_ms"
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/duration_ms"
                     },
                     "score": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/risk_score"
+                      "$ref": "#/definitions/GuardAudit/properties/risk_score"
                     },
                     "finding_ids": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/finding_ids"
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/finding_ids"
                     },
                     "error": {
-                      "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/error"
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/error"
                     }
                   },
                   "required": [
@@ -251,7 +247,7 @@
             "blocked_gate": {
               "anyOf": [
                 {
-                  "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/gate"
+                  "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/gate"
                 },
                 {
                   "type": "null"
@@ -259,10 +255,10 @@
               ]
             },
             "trigger_finding_ids": {
-              "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/finding_ids"
+              "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/finding_ids"
             },
             "reason": {
-              "$ref": "#/definitions/GuardAuditV2/properties/platform"
+              "$ref": "#/definitions/GuardAudit/properties/platform"
             }
           },
           "required": [
@@ -279,22 +275,22 @@
             "type": "object",
             "properties": {
               "finding_id": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "phase_id": {
-                "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/phase_id"
+                "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/phase_id"
               },
               "rule_id": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "severity": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "category": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "title": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "description": {
                 "type": "string"
@@ -319,10 +315,10 @@
           }
         },
         "explanation": {
-          "$ref": "#/definitions/GuardAuditV2/properties/platform"
+          "$ref": "#/definitions/GuardAudit/properties/platform"
         },
         "error": {
-          "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/error"
+          "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/error"
         },
         "cwd": {
           "type": "string"
@@ -333,7 +329,7 @@
         "phase_stopped": {
           "anyOf": [
             {
-              "$ref": "#/definitions/GuardAuditV2/properties/phases/items/properties/phase_id"
+              "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/phase_id"
             },
             {
               "type": "null"
@@ -373,19 +369,19 @@
             "type": "object",
             "properties": {
               "rule_id": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "severity": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "category": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "title": {
-                "$ref": "#/definitions/GuardAuditV2/properties/platform"
+                "$ref": "#/definitions/GuardAudit/properties/platform"
               },
               "confidence": {
-                "$ref": "#/definitions/GuardAuditV2/properties/findings/items/properties/confidence"
+                "$ref": "#/definitions/GuardAudit/properties/findings/items/properties/confidence"
               }
             },
             "required": [
@@ -411,7 +407,6 @@
       },
       "required": [
         "event",
-        "schema_version",
         "evaluation_id",
         "timestamp",
         "duration_ms",

@@ -1081,14 +1081,14 @@ describe('Adapter Common Utilities', () => {
 
 });
 
-describe('v2 hook audit', () => {
+describe('structured hook audit', () => {
   it('writes factual tool gate deny, unmapped and successful evaluations', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { evaluateHook } = await import('../adapters/hook-engine.js');
     const { ActionOrchestrator } = await import('../core/action-orchestrator.js');
     const { guardAuditSchema } = await import('../schemas/index.js');
-    const dir = mkdtempSync(join(tmpdir(), 'nio-v2-hook-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nio-guard-hook-'));
     try {
       const path = join(dir, 'audit.jsonl');
       const adapter = new ClaudeCodeAdapter();
@@ -1103,6 +1103,7 @@ describe('v2 hook audit', () => {
       assert.equal(post.decision, 'deny');
       const entries = readFileSync(path, 'utf8').trim().split('\n').map(line => guardAuditSchema.parse(JSON.parse(line)));
       assert.equal(entries.length, 3);
+      assert.ok(entries.every(entry => !Object.hasOwn(entry, 'schema_version')));
       assert.equal(new Set(entries.map(e => e.evaluation_id)).size, 3);
       assert.equal(entries[0].termination.blocked_gate, 'tool_gate');
       assert.equal(entries[0].findings[0].rule_id, 'TOOL_GATE_BLOCKED');
@@ -1115,14 +1116,14 @@ describe('v2 hook audit', () => {
   });
 });
 
-describe('v2 hook fail open', () => {
+describe('structured hook fail open', () => {
   it('retains tool gate history and emits error when envelope construction fails', async () => {
     const { mkdtempSync, rmSync } = await import('node:fs');
     const { tmpdir } = await import('node:os');
     const { evaluateHook } = await import('../adapters/hook-engine.js');
     const { ActionOrchestrator } = await import('../core/action-orchestrator.js');
     const { guardAuditSchema } = await import('../schemas/index.js');
-    const dir = mkdtempSync(join(tmpdir(), 'nio-v2-error-'));
+    const dir = mkdtempSync(join(tmpdir(), 'nio-guard-error-'));
     try {
       const path = join(dir, 'audit.jsonl');
       const adapter = new ClaudeCodeAdapter();

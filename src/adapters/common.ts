@@ -212,7 +212,7 @@ export function writeAuditLog(
   entry: AuditEntry,
   opts?: WriteAuditLogOptions,
 ): void {
-  if (entry.event === 'guard' && 'schema_version' in entry) {
+  if (entry.event === 'guard' && 'evaluation_id' in entry) {
     const parsed = guardAuditSchema.safeParse(entry);
     if (!parsed.success) {
       reportDiagnostic({ severity: 'error', source: 'hook', kind: 'guard_audit_invalid', message: parsed.error.message });
@@ -322,7 +322,7 @@ export function buildEvaluatedGuardAuditEntry(
 ): GuardAuditEntry {
   const legacy = buildGuardAuditEntry(input, rd, initiatingSkill, platform, actionType, agentName);
   return {
-    ...legacy, schema_version: 2, ...audit.identity,
+    ...legacy, ...audit.identity,
     duration_ms: performance.now() - audit.started,
     service_name: `nio-${platform}`, agent_name: agentName || platform,
     decision: rd?.decision || 'allow', risk_level: rd?.risk_level ?? null,
@@ -383,4 +383,4 @@ function summariseToolInput(input: HookInput): string {
 }
 
 
-export { buildGuardAuditV2, createGuardEvaluation } from '../schemas/index.js';
+export { validateGuardAuditEntry, createGuardEvaluation } from '../schemas/index.js';
