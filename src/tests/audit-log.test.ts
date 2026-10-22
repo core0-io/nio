@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, existsSync, writeFileSync, statSync } from '
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import { writeAuditLog, resolveAuditPath } from '../adapters/common.js';
+import { guardAuditFixture } from './helpers/guard-audit.js';
 import type { AuditHookEntry, AuditGuardEntry } from '../adapters/audit-types.js';
 import type { CollectorLogsConfig } from '../adapters/config-schema.js';
 
@@ -28,21 +29,7 @@ const sampleHookEntry = (): AuditHookEntry => ({
   tool_summary: 'ls /tmp',
 });
 
-const sampleGuardEntry = (): AuditGuardEntry => ({
-  event: 'guard',
-  timestamp: '2026-04-29T12:00:00.000Z',
-  platform: 'claude-code',
-  tool_name: 'Bash',
-  tool_input_summary: 'ls /tmp',
-  decision: 'allow',
-  risk_level: 'low',
-  max_finding_severity: 'low',
-  risk_score: 0,
-  risk_tags: [],
-  phase_stopped: null,
-  scores: {},
-  top_findings: [],
-});
+const sampleGuardEntry = guardAuditFixture;
 
 // ── resolveAuditPath ────────────────────────────────────────────────────
 
@@ -151,21 +138,19 @@ describe('writeAuditLog: rotation', () => {
 // ── writeAuditLog: OTEL emission ────────────────────────────────────────
 
 describe('writeAuditLog: OTEL emit', () => {
-  it('skips OTEL emit when logsConfig.enabled === false', () => {
-    const dir = freshDir();
-    const path = join(dir, 'audit.jsonl');
-    let emitCount = 0;
-    const fakeProvider = { mark: 'fake-provider' };
-    // Loose stub — writeAuditLog dynamically requires logs-collector;
-    // since the require may fail in this test env, we just check that
-    // the local-write side honors `enabled: false`'s sibling path.
-    writeAuditLog(sampleHookEntry(), {
-      logsConfig: { path, enabled: false, local: true },
-      loggerProvider: fakeProvider as unknown as never,
-    });
-    // Local write still happens (local !== false)
-    assert.ok(existsSync(path));
-    assert.equal(emitCount, 0);
+  it('skips OTEL emit when logsConfig.enabled === false', async () => {
+    const { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } = await import('@opentelemetry/sdk-logs');
+    const path = join(freshDir(), 'audit.jsonl');
+    const exporter = new InMemoryLogRecordExporter();
+    const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
+    try {
+      writeAuditLog(sampleHookEntry(), {
+        logsConfig: { path, enabled: false, local: true }, loggerProvider: provider,
+      });
+      await provider.forceFlush();
+      assert.equal(readEntries(path).length, 1);
+      assert.equal(exporter.getFinishedLogRecords().length, 0);
+    } finally { await provider.shutdown(); }
   });
 
   it('skips OTEL emit when loggerProvider is null', () => {
@@ -178,5 +163,48 @@ describe('writeAuditLog: OTEL emit', () => {
     // Local write succeeds; OTEL silently no-ops.
     const entries = readEntries(path);
     assert.equal(entries.length, 1);
+  });
+});
+
+describe('canonical Guard write boundary', () => {
+  for (const missing of ['evaluation_id', 'phases'] as const) {
+    it(`rejects Guard missing ${missing} before either destination and diagnoses it`, async () => {
+      const { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } = await import('@opentelemetry/sdk-logs');
+      const { _setDiagnosticsAuditPathForTests } = await import('../adapters/diagnostics.js');
+      const { guardAuditFixture } = await import('./helpers/guard-audit.js');
+      const dir = freshDir();
+      const path = join(dir, 'audit.jsonl');
+      const diagnostics = join(dir, 'diagnostics.jsonl');
+      const exporter = new InMemoryLogRecordExporter();
+      const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
+      const malformed: Record<string, unknown> = { ...guardAuditFixture() };
+      delete malformed[missing];
+      _setDiagnosticsAuditPathForTests(diagnostics);
+      try {
+        writeAuditLog(malformed as unknown as AuditGuardEntry, { loggerProvider: provider, logsConfig: { path } });
+        await provider.forceFlush();
+        assert.equal(readEntries(path).length, 0);
+        assert.equal(exporter.getFinishedLogRecords().length, 0);
+        assert.equal(readEntries(diagnostics)[0]?.kind, 'guard_audit_invalid');
+      } finally {
+        _setDiagnosticsAuditPathForTests(null);
+        await provider.shutdown();
+      }
+    });
+  }
+  it('dual-writes valid Guard and non-Guard entries without changing their event identities', async () => {
+    const { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } = await import('@opentelemetry/sdk-logs');
+    const { guardAuditFixture } = await import('./helpers/guard-audit.js');
+    const dir = freshDir();
+    const path = join(dir, 'audit.jsonl');
+    const exporter = new InMemoryLogRecordExporter();
+    const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
+    try {
+      const expected = [guardAuditFixture(), sampleHookEntry()];
+      for (const entry of expected) writeAuditLog(entry, { loggerProvider: provider, logsConfig: { path } });
+      await provider.forceFlush();
+      assert.deepEqual(readEntries(path), expected);
+      assert.deepEqual(exporter.getFinishedLogRecords().map(record => JSON.parse(String(record.body))), expected);
+    } finally { await provider.shutdown(); }
   });
 });

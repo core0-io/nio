@@ -46,41 +46,7 @@ export type AuditPhaseMap = Partial<{
 
 // ── Guard entry ─────────────────────────────────────────────────────────
 
-export interface AuditGuardEntry {
-  event: 'guard';
-  timestamp: string;
-  platform: string;
-  agent_name?: string;
-  session_id?: string;
-  cwd?: string;
-
-  tool_name: string;
-  action_type?: string;
-  tool_input_summary: string;
-
-  decision: string;
-  risk_level: string;
-  max_finding_severity: string;
-  risk_score: number;
-  risk_tags: string[];
-
-  phase_stopped: number | null;
-  scores: {
-    runtime?: number;
-    static?: number;
-    behavioural?: number;
-    llm?: number;
-    /** Phase 6: per-endpoint scores keyed by external-analyser name. */
-    external?: Record<string, number>;
-    final?: number;
-  };
-  phases?: AuditPhaseMap;
-  top_findings: AuditFindingSummary[];
-  explanation?: string;
-
-  initiating_skill?: string;
-  event_type?: 'pre' | 'post';
-}
+export type AuditGuardEntry = import('../schemas/index.js').GuardAuditEntry;
 
 // ── Scan entry ──────────────────────────────────────────────────────────
 
@@ -187,7 +153,6 @@ export interface AuditHookEntry {
 // ── Union ───────────────────────────────────────────────────────────────
 
 export type AuditEntry =
-  | import('../schemas/index.js').GuardAuditEntry
   | AuditGuardEntry
   | AuditScanEntry
   | AuditLifecycleEntry

@@ -4,6 +4,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { guardAuditFixture } from './helpers/guard-audit.js';
 import { emitAuditLog } from '../scripts/lib/logs-collector.js';
 
 describe('audit log severity', () => {
@@ -17,7 +18,7 @@ describe('audit log severity', () => {
       const exporter = new InMemoryLogRecordExporter();
       const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
       try {
-        emitAuditLog(provider, { event: 'guard', platform: 'test', risk_level: risk, decision: 'deny' });
+        emitAuditLog(provider, { ...guardAuditFixture(), risk_level: risk });
         await provider.forceFlush();
         const [record] = exporter.getFinishedLogRecords();
         assert.equal(record.severityNumber, number);
@@ -33,7 +34,7 @@ describe('audit log severity', () => {
     const exporter = new InMemoryLogRecordExporter();
     const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
     try {
-      emitAuditLog(provider, { event: 'SessionStart', platform: 'test' });
+      emitAuditLog(provider, { event: 'SessionStart', platform: 'test', timestamp: '2026-10-22T00:00:00.000Z' });
       await provider.forceFlush();
       const [record] = exporter.getFinishedLogRecords();
       assert.equal(record.severityNumber, 9);
@@ -50,13 +51,15 @@ describe('guard audit projection', () => {
     const exporter = new InMemoryLogRecordExporter();
     const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
     const timestamp = '2026-10-22T01:02:03.000Z';
-    emitAuditLog(provider, { event: 'guard', platform: 'test', timestamp,
-      evaluation_id: 'evaluation', decision: 'error', risk_level: null, risk_score: null,
-      termination: { kind: 'engine_error', blocked_gate: null },
-      phases: [{ score: null, duration_ms: null, finding_count: 0 }] });
+    const entry = guardAuditFixture();
+    Object.assign(entry, { timestamp, decision: 'error', risk_level: null, risk_score: null,
+      error: { kind: 'Error', message: 'Engine failed' },
+      termination: { kind: 'engine_error', blocked_gate: null, trigger_finding_ids: [], reason: 'Engine failed' } });
+    Object.assign(entry.phases[0], { status: 'failed', error: entry.error, score: null, duration_ms: null });
+    emitAuditLog(provider, entry);
     await provider.forceFlush();
     const [record] = exporter.getFinishedLogRecords();
-    assert.equal(record.attributes['nio.guard.evaluation_id'], 'evaluation');
+    assert.equal(record.attributes['nio.guard.evaluation_id'], entry.evaluation_id);
     assert.equal(record.attributes['nio.guard.decision'], 'error');
     assert.equal(record.attributes['nio.guard.termination'], 'engine_error');
     assert.equal(record.attributes['nio.guard.risk_score'], undefined);
