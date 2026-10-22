@@ -333,13 +333,13 @@ export class ActionOrchestrator {
       if (isBehaviouralTarget) {
         audit.start(4);
         const t4 = performance.now();
-        const phase4Findings = await this.runBehaviouralOnContent(phase34Content, phase34Path);
+        const phase4Findings = await this.runBehaviouralOnContent(phase34Content, phase34Path, audit);
         const t4End = performance.now();
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
         scores.behavioural = scoreC;
         timings.behavioural = { score: scoreC, finding_count: phase4Findings.length, duration_ms: Math.round(t4End - t4) };
-        audit.complete(4, scoreC, phase4Findings);
+        if (audit.isActive(4)) audit.complete(4, scoreC, phase4Findings);
 
         if (shouldShortCircuit(scoreC, level)) {
           return finish(this.buildResult(allFindings, scores, 4, level, timings, scoreC), 4);
@@ -545,7 +545,7 @@ export class ActionOrchestrator {
 
   // ── Phase 4: Behavioural analysis on file content ──────────────────────
 
-  private async runBehaviouralOnContent(content: string, filePath: string): Promise<Finding[]> {
+  private async runBehaviouralOnContent(content: string, filePath: string, audit: GuardEvaluation): Promise<Finding[]> {
     // Lazy import
     const { BehaviouralAnalyser } = await import('./analysers/behavioural/index.js');
     const { defaultPolicy } = await import('./scan-policy.js');
@@ -562,11 +562,17 @@ export class ActionOrchestrator {
       extension: ext,
     };
 
-    return analyser.analyse({
+    const outcome = await analyser.analyseWithOutcome({
       rootDir: '.',
       files: [fakeFileInfo],
       policy,
     });
+    if (outcome.parseFailures > 0) {
+      audit.fail(4, { kind: 'parse_failed', message: 'Behavioural analysis could not parse the content' });
+    } else if (outcome.supportedFiles === 0) {
+      audit.skip(4, 'not_applicable', 'No supported behavioural input');
+    }
+    return outcome.findings;
   }
 
   // ── Phase 5: LLM analysis on action ────────────────────────────────────

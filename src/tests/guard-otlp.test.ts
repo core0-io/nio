@@ -16,6 +16,7 @@ import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { PiAdapter } from '../adapters/pi.js';
 import { OpenCodeAdapter } from '../adapters/opencode.js';
 import { GuardEvaluation } from '../core/guard-evaluation.js';
+import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import { validateGuardAuditEntry } from '../schemas/index.js';
 
 it('dual-writes the same validated Guard record through a real HTTP OTLP receiver', async () => {
@@ -57,6 +58,29 @@ it('dual-writes the same validated Guard record through a real HTTP OTLP receive
     assert.equal(attrs['service.name'], entry.service_name);
     assert.equal(attrs['nio.platform'], entry.platform);
     assert.equal(attrs['gen_ai.agent.name'], entry.agent_name);
+    const content = 'function broken(';
+    const parseAudit = new GuardEvaluation();
+    const result = await new ActionOrchestrator().evaluate({
+      actor: { skill: { id: 'parse-fixture', source: 'local', version_ref: '0', artifact_hash: '' } },
+      action: { type: 'write_file', data: { path: '/tmp/probe.js', content_preview: content } },
+      context: { session_id: 'parse-fixture', user_present: true, env: 'test', time: new Date().toISOString() },
+    }, undefined, parseAudit);
+    const parseEntry = buildEvaluatedGuardAuditEntry(
+      { toolName: 'Write', toolInput: { file_path: '/tmp/probe.js', content }, eventType: 'pre', raw: {} },
+      result, null, 'pi', parseAudit, 'write_file',
+    );
+    writeAuditLog(parseEntry, { loggerProvider: provider, logsConfig: { path } });
+    await provider.forceFlush();
+    assert.equal(payloads.length, 2);
+    const parseBody = JSON.parse(payloads[1].resourceLogs[0].scopeLogs[0].logRecords[0].body.stringValue);
+    const localEntries = readFileSync(path, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    assert.equal(localEntries.length, 2);
+    assert.deepEqual(parseBody, localEntries[1]);
+    validateGuardAuditEntry(parseBody);
+    assert.equal(parseBody.evaluation_id, parseAudit.identity.evaluation_id);
+    assert.equal(parseBody.decision, 'allow');
+    assert.equal(parseBody.phases[4].status, 'failed');
+    assert.equal(parseBody.phases[4].error.kind, 'parse_failed');
     for (const adapter of [new ClaudeCodeAdapter(), new CodexAdapter(), new HermesAdapter(), new OpenClawAdapter(), new PiAdapter(), new OpenCodeAdapter()]) {
       const platformProvider = createLoggerProvider({ endpoint: `http://127.0.0.1:${address.port}`, protocol: 'http', api_key: '', headers: {}, timeout: 1000, enabled: true, logs_enabled: true, metrics_enabled: false, traces_enabled: false }, adapter.name)!;
       const before: number = payloads.length;
