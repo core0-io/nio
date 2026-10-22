@@ -198,11 +198,12 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
 
 export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void {
   const logger = provider.getLogger('nio-audit', '1.0.0');
-  const severityLevel = ('risk_level' in entry ? entry.risk_level : 'low') as string;
+  const severityLevel = typeof entry.risk_level === 'string' ? entry.risk_level : '';
+  const severityNumber = RISK_TO_SEVERITY[severityLevel] ?? SeverityNumber.INFO;
 
   logger.emit({
-    severityNumber: RISK_TO_SEVERITY[severityLevel] ?? SeverityNumber.INFO,
-    severityText: severityLevel,
+    severityNumber,
+    severityText: SeverityNumber[severityNumber],
     body: JSON.stringify(entry),
     attributes: auditEntryAttributes(entry),
   });
