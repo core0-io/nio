@@ -12,8 +12,8 @@ export {};
  * (Phase 3), BehaviouralAnalyser (Phase 4), LLMAnalyser (Phase 5),
  * ExternalAnalyser (Phase 6). This CLI does NOT run Phase 0 (tool gate) —
  * Phase 0 lives in hook-engine.ts::evaluateHook, where tool_name +
- * platform are available. For tool-call-level interception (Phase 0 +
- * audit logging), use hook-cli instead.
+ * platform are available. Direct evaluations share the audit writer, with
+ * Tool gate marked not applicable. Use hook-cli for tool-call interception.
  *
  * Usage:
  *   node action-cli.js evaluate --type <action_type> [action-specific args]
@@ -36,6 +36,11 @@ export {};
  *     --tool <name> [--server <name>] [--args-json <json_object>]
  */
 
+import { GuardEvaluation, guardError } from '../core/guard-evaluation.js';
+import { buildEvaluatedGuardAuditEntry, writeAuditLog, loadConfig } from '../adapters/common.js';
+import { createLoggerProvider } from './lib/logs-collector.js';
+import { loadCollectorConfig } from './lib/config-loader.js';
+import { reportFlushFailure } from './lib/exporter-diagnostics.js';
 import { createNio } from '../index.js';
 import type { ActionEnvelope as TypedActionEnvelope } from '../types/action.js';
 
@@ -214,8 +219,25 @@ async function main(): Promise<void> {
   // Local ActionEnvelope uses Record<string, unknown> for data; cast to the
   // strict discriminated-union form that orchestrator.evaluate expects. Safe —
   // buildEnvelope fills type-appropriate fields per action type.
-  const result = await orchestrator.evaluate(envelope as unknown as TypedActionEnvelope);
-  console.log(JSON.stringify(result, null, 2));
+  const audit = new GuardEvaluation();
+  audit.skip(0, 'not_applicable', 'Direct action evaluation does not execute Tool gate');
+  const config = loadConfig();
+  const collector = loadCollectorConfig();
+  const provider = createLoggerProvider(collector, 'cli', config.agent_name);
+  const auditOpts = { loggerProvider: provider, logsConfig: config.collector?.logs };
+  const input = { toolName: envelope.action.type, toolInput: envelope.action.data, eventType: 'pre' as const, sessionId: envelope.context.session_id, raw: envelope };
+  try {
+    const result = await orchestrator.evaluate(envelope as unknown as TypedActionEnvelope, undefined, audit);
+    writeAuditLog(buildEvaluatedGuardAuditEntry(input, result, null, 'cli', audit, envelope.action.type, config.agent_name), auditOpts);
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error) {
+    audit.engineError(error);
+    writeAuditLog(buildEvaluatedGuardAuditEntry(input, null, null, 'cli', audit, envelope.action.type, config.agent_name, { decision: 'error', error: guardError(error) }), auditOpts);
+    throw error;
+  } finally {
+    await provider?.forceFlush().catch(error => reportFlushFailure('logs', collector.endpoint, error));
+    await provider?.shutdown();
+  }
 }
 
 main().catch((err: Error) => {
