@@ -44,3 +44,25 @@ describe('audit log severity', () => {
     }
   });
 });
+
+describe('guard audit projection', () => {
+  it('exports evaluation identity, termination, nullable scores and event time', async () => {
+    const exporter = new InMemoryLogRecordExporter();
+    const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
+    const timestamp = '2026-10-22T01:02:03.000Z';
+    emitAuditLog(provider, { event: 'guard', platform: 'test', timestamp,
+      evaluation_id: 'evaluation', decision: 'error', risk_level: null, risk_score: null,
+      termination: { kind: 'engine_error', blocked_gate: null },
+      phases: [{ score: null, duration_ms: null, finding_count: 0 }] });
+    await provider.forceFlush();
+    const [record] = exporter.getFinishedLogRecords();
+    assert.equal(record.attributes['nio.guard.evaluation_id'], 'evaluation');
+    assert.equal(record.attributes['nio.guard.decision'], 'error');
+    assert.equal(record.attributes['nio.guard.termination'], 'engine_error');
+    assert.equal(record.attributes['nio.guard.risk_score'], undefined);
+    assert.equal(record.attributes['nio.phases.0.score'], undefined);
+    assert.equal(record.attributes['nio.phases.0.duration_ms'], undefined);
+    assert.equal(record.hrTime[0] * 1000 + record.hrTime[1] / 1e6, Date.parse(timestamp));
+    await provider.shutdown();
+  });
+});

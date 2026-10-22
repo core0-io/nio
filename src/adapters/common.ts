@@ -20,6 +20,7 @@ export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, 
 export { reportDiagnostic, DiagnosticCollector, type Diagnostic } from './diagnostics.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
 import type { Finding } from '../core/models.js';
+import { emitAuditLog } from '../scripts/lib/logs-collector.js';
 import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 // ---------------------------------------------------------------------------
@@ -225,11 +226,6 @@ export function writeAuditLog(
   // OTEL Logs export (fire-and-forget)
   if (logsConfig?.enabled !== false && opts?.loggerProvider) {
     try {
-      // Dynamic import avoided — emitAuditLog is called from hook scripts
-      // that construct the LoggerProvider themselves.
-      const { emitAuditLog } = require('../scripts/lib/logs-collector.js') as {
-        emitAuditLog: (p: LoggerProvider, e: AuditEntry) => void;
-      };
       emitAuditLog(opts.loggerProvider, entry);
     } catch {
       // Non-critical — OTEL export failure should not block

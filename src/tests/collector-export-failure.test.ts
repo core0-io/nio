@@ -65,10 +65,12 @@ describe('collector export failures land in the audit log', () => {
     assert.ok(provider);
     const span = provider!.getTracer('t').startSpan('s');
     span.end();
-    await provider!.forceFlush();
+    await assert.rejects(provider!.forceFlush(), /ECONNREFUSED/);
     await provider!.shutdown();
 
-    assert.ok(exportFailures('traces').length >= 1, 'a traces export failure was recorded');
+    const failures = exportFailures('traces');
+    assert.ok(failures.length >= 1, 'a traces export failure was recorded');
+    assert.match(String(failures[0].detail), /ECONNREFUSED/);
   });
 
   it('metrics: failed metric export is audited', async () => {
