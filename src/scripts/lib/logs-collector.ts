@@ -26,8 +26,7 @@ import { collectorRequestHeaders, type CollectorConfig } from './config-loader.j
 import { buildNioResource } from './traces-collector.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
 
-import type { AuditEntry as SharedAuditEntry } from '../../adapters/audit-types.js';
-type AuditEntry = SharedAuditEntry | { event: string; platform: string; session_id?: string; [key: string]: unknown };
+import type { AuditEntry } from '../../adapters/audit-types.js';
 // ---------------------------------------------------------------------------
 // Severity mapping
 // ---------------------------------------------------------------------------
@@ -103,7 +102,7 @@ export function createLoggerProvider(
  * `nio.task_id`, `nio.task_summary`, `nio.cwd`, `nio.transcript_path`.
  */
 export function auditEntryAttributes(input: AuditEntry): Record<string, string | number> {
-  const entry = input as { event: string; platform: string; session_id?: string; [key: string]: unknown };
+  const entry = input as unknown as { event: string; platform: string; session_id?: string; [key: string]: unknown };
   const attrs: Record<string, string | number> = {
     'nio.event': entry.event,
   };

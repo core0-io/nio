@@ -86,7 +86,7 @@ describe('collector export failures land in the audit log', () => {
   it('logs: failed log export is audited', async () => {
     const provider = createLoggerProvider(unreachable, 'test');
     assert.ok(provider);
-    emitAuditLog(provider!, { event: 'SessionStart', platform: 'test' });
+    emitAuditLog(provider!, { event: 'SessionStart', platform: 'test', timestamp: new Date().toISOString() });
     await provider!.forceFlush();
     await provider!.shutdown();
 

@@ -8,13 +8,11 @@ import { homedir } from 'node:os';
 import { guardAuditSchema, type GuardAuditEntry } from '../schemas/index.js';
 import { GuardEvaluation } from '../core/guard-evaluation.js';
 import type { HookInput } from './types.js';
-import type { RiskLevel } from '../types/scanner.js';
-import { riskLevelToNumericScore } from '../types/scanner.js';
 import { validateConfig } from './config-schema.js';
 import type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 export type { NioConfig, CollectorConfig, CollectorLogsConfig, ResolvedMetricsConfig } from './config-schema.js';
 import { matchesSensitiveFilePath } from '../core/shared/detection-data.js';
-import type { AuditEntry, AuditGuardEntry, AuditFindingSummary } from './audit-types.js';
+import type { AuditEntry, AuditFindingSummary } from './audit-types.js';
 import { reportDiagnostic } from './diagnostics.js';
 export type { AuditEntry, AuditGuardEntry, AuditScanEntry, AuditLifecycleEntry, AuditDiagnosticEntry, AuditFindingSummary, AuditPhaseDetail, AuditPhaseMap, AuditHookEntry, HookEventName } from './audit-types.js';
 export { reportDiagnostic, DiagnosticCollector, type Diagnostic } from './diagnostics.js';
@@ -213,7 +211,7 @@ export function writeAuditLog(
   entry: AuditEntry,
   opts?: WriteAuditLogOptions,
 ): void {
-  if (entry.event === 'guard' && 'evaluation_id' in entry) {
+  if (entry.event === 'guard') {
     const parsed = guardAuditSchema.safeParse(entry);
     if (!parsed.success) {
       reportDiagnostic({ severity: 'error', source: 'hook', kind: 'guard_audit_invalid', message: parsed.error.message });
@@ -273,42 +271,22 @@ export function compactFindings(findings: Finding[], limit = 5): AuditFindingSum
   }));
 }
 
-export function buildGuardAuditEntry(
-  input: HookInput,
-  rd: ActionDecision | null,
-  initiatingSkill: string | null | undefined,
-  platform: string | null | undefined,
-  actionType?: string,
-  agentName?: string | null | undefined,
-): AuditGuardEntry {
-  const entry: AuditGuardEntry = {
-    event: 'guard',
-    timestamp: new Date().toISOString(),
-    platform: platform || 'unknown',
-    ...(agentName && agentName.length > 0 ? { agent_name: agentName } : {}),
-    tool_name: input.toolName,
-    tool_input_summary: summariseToolInput(input),
-    decision: rd?.decision || 'allow',
-    risk_level: rd?.risk_level || 'low',
+function buildGuardCompatibilityFields(
+  input: HookInput, rd: ActionDecision | null, initiatingSkill: string | null | undefined,
+): Pick<GuardAuditEntry,
+  'max_finding_severity' | 'phase_stopped' | 'scores' | 'top_findings' |
+  'event_type' | 'initiating_skill' | 'cwd' | 'session_id'
+> {
+  return {
     max_finding_severity: rd?.max_finding_severity || 'low',
-    risk_score: rd?.scores?.final ?? 0,
-    risk_tags: rd ? [...new Set(rd.findings.map(f => f.rule_id))] : [],
     phase_stopped: rd?.phase_stopped ?? null,
     scores: rd?.scores ? { ...rd.scores } : {},
     top_findings: rd ? compactFindings(rd.findings) : [],
     event_type: input.eventType,
+    ...(input.sessionId ? { session_id: input.sessionId } : {}),
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(initiatingSkill ? { initiating_skill: initiatingSkill } : {}),
   };
-
-  if (input.sessionId) entry.session_id = input.sessionId;
-  if (input.cwd) entry.cwd = input.cwd;
-  if (actionType) entry.action_type = actionType;
-  if (rd?.explanation) entry.explanation = rd.explanation;
-  if (initiatingSkill) entry.initiating_skill = initiatingSkill;
-  if (rd?.phase_timings) {
-    entry.phases = rd.phase_timings;
-  }
-
-  return entry;
 }
 
 export function buildEvaluatedGuardAuditEntry(
@@ -316,9 +294,13 @@ export function buildEvaluatedGuardAuditEntry(
   platform: string, audit: GuardEvaluation, actionType?: string, agentName?: string,
   overrides: Partial<GuardAuditEntry> = {},
 ): GuardAuditEntry {
-  const legacy = buildGuardAuditEntry(input, rd, initiatingSkill, platform, actionType, agentName);
+  const compatibility = buildGuardCompatibilityFields(input, rd, initiatingSkill);
   return {
-    ...legacy, ...audit.identity,
+    ...compatibility, ...audit.identity,
+    event: 'guard', platform, tool_name: input.toolName,
+    tool_input_summary: summariseToolInput(input),
+    risk_tags: rd ? [...new Set(rd.findings.map(f => f.rule_id))] : [],
+    ...(actionType ? { action_type: actionType } : {}),
     duration_ms: performance.now() - audit.started,
     service_name: `nio-${platform}`, agent_name: agentName || platform,
     decision: rd?.decision || 'allow', risk_level: rd?.risk_level ?? null,
@@ -327,40 +309,6 @@ export function buildEvaluatedGuardAuditEntry(
     explanation: rd?.explanation || audit.termination.reason,
     ...audit.snapshot(), ...overrides,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Legacy writeAuditLog wrapper (for call sites not yet migrated)
-// ---------------------------------------------------------------------------
-
-export function writeAuditLogLegacy(
-  input: HookInput,
-  decision: { decision?: string; risk_level?: string; risk_tags?: string[] } | null,
-  initiatingSkill?: string | null,
-  platform?: string | null
-): void {
-  const rl = decision?.risk_level || 'low';
-  const entry: AuditGuardEntry = {
-    event: 'guard',
-    timestamp: new Date().toISOString(),
-    platform: platform || 'unknown',
-    tool_name: input.toolName,
-    tool_input_summary: summariseToolInput(input),
-    decision: decision?.decision || 'allow',
-    risk_level: rl,
-    max_finding_severity: 'low',
-    risk_score: riskLevelToNumericScore(rl as RiskLevel),
-    risk_tags: decision?.risk_tags || [],
-    phase_stopped: null,
-    scores: {},
-    top_findings: [],
-    event_type: input.eventType,
-  };
-  if (initiatingSkill) entry.initiating_skill = initiatingSkill;
-  if (input.sessionId) entry.session_id = input.sessionId;
-  if (input.cwd) entry.cwd = input.cwd;
-
-  writeAuditLog(entry);
 }
 
 function summariseToolInput(input: HookInput): string {
