@@ -187,6 +187,7 @@ export interface AuditHookEntry {
 // ── Union ───────────────────────────────────────────────────────────────
 
 export type AuditEntry =
+  | import('../schemas/index.js').GuardAuditEntry
   | AuditGuardEntry
   | AuditScanEntry
   | AuditLifecycleEntry
