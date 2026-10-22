@@ -195,6 +195,20 @@ export const guardAuditSchema = z
     const permitsEarlyTermination = isGateBlock || isError || termination.kind === 'allowlist_allow';
     if (!permitsEarlyTermination && entry.phases.some((p) => p.skip_reason === 'terminated_earlier'))
       issue(['phases'], 'No earlier termination occurred');
+    const firstTerminationSkip = entry.phases.findIndex((phase) => phase.skip_reason === 'terminated_earlier');
+    if (firstTerminationSkip >= 0) {
+      const knownTerminationIndex =
+        isGateBlock && termination.blocked_gate !== null
+          ? GUARD_GATES.indexOf(termination.blocked_gate)
+          : termination.kind === 'allowlist_allow'
+            ? 1
+            : null;
+      if (knownTerminationIndex !== null && firstTerminationSkip <= knownTerminationIndex)
+        issue(['phases'], 'Termination skips must follow the terminating gate');
+      for (const phase of entry.phases.slice(firstTerminationSkip))
+        if (phase.status !== 'skipped' || phase.skip_reason !== 'terminated_earlier')
+          issue(['phases'], 'Execution cannot resume after termination skips');
+    }
     if (isGateBlock && termination.blocked_gate !== null) {
       const index = GUARD_GATES.indexOf(termination.blocked_gate);
       for (const id of termination.trigger_finding_ids)

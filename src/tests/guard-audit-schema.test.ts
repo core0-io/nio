@@ -198,3 +198,50 @@ it('preserves external partial success without losing failed endpoint details', 
   ];
   assert.deepEqual(audit.guardAuditSchema.parse(r).phases[6].external_results, r.phases[6].external_results);
 });
+
+function terminatedSkip(r: any, index: number) {
+  Object.assign(r.phases[index], {
+    status: 'skipped',
+    skip_reason: 'terminated_earlier',
+    duration_ms: null,
+    score: null,
+  });
+}
+it('rejects termination skips before the actual blocking gate', () => {
+  const r = record();
+  r.decision = 'deny';
+  r.termination = { kind: 'gate_block', blocked_gate: 'runtime', trigger_finding_ids: [], reason: 'Threshold' };
+  r.phases[2].triggered_block = true;
+  terminatedSkip(r, 0);
+  for (let i = 3; i < 7; i++) terminatedSkip(r, i);
+  assert.equal(audit.guardAuditSchema.safeParse(r).success, false);
+});
+it('rejects termination skips before allowlist early allow', () => {
+  const r = record();
+  r.termination.kind = 'allowlist_allow';
+  terminatedSkip(r, 0);
+  for (let i = 2; i < 7; i++) terminatedSkip(r, i);
+  assert.equal(audit.guardAuditSchema.safeParse(r).success, false);
+});
+it('rejects resumed execution after a termination skip in engine errors', () => {
+  const r = record();
+  r.decision = 'error';
+  r.termination.kind = 'engine_error';
+  r.error = { kind: 'engine', message: 'Failed' };
+  terminatedSkip(r, 3);
+  assert.equal(audit.guardAuditSchema.safeParse(r).success, false);
+});
+it('preserves analyzer failures that continue to later gates', () => {
+  const r = record();
+  Object.assign(r.phases[3], { status: 'failed', score: null, error: { kind: 'analyzer', message: 'Unavailable' } });
+  assert.equal(audit.guardAuditSchema.safeParse(r).success, true);
+});
+it('accepts engine failure followed by a termination suffix', () => {
+  const r = record();
+  r.decision = 'error';
+  r.termination.kind = 'engine_error';
+  r.error = { kind: 'engine', message: 'Failed' };
+  Object.assign(r.phases[3], { status: 'failed', score: null, error: r.error });
+  for (let i = 4; i < 7; i++) terminatedSkip(r, i);
+  assert.equal(audit.guardAuditSchema.safeParse(r).success, true);
+});

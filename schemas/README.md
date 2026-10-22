@@ -48,6 +48,10 @@ or equivalent semantic checks in addition to the artifact:
 - skip reasons/nulls, failed errors/null scores, external gate ownership;
 - decision/termination/error agreement, one actual blocking gate and trigger ownership;
 - early-allow and gate-block suffix skips, and no unexplained terminated_earlier status.
+  Termination skips form a contiguous suffix and cannot precede a known blocking
+  or allowlist termination gate. Engine errors may terminate before a gate starts;
+  execution cannot resume after their termination skips. Analyzer failures may
+  continue to later gates when they do not terminate the evaluation.
 
 The canonical runtime tests exercise these checks separately from artifact tests.
 No JSON Schema-only receiver should claim to verify these semantic invariants.
