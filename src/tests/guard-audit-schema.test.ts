@@ -1,17 +1,19 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Ajv } from 'ajv';
 import { default as addFormats } from 'ajv-formats';
 import * as audit from '../schemas/index.js';
 import { InMemoryLogRecordExporter, LoggerProvider, SimpleLogRecordProcessor } from '@opentelemetry/sdk-logs';
+import { writeAuditLog } from '../adapters/common.js';
 import { emitAuditLog } from '../scripts/lib/logs-collector.js';
 
 const gates = ['tool_gate', 'allowlist', 'runtime', 'static', 'behavioural', 'llm', 'external'];
 function record(): any {
   return {
     event: 'guard',
-    schema_version: 2,
     evaluation_id: '550e8400-e29b-41d4-a716-446655440000',
     timestamp: '2026-10-22T00:00:00.000Z',
     duration_ms: 4,
@@ -41,12 +43,12 @@ function record(): any {
   };
 }
 
-describe('canonical Guard audit v2', () => {
+describe('canonical Guard audit', () => {
   it('accepts complete evaluations without session or trace identity', () => {
     assert.deepEqual(audit.guardAuditSchema.parse(record()), record());
   });
   const invalid: [string, (r: any) => void][] = [
-    ['version', (r) => (r.schema_version = 1)],
+    ['missing evaluation identity', (r) => delete r.evaluation_id],
     ['event', (r) => (r.event = 'content')],
     ['decision', (r) => (r.decision = 'ask')],
     ['UUID', (r) => (r.evaluation_id = 'invalid')],
@@ -104,11 +106,14 @@ describe('canonical Guard audit v2', () => {
     const second = audit.createGuardEvaluation();
     assert.notEqual(first.evaluation_id, second.evaluation_id);
     assert.match(first.timestamp, /^\d{4}-/);
-    assert.throws(() => audit.buildGuardAuditV2({ ...record(), decision: undefined }));
-    assert.deepEqual(audit.buildGuardAuditV2(record()), record());
+    assert.throws(() => audit.validateGuardAuditEntry({ ...record(), decision: undefined }));
+    assert.deepEqual(audit.validateGuardAuditEntry(record()), record());
   });
   it('publishes a matching receiver schema that validates the serialized OTLP body', async () => {
-    const artifact = JSON.parse(readFileSync('schemas/guard-audit.v2.schema.json', 'utf8'));
+    const artifact = JSON.parse(readFileSync('schemas/guard-audit.schema.json', 'utf8'));
+    assert.equal(existsSync('schemas/guard-audit.v2.schema.json'), false);
+    assert.equal(artifact.$ref, '#/definitions/GuardAudit');
+    assert.equal('schema_version' in artifact.definitions.GuardAudit.properties, false);
     assert.deepEqual(artifact, audit.guardAuditJsonSchema());
     const ajv = new Ajv({ strict: false });
     (addFormats as any)(ajv);
@@ -116,7 +121,7 @@ describe('canonical Guard audit v2', () => {
     const exporter = new InMemoryLogRecordExporter();
     const provider = new LoggerProvider({ processors: [new SimpleLogRecordProcessor(exporter)] });
     try {
-      emitAuditLog(provider, audit.buildGuardAuditV2(record()));
+      emitAuditLog(provider, audit.validateGuardAuditEntry(record()));
       await provider.forceFlush();
       const body = JSON.parse(String(exporter.getFinishedLogRecords()[0].body));
       assert.deepEqual(body, record());
@@ -244,4 +249,21 @@ it('accepts engine failure followed by a termination suffix', () => {
   Object.assign(r.phases[3], { status: 'failed', score: null, error: r.error });
   for (let i = 4; i < 7; i++) terminatedSkip(r, i);
   assert.equal(audit.guardAuditSchema.safeParse(r).success, true);
+});
+
+it('validates structured evaluations before writing without a discriminator', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nio-guard-validation-'));
+  const path = join(dir, 'audit.jsonl');
+  try {
+    const invalid = record();
+    delete invalid.decision;
+    writeAuditLog(invalid, { logsConfig: { path, enabled: false } });
+    assert.equal(existsSync(path), false);
+    writeAuditLog(record(), { logsConfig: { path, enabled: false } });
+    const written = JSON.parse(readFileSync(path, 'utf8'));
+    assert.deepEqual(written, record());
+    assert.equal('schema_version' in written, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

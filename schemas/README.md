@@ -1,22 +1,21 @@
-# Guard audit protocol
+# Guard audit schema
 
 `src/schemas/guard-audit.ts` is the only manually maintained structure definition.
 Types, public exports and the draft-07 JSON Schema derive from it. Run
 `pnpm schema:generate` after changes; `pnpm schema:check` and `pnpm test` detect stale
 artifacts. The build regenerates the artifact. Published packages include this directory.
 
-Select this protocol using `event=guard` and `schema_version=2`. Incompatible changes
-require a new version and artifact. Additive optional fields require regenerated
-artifacts, documentation and tests. Content and other audit events retain their own
-protocols. Existing production v1 constructors remain supported during migration;
-this foundation does not validate or convert their output into v2.
+Structured Guard evaluations use `event=guard` and an `evaluation_id`.
+The generated receiver artifact is `schemas/guard-audit.schema.json`, named
+`GuardAudit`. Content and other audit events retain their own structures.
 
 `createGuardEvaluation()` creates an evaluation UUID and start timestamp once at
-entry; retain them for local/remote writes and retries. `buildGuardAuditV2()` validates
+entry; retain them for local/remote writes and retries. `validateGuardAuditEntry()` validates
 an explicitly supplied final record and returns its parsed copy. It never supplies
 a decision, risk score or successful termination. It throws on invalid input;
 callers integrating it must report validation diagnostics without changing Guard
-execution decisions. This task does not install validation in production writers.
+execution decisions. The shared writer validates structured Guard evaluations before
+exporting or writing them.
 
 Required identity is actual platform, service_name and agent_name. session_id and
 trace/span identity are not required. tool_input_summary uses the existing summary
@@ -60,7 +59,7 @@ No JSON Schema-only receiver should claim to verify these semantic invariants.
 
 ```json
 {
-  "event": "guard", "schema_version": 2,
+  "event": "guard",
   "evaluation_id": "550e8400-e29b-41d4-a716-446655440000",
   "timestamp": "2026-10-22T00:00:00.000Z", "duration_ms": 1,
   "platform": "codex", "service_name": "nio", "agent_name": "codex",
