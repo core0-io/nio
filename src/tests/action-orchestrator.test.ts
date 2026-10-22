@@ -974,3 +974,48 @@ describe('structured all-external failure', () => {
     } finally { await stopScorer(failure.server); }
   });
 });
+
+
+describe('behavioural parsing audit facts', () => {
+  for (const [path, content, status] of [
+    ['/tmp/probe.js', 'function broken(', 'failed'],
+    ['/tmp/probe.js', 'const value = 1;', 'completed'],
+    ['/tmp/probe.txt', 'ordinary text', 'skipped'],
+    ['/tmp/probe.mts', 'const value = 1;', 'skipped'],
+    ['/tmp/probe.js', '', 'skipped'],
+  ] as const) {
+    it(`records ${status} for ${path} with ${JSON.stringify(content)}`, async () => {
+      const { GuardEvaluation } = await import('../core/guard-evaluation.js');
+      const { buildEvaluatedGuardAuditEntry } = await import('../adapters/common.js');
+      const { validateGuardAuditEntry } = await import('../schemas/index.js');
+      const audit = new GuardEvaluation();
+      const result = await new ActionOrchestrator().evaluate(makeEnvelope('write_file', { path, content_preview: content }), undefined, audit);
+      const phase = result.audit!.phases[4];
+      assert.equal(phase.status, status);
+      assert.equal(result.decision, 'allow');
+      assert.equal(result.scores.final, 0);
+      assert.deepEqual(result.findings, []);
+      assert.equal(result.audit!.termination.kind, 'completed');
+      assert.equal(phase.finding_count, 0);
+      if (status === 'failed') {
+        assert.equal(result.scores.behavioural, 0);
+        assert.equal(phase.score, null);
+        assert.equal(phase.error?.kind, 'parse_failed');
+        assert.ok(phase.duration_ms !== null);
+        assert.ok(!JSON.stringify(phase).includes(content));
+      } else if (status === 'completed') {
+        assert.equal(phase.score, 0);
+        assert.equal(phase.error, undefined);
+      } else {
+        assert.equal(phase.skip_reason, 'not_applicable');
+        assert.equal(phase.score, null);
+        assert.equal(phase.duration_ms, null);
+      }
+      const entry = buildEvaluatedGuardAuditEntry(
+        { toolName: 'Write', toolInput: { file_path: path, content }, eventType: 'pre', raw: {} },
+        result, null, 'claude-code', audit, 'write_file',
+      );
+      assert.ok(validateGuardAuditEntry(entry));
+    });
+  }
+});
