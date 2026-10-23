@@ -1,0 +1,431 @@
+{
+  "$ref": "#/definitions/GuardAudit",
+  "definitions": {
+    "GuardAudit": {
+      "type": "object",
+      "properties": {
+        "event": {
+          "type": "string",
+          "const": "guard"
+        },
+        "evaluation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "duration_ms": {
+          "type": "number",
+          "minimum": 0
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service_name": {
+          "$ref": "#/definitions/GuardAudit/properties/platform"
+        },
+        "agent_name": {
+          "$ref": "#/definitions/GuardAudit/properties/platform"
+        },
+        "session_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "$ref": "#/definitions/GuardAudit/properties/platform"
+        },
+        "action_type": {
+          "type": "string"
+        },
+        "tool_input_summary": {
+          "type": "string"
+        },
+        "decision": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny",
+            "confirm",
+            "error"
+          ]
+        },
+        "risk_score": {
+          "anyOf": [
+            {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "risk_level": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardAudit/properties/platform"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "risk_tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "phases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "phase_id": {
+                "type": "number",
+                "enum": [
+                  0,
+                  1,
+                  2,
+                  3,
+                  4,
+                  5,
+                  6
+                ]
+              },
+              "gate": {
+                "type": "string",
+                "enum": [
+                  "tool_gate",
+                  "allowlist",
+                  "runtime",
+                  "static",
+                  "behavioural",
+                  "llm",
+                  "external"
+                ]
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "completed",
+                  "skipped",
+                  "failed"
+                ]
+              },
+              "skip_reason": {
+                "type": "string",
+                "enum": [
+                  "disabled",
+                  "not_applicable",
+                  "terminated_earlier"
+                ]
+              },
+              "reason": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "duration_ms": {
+                "anyOf": [
+                  {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "score": {
+                "$ref": "#/definitions/GuardAudit/properties/risk_score"
+              },
+              "finding_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "finding_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/GuardAudit/properties/platform"
+                }
+              },
+              "triggered_block": {
+                "type": "boolean"
+              },
+              "error": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "$ref": "#/definitions/GuardAudit/properties/platform"
+                  },
+                  "message": {
+                    "$ref": "#/definitions/GuardAudit/properties/platform"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              "external_results": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "$ref": "#/definitions/GuardAudit/properties/platform"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "completed",
+                        "failed",
+                        "skipped"
+                      ]
+                    },
+                    "reason": {
+                      "$ref": "#/definitions/GuardAudit/properties/platform"
+                    },
+                    "duration_ms": {
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/duration_ms"
+                    },
+                    "score": {
+                      "$ref": "#/definitions/GuardAudit/properties/risk_score"
+                    },
+                    "finding_ids": {
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/finding_ids"
+                    },
+                    "error": {
+                      "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/error"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "status",
+                    "reason",
+                    "duration_ms",
+                    "score",
+                    "finding_ids"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "phase_id",
+              "gate",
+              "status",
+              "reason",
+              "duration_ms",
+              "score",
+              "finding_count",
+              "finding_ids",
+              "triggered_block"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 7,
+          "maxItems": 7
+        },
+        "termination": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "allowlist_allow",
+                "unmapped_allow",
+                "gate_block",
+                "aggregate_block",
+                "engine_error"
+              ]
+            },
+            "blocked_gate": {
+              "anyOf": [
+                {
+                  "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/gate"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "trigger_finding_ids": {
+              "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/finding_ids"
+            },
+            "reason": {
+              "$ref": "#/definitions/GuardAudit/properties/platform"
+            }
+          },
+          "required": [
+            "kind",
+            "blocked_gate",
+            "trigger_finding_ids",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "finding_id": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "phase_id": {
+                "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/phase_id"
+              },
+              "rule_id": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "severity": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "category": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "title": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "description": {
+                "type": "string"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              }
+            },
+            "required": [
+              "finding_id",
+              "phase_id",
+              "rule_id",
+              "severity",
+              "category",
+              "title",
+              "description",
+              "confidence"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "explanation": {
+          "$ref": "#/definitions/GuardAudit/properties/platform"
+        },
+        "error": {
+          "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/error"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "max_finding_severity": {
+          "type": "string"
+        },
+        "phase_stopped": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/GuardAudit/properties/phases/items/properties/phase_id"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scores": {
+          "type": "object",
+          "properties": {
+            "runtime": {
+              "type": "number"
+            },
+            "static": {
+              "type": "number"
+            },
+            "behavioural": {
+              "type": "number"
+            },
+            "llm": {
+              "type": "number"
+            },
+            "external": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "number"
+              }
+            },
+            "final": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "top_findings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_id": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "severity": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "category": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "title": {
+                "$ref": "#/definitions/GuardAudit/properties/platform"
+              },
+              "confidence": {
+                "$ref": "#/definitions/GuardAudit/properties/findings/items/properties/confidence"
+              }
+            },
+            "required": [
+              "rule_id",
+              "severity",
+              "category",
+              "title",
+              "confidence"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "initiating_skill": {
+          "type": "string"
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "pre",
+            "post"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "evaluation_id",
+        "timestamp",
+        "duration_ms",
+        "platform",
+        "service_name",
+        "agent_name",
+        "tool_name",
+        "tool_input_summary",
+        "decision",
+        "risk_score",
+        "risk_level",
+        "risk_tags",
+        "phases",
+        "termination",
+        "findings",
+        "explanation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

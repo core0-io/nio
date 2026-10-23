@@ -50,3 +50,7 @@ export function shouldShortCircuit(
   const t = THRESHOLDS[level] || THRESHOLDS.balanced;
   return score >= t.deny;
 }
+
+export function denyThreshold(level: ProtectionLevel): number {
+  return (THRESHOLDS[level] || THRESHOLDS.balanced).deny;
+}

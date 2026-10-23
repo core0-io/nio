@@ -60,6 +60,109 @@ import { instrumentExporter } from './exporter-diagnostics.js';
 // Provider factory
 // ---------------------------------------------------------------------------
 
+/**
+ * A `PeriodicExportingMetricReader` whose export timer can be stopped and
+ * restarted without tearing anything down.
+ *
+ * ── Why this type has to exist ────────────────────────────────────────
+ *
+ * The monitor gate stops the RECORDING leg: once a session is disarmed,
+ * nothing calls `counter.add()` for it again. It never stopped the EXPORT
+ * leg. Metric temporality is CUMULATIVE, so the reader's 1 s timer
+ * re-sends the running totals on every tick whether or not anything new
+ * was recorded — measured on a live host after `/nio monitor off`,
+ * `nio.turn.count` held a constant 5 while a fresh sample landed every
+ * second across 163 series, until the process was killed. That is the
+ * "KNOWN RESIDUAL LIMITATION" recorded in plugin-runtime.ts.
+ *
+ * ── Why not just call `shutdown()` ────────────────────────────────────
+ *
+ * `PeriodicExportingMetricReader.onShutdown()` clears the interval AND
+ * calls `exporter.shutdown()`. Only the first half is wanted. Shutting
+ * the exporter is terminal: re-arming would need a whole new
+ * MeterProvider, and its counters would start from zero — a cumulative
+ * reset the backend reads as a new series, so the chart restarts instead
+ * of continuing. Stopping the timer alone leaves the accumulated totals
+ * and the export channel intact, so `/nio monitor on` resumes the same
+ * curve where it left off.
+ *
+ * ── How ───────────────────────────────────────────────────────────────
+ *
+ * The SDK starts its own interval in `onInitialized()` and keeps the
+ * handle in a private field. Rather than reach into that field — private
+ * to the SDK and free to change between releases — this overrides the
+ * documented `protected onInitialized()` hook so the SDK's timer is never
+ * started at all, and runs an equivalent one this class owns. The tick
+ * calls the public `forceFlush()`, which is what the SDK's own tick
+ * ultimately does.
+ */
+export class PausableExportingMetricReader extends PeriodicExportingMetricReader {
+  private timer: ReturnType<typeof setInterval> | undefined;
+  private readonly intervalMs: number;
+  /** False between `pause()` and `resume()`; also false before start. */
+  private running = false;
+
+  constructor(opts: { exporter: ConstructorParameters<typeof PeriodicExportingMetricReader>[0]['exporter']; exportIntervalMillis: number }) {
+    super(opts);
+    this.intervalMs = opts.exportIntervalMillis;
+  }
+
+  /**
+   * Deliberately does NOT call `super.onInitialized()`: that is where the
+   * SDK would start the interval this class replaces. Starting both would
+   * double every export and leave one timer we cannot stop.
+   */
+  protected override onInitialized(): void {
+    this.resume();
+  }
+
+  /** Start ticking. No-op if already running, so a double call is safe. */
+  resume(): void {
+    if (this.running) return;
+    this.running = true;
+    this.timer = setInterval(() => {
+      // forceFlush() collects and exports, and never rejects into the
+      // timer — a failed export is reported by the instrumented exporter.
+      void this.forceFlush().catch(() => { /* reported downstream */ });
+    }, this.intervalMs);
+    // Never hold the process open on account of telemetry.
+    if (typeof this.timer !== 'number') this.timer.unref();
+  }
+
+  /**
+   * Stop ticking, after shipping whatever is already recorded.
+   *
+   * The trailing flush is the same reasoning that makes SIGTERM preferable
+   * to SIGKILL here: points recorded just before the pause would otherwise
+   * sit in the aggregator until a resume that may never come.
+   */
+  async pause(): Promise<void> {
+    if (!this.running) return;
+    this.running = false;
+    if (this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+    await this.forceFlush().catch(() => { /* reported downstream */ });
+  }
+
+  /** True while the export timer is ticking. */
+  get isRunning(): boolean {
+    return this.running;
+  }
+
+  protected override async onShutdown(): Promise<void> {
+    this.running = false;
+    if (this.timer !== undefined) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+    // super still does its own clearInterval (of a handle that was never
+    // set, which is harmless), the final flush, and the exporter shutdown.
+    await super.onShutdown();
+  }
+}
+
 export function createMeterProvider(
   config: CollectorConfig,
   platform: string,
@@ -93,15 +196,55 @@ export function createMeterProvider(
   }
   instrumentExporter(exporter, 'metrics', config.endpoint);
 
-  return new MeterProvider({
-    resource: buildNioResource(platform, agentName),
-    readers: [
-      new PeriodicExportingMetricReader({
-        exporter,
-        exportIntervalMillis: 1000,
-      }),
-    ],
+  const reader = new PausableExportingMetricReader({
+    exporter,
+    exportIntervalMillis: 1000,
   });
+  const provider = new MeterProvider({
+    resource: buildNioResource(platform, agentName),
+    readers: [reader],
+  });
+  pausableReaders.set(provider, reader);
+  return provider;
+}
+
+// ---------------------------------------------------------------------------
+// Export-timer control
+// ---------------------------------------------------------------------------
+
+/**
+ * The pausable reader belonging to each provider this module built.
+ *
+ * A WeakMap rather than a field on the provider: `MeterProvider` is the
+ * SDK's type and the caller passes it around by itself, so the
+ * association has to live beside it — the same shape `flushStates` below
+ * uses, and for the same reason. Weak keys mean a discarded provider
+ * takes its entry with it.
+ *
+ * A provider built elsewhere (an injected one, a test double) simply has
+ * no entry, and the functions below no-op rather than throw. Telemetry
+ * control must never be able to break a host.
+ */
+const pausableReaders = new WeakMap<MeterProvider, PausableExportingMetricReader>();
+
+/**
+ * Stop this provider's periodic export, after shipping what is already
+ * recorded. The exporter stays open and the accumulated totals stay
+ * intact, so `resumeMetricsExport` continues the same cumulative series
+ * rather than restarting it at zero.
+ */
+export async function pauseMetricsExport(provider: MeterProvider): Promise<void> {
+  await pausableReaders.get(provider)?.pause();
+}
+
+/** Restart a paused provider's periodic export. */
+export function resumeMetricsExport(provider: MeterProvider): void {
+  pausableReaders.get(provider)?.resume();
+}
+
+/** Whether this provider is currently exporting on its timer. */
+export function metricsExportRunning(provider: MeterProvider): boolean {
+  return pausableReaders.get(provider)?.isRunning ?? false;
 }
 
 // ---------------------------------------------------------------------------

@@ -61,15 +61,27 @@ export class BehaviouralAnalyser extends BaseAnalyser {
   }
 
   async analyse(ctx: AnalysisContext): Promise<Finding[]> {
+    return (await this.analyseWithOutcome(ctx)).findings;
+  }
+
+  async analyseWithOutcome(ctx: AnalysisContext): Promise<{
+    findings: Finding[];
+    supportedFiles: number;
+    parseFailures: number;
+  }> {
     const supportedFiles = ctx.files.filter((f) => EXT_TO_EXTRACTOR.has(f.extension));
-    if (supportedFiles.length === 0) return [];
+    if (supportedFiles.length === 0) return { findings: [], supportedFiles: 0, parseFailures: 0 };
+    let parseFailures = 0;
 
     // Step 1: Parse all supported files and extract security info
     const fileAnalyses: FileAnalysis[] = [];
     for (const file of supportedFiles) {
       const extractor = EXT_TO_EXTRACTOR.get(file.extension)!;
       const extraction = extractor.extract(file.content, file.relativePath);
-      if (!extraction) continue;
+      if (!extraction) {
+        parseFailures++;
+        continue;
+      }
 
       // Step 2: Run dataflow analysis per file
       const flows = analyseDataflows(extraction, file.content, extractor.language);
@@ -117,9 +129,11 @@ export class BehaviouralAnalyser extends BaseAnalyser {
     findings.push(...capabilityFindings(profile, fileAnalyses));
 
     // Filter out disabled rules
-    return findings.filter(
-      (f) => !ctx.policy.rules.disabled_rules.includes(f.rule_id),
-    );
+    return {
+      findings: findings.filter((f) => !ctx.policy.rules.disabled_rules.includes(f.rule_id)),
+      supportedFiles: supportedFiles.length,
+      parseFailures,
+    };
   }
 }
 

@@ -31,7 +31,7 @@
     <div class="topbar-right">
       <a href="https://core0.io" class="pill link">Core0</a>
       <a href="https://github.com/core0-io/nio" class="pill link"><svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>GitHub</a>
-      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.5.1">v2.5.1</a>
+      <a class="pill link" href="https://github.com/core0-io/nio/releases/tag/v2.5.2">v2.5.2</a>
     </div>
   </div>
 
@@ -135,29 +135,29 @@
         </div>
 
         <h2 id="gating">Capture gating</h2>
-        <p>Nio exports nothing by default. Each of the three signals is created only for sessions the user explicitly armed, or for every session when <code>collector.monitor_all_sessions: true</code> is set.</p>
+        <p>Conversation content, traces, and metrics require an armed session or <code>collector.monitor_all_sessions: true</code>. Structured Guard evaluation logs export independently when an endpoint and logs export are enabled.</p>
 
         <table>
           <thead><tr><th>State</th><th>metrics</th><th>traces</th><th>logs (OTLP)</th><th><code>~/.nio/audit.jsonl</code></th><th>guard</th></tr></thead>
           <tbody>
-            <tr><td>Default (no <code>/nio-monitor</code>)</td><td>off</td><td>off</td><td>off</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+            <tr><td>Default (no <code>/nio-monitor</code>)</td><td>off</td><td>off</td><td>Guard evaluations only</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
             <tr><td>After <code>/nio-monitor on</code></td><td>on</td><td>on</td><td>on</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
-            <tr><td>After <code>/nio-monitor off</code></td><td>off</td><td>off</td><td>off</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
+            <tr><td>After <code>/nio-monitor off</code></td><td>off</td><td>off</td><td>Guard evaluations only</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
             <tr><td><code>monitor_all_sessions: true</code></td><td>on</td><td>on</td><td>on</td><td><strong>written</strong></td><td><strong>enforcing</strong></td></tr>
           </tbody>
         </table>
 
-        <p>Conversation content is gated by exactly this switch on both signals it uses: the content records need a logger provider, which an unarmed session never builds, and the span attributes that carry small bodies (<code>nio.chat.reply</code>, <code>gen_ai.tool.call.arguments</code>) ride the traces provider, which an unarmed session never builds either.</p>
+        <p>Conversation content remains monitor-gated even if a Guard evaluation has already created the shared logs exporter. Unarmed sessions do not export conversation records or traces.</p>
 
         <p><strong>Arming</strong> is <code>/nio-monitor on</code> on the platforms that install the focused <code>nio-*</code> skills (Claude Code, Codex, Pi, opencode) and <code>/nio monitor on</code> on OpenClaw and Hermes, which keep the unified <code>/nio</code> as their only entry point. Both forms run the same code. Claude Code is the only host whose session-id environment variable is verified, so everywhere else <code>on</code> leaves a <em>pending arm</em> that the next hook event from the same directory claims (60 s TTL). Full behaviour: <a href="nio-monitor.html"><code>/nio-monitor</code></a>.</p>
 
-        <p>The gate sits <strong>before OTEL provider creation</strong> — an unmonitored session does not initialise exporters at all, so the cost is one small file read per hook event. This includes the SessionStart skill scanner, whose <code>session_scan</code> records would otherwise carry the user's installed-skill inventory and its risk levels off the machine before anything was armed.</p>
+        <p>Trace and metric providers require monitored use. The logs provider may also be created for a Guard evaluation. SessionStart skill-scanner records remain monitor-gated.</p>
 
         <div class="callout">
-          <div class="title">Two things are outside the gate</div>
+          <div class="title">Outside the gate</div>
           <ul>
             <li><strong>Guard enforcement.</strong> Phase 0–6 risk evaluation and blocking run regardless — with capture off the guard still evaluates and still denies. The switch controls reporting, not enforcement. Phases 0–4 are local pattern/AST matching with no network I/O. Phase 5 (<code>guard.llm_analyser</code>) sends the content under evaluation to the Anthropic API when enabled; Phase 6 (<code>guard.external_analyser</code>) issues a GET-only request per configured endpoint to fetch a score, without sending any evaluated content. Both are independent of monitor state and both ship disabled by default.</li>
-            <li><strong>Local audit log.</strong> <code>~/.nio/audit.jsonl</code> is written regardless, since it never leaves the machine and backs <a href="nio-report.html"><code>/nio report</code></a>. Only its OTLP leg is conditional.</li>
+            <li><strong>Local audit log.</strong> <code>~/.nio/audit.jsonl</code> is written regardless, since it never leaves the machine and backs <a href="nio-report.html"><code>/nio report</code></a>. Structured Guard evaluations export independently of monitor state when an endpoint and logs export are enabled.</li>
           </ul>
         </div>
 
@@ -199,7 +199,7 @@
         </details>
 
         <ul>
-          <li><strong>Two independent switches.</strong> <code>collector.endpoint</code> says <em>where</em> telemetry could go; the per-session monitor state says <em>whether</em> it is collected at all. A configured endpoint on its own captures nothing.</li>
+          <li><strong>Two independent switches.</strong> <code>collector.endpoint</code> says <em>where</em> telemetry could go; the per-session monitor state says <em>whether</em> it is collected at all. A configured endpoint can export Guard evaluations; content still requires monitor.</li>
           <li>When <code>collector.endpoint</code> is empty, the corresponding provider factory returns <code>null</code> and the platform code skips emit — even for an armed session.</li>
           <li>The audit-log local JSONL still works (controlled by <code>collector.logs.local</code>) without an endpoint <em>and</em> without arming — handy for offline / air-gapped use.</li>
         </ul>
@@ -220,7 +220,7 @@
 
       <div class="site-footer">
         <a href="https://core0.io"><span>CORE0 · NIO</span></a>
-        <a href="https://github.com/core0-io/nio/releases/tag/v2.5.1">v2.5.1</a>
+        <a href="https://github.com/core0-io/nio/releases/tag/v2.5.2">v2.5.2</a>
       </div>
     </main>
   </div>

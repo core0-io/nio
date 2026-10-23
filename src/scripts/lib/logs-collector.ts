@@ -24,18 +24,11 @@ import { OTLPLogExporter as OTLPLogExporterHttp } from '@opentelemetry/exporter-
 import { OTLPLogExporter as OTLPLogExporterGrpc } from '@opentelemetry/exporter-logs-otlp-grpc';
 import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
-import { nioGuardAttributes, buildNioResource } from './traces-collector.js';
+import { buildNioResource } from './traces-collector.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
 import type { ContentRecord } from './content/emit.js';
 
-/** Minimal audit entry shape for OTEL log emission (avoids cross-rootDir import). */
-interface AuditEntry {
-  event: string;
-  platform: string;
-  session_id?: string;
-  [key: string]: unknown;
-}
-
+import type { AuditEntry } from '../../adapters/audit-types.js';
 // ---------------------------------------------------------------------------
 // Severity mapping
 // ---------------------------------------------------------------------------
@@ -94,6 +87,7 @@ export function createLoggerProvider(
   platform: string,
   agentName?: string,
 ): LoggerProvider | null {
+  if (!config.enabled) return null;
   if (!config.endpoint) return null;
   if (!config.logs_enabled) return null;
 
@@ -123,7 +117,7 @@ export function createLoggerProvider(
   instrumentExporter(exporter, 'logs', config.endpoint);
 
   return new LoggerProvider({
-    resource: buildNioResource(platform, agentName),
+    resource: buildNioResource(platform, agentName || platform),
     // BatchLogRecordProcessor, not SimpleLogRecordProcessor. Simple
     // starts one export per `logger.emit()`, and a turn's content sink
     // emits the whole turn's records — thinking, text, tool_input — in
@@ -192,9 +186,7 @@ export async function flushLogRecords(provider: LoggerProvider): Promise<void> {
  * - `tool_use_id`   → `gen_ai.tool.call.id`      (matches tool span)
  * - `session_id`    → `gen_ai.conversation.id` + `session.id` (matches turn span)
  * - `decision` / `risk_level` / `risk_score` / `risk_tags`
- *                   → `nioGuardAttributes(...)` from traces-collector
- *                     (produces `nio.guard.decision` etc. — matches the
- *                     OpenClaw tool span guard attrs)
+ *                   → `nio.guard.*` attributes (matches tool span names)
  *
  * Nio-specific (no GenAI equivalent, kept under `nio.*`):
  * `nio.event`, `nio.event_type`, `nio.action_type`,
@@ -202,7 +194,8 @@ export async function flushLogRecords(provider: LoggerProvider): Promise<void> {
  * `nio.phases.{name}.{score,finding_count,duration_ms}`, `nio.tool_summary`,
  * `nio.task_id`, `nio.task_summary`, `nio.cwd`, `nio.transcript_path`.
  */
-export function auditEntryAttributes(entry: AuditEntry): Record<string, string | number> {
+export function auditEntryAttributes(input: AuditEntry): Record<string, string | number> {
+  const entry = input as unknown as { event: string; platform: string; session_id?: string; [key: string]: unknown };
   const attrs: Record<string, string | number> = {
     'nio.event': entry.event,
   };
@@ -220,38 +213,29 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
     attrs['session.id'] = entry.session_id;
   }
 
-  // Guard decision attributes (shared helper from traces-collector)
+  // Guard decision attributes
   const decision = entry['decision'];
   const riskLevel = entry['risk_level'];
   const riskScore = entry['risk_score'];
   const riskTags = entry['risk_tags'];
-
-  // Risk level as its own dimension, independent of the record's severity.
-  // Set ONLY when the entry actually carries one: lifecycle, hook and
-  // diagnostic entries have no risk level, and defaulting them to 'low'
-  // would invent a verdict nio never reached. Distinct from
-  // `nio.guard.risk_level` in coverage, not in meaning — the guard block
-  // below needs a `decision` too, so a `session_scan` entry (risk level,
-  // no decision) reaches an attribute only through this key.
   if (typeof riskLevel === 'string') attrs['nio.risk_level'] = riskLevel;
-  if (typeof decision === 'string' && typeof riskLevel === 'string') {
-    const guard = nioGuardAttributes(
-      decision,
-      riskLevel,
-      typeof riskScore === 'number' ? riskScore : 0,
-      Array.isArray(riskTags) ? riskTags as string[] : undefined,
-    );
-    for (const [k, v] of Object.entries(guard)) {
-      if (typeof v === 'string' || typeof v === 'number') attrs[k] = v;
-    }
+  if (typeof decision === 'string') {
+    attrs['nio.guard.decision'] = decision;
+    if (typeof riskLevel === 'string') attrs['nio.guard.risk_level'] = riskLevel;
+    if (typeof riskScore === 'number' && Number.isFinite(riskScore)) attrs['nio.guard.risk_score'] = riskScore;
+    if (Array.isArray(riskTags) && riskTags.length > 0) attrs['nio.guard.risk_tags'] = riskTags.join(',');
   }
+  if (typeof entry.evaluation_id === 'string') attrs['nio.guard.evaluation_id'] = entry.evaluation_id;
+  const termination = entry.termination as { kind?: string; blocked_gate?: string | null } | undefined;
+  if (typeof termination?.kind === 'string') attrs['nio.guard.termination'] = termination.kind;
+  if (typeof termination?.blocked_gate === 'string') attrs['nio.guard.blocked_gate'] = termination.blocked_gate;
 
   // Nio-specific extensions (no GenAI counterpart)
   const maxFindingSeverity = entry['max_finding_severity'];
   if (typeof maxFindingSeverity === 'string') attrs['nio.max_finding_severity'] = maxFindingSeverity;
 
   const phaseStopped = entry['phase_stopped'];
-  if (typeof phaseStopped === 'number') attrs['nio.phase_stopped'] = phaseStopped;
+  if (typeof phaseStopped === 'number' && Number.isFinite(phaseStopped)) attrs['nio.phase_stopped'] = phaseStopped;
 
   const actionType = entry['action_type'];
   if (typeof actionType === 'string') attrs['nio.action_type'] = actionType;
@@ -283,9 +267,10 @@ export function auditEntryAttributes(entry: AuditEntry): Record<string, string |
   if (phases && typeof phases === 'object') {
     for (const [k, v] of Object.entries(phases as Record<string, { score: number; finding_count: number; duration_ms: number }>)) {
       if (v && typeof v === 'object') {
-        attrs[`nio.phases.${k}.score`] = Math.round(v.score * 1000) / 1000;
-        attrs[`nio.phases.${k}.finding_count`] = v.finding_count;
-        attrs[`nio.phases.${k}.duration_ms`] = v.duration_ms;
+        for (const field of ['score', 'finding_count', 'duration_ms'] as const) {
+          const value = v[field];
+          if (typeof value === 'number' && Number.isFinite(value)) attrs[`nio.phases.${k}.${field}`] = value;
+        }
       }
     }
   }
@@ -303,11 +288,12 @@ export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void 
   // scan entries carry a risk level at all; hook, lifecycle and diagnostic
   // entries do not, and the old `'risk_level' in entry ? … : 'low'` default
   // stamped a risk verdict on all of them.
-  const riskLevel = typeof entry['risk_level'] === 'string' ? entry['risk_level'] : undefined;
+  const riskLevel = 'risk_level' in entry && typeof entry.risk_level === 'string' ? entry.risk_level : undefined;
   const severityNumber = (riskLevel !== undefined ? RISK_TO_SEVERITY[riskLevel] : undefined)
     ?? SeverityNumber.INFO;
 
   logger.emit({
+    timestamp: typeof entry.timestamp === 'string' ? new Date(entry.timestamp) : undefined,
     severityNumber,
     severityText: otelSeverityText(severityNumber),
     body: JSON.stringify(entry),

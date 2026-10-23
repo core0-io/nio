@@ -45,7 +45,8 @@ import { HermesAdapter } from '../adapters/hermes.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { OpenCodeAdapter } from '../adapters/opencode.js';
 import { PiAdapter } from '../adapters/pi.js';
-import { buildGuardAuditEntry, asText } from '../adapters/common.js';
+import { GuardEvaluation } from '../core/guard-evaluation.js';
+import { buildEvaluatedGuardAuditEntry, asText } from '../adapters/common.js';
 import type { HookAdapter, HookInput } from '../adapters/types.js';
 
 /**
@@ -369,7 +370,7 @@ describe('opencode apply_patch is total over a malformed patch body', () => {
   });
 });
 
-describe('buildGuardAuditEntry is total over a live host object', () => {
+describe('buildEvaluatedGuardAuditEntry is total over a live host object', () => {
   /**
    * The in-process runtimes (OpenClaw / Pi / opencode) hand the adapters
    * the host's own objects, which can be self-referential. This builder
@@ -385,7 +386,7 @@ describe('buildGuardAuditEntry is total over a live host object', () => {
     const input: HookInput = {
       toolName: 'exec', toolInput: circular, eventType: 'pre', raw: {},
     };
-    const entry = buildGuardAuditEntry(input, null, null, 'openclaw');
+    const entry = buildEvaluatedGuardAuditEntry(input, null, null, 'openclaw', new GuardEvaluation());
     assert.equal(typeof entry.tool_input_summary, 'string');
   });
 
@@ -394,7 +395,7 @@ describe('buildGuardAuditEntry is total over a live host object', () => {
       toolName: 'exec', toolInput: { command: 'ls /tmp' }, eventType: 'pre', raw: {},
     };
     assert.equal(
-      buildGuardAuditEntry(input, null, null, 'openclaw').tool_input_summary,
+      buildEvaluatedGuardAuditEntry(input, null, null, 'openclaw', new GuardEvaluation()).tool_input_summary,
       'ls /tmp',
     );
   });
