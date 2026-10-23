@@ -592,9 +592,10 @@ export async function evaluateHook(
     // adapter resolved before the pipeline was entered — so it is already
     // in hand, needs no analysis, and is unaffected by whatever just threw.
     // Deliberately nothing else: no re-run, no rule lookup, no re-parse.
-    const actionType = envelope?.action.type ?? 'exec_command';
+    const actionType = envelope?.action.type;
+    const actionLabel = actionType ?? 'unclassified action';
     const decision: 'allow' | 'deny' =
-      ENGINE_ERROR_ALLOWED_ACTIONS.has(actionType) ? 'allow' : 'deny';
+      actionType && ENGINE_ERROR_ALLOWED_ACTIONS.has(actionType) ? 'allow' : 'deny';
 
     const outcome = decision === 'deny'
       ? 'was denied without being analysed'
@@ -603,9 +604,9 @@ export async function evaluateHook(
       severity: 'error',
       source: 'hook',
       kind: 'engine_error',
-      component: actionType,
+      component: actionLabel,
       message:
-        `Guard engine failed during Phase 1-6, so this ${actionType} ${outcome} ` +
+        `Guard engine failed during Phase 1-6, so this ${actionLabel} ${outcome} ` +
         `(${describeEngineError(err)})`,
       hint: decision === 'deny'
         ? 'This is a Nio failure, not a policy violation by your action. ' +
