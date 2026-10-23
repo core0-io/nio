@@ -33,6 +33,9 @@ importers:
       '@opentelemetry/api-logs':
         specifier: ^0.214.0
         version: 0.214.0
+      '@opentelemetry/core':
+        specifier: ^2.6.1
+        version: 2.6.1(@opentelemetry/api@1.9.1)
       '@opentelemetry/exporter-logs-otlp-grpc':
         specifier: ^0.214.0
         version: 0.214.0(@opentelemetry/api@1.9.1)

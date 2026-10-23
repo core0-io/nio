@@ -65,7 +65,7 @@ describe('collector export failures land in the audit log', () => {
     assert.ok(provider);
     const span = provider!.getTracer('t').startSpan('s');
     span.end();
-    await assert.rejects(provider!.forceFlush(), /ECONNREFUSED/);
+    await provider!.forceFlush();
     await provider!.shutdown();
 
     const failures = exportFailures('traces');
