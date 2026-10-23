@@ -786,13 +786,14 @@ Single source of truth: [`buildNioResource(platform, agentName?)`](../src/script
 
 ### Traces
 
-One trace per conversation turn, with child spans per tool call / task. Span
+One trace per conversation turn, with child chat, tool and task spans. Span
 names and attributes follow the OTel [GenAI semantic
 conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where
 applicable; Nio-specific extensions use the `nio.*` prefix.
 
 ```
 Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
+  ├─ Span: chat <model>           (one reconstructed LLM call)
   ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
   ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
   └─ Span: task:execute             (TaskCreated → TaskCompleted)
@@ -814,7 +815,7 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `nio.turn_number` | Auto-incrementing per session |
 | `nio.platform` | `claude-code`, `codex`, `openclaw`, `hermes`, `pi`, or `opencode` |
 | `nio.cwd` | Working directory when the turn started |
-| `nio.turn.user_prompt` | UserPromptSubmit prompt (redacted) |
+| `nio.content.source` | `logs`: bodies belong to linked content records, not span previews |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
@@ -825,9 +826,11 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 - **Pi**: `message_end` carries `message.usage` (`input` / `output` / `cacheRead` / `cacheWrite`) once per assistant message; accumulated the same way as OpenClaw.
 - **opencode**: `message.updated` carries cumulative `info.tokens`, but it is a **snapshot** republished on every change to the same message rather than a one-shot event. The binding keys the last-seen totals by message id and feeds only the delta into `onLlmUsage`, so a re-publish cannot compound the turn's totals. Messages without an id are skipped rather than risk inflating them.
 
-**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments` (redacted, ≤2 KB), `gen_ai.tool.call.result` (redacted, ≤2 KB), `nio.tool_summary`, `nio.platform`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set)
+**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `nio.content.source=logs`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set), existing duration/run/Guard metadata. Arguments and results are OTLP content logs, not span attributes.
 
 **Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
+
+**Chat span (`chat <model>`)** retains model, timing, token usage, source-call identity and host tool-call IDs. Assistant text and host-exposed thinking are `nio-content` OTLP Logs linked to that exact chat span; prompts link to the turn and tool input/output to the tool. All lengths use the same placement. Spans carry association metadata, not full bodies or previews. Content capture requires existing monitor consent, an endpoint, and traces/logs enabled; Guard evaluation/local audit writing remain independent. See [canonical content schema, ordering and platform limits](COLLECTOR-SIGNALS.md#logs-conversation-content). Generic OTLP backends do not automatically display linked log bodies inside a trace.
 
 ### Trace state and span lifecycle
 

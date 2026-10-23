@@ -394,21 +394,31 @@ collector:
   #   grpc — gRPC on port 4317
   protocol: http
 
+  # Content bodies require existing monitor consent; this never arms a session.
+  monitor_all_sessions: false
+  # UTF-8 byte caps after redaction; 0 means unlimited.
+  content_limits:
+    thinking: 65536
+    text: 65536
+    user_prompt: 32768
+    tool_input: 16384
+    tool_output: 32768
+
   # Metrics signal (counters, histograms). Exported via OTLP only — there
   # is no local metrics file. Hook event audit records live in the audit
   # log (see `logs` block below).
   metrics:
     enabled: true
 
-  # Traces signal (spans for tool calls, turns, tasks).
+  # Traces signal (execution metadata for chat, tool, turn and task spans).
   traces:
     enabled: true
 
-  # Logs signal (audit log entries: guard, scan, lifecycle events).
+  # Logs signal (audit entries plus consent-gated linked content bodies).
   logs:
     # Enable OTEL Logs export to collector endpoint.
     enabled: true
-    # Enable local JSONL backup at the path below.
+    # Local JSONL audit backup only; content bodies are OTLP-only.
     local: true
     # Path to local JSONL audit log. Supports ~/ prefix.
     path: "~/.nio/audit.jsonl"

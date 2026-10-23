@@ -315,6 +315,10 @@
           </tbody>
         </table>
 
+        <h3 id="collector.content">Content capture consent and limits</h3>
+        <p>Conversation bodies use linked <a href="collector-signals-logs.html#content">OTLP content logs</a>, not span previews. Capture is off without existing session monitor consent or explicit <code>collector.monitor_all_sessions: true</code> (default <code>false</code>). This does not enable or disable Guard evaluation/local audit writing or baseline execution metadata. An endpoint and both <code>traces.enabled</code> and <code>logs.enabled</code> are required. No monitor-management command is introduced.</p>
+        <p><code>collector.content_limits</code> sets UTF-8 byte caps after secret redaction: <code>thinking</code> / <code>text</code> default 65536, <code>user_prompt</code> / <code>tool_output</code> 32768, <code>tool_input</code> 16384. Each nonnegative finite override applies independently; <code>0</code> is unlimited. Truncation markers count toward the cap; provenance records the redacted pre-truncation byte length.</p>
+
         <hr>
 
         <h2 id="env">Environment variables</h2>

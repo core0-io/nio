@@ -59,6 +59,9 @@ export interface CollectorState {
    */
   pending_guard_attrs?: Record<string, Record<string, unknown>>;
   turn_attributes?: Record<string, unknown>;
+  observed_call_ids?: string[];
+  observed_prompt_ids?: string[];
+  prompt_count?: number;
 }
 
 // ── Path resolution ────────────────────────────────────────────────────

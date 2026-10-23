@@ -41,11 +41,18 @@
 
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Logs</div>
-        <h1><em>Logs</em> — audit-log entries, dual-written</h1>
+        <h1><em>Logs</em> — audit entries and linked content</h1>
         <p class="lead">Audit entries are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing. For Guard evaluations, both carry the same evaluation payload; remote export uses the existing <code>nio-audit</code> logger and collector endpoint. Local writing continues without an endpoint, with remote logs disabled, or after export failure unless <code>collector.logs.local=false</code>.</p>
       </div>
 
       <div class="doc">
+
+        <h2 id="content">Conversation content</h2>
+        <p><code>nio-content</code> emits prompts, assistant text, host-exposed thinking, tool arguments and tool results as plain string OTLP LogRecord bodies, whether short or long. Built-in <code>traceId</code>/<code>spanId</code> link prompts to the turn, text/thinking to the executing chat, and tool input/output to the exact tool span. Spans retain execution/model/token/tool metadata and <code>nio.content.source=logs</code>, not body previews.</p>
+        <p>Canonical <a href="../schemas/content.schema.json">ContentRecord JSON Schema</a> derives from <code>src/schemas/content.ts</code>. Records preserve <code>nio.content.type</code>, original block <code>index</code>, source/call identity, redundant <code>nio.trace_id</code>/<code>nio.span_id</code>, optional tool-call ID, thinking fidelity and redaction/truncation provenance. Secret redaction runs before UTF-8 byte truncation. INFO content records carry no Guard decision or risk mapping and are not written to the local audit JSONL.</p>
+        <p>Capture requires existing monitor consent, a configured endpoint and both traces/logs enabled. It is not automatically enabled. The existing <code>monitored-sessions.json</code> format and explicit <code>collector.monitor_all_sessions</code> opt-in are honored; no monitor-management commands are added. Guard export and offline local audit remain independent.</p>
+        <p>Claude Code/Codex need readable transcripts for replay; bounded readers cannot recover items outside the retained window. Pi uses session JSONL or observed assistant messages; opencode uses final message/part snapshots. OpenClaw captures thinking only when explicitly exposed in <code>lastAssistant.content</code>, never from reasoning-effort metadata; no-ID redeliveries cannot safely be distinguished from identical calls. Codex exposes summaries, never encrypted reasoning. Hermes uses visible history after a user boundary or an explicit current response; identical-item compaction without IDs is ambiguous. Missing post-tool events cannot supply results. See <a href="COLLECTOR-SIGNALS.md#logs-conversation-content">ordering, limits and precise host caveats</a>.</p>
+        <p>Use built-in IDs or redundant attributes for explicit queries. Generic OTLP correlation does not automatically render log bodies inside a backend's trace UI.</p>
 
         <h2 id="entry-types">Entry types</h2>
         <p>Discriminated by the <code>event</code> field. Five shapes — four named entry types plus the catch-all "hook event" record.</p>

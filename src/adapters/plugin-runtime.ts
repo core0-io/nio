@@ -17,13 +17,18 @@
  */
 
 import type { HookAdapter, NioInstance } from './types.js';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import { loadConfig, writeAuditLog } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { AuditLifecycleEntry } from './audit-types.js';
 import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
-import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
+import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
+import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
+import type { ChatCall } from '../scripts/lib/conversation/types.js';
+import { createContentSink, emitToolInputContent, emitToolOutputContent, emitUserPromptContent } from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
@@ -49,7 +54,6 @@ import {
   nioGuardAttributes,
   nioReclaimedSpanAttributes,
 } from '../scripts/lib/traces-collector.js';
-import { toolSummary } from '../scripts/lib/collector-core.js';
 import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 
@@ -84,6 +88,10 @@ export interface PluginRuntimeOptions {
    * disabled) semantics as `tracerProvider`.
    */
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /** Logs injection follows the same undefined/build, null/disabled contract. */
+  loggerProvider?: LoggerProvider | null;
+  /** Host-reported project directory, never the server's launch directory. */
+  defaultCwd?: string;
 }
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
@@ -108,8 +116,17 @@ export class InProcessPluginRuntime {
   protected readonly meterProvider: ReturnType<typeof createMeterProvider>;
   protected readonly loggerProvider: ReturnType<typeof createLoggerProvider>;
   protected readonly sessionState = new Map<string, CollectorState>();
+  private readonly conversationEvents = new Map<string, Map<string, unknown>>();
+  private readonly transcriptPaths = new Map<string, string>();
+  private readonly sessionCwds = new Map<string, string>();
+  private readonly observedCalls = new Map<string, Set<string>>();
+  private readonly observedTools = new Map<string, Set<string>>();
+  private readonly promptIndices = new Map<string, number>();
+  private readonly observedPrompts = new Map<string, Set<string>>();
+  private conversationSequence = 0;
 
   private readonly opts: PluginRuntimeOptions;
+  private readonly contentEnabled: boolean;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
 
@@ -126,6 +143,7 @@ export class InProcessPluginRuntime {
     this.confirmAction = opts.confirmAction ?? guard?.confirm_action ?? 'allow';
 
     const collectorConfig = loadCollectorConfig();
+    this.contentEnabled = collectorConfig.enabled && collectorConfig.traces_enabled && collectorConfig.logs_enabled;
     // Resource-level agent name is only set when the operator configured
     // one — empty / unset means "no gen_ai.agent.name on the resource".
     const agentName =
@@ -140,8 +158,9 @@ export class InProcessPluginRuntime {
       ? opts.meterProvider
       : createMeterProvider(collectorConfig, opts.platform, agentName);
     const logsConfig = this.config.collector?.logs;
-    this.loggerProvider =
-      logsConfig?.enabled !== false
+    this.loggerProvider = opts.loggerProvider !== undefined
+      ? opts.loggerProvider
+      : logsConfig?.enabled !== false
         ? createLoggerProvider(collectorConfig, opts.platform, agentName)
         : null;
     this.auditOpts = { loggerProvider: this.loggerProvider, logsConfig };
@@ -195,9 +214,52 @@ export class InProcessPluginRuntime {
     this.sessionState.set(sessionId, state);
   }
 
+  setSessionCwd(sessionId: string, cwd: string | null | undefined): void {
+    if (cwd) this.sessionCwds.set(sessionId, cwd);
+    else this.sessionCwds.delete(sessionId);
+  }
+
+  /** Capture consent applies only to new content, not Guard or baseline signals. */
+  private contentLogger(sessionId: string): LoggerProvider | null {
+    if (!this.contentEnabled || !this.tracerProvider || !this.loggerProvider) return null;
+    const cwd = this.sessionCwds.get(sessionId) ?? this.opts.defaultCwd ?? null;
+    return isSessionMonitored(sessionId, cwd, this.config.collector?.logs)
+      ? this.loggerProvider : null;
+  }
+
+  /** Replace streamed snapshots in their original source position. */
+  recordConversationEvent(sessionId: string, event: unknown, dedupKey?: string, startMs?: number): void {
+    if (!this.contentLogger(sessionId)) return;
+    const slots = this.conversationEvents.get(sessionId) ?? new Map<string, unknown>();
+    slots.set(dedupKey === undefined ? `#${this.conversationSequence++}` : `k:${dedupKey}`, event);
+    this.conversationEvents.set(sessionId, slots);
+    // Content-only hosts still need a real turn root to associate their logs.
+    if (this.tracerProvider) {
+      const state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      const observedStart = typeof startMs === 'number' && Number.isFinite(startMs)
+        ? Math.min(state.turn_start_ms, startMs) : state.turn_start_ms;
+      this.sessionState.set(sessionId, { ...state, turn_start_ms: observedStart });
+    }
+  }
+
+  setTranscriptPath(sessionId: string, path: string | null): void {
+    if (path) this.transcriptPaths.set(sessionId, path);
+    else this.transcriptPaths.delete(sessionId);
+  }
+
+  protected conversationInputFor(sessionId: string): SourceInput {
+    const transcriptPath = this.transcriptPaths.get(sessionId);
+    return { transcriptPath, events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
+  }
   /** Hard session boundary — drop stale turn numbering, write audit row. */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
+    this.conversationEvents.delete(sessionId);
+    this.transcriptPaths.delete(sessionId);
+    this.observedCalls.delete(sessionId);
+    this.observedTools.delete(sessionId);
+    this.observedPrompts.delete(sessionId);
+    this.promptIndices.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -205,6 +267,11 @@ export class InProcessPluginRuntime {
   async onSessionEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
+    this.transcriptPaths.delete(sessionId);
+    this.sessionCwds.delete(sessionId);
+    this.observedCalls.delete(sessionId);
+    this.observedPrompts.delete(sessionId);
+    this.observedTools.delete(sessionId);
   }
 
   /**
@@ -274,6 +341,15 @@ export class InProcessPluginRuntime {
    * Idempotent: no-op if no state exists.
    */
   protected async flushSessionTurn(sessionId: string): Promise<void> {
+    try {
+      await this.flushSessionTurnInner(sessionId);
+    } finally {
+      this.conversationEvents.delete(sessionId);
+      this.promptIndices.delete(sessionId);
+    }
+  }
+
+  private async flushSessionTurnInner(sessionId: string): Promise<void> {
     if (!this.tracerProvider) {
       this.sessionState.delete(sessionId);
       return;
@@ -315,7 +391,26 @@ export class InProcessPluginRuntime {
       state = r.state;
     }
 
-    await endTurn(this.tracerProvider, state, process.cwd());
+    const logger = this.contentLogger(sessionId);
+    let calls: ChatCall[] | undefined;
+    if (logger) {
+      try {
+        const seen = this.observedCalls.get(sessionId) ?? new Set<string>();
+        calls = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId))
+          ?.callsSince(state.turn_start_ms).filter(call => !seen.has(call.callId));
+        for (const call of calls ?? []) {
+          // OpenClaw's synthetic fingerprints identify an occurrence only
+          // inside one turn. Reusing them across turns drops identical replies.
+          if (this.platform !== 'openclaw'
+            || this.conversationEvents.get(sessionId)?.has(`k:${call.callId}`)) seen.add(call.callId);
+        }
+        this.observedCalls.set(sessionId, seen);
+      } catch {
+        // Missing/malformed host transcripts do not change Guard or turn export.
+      }
+    }
+    const sink = logger ? createContentSink(logger, loadContentLimits()) : undefined;
+    await endTurn(this.tracerProvider, state, process.cwd(), null, calls, sink);
     this.sessionState.delete(sessionId);
     await this.tracerProvider.forceFlush();
   }
@@ -337,17 +432,22 @@ export class InProcessPluginRuntime {
     opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
     if (this.tracerProvider) {
-      let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
-      // `spanKey` is the internal correlation key (falls back to the tool
-      // name when the platform gives no id) — it must never leak onto the
-      // span as `gen_ai.tool.call.id`. Only a real platform-supplied id
-      // may produce that attribute; otherwise it's omitted entirely.
-      const preAttrs: Record<string, unknown> = {
-        ...genAiToolCallInputAttributes(params, opts?.toolCallId),
-        ...(opts?.extraPreAttrs ?? {}),
-      };
-      state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
-      this.sessionState.set(sessionId, state);
+      const seen = this.observedTools.get(sessionId) ?? new Set<string>();
+      const firstObservation = !opts?.toolCallId || !seen.has(opts.toolCallId);
+      if (opts?.toolCallId) seen.add(opts.toolCallId);
+      this.observedTools.set(sessionId, seen);
+      if (firstObservation) {
+        let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+        // Only real platform identities are exported as tool call IDs.
+        const preAttrs: Record<string, unknown> = {
+          ...genAiToolCallInputAttributes(params, opts?.toolCallId),
+          ...(opts?.extraPreAttrs ?? {}),
+        };
+        state = recordPreToolUse(state, spanKey, toolName, '', preAttrs);
+        this.sessionState.set(sessionId, state);
+        this.emitToolContent(sessionId, 'input',
+          state.pending_spans[spanKey]?.span_id, state.turn_trace_id, params, opts?.toolCallId);
+      }
     }
     if (this.meterProvider) {
       recordToolUse(this.meterProvider, toolName, 'PreToolUse').catch(() => {});
@@ -471,6 +571,9 @@ export class InProcessPluginRuntime {
             durationMs: outcome.durationMs,
           }),
         };
+        const pending = drained.pending_spans[spanKey];
+        this.emitToolContent(sessionId, 'output', pending?.span_id, drained.turn_trace_id,
+          outcome.result, pending?.attributes?.['gen_ai.tool.call.id'] as string | undefined);
         const r = await recordPostToolUse(
           this.tracerProvider,
           drained,
@@ -487,12 +590,27 @@ export class InProcessPluginRuntime {
     }
   }
 
-  /** Capture the user prompt onto turn state; applied at endTurn time. */
-  onUserPrompt(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+  /** Record prompt metadata on the turn and its body only on consented Logs. */
+  onUserPrompt(sessionId: string, text: string, opts?: { index?: number; sourceId?: string }): boolean {
+    if (!this.tracerProvider || !text) return false;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordUserPrompt(state, text);
     this.sessionState.set(sessionId, state);
+    const logger = this.contentLogger(sessionId);
+    if (!logger || !state.turn_trace_id) return false;
+    if (opts?.sourceId) {
+      const seen = this.observedPrompts.get(sessionId) ?? new Set<string>();
+      if (seen.has(opts.sourceId)) return false;
+      seen.add(opts.sourceId);
+      this.observedPrompts.set(sessionId, seen);
+    }
+    const index = opts?.index ?? this.promptIndices.get(sessionId) ?? 0;
+    emitUserPromptContent(logger, loadContentLimits(), {
+      prompt: text, spanId: state.turn_trace_id.slice(0, 16), traceId: state.turn_trace_id,
+      index, sourceId: opts?.sourceId, source: `${this.platform}-events`,
+    });
+    this.promptIndices.set(sessionId, index + 1);
+    return true;
   }
 
   /** Capture the assistant reply onto turn state. */
@@ -565,6 +683,29 @@ export class InProcessPluginRuntime {
       const msg = err instanceof Error ? err.stack || err.message : String(err);
       return `[nio error] ${msg}`;
     }
+  }
+
+  private emitToolContent(
+    sessionId: string,
+    kind: 'input' | 'output',
+    spanId: string | undefined,
+    traceId: string | undefined,
+    payload: unknown,
+    toolCallId?: string,
+  ): void {
+    if (!spanId || !traceId) return;
+    const logger = this.contentLogger(sessionId);
+    if (!logger) return;
+    let text: string;
+    try {
+      text = typeof payload === 'string' ? payload : JSON.stringify(payload) ?? '';
+    } catch {
+      return; // Host objects may be cyclic; content must never affect execution.
+    }
+    if (!text) return;
+    const opts = { spanId, traceId, toolCallId, source: `${this.platform}-events`, sourceId: toolCallId };
+    if (kind === 'input') emitToolInputContent(logger, loadContentLimits(), { input: text, ...opts });
+    else emitToolOutputContent(logger, loadContentLimits(), { result: text, ...opts });
   }
 
   private stashGuardAttrs(

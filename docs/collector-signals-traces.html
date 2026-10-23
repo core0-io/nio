@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Traces</div>
         <h1><em>Traces</em> — one trace per conversation turn</h1>
-        <p class="lead">Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> wherever a spec equivalent exists; Nio-specific extensions use the <code>nio.*</code> prefix. Three span shapes — turn root, tool call, subagent task — covered below with their full attribute schemas.</p>
+        <p class="lead">Span hierarchy follows the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a> where applicable. Turn, chat, tool and task spans retain execution metadata; conversation bodies live in <a href="collector-signals-logs.html#content">linked OTLP content logs</a>, including short bodies.</p>
       </div>
 
       <div class="doc">
@@ -61,12 +61,13 @@
 
         <h2 id="hierarchy">Span hierarchy</h2>
         <pre><code>Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
+  ├─ Span: chat &lt;model&gt;          (one reconstructed LLM call)
   ├─ Span: execute_tool &lt;name&gt;   (PreToolUse → PostToolUse)
   ├─ Span: execute_tool &lt;name&gt;   (...)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)</code></pre>
 
         <h2 id="span-turn">Span: <code>invoke_agent UserPromptSubmit</code> <span style="color: var(--fg-3); font-weight: 400;">— turn root</span></h2>
-        <p>One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.</p>
+        <p>One per conversation turn. Carries conversation identity, accumulated token usage and content association metadata, not prompt/reply previews.</p>
         <table>
           <thead><tr><th>Attribute</th><th>Description</th><th>Captured at</th><th>Platforms</th></tr></thead>
           <tbody>
@@ -82,12 +83,14 @@
             <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>turn close</td><td>all</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Per-session counter, starts at 1</td><td>turn close</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at turn start</td><td>turn close (when set)</td><td>all</td></tr>
-            <tr><td><code>nio.turn.user_prompt</code></td><td>First user message of the turn, redacted, ≤2 KB</td><td>UserPromptSubmit</td><td>all</td></tr>
-            <tr><td><code>nio.turn.assistant_reply</code></td><td>First assistant reply of the turn, redacted, ≤2 KB</td><td><code>llm_output</code> (OpenClaw-native)</td><td>OpenClaw only</td></tr>
+            <tr><td><code>nio.content.source</code></td><td><code>logs</code>: content placement convention, not a delivery acknowledgement</td><td>content observation</td><td>all</td></tr>
             <tr><td><code>nio.turn.cache_hit_rate</code></td><td><code>cache_read / (input + cache_creation + cache_read)</code>, 0–1</td><td>turn close</td><td>all</td></tr>
           </tbody>
         </table>
         <p style="font-size: 13px; color: var(--fg-2);"><strong>Token usage source</strong> differs by platform. <strong>Claude Code</strong>: <code>Stop</code> reads the transcript JSONL and sums <code>message.usage</code> from all assistant entries since turn start. <strong>Hermes</strong>: same code path as Claude Code if the transcript path is included in the <code>post_llm_call</code> payload; otherwise empty. <strong>OpenClaw</strong>: <code>llm_output</code> event payload carries usage directly; accumulated incrementally.</p>
+
+        <h2 id="span-chat">Span: <code>chat &lt;model&gt;</code></h2>
+        <p>One per reconstructed LLM call. Preserves timing, model, token usage, source-call identity and <code>nio.chat.tool_call_ids</code> when the host supplies real tool IDs. Tool spans remain siblings under the turn; no parent link is guessed from timing. Assistant text and host-exposed thinking use the chat span's exact ID in <a href="collector-signals-logs.html#content">content logs</a>. No reply body or 2 KB ownership threshold remains on spans.</p>
 
         <h2 id="span-tool">Span: <code>execute_tool &lt;name&gt;</code> <span style="color: var(--fg-3); font-weight: 400;">— tool span</span></h2>
         <p>One per tool invocation. Span name is literally <code>execute_tool ${toolName || 'unknown'}</code>. Pre-event opens the span; post-event closes it (with retroactive start time on Claude Code/Hermes since the pre-side process is gone).</p>
@@ -98,12 +101,10 @@
             <tr><td><code>gen_ai.tool.name</code></td><td>Host tool name (<code>Bash</code>, <code>WebFetch</code>, …)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.type</code></td><td>Tool type, when known</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id (<code>tool_use_id</code> on Claude Code, <code>toolCallId</code> on OpenClaw)</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.arguments</code></td><td>Tool input, redacted, ≤2 KB</td><td>PreToolUse</td><td>all</td></tr>
-            <tr><td><code>gen_ai.tool.call.result</code></td><td>Tool output, redacted, ≤2 KB</td><td>PostToolUse</td><td>all</td></tr>
+            <tr><td><code>nio.content.source</code></td><td><code>logs</code>: arguments and results are linked content logs</td><td>content observation</td><td>all</td></tr>
             <tr><td><code>nio.tool.error</code></td><td>Error message when the tool failed</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.tool.duration_ms</code></td><td>Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use <code>nio.guard.eval_ms</code> instead)</td><td>PostToolUse</td><td>OpenClaw only</td></tr>
             <tr><td><code>nio.tool.run_id</code></td><td>OpenClaw-internal run identifier</td><td>PreToolUse</td><td>OpenClaw only</td></tr>
-            <tr><td><code>nio.tool_summary</code></td><td>One-line summary derived from tool input</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.platform</code></td><td>Source platform — <code>claude-code</code> / <code>hermes</code> / <code>openclaw</code></td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.turn_number</code></td><td>Parent turn's number</td><td>PostToolUse</td><td>all</td></tr>
             <tr><td><code>nio.cwd</code></td><td>Working dir at hook fire</td><td>PostToolUse (when set)</td><td>all</td></tr>

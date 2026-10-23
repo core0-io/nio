@@ -57,6 +57,11 @@ import {
   takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
+import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
+import { lastUserPromptSince } from './conversation/claude-code-source.js';
+import { createContentSink, emitToolInputContent, emitToolOutputContent, emitUserPromptContent } from './content/sink.js';
+import { loadContentLimits } from './config-loader.js';
+import { isSessionMonitored } from './monitor-check.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -66,6 +71,7 @@ export interface HookStdinPayload {
   transcript_path?: string;
   cwd?: string;
   prompt?: string;
+  prompt_id?: string;
   tool_name?: string;
   tool_use_id?: string;
   tool_input?: Record<string, unknown>;
@@ -103,6 +109,7 @@ export interface DispatchOptions {
    * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
+  conversationInput?: SourceInput;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -220,6 +227,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   const transcriptPath = input.transcript_path ?? null;
   const toolInput = input.tool_input ?? {};
   const auditOpts = { loggerProvider, logsConfig };
+  const captureEnabled = tracerProvider && loggerProvider && opts.config.enabled
+    && opts.config.logs_enabled && opts.config.traces_enabled
+    && isSessionMonitored(sessionId, cwd, logsConfig);
+  const contentProvider = captureEnabled ? loggerProvider : null;
 
   // Shared base fields for every audit entry shape. Branches augment with
   // event-specific fields (task_id/task_summary, …) before writing. We
@@ -244,10 +255,38 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     if (event === 'UserPromptSubmit') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      if (tracerProvider && input.prompt) {
-        const prev = loadState(logsConfig);
-        let state = ensureTurn(prev, sessionId);
-        state = recordUserPrompt(state, input.prompt);
+      if (tracerProvider) {
+        let state = ensureTurn(loadState(logsConfig), sessionId);
+        const transcriptPrompt = contentProvider && !input.prompt && transcriptPath
+          ? lastUserPromptSince(transcriptPath, state.turn_start_ms - 5000) : null;
+        const prompt = input.prompt ?? transcriptPrompt?.text;
+        const identity = input.prompt_id ?? transcriptPrompt?.id;
+        const seen = state.observed_prompt_ids ?? [];
+        const alreadyObserved = identity !== undefined && seen.includes(identity);
+        if (prompt && !alreadyObserved && contentProvider) {
+          state = recordUserPrompt(state, prompt);
+          const blocks = transcriptPrompt?.blocks ?? [{ text: prompt, index: 0, sourceId: identity }];
+          const limits = loadContentLimits();
+          const offset = state.prompt_count ?? 0;
+          let nextIndex = offset;
+          for (const block of blocks) {
+            const index = offset + block.index;
+            emitUserPromptContent(contentProvider, limits, {
+              prompt: block.text,
+              spanId: state.turn_trace_id.slice(0, 16),
+              traceId: state.turn_trace_id,
+              index,
+              source: platform,
+              sourceId: block.sourceId ?? (identity ? `${identity}:${block.index}` : undefined),
+            });
+            nextIndex = Math.max(nextIndex, index + 1);
+          }
+          state = {
+            ...state,
+            prompt_count: nextIndex,
+            observed_prompt_ids: identity ? [...seen, identity] : seen,
+          };
+        }
         saveState(logsConfig, state);
       }
 
@@ -289,6 +328,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         state = drained.state;
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
+        const toolSpanId = state.pending_spans[key]?.span_id;
         const result = await recordPostToolUse(
           tracerProvider, state, key, cwd,
           {
@@ -297,6 +337,25 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           },
           err ?? null,
         );
+        if (toolSpanId && contentProvider) {
+          const limits = loadContentLimits();
+          emitToolInputContent(contentProvider, limits, {
+            input: JSON.stringify(toolInput),
+            spanId: toolSpanId,
+            traceId: state.turn_trace_id,
+            source: platform,
+            toolCallId: input.tool_use_id,
+          });
+          const resultText = typeof resp.output === 'string' ? resp.output
+            : Object.keys(resp).length > 0 ? JSON.stringify(resp) : '';
+          emitToolOutputContent(contentProvider, limits, {
+            result: resultText,
+            spanId: toolSpanId,
+            traceId: state.turn_trace_id,
+            source: platform,
+            toolCallId: input.tool_use_id,
+          });
+        }
         saveState(logsConfig, result.state);
       }
 
@@ -354,10 +413,16 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
-        const state = ensureTurn(prev, sessionId);
-        if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
+        const state = loadState(logsConfig);
+        const matchesSession = sessionId === '' || sessionId === 'unknown' || state?.session_id === sessionId;
+        if (state?.turn_trace_id && matchesSession) {
+          const source = contentProvider ? createSourceForPlatform(platform, {
+            transcriptPath,
+            ...(opts.conversationInput ?? {}),
+          }) : null;
+          const calls = source ? await source.callsSince(state.turn_start_ms) : undefined;
+          const sink = createContentSink(contentProvider, loadContentLimits());
+          const next = await endTurn(tracerProvider, state, cwd, transcriptPath, calls, sink);
           if (next) saveState(logsConfig, next);
         }
       }

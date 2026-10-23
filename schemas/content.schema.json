@@ -1,0 +1,100 @@
+{
+  "$ref": "#/definitions/ContentRecord",
+  "definitions": {
+    "ContentRecord": {
+      "type": "object",
+      "properties": {
+        "traceId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{32}$"
+        },
+        "spanId": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{16}$"
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "attributes": {
+          "type": "object",
+          "properties": {
+            "nio.content.type": {
+              "type": "string",
+              "enum": [
+                "thinking",
+                "text",
+                "user_prompt",
+                "tool_input",
+                "tool_output"
+              ]
+            },
+            "nio.content.index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nio.content.source": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nio.content.call_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nio.content.source_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nio.content.fidelity": {
+              "type": "string",
+              "enum": [
+                "full",
+                "summary",
+                "unknown"
+              ]
+            },
+            "nio.content.truncated": {
+              "type": "boolean"
+            },
+            "nio.content.original_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "nio.content.redactions": {
+              "type": "integer",
+              "exclusiveMinimum": 0
+            },
+            "nio.trace_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{32}$"
+            },
+            "nio.span_id": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{16}$"
+            },
+            "gen_ai.tool.call.id": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "nio.content.type",
+            "nio.content.index",
+            "nio.content.source",
+            "nio.trace_id",
+            "nio.span_id"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "traceId",
+        "spanId",
+        "body",
+        "attributes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

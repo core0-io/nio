@@ -1,9 +1,8 @@
-# Guard audit schema
+# Collector schemas
 
-`src/schemas/guard-audit.ts` is the only manually maintained structure definition.
-Types, public exports and the draft-07 JSON Schema derive from it. Run
-`pnpm schema:generate` after changes; `pnpm schema:check` and `pnpm test` detect stale
-artifacts. The build regenerates the artifact. Published packages include this directory.
+`src/schemas/guard-audit.ts` and `src/schemas/content.ts` are the canonical manually maintained definitions for their respective signals. Types, exports and draft-07 JSON Schema artifacts derive from them. Run `pnpm schema:generate` after changes; `pnpm schema:check` and `pnpm test` detect stale artifacts. Build regenerates both artifacts; published packages include this directory.
+
+## Guard audit
 
 Structured Guard evaluations use `event=guard` and an `evaluation_id`.
 The generated receiver artifact is `schemas/guard-audit.schema.json`, named
@@ -78,3 +77,9 @@ No JSON Schema-only receiver should claim to verify these semantic invariants.
   "findings": [], "explanation": "Unmapped tool allowed"
 }
 ```
+
+## Conversation content
+
+`schemas/content.schema.json` describes `ContentRecord`, built by `src/scripts/lib/content/emit.ts` for every host. The string body is redacted then UTF-8 byte bounded; built-in OTLP `traceId` / `spanId` are supplied via the logger's explicit OTel context. Attribute copies `nio.trace_id` / `nio.span_id` must match these fields (runtime Zod validation checks equality; JSON Schema validates structure, not equality).
+
+Required attributes: `nio.content.type` (`user_prompt`, `text`, `thinking`, `tool_input`, `tool_output`), `nio.content.index`, `nio.content.source`, and the copied trace/span IDs. Source-call/source-item IDs, thinking fidelity, tool-call ID, truncation/original bytes and redaction counts are retained when available. This schema is not a Guard record and has no decision/risk fields. See [placement, consent, ordering and host limitations](../docs/COLLECTOR-SIGNALS.md#logs-conversation-content).

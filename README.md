@@ -103,6 +103,8 @@ Captures every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Tas
 
 Guard evaluations include an independent evaluation ID, all seven gate outcomes, all findings, and the reason evaluation stopped. The same record is written locally and exported through OTEL Logs; it does not require traces. See the [audit log reference](docs/COLLECTOR-SIGNALS.md#logs-audit-log).
 
+Conversation bodies are exported as **OTLP Logs** through `nio-content`, including short replies, prompts, host-exposed thinking, and tool arguments/results. Built-in `traceId`/`spanId` fields link each record to its turn, chat, or tool span; spans retain execution/model/token/tool metadata rather than body copies. Content capture requires monitor consent, an endpoint, and both traces/logs enabled; it is not enabled automatically. Guard evaluation export and local audit writing are independent. See [content records and host limitations](docs/COLLECTOR-SIGNALS.md#logs-conversation-content).
+
 ### Guard
 
 Pre-execution risk evaluation in two modes:
