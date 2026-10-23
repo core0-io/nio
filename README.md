@@ -101,6 +101,8 @@ Two integration models sit under that: Claude Code and Codex spawn a short-lived
 
 Captures every hook event (`UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `TaskCreated`, `TaskCompleted`, `Stop`, `SubagentStop`, `SessionStart`, `SessionEnd`) as **OpenTelemetry** signals — metrics, traces, and logs — exported over OTLP (gRPC or HTTP). Audit log entries are also dual-written to a local JSONL backup at `~/.nio/audit.jsonl`, so you have a queryable record even when no OTLP endpoint is configured.
 
+Guard evaluations include an independent evaluation ID, all seven gate outcomes, full findings, and the reason evaluation stopped. The same record is written locally and exported through OTEL Logs; it does not require traces. See the [audit log reference](docs/COLLECTOR-SIGNALS.md#logs-audit-log).
+
 ### Guard
 
 Pre-execution risk evaluation in two modes:

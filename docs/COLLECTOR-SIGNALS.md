@@ -326,35 +326,36 @@ Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a `
 
 ## Logs (audit log)
 
-Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing.
+Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing. For Guard evaluations, both carry the same evaluation ID and payload; remote export uses the existing `nio-audit` logger and collector endpoint. Local writing continues when the endpoint is absent, remote logs are disabled, or export fails, unless `collector.logs.local=false`.
 
 ### Entry types (discriminated by `event`)
 
 #### `event: "guard"` — guard decision (per PreToolUse / PostToolUse)
 
+Structured Guard evaluations have their own identity and do not depend on trace/span availability or a session id. The canonical definition is [`src/schemas/guard-audit.ts`](../src/schemas/guard-audit.ts); the generated receiver artifact is [`schemas/guard-audit.schema.json`](../schemas/guard-audit.schema.json). See the [schema reference](../schemas/README.md) for validation requirements.
+
 | Field | Type | Notes |
 | --- | --- | --- |
 | `event` | `"guard"` | discriminator |
-| `timestamp` | string | ISO-8601 |
-| `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` |
-| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
-| `session_id` | string? | host session id |
-| `cwd` | string? | working dir |
-| `tool_name` | string | host tool name |
-| `action_type` | string? | `exec_command` / `write_file` / `network_request` / `read_file` |
-| `tool_input_summary` | string | redacted ≤200-char summary of tool input |
-| `decision` | string | `allow` / `deny` / `ask` |
-| `risk_level` | string | `low` / `medium` / `high` / `critical` |
-| `max_finding_severity` | string | highest finding severity |
-| `risk_score` | number | 0–1 final score |
-| `risk_tags` | string[] | rule IDs hit (deduped) |
-| `phase_stopped` | number \| null | which Phase 0–6 produced the decision |
-| `scores` | `Record<string, number>` | per-phase score (`runtime`, `static`, `behavioural`, `llm`, `external`, `final`) |
-| `phases` | `AuditPhaseMap?` | per-phase `{score, finding_count, duration_ms}` |
-| `top_findings` | `AuditFindingSummary[]` | up to 5: `{rule_id, severity, category, title, confidence}` |
-| `explanation` | string? | human-readable reason |
-| `initiating_skill` | string? | which skill scope the action originated from |
-| `event_type` | `"pre" \| "post"?` | which hook side fired |
+| `evaluation_id` | `string` | Evaluation UUID; independent of session, trace, and span identity |
+| `timestamp / duration_ms` | `string / number` | Evaluation start (ISO-8601) and elapsed milliseconds |
+| `platform / service_name / agent_name` | `string` | Required host, service, and agent identity |
+| `session_id` | `string?` | Optional host session id |
+| `tool_name / tool_input_summary` | `string` | Host tool name and existing redacted input summary |
+| `decision` | `string` | allow / deny / confirm / error |
+| `risk_score / risk_level` | `number \| null / string \| null` | Final risk; unknown values are null |
+| `risk_tags` | `string[]` | Deduplicated rule IDs |
+| `phases` | `GuardPhase[]` | All seven gates in order: tool_gate, allowlist, runtime, static, behavioural, llm, external |
+| `findings` | `GuardFinding[]` | Full findings with unique finding_id, producing phase_id, and rule metadata |
+| `termination` | `GuardTermination` | kind, blocked_gate, trigger_finding_ids, and reason |
+| `explanation` | `string` | Human-readable result |
+| `error` | `{kind, message}?` | Actual engine error details |
+| `scores / top_findings / phase_stopped / max_finding_severity` | `optional legacy fields` | Retained summaries; top_findings remains limited to five |
+| `cwd / action_type / initiating_skill / event_type` | `optional context` | Existing local and hook context |
+
+Each gate records `status` (`completed`, `skipped`, or `failed`), `reason`, `duration_ms`, nullable `score`, finding IDs/count, and `triggered_block`. Skips include `skip_reason` (`disabled`, `not_applicable`, or `terminated_earlier`) and null timing/score; failures include actual error details and a null score. External gate results preserve each endpoint outcome. A completed gate can block: `termination.kind=gate_block` identifies `blocked_gate`; an aggregate threshold block identifies no single gate. Trigger finding IDs reference actual findings.
+
+Behavioural parse failures are recorded as failed with a null audit score. The runtime scoring fallback and Guard decision are unchanged.
 
 #### `event: "session_scan"` — skill scan (on-demand or session-start)
 
@@ -425,7 +426,9 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `gen_ai.tool.call.id` | Host tool-call id; same key as the tool-span attribute | PreToolUse · PostToolUse | all |
 | `gen_ai.conversation.id` | Host session id; same key as the turn-span attribute | every audit entry with a session | all |
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
-| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm` / `error` | guard decision | all |
+| `nio.guard.evaluation_id` | Independent evaluation UUID | structured guard evaluation | all |
+| `nio.guard.termination` / `nio.guard.blocked_gate` | Termination kind; blocking gate when applicable | structured guard evaluation | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
 | `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
 | `nio.guard.risk_tags` | Comma-joined rule IDs that fired | guard decision | all |
@@ -442,7 +445,7 @@ The flat attribute set used for OTEL Logs indexing. Same key names as the matchi
 | `nio.phase_stopped` | Which Phase 0–6 produced the decision | guard decision | all |
 | `nio.explanation` | Human-readable reason for the verdict | guard decision | all |
 | `nio.transcript_path` | Claude Code-only — path to session transcript JSONL | hook events with transcript | Claude Code only |
-| `nio.phases.{name}.score` | Per-phase score (Phase 0–6) | guard decision | all |
+| `nio.phases.{name}.score` | Per-phase score (array index 0–6 for structured evaluations); null values omitted | guard decision | all |
 | `nio.phases.{name}.finding_count` | Per-phase finding count | guard decision | all |
 | `nio.phases.{name}.duration_ms` | Per-phase wall-clock cost (ms) | guard decision | all |
 
