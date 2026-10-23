@@ -570,9 +570,7 @@ async function main(): Promise<void> {
     // monitor gate, the collector dispatch, and the span bookkeeping).
     const collectorInput = hermesToCollectorInput(payload, 'PreToolUse');
 
-    // Gate before creating any provider — an unmonitored session must
-    // not get OTLP exporters, even though evaluateHook() and the guard
-    // decision below still run unconditionally.
+    // Guard evaluation logs export independently; content and other signals remain gated.
     const monitored = isSessionMonitored(
       collectorInput.session_id,
       collectorInput.cwd ?? null,
@@ -587,7 +585,7 @@ async function main(): Promise<void> {
     // the guard-hook.ts wiring on Claude Code. Without this, SigNoz's
     // "Logs" view stays empty for Hermes guard activity even though
     // metrics and traces flow correctly.
-    const loggerProvider = (monitored && collectorConfig.enabled && logsConfig?.enabled !== false)
+    const loggerProvider = (collectorConfig.enabled && logsConfig?.enabled !== false)
       ? createLoggerProvider(collectorConfig, 'hermes', resourceAgentName) : null;
 
     const evalStartMs = Date.now();

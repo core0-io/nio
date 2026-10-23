@@ -985,9 +985,13 @@ export class InProcessPluginRuntime {
       this.adapter,
       rawEvent,
       { config: this.config, nio: { orchestrator: this.orchestrator } },
-      this.auditOptsFor(monitored),
+      { loggerProvider: this.getLoggerProvider(), logsConfig: this.config.collector?.logs },
     );
     const evalMs = Date.now() - startMs;
+    if (!monitored) {
+      const loggerProvider = this.existingLoggerProvider();
+      if (loggerProvider) await flushLogRecords(loggerProvider);
+    }
 
     if (meterProvider) {
       recordGuardDecision(

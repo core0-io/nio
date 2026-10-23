@@ -14,7 +14,7 @@ argument-hint: "[on|off|status]"
 
 Turn telemetry capture on or off for the **current agent session**.
 
-Nio captures nothing by default. Every session stays silent until it is explicitly armed here. Arming affects all three OTLP signals (metrics, traces, logs); it does **not** affect guard enforcement, which always runs, and does not affect the local audit log at `~/.nio/audit.jsonl`, which is always written.
+Conversation content, traces, and metrics are off until the session is armed. Structured Guard evaluation logs export independently when the collector endpoint and logs export are enabled. Monitor does not affect Guard enforcement or the local audit log at `~/.nio/audit.jsonl`.
 
 > **Passive invocation.** If the user asks to start/stop monitoring, enable/disable telemetry, or check whether capture is on, you MUST run the CLI below rather than describing behaviour from memory.
 

@@ -23,6 +23,7 @@ import { trackTempDir } from './helpers/tmp-dirs.js';
 import { InProcessPluginRuntime } from '../adapters/plugin-runtime.js';
 import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { makeInMemoryLogger } from './helpers/logger.js';
+import { guardAuditSchema } from '../schemas/index.js';
 import { makeInMemoryTracer } from './helpers/tracer.js';
 
 const STORE = 'monitored-sessions.json';
@@ -400,6 +401,39 @@ describe('plugin runtime: providers are lazy and gated', () => {
     }
   });
 
+  it('exports structured Guard evaluations while unarmed without exporting conversation content', async () => {
+    const logger = makeInMemoryLogger();
+    const tracer = makeInMemoryTracer();
+    const rt = new InProcessPluginRuntime({
+      platform: 'openclaw', adapter: new OpenClawAdapter(),
+      loggerProvider: logger.provider, tracerProvider: tracer.provider,
+    });
+    try {
+      rt.onSessionStart('sess-guard-only');
+      rt.onUserPrompt('sess-guard-only', 'private conversation');
+      const result = await rt.onPreTool(
+        'sess-guard-only', 'call-guard', 'exec', { command: 'rm -rf /' },
+        { toolName: 'exec', params: { command: 'rm -rf /' } },
+      );
+      await rt.onTurnEnd('sess-guard-only');
+      assert.equal(result.block, true);
+      const records = await logger.flushed();
+      assert.equal(records.length, 1);
+      const evaluation = guardAuditSchema.parse(JSON.parse(String(records[0]!.body)));
+      assert.equal(evaluation.decision, 'deny');
+      assert.equal(evaluation.phases.length, 7);
+      assert.equal(records[0]!.attributes['nio.event'], 'guard');
+      assert.equal(records[0]!.attributes['nio.guard.evaluation_id'], evaluation.evaluation_id);
+      const local = readFileSync(join(home, 'audit.jsonl'), 'utf-8').trim().split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>);
+      assert.deepEqual(local.find(entry => entry['event'] === 'guard'), evaluation);
+      assert.equal((await tracer.flushed()).length, 0);
+    } finally {
+      await logger.shutdown();
+      await tracer.shutdown();
+    }
+  });
+
   it('still evaluates and blocks a dangerous call on an unmonitored session', async () => {
     // Guard and monitor are orthogonal. With capture off the guard must
     // block exactly as before — a monitor state that could disable
@@ -413,9 +447,7 @@ describe('plugin runtime: providers are lazy and gated', () => {
 
     assert.equal(r.block, true, 'an unarmed session must still be guarded');
     assert.equal(r.decision, 'deny');
-    assert.equal(
-      rt._providersBuiltForTests(), false,
-      'and guarding it must still not build a provider',
-    );
+    const entries = readFileSync(join(home, 'audit.jsonl'), 'utf-8').trim().split('\n');
+    assert.equal(guardAuditSchema.parse(JSON.parse(entries.at(-1)!)).decision, 'deny');
   });
 });

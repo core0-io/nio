@@ -1,8 +1,9 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
+import { GuardEvaluation, guardError } from '../core/guard-evaluation.js';
 import type { HookAdapter, HookInput, HookOutput, EngineOptions } from './types.js';
-import { writeAuditLog, buildGuardAuditEntry, asText } from './common.js';
+import { writeAuditLog, buildEvaluatedGuardAuditEntry, asText } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { Diagnostic } from './diagnostics.js';
 import type { ActionDecision } from '../core/action-orchestrator.js';
@@ -498,88 +499,87 @@ export async function evaluateHook(
     ? options.config.agent_name
     : undefined;
 
-  // Phase 0: Tool-level gate
-  const t0 = performance.now();
-  const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name, options.mcpRegistry);
-  const t0End = performance.now();
-  if (toolGate) {
-    const skill = await adapter.inferInitiatingSkill(input);
-    const entry = buildGuardAuditEntry(input, null, skill, adapter.name, undefined, agentName);
-    entry.decision = 'deny';
-    entry.risk_level = 'critical';
-    entry.risk_score = 1.0;
-    entry.risk_tags = toolGate.riskTags ?? [];
-    entry.explanation = toolGate.reason;
-    entry.phase_stopped = 0;
-    entry.phases = { tool_gate: { score: 1, finding_count: 1, duration_ms: Math.round(t0End - t0) } };
-    writeAuditLog(entry, auditOpts);
-    return toolGate;
-  }
-
-  // Post-tool events → no guard evaluation needed
-  if (input.eventType === 'post') {
-    return { decision: 'allow' };
-  }
-
-  // Build envelope
-  const initiatingSkill = await adapter.inferInitiatingSkill(input);
-  let envelope = adapter.buildEnvelope(input, initiatingSkill);
-
-  // MCP fallback: when the adapter can't classify the tool via its native
-  // mapping, check whether the name matches the platform's MCP convention
-  // and build an `mcp_tool_call` envelope so Phase 1-6 still runs. This
-  // lifts MCP calls from "silent allow" to first-class actions evaluated
-  // by all rules + analysers.
-  if (!envelope && input.toolName) {
-    const registry = options.mcpRegistry ?? loadMCPRegistry();
-    const parsed = parseMcpToolName(
-      input.toolName, adapter.name, registry.entries.map(e => e.serverName), input.toolInput,
-    );
-    if (parsed.isMcp && parsed.local) {
-      envelope = buildMcpEnvelope(input, parsed, initiatingSkill, adapter.name);
-    }
-  }
-
-  if (!envelope) {
-    // Truly uncategorised tool — not in `native_tool_mapping`, not an MCP
-    // call. Allow but record the pass-through so the audit log has a row
-    // for every tool invocation. The `UNCATEGORIZED_TOOL:<tool_name>` risk
-    // tag (same `TAG:identifier` shape as `EXTERNAL_SCORE:<scorer>`) lets
-    // downstream queries group / filter by which tool was unmapped without
-    // having to parse `explanation` or join on `tool_name`.
-    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, undefined, agentName);
-    entry.decision = 'allow';
-    entry.risk_level = 'low';
-    entry.risk_score = 0;
-    entry.risk_tags = [`UNCATEGORIZED_TOOL:${input.toolName}`];
-    entry.explanation =
-      `Tool "${input.toolName}" has no action mapping; passed through without Phase 1-6 analysis`;
-    entry.phase_stopped = 0;
-    writeAuditLog(entry, auditOpts);
-    return { decision: 'allow' };
-  }
-
-  // Nio self-invocation short-circuit: when the skill/E2E/debug flow
-  // runs Nio's own action-cli via a shell-exec tool (e.g. Claude Code's
-  // Bash), the outer hook must not double-analyse. action-cli itself
-  // runs the full Phase 1-6 pipeline on the real envelope inside its
-  // subprocess, so one analysis is enough. Phase 0 has already passed
-  // above, so blocked_tools still applies. Silent (no audit entry) to
-  // keep skill queries from polluting ~/.nio/audit.jsonl.
-  if (
-    envelope.action.type === 'exec_command' &&
-    isNioSelfInvocation((envelope.action.data as { command?: string }).command)
-  ) {
-    return { decision: 'allow' };
-  }
-
-  // Run ActionOrchestrator pipeline (Phase 1-6)
+  const audit = new GuardEvaluation();
+  let initiatingSkill: string | null = null;
+  let envelope: ActionEnvelope | null = null;
   try {
-    const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
-    const rd: ActionDecision = await options.nio.orchestrator.evaluate(envelope, level);
+    audit.start(0);
+    const toolGate = checkToolGate(input.toolName, input.toolInput, options.config, adapter.name, options.mcpRegistry);
+    if (input.eventType === 'post') return toolGate || { decision: 'allow' };
+    const gateFindings = toolGate ? [{
+      id: toolGate.topFindingRule || 'TOOL_GATE', rule_id: toolGate.topFindingRule || 'TOOL_GATE',
+      category: 'policy_violation' as const, severity: 'critical' as const,
+      title: 'Tool permission denied', description: toolGate.reason || 'Tool permission denied',
+      location: { file: input.toolName, line: 0 }, analyser: 'static' as const, confidence: 1,
+    }] : [];
+    audit.complete(0, toolGate ? 1 : 0, gateFindings, toolGate?.reason || 'Tool permissions passed');
+    if (toolGate) {
+      const skill = await adapter.inferInitiatingSkill(input);
+      audit.terminate('gate_block', toolGate.reason || 'Tool permission denied', 0);
+      audit.termination.trigger_finding_ids = audit.phases[0].finding_ids;
+      writeAuditLog(buildEvaluatedGuardAuditEntry(input, null, skill, adapter.name, audit, undefined, agentName, {
+        decision: 'deny', risk_level: 'critical', risk_score: 1, risk_tags: toolGate.riskTags || [],
+        phase_stopped: 0, explanation: toolGate.reason, top_findings: gateFindings.map(({ rule_id, severity, category, title, confidence }) => ({ rule_id, severity, category, title, confidence })),
+      }), auditOpts);
+      return toolGate;
+    }
 
-    const entry = buildGuardAuditEntry(
-      input, rd, initiatingSkill, adapter.name, envelope.action.type, agentName,
+    // Build envelope
+    initiatingSkill = await adapter.inferInitiatingSkill(input);
+    envelope = adapter.buildEnvelope(input, initiatingSkill);
+
+    // MCP fallback: when the adapter can't classify the tool via its native
+    // mapping, check whether the name matches the platform's MCP convention
+    // and build an `mcp_tool_call` envelope so Phase 1-6 still runs. This
+    // lifts MCP calls from "silent allow" to first-class actions evaluated
+    // by all rules + analysers.
+    if (!envelope && input.toolName) {
+      const registry = options.mcpRegistry ?? loadMCPRegistry();
+      const parsed = parseMcpToolName(
+        input.toolName, adapter.name, registry.entries.map(e => e.serverName), input.toolInput,
+      );
+      if (parsed.isMcp && parsed.local) {
+        envelope = buildMcpEnvelope(input, parsed, initiatingSkill, adapter.name);
+      }
+    }
+
+    if (!envelope) {
+      // Truly uncategorised tool — not in `native_tool_mapping`, not an MCP
+      // call. Allow but record the pass-through so the audit log has a row
+      // for every tool invocation. The `UNCATEGORIZED_TOOL:<tool_name>` risk
+      // tag (same `TAG:identifier` shape as `EXTERNAL_SCORE:<scorer>`) lets
+      // downstream queries group / filter by which tool was unmapped without
+      // having to parse `explanation` or join on `tool_name`.
+      const reason = `Tool "${input.toolName}" has no action mapping; passed through without Phase 1-6 analysis`;
+      audit.terminate('unmapped_allow', reason, 0);
+      const entry = buildEvaluatedGuardAuditEntry(input, null, initiatingSkill, adapter.name, audit, undefined, agentName, {
+        decision: 'allow', risk_level: 'low', risk_score: 0,
+        risk_tags: [`UNCATEGORIZED_TOOL:${input.toolName}`], explanation: reason, phase_stopped: 0,
+      });
+      writeAuditLog(entry, auditOpts);
+      return { decision: 'allow' };
+    }
+
+    // Nio self-invocation short-circuit: when the skill/E2E/debug flow
+    // runs Nio's own action-cli via a shell-exec tool (e.g. Claude Code's
+    // Bash), the outer hook must not double-analyse. action-cli itself
+    // runs the full Phase 1-6 pipeline on the real envelope inside its
+    // subprocess, so one analysis is enough. Phase 0 has already passed
+    // above, so blocked_tools still applies. Silent (no audit entry) to
+    // keep skill queries from polluting ~/.nio/audit.jsonl.
+    if (
+      envelope.action.type === 'exec_command' &&
+      isNioSelfInvocation((envelope.action.data as { command?: string }).command)
+    ) {
+      return { decision: 'allow' };
+    }
+
+    // Run ActionOrchestrator pipeline (Phase 1-6)
+    const level = (options.config.guard?.protection_level || 'balanced') as ProtectionLevel;
+    const rd: ActionDecision = await options.nio.orchestrator.evaluate(envelope, level, audit);
+
+    const entry = buildEvaluatedGuardAuditEntry(
+      input, rd, initiatingSkill, adapter.name, audit, envelope.action.type, agentName,
     );
     writeAuditLog(entry, auditOpts);
 
@@ -592,7 +592,7 @@ export async function evaluateHook(
     // adapter resolved before the pipeline was entered — so it is already
     // in hand, needs no analysis, and is unaffected by whatever just threw.
     // Deliberately nothing else: no re-run, no rule lookup, no re-parse.
-    const actionType = envelope.action.type;
+    const actionType = envelope?.action.type ?? 'exec_command';
     const decision: 'allow' | 'deny' =
       ENGINE_ERROR_ALLOWED_ACTIONS.has(actionType) ? 'allow' : 'deny';
 
@@ -613,12 +613,10 @@ export async function evaluateHook(
         : 'Nio could not analyse this read. Run /nio doctor if it keeps happening.',
     };
 
-    const entry = buildGuardAuditEntry(input, null, initiatingSkill, adapter.name, actionType, agentName);
-    entry.decision = decision;
-    entry.risk_level = decision === 'deny' ? 'critical' : 'low';
-    entry.risk_score = decision === 'deny' ? 1.0 : 0;
-    entry.risk_tags = ['ENGINE_ERROR'];
-    entry.explanation = diagnostic.message;
+    audit.engineError(err);
+    const entry = buildEvaluatedGuardAuditEntry(input, null, initiatingSkill, adapter.name, audit, actionType, agentName, {
+      decision: 'error', risk_tags: ['ENGINE_ERROR'], error: guardError(err), explanation: diagnostic.message,
+    });
     writeAuditLog(entry, auditOpts);
 
     if (decision === 'allow') {

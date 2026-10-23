@@ -72,11 +72,11 @@
         <hr>
 
         <h2 id="monitor"><code>monitor</code></h2>
-        <p>Turn telemetry capture on or off for the <strong>current session</strong>. Nio captures nothing by default: every session stays silent until it is explicitly armed here.</p>
+        <p>Turn telemetry capture on or off for the <strong>current session</strong>. Conversation content, traces, and metrics are off until the session is armed. Structured Guard evaluation logs export independently when configured.</p>
         <pre><code>/nio monitor on       # arm this session
 /nio monitor off      # disarm
 /nio monitor status   # is this session being captured?</code></pre>
-        <p>Arming affects all three OTLP signals (metrics, traces, logs), including the conversation content carried on spans. It does <strong>not</strong> affect guard enforcement, which always runs, and does not affect the local audit log at <code>~/.nio/audit.jsonl</code>, which is always written. Full behaviour — what exactly is captured, the pending-arm model on platforms without a session-id variable, and the known limitation on the in-process hosts — is on the <a href="nio-monitor.html"><code>/nio-monitor</code></a> page.</p>
+        <p>Arming enables conversation content, traces, and metrics. Structured Guard evaluations are independent of this switch. It does <strong>not</strong> affect guard enforcement, which always runs, and does not affect the local audit log at <code>~/.nio/audit.jsonl</code>, which is always written. Full behaviour — what exactly is captured, the pending-arm model on platforms without a session-id variable, and the known limitation on the in-process hosts — is on the <a href="nio-monitor.html"><code>/nio-monitor</code></a> page.</p>
 
         <hr>
 

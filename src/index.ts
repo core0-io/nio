@@ -110,3 +110,5 @@ export function createNio(options?: {
 
 // Default export
 export default createNio;
+
+export * from './schemas/index.js';

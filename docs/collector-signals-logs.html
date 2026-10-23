@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Logs</div>
         <h1><em>Logs</em> — audit entries, dual-written · conversation content, OTLP-only</h1>
-        <p class="lead">The logs signal carries two kinds of record. <strong>Audit entries</strong> are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing. <strong>Content records</strong> carry the conversation itself and are OTLP-only.</p>
+        <p class="lead">The logs signal carries two kinds of record. <strong>Audit entries</strong> are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing. Guard evaluations carry the shared structured payload with seven gate outcomes and continue local writing without a remote endpoint. <strong>Content records</strong> carry the conversation itself and are OTLP-only.</p>
       </div>
 
       <div class="doc">
@@ -59,33 +59,31 @@
         <div class="card">
           <div class="card-head">
             <span class="tag">event: "guard"</span>
-            <span>Guard decision per PreToolUse / PostToolUse</span>
+            <span>Guard evaluation</span>
           </div>
+          <p>Each evaluation has its own ID and records every gate, including skips and failures. No session, trace, or span identity is required. See the <a href="../schemas/README.md">canonical schema reference</a> and <a href="../schemas/guard-audit.schema.json">receiver JSON Schema</a>.</p>
           <table>
             <thead><tr><th>Field</th><th>Type</th><th>Notes</th></tr></thead>
             <tbody>
-              <tr><td><code>timestamp</code></td><td>string</td><td>ISO-8601</td></tr>
-              <tr><td><code>platform</code></td><td>string</td><td><code>claude-code</code> / <code>codex</code> / <code>hermes</code> / <code>openclaw</code> / <code>pi</code> / <code>opencode</code></td></tr>
-              <tr><td><code>agent_name</code></td><td>string?</td><td>User-configured <a href="configuration.html#agent_name"><code>agent_name</code></a>; omitted when unset</td></tr>
-              <tr><td><code>session_id</code></td><td>string?</td><td>host session id</td></tr>
-              <tr><td><code>cwd</code></td><td>string?</td><td>working dir</td></tr>
-              <tr><td><code>tool_name</code></td><td>string</td><td>host tool name</td></tr>
-              <tr><td><code>action_type</code></td><td>string?</td><td><code>exec_command</code> / <code>write_file</code> / <code>network_request</code> / <code>read_file</code></td></tr>
-              <tr><td><code>tool_input_summary</code></td><td>string</td><td>redacted ≤200-char summary of tool input</td></tr>
-              <tr><td><code>decision</code></td><td>string</td><td><code>allow</code> / <code>deny</code> / <code>ask</code></td></tr>
-              <tr><td><code>risk_level</code></td><td>string</td><td><code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td></tr>
-              <tr><td><code>max_finding_severity</code></td><td>string</td><td>highest finding severity</td></tr>
-              <tr><td><code>risk_score</code></td><td>number</td><td>0–1 final score</td></tr>
-              <tr><td><code>risk_tags</code></td><td>string[]</td><td>rule IDs hit (deduped)</td></tr>
-              <tr><td><code>phase_stopped</code></td><td>number | null</td><td>which Phase 0–6 produced the decision</td></tr>
-              <tr><td><code>scores</code></td><td>Record&lt;string, number&gt;</td><td>per-phase score (<code>runtime</code>, <code>static</code>, <code>behavioural</code>, <code>llm</code>, <code>external</code>, <code>final</code>)</td></tr>
-              <tr><td><code>phases</code></td><td>AuditPhaseMap?</td><td>per-phase <code>{score, finding_count, duration_ms}</code></td></tr>
-              <tr><td><code>top_findings</code></td><td>AuditFindingSummary[]</td><td>up to 5: <code>{rule_id, severity, category, title, confidence}</code></td></tr>
-              <tr><td><code>explanation</code></td><td>string?</td><td>human-readable reason</td></tr>
-              <tr><td><code>initiating_skill</code></td><td>string?</td><td>which skill scope the action originated from</td></tr>
-              <tr><td><code>event_type</code></td><td>"pre" | "post"?</td><td>which hook side fired</td></tr>
+              <tr><td><code>event</code></td><td>&quot;guard&quot;</td><td>discriminator</td></tr>
+              <tr><td><code>evaluation_id</code></td><td>string</td><td>Evaluation UUID; independent of session, trace, and span identity</td></tr>
+              <tr><td><code>timestamp / duration_ms</code></td><td>string / number</td><td>Evaluation start (ISO-8601) and elapsed milliseconds</td></tr>
+              <tr><td><code>platform / service_name / agent_name</code></td><td>string</td><td>Required host, service, and agent identity</td></tr>
+              <tr><td><code>session_id</code></td><td>string?</td><td>Optional host session id</td></tr>
+              <tr><td><code>tool_name / tool_input_summary</code></td><td>string</td><td>Host tool name and existing redacted input summary</td></tr>
+              <tr><td><code>decision</code></td><td>string</td><td>allow / deny / confirm / error</td></tr>
+              <tr><td><code>risk_score / risk_level</code></td><td>number | null / string | null</td><td>Final risk; unknown values are null</td></tr>
+              <tr><td><code>risk_tags</code></td><td>string[]</td><td>Deduplicated rule IDs</td></tr>
+              <tr><td><code>phases</code></td><td>GuardPhase[]</td><td>All seven gates in order: tool_gate, allowlist, runtime, static, behavioural, llm, external</td></tr>
+              <tr><td><code>findings</code></td><td>GuardFinding[]</td><td>All findings with unique finding_id, producing phase_id, and rule metadata</td></tr>
+              <tr><td><code>termination</code></td><td>GuardTermination</td><td>kind, blocked_gate, trigger_finding_ids, and reason</td></tr>
+              <tr><td><code>explanation</code></td><td>string</td><td>Human-readable result</td></tr>
+              <tr><td><code>error</code></td><td>{kind, message}?</td><td>Actual engine error details</td></tr>
+              <tr><td><code>scores / top_findings / phase_stopped / max_finding_severity</code></td><td>optional legacy fields</td><td>Retained summaries; top_findings remains limited to five</td></tr>
+              <tr><td><code>cwd / action_type / initiating_skill / event_type</code></td><td>optional context</td><td>Existing local and hook context</td></tr>
             </tbody>
           </table>
+          <p>Each gate records status (completed, skipped, failed), reason, duration, nullable score, finding IDs/count, and whether it triggered a block. Skips explain why and have null timing/score; failures retain errors and a null score. External results retain each endpoint outcome. Termination identifies the actual blocking gate or an aggregate block and references the triggering findings.</p>
         </div>
 
         <div class="card">
@@ -192,7 +190,9 @@
             <tr><td><code>gen_ai.tool.call.id</code></td><td>Host tool-call id; same key as the tool-span attribute</td><td>PreToolUse · PostToolUse</td><td>all</td></tr>
             <tr><td><code>gen_ai.conversation.id</code></td><td>Host session id; same key as the turn-span attribute</td><td>every audit entry with a session</td><td>all</td></tr>
             <tr><td><code>session.id</code></td><td>Mirror of <code>gen_ai.conversation.id</code> for OTel base-spec consumers</td><td>every audit entry with a session</td><td>all</td></tr>
-            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>ask</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.decision</code></td><td>Guard verdict — <code>allow</code> / <code>deny</code> / <code>confirm</code> / <code>error</code></td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.guard.evaluation_id</code></td><td>Independent evaluation UUID</td><td>structured guard evaluation</td><td>all</td></tr>
+            <tr><td><code>nio.guard.termination</code> / <code>nio.guard.blocked_gate</code></td><td>Termination kind; blocking gate when applicable</td><td>structured guard evaluation</td><td>all</td></tr>
             <tr><td><code>nio.guard.risk_level</code></td><td>Guard risk level — <code>low</code> / <code>medium</code> / <code>high</code> / <code>critical</code></td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.risk_level</code></td><td>Nio risk level of the entry — same values, but present on <strong>any</strong> entry carrying one, including a <code>session_scan</code> entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above</td><td>guard decision · session scan</td><td>all</td></tr>
             <tr><td><code>nio.guard.risk_score</code></td><td>Guard risk score, 0–1</td><td>guard decision</td><td>all</td></tr>
@@ -210,7 +210,7 @@
             <tr><td><code>nio.phase_stopped</code></td><td>Which Phase 0–6 produced the decision</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.explanation</code></td><td>Human-readable reason for the verdict</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.transcript_path</code></td><td>Claude Code-only — path to session transcript JSONL</td><td>hook events with transcript</td><td>Claude Code only</td></tr>
-            <tr><td><code>nio.phases.{name}.score</code></td><td>Per-phase score (Phase 0–6)</td><td>guard decision</td><td>all</td></tr>
+            <tr><td><code>nio.phases.{name}.score</code></td><td>Per-phase score (array index 0–6 for structured evaluations); null values omitted</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.phases.{name}.finding_count</code></td><td>Per-phase finding count</td><td>guard decision</td><td>all</td></tr>
             <tr><td><code>nio.phases.{name}.duration_ms</code></td><td>Per-phase wall-clock cost (ms)</td><td>guard decision</td><td>all</td></tr>
           </tbody>

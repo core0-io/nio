@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Skill · /nio-monitor</div>
         <h1><code>/nio-monitor</code> — the telemetry capture switch.</h1>
-        <p class="lead">Nio captures nothing by default. Every session stays silent until it is explicitly armed here. Arming affects all three OTLP signals; it does <strong>not</strong> affect guard enforcement, and it does not affect the local audit log.</p>
+        <p class="lead">Conversation content, traces, and metrics are off until a session is armed. Structured Guard evaluations export independently when an endpoint and logs export are enabled. Monitor it does <strong>not</strong> affect guard enforcement, and it does not affect the local audit log.</p>
       </div>
 
       <div class="doc">
@@ -110,10 +110,10 @@
         <h2 id="in-process">Known limitation on the in-process hosts (OpenClaw · Pi · opencode)</h2>
         <p>These three load Nio into a long-lived host process rather than spawning a fresh one per event, and OTEL metric counters there are cumulative for the life of that process.</p>
         <ul>
-          <li>A host where <strong>no</strong> session has ever been armed exports nothing at all — no exporter is even created.</li>
+          <li>A host where <strong>no</strong> session has ever been armed exports no content, traces, or metrics. Guard evaluations can still use the configured logs exporter.</li>
           <li>Once <strong>any</strong> session in that process has been armed and recorded a counter, the metrics exporter starts a periodic export and <strong>keeps re-sending its accumulated counter totals roughly once a second until the host restarts</strong> — including after <code>off</code>, after the session ends, and after the arm record is deleted.</li>
         </ul>
-        <p>What <code>off</code> does guarantee there is that <strong>no new session data is collected</strong>: no new spans, no new audit records, no new counter increments. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the host process clears it. Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.</p>
+        <p>What <code>off</code> does guarantee there is that <strong>no new content, traces, or metric increments are collected</strong>. Guard evaluation logging continues independently. What it cannot do is silence the already-running periodic export of totals accumulated while armed. Restarting the host process clears it. Claude Code, Codex and Hermes are unaffected — each hook event is its own process, so nothing outlives it.</p>
 
         <h2 id="notes">Notes</h2>
         <ul>

@@ -133,7 +133,7 @@ describe('engine error: reachable for real', () => {
     assert.deepEqual(result.riskTags, ['ENGINE_ERROR']);
     const entries = readEntries(auditPath);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]!['decision'], 'deny');
+    assert.equal(entries[0]!['decision'], 'error');
     assert.deepEqual(entries[0]!['risk_tags'], ['ENGINE_ERROR']);
   });
 });
@@ -342,8 +342,8 @@ describe('engine error: fail closed for anything that changes the world', () => 
     const entries = readEntries(auditPath);
     assert.equal(entries.length, 1);
     assert.equal(
-      entries[0]!['decision'], 'deny',
-      'the audit log must say what was done, not just that something failed',
+      entries[0]!['decision'], 'error',
+      'the audit log must retain an engine failure rather than inventing a policy verdict',
     );
     assert.deepEqual(entries[0]!['risk_tags'], ['ENGINE_ERROR']);
     assert.equal(entries[0]!['action_type'], 'write_file');
@@ -397,7 +397,7 @@ describe('engine error: fail open only for actions that cannot change anything',
     assert.match(diags[0]!.message, /allowed unanalysed/);
   });
 
-  it('the audit row for a failed-open read says allow, tagged ENGINE_ERROR', async () => {
+  it('the audit row for a failed-open read records error, tagged ENGINE_ERROR', async () => {
     ctx = createTestContext('balanced');
     const dir = freshDir('nio-engine-error-audit-allow-');
     const auditPath = join(dir, 'audit.jsonl');
@@ -406,7 +406,7 @@ describe('engine error: fail open only for actions that cannot change anything',
 
     const entries = readEntries(auditPath);
     assert.equal(entries.length, 1);
-    assert.equal(entries[0]!['decision'], 'allow');
+    assert.equal(entries[0]!['decision'], 'error');
     assert.deepEqual(entries[0]!['risk_tags'], ['ENGINE_ERROR']);
     assert.equal(entries[0]!['action_type'], 'read_file');
   });

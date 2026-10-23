@@ -4,7 +4,7 @@ What Nio captures while an agent runs, organised by OTEL signal. This is the sch
 
 Three OTEL signals out — **metrics**, **traces**, **logs**. The audit log (logs signal) is the only one with a local backup; metrics and traces are OTLP-only.
 
-**All three are off until a session is armed.** Configuring `collector.endpoint` does not start collection — see [Capture gating](#capture-gating).
+**Content, traces, and metrics require an armed session; structured Guard evaluation logs do not.** Configuring `collector.endpoint` does not start collection — see [Capture gating](#capture-gating).
 
 ## Architecture
 
@@ -163,22 +163,14 @@ Four honest caveats:
 
 ## Capture gating
 
-Nio exports nothing by default. Each of the three signals is created only
-for sessions the user explicitly armed, or for every session when
-`collector.monitor_all_sessions: true` is set.
+Conversation content, traces, and metrics require an explicitly armed session, or
+`collector.monitor_all_sessions: true`. Structured Guard evaluation logs use the
+configured logs exporter independently of monitor state. Without an endpoint,
+the evaluation is still written locally.
 
-Conversation content is gated by exactly this switch on both signals it
-uses: the content records need a logger provider,
-which an unarmed session never builds, and the span attributes that carry
-small bodies (`nio.chat.reply`, `gen_ai.tool.call.arguments`) ride the
-traces provider, which an unarmed session never builds either.
-
-This gate covers only the three OTLP signals above. The guard pipeline's
-Phase 5 (`guard.llm_analyser`) and Phase 6 (`guard.external_analyser`) have
-their own, independent outbound paths — see "Two things are outside the
-gate" below — and are not affected by monitor state either way. Both ship
-disabled (`llm_analyser.enabled: false`, `external_analyser: []`), so on
-an unmodified config nothing leaves the machine through them either.
+Content emission remains gated even when a Guard evaluation has already created
+the shared logger provider. The switch does not permit unarmed conversation
+records, tool content, or trace attributes to be exported.
 
 Arming is `/nio-monitor on` on the platforms that install the focused
 `nio-*` skills (Claude Code, Codex, Pi, opencode) and `/nio monitor on`
@@ -188,13 +180,11 @@ session-id environment variable is verified, so everywhere else `on`
 leaves a *pending arm* that the next hook event from the same directory
 claims (60 s TTL).
 
-The gate sits **before OTEL provider creation** — an unmonitored session
-does not initialise exporters at all, so the cost is one small file read
-per hook event. This includes the SessionStart skill scanner, whose
-`session_scan` records would otherwise carry the user's installed-skill
-inventory and its risk levels off the machine before anything was armed.
+Trace and metric providers are created only on monitored use. The logs provider
+may also be created for a Guard evaluation. SessionStart skill-scanner records
+remain monitor-gated.
 
-Two things are outside the gate:
+Outside the gate:
 
 - **Guard enforcement.** Phase 0–6 risk evaluation and blocking run
   regardless. The switch controls reporting, not enforcement. Phases 0–4
@@ -205,13 +195,15 @@ Two things are outside the gate:
   sending any evaluated content. Both are independent of monitor state
   and both ship disabled by default (`llm_analyser.enabled: false`,
   `external_analyser: []`).
+- **Structured Guard evaluations.** Export when an endpoint is configured and logs export is enabled, independently of content capture.
 - **Local audit log.** `~/.nio/audit.jsonl` is written regardless, since
   it never leaves the machine and backs `/nio report`.
 
 **One limitation, on the in-process hosts (OpenClaw · Pi · opencode).**
 These three load Nio into a long-lived host process and OTEL counters
 there are cumulative for the life of that process. A host in which no
-session has ever been armed creates no providers and exports nothing. But
+session has ever been armed creates no trace or metric providers; Guard logs
+can still export independently. But
 once any session has been armed and recorded a counter, the metrics
 exporter keeps re-sending its accumulated totals about once a second until
 the host restarts — disarming, session end and the arm-record deletion all
@@ -411,35 +403,36 @@ Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a `
 
 ## Logs (audit log)
 
-Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing.
+Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing. For Guard evaluations, both carry the same evaluation ID and payload; remote export uses the existing `nio-audit` logger and collector endpoint. Local writing continues when the endpoint is absent, remote logs are disabled, or export fails, unless `collector.logs.local=false`.
 
 ### Entry types (discriminated by `event`)
 
-#### `event: "guard"` — guard decision (per PreToolUse / PostToolUse)
+#### `event: "guard"` — Guard evaluation
+
+Structured Guard evaluations have their own identity and do not depend on trace/span availability or a session id. The canonical definition is [`src/schemas/guard-audit.ts`](../src/schemas/guard-audit.ts); the generated receiver artifact is [`schemas/guard-audit.schema.json`](../schemas/guard-audit.schema.json). See the [schema reference](../schemas/README.md) for validation requirements.
 
 | Field | Type | Notes |
 | --- | --- | --- |
 | `event` | `"guard"` | discriminator |
-| `timestamp` | string | ISO-8601 |
-| `platform` | string | `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` |
-| `agent_name` | string? | User-configured [`agent_name`](configuration.html#agent_name); omitted when unset |
-| `session_id` | string? | host session id |
-| `cwd` | string? | working dir |
-| `tool_name` | string | host tool name |
-| `action_type` | string? | `exec_command` / `write_file` / `network_request` / `read_file` |
-| `tool_input_summary` | string | redacted ≤200-char summary of tool input |
-| `decision` | string | `allow` / `deny` / `ask` |
-| `risk_level` | string | `low` / `medium` / `high` / `critical` |
-| `max_finding_severity` | string | highest finding severity |
-| `risk_score` | number | 0–1 final score |
-| `risk_tags` | string[] | rule IDs hit (deduped) |
-| `phase_stopped` | number \| null | which Phase 0–6 produced the decision |
-| `scores` | `Record<string, number>` | per-phase score (`runtime`, `static`, `behavioural`, `llm`, `external`, `final`) |
-| `phases` | `AuditPhaseMap?` | per-phase `{score, finding_count, duration_ms}` |
-| `top_findings` | `AuditFindingSummary[]` | up to 5: `{rule_id, severity, category, title, confidence}` |
-| `explanation` | string? | human-readable reason |
-| `initiating_skill` | string? | which skill scope the action originated from |
-| `event_type` | `"pre" \| "post"?` | which hook side fired |
+| `evaluation_id` | `string` | Evaluation UUID; independent of session, trace, and span identity |
+| `timestamp / duration_ms` | `string / number` | Evaluation start (ISO-8601) and elapsed milliseconds |
+| `platform / service_name / agent_name` | `string` | Required host, service, and agent identity |
+| `session_id` | `string?` | Optional host session id |
+| `tool_name / tool_input_summary` | `string` | Host tool name and existing redacted input summary |
+| `decision` | `string` | allow / deny / confirm / error |
+| `risk_score / risk_level` | `number \| null / string \| null` | Final risk; unknown values are null |
+| `risk_tags` | `string[]` | Deduplicated rule IDs |
+| `phases` | `GuardPhase[]` | All seven gates in order: tool_gate, allowlist, runtime, static, behavioural, llm, external |
+| `findings` | `GuardFinding[]` | All findings with unique finding_id, producing phase_id, and rule metadata |
+| `termination` | `GuardTermination` | kind, blocked_gate, trigger_finding_ids, and reason |
+| `explanation` | `string` | Human-readable result |
+| `error` | `{kind, message}?` | Actual engine error details |
+| `scores / top_findings / phase_stopped / max_finding_severity` | `optional legacy fields` | Retained summaries; top_findings remains limited to five |
+| `cwd / action_type / initiating_skill / event_type` | `optional context` | Existing local and hook context |
+
+Each gate records `status` (`completed`, `skipped`, or `failed`), `reason`, `duration_ms`, nullable `score`, finding IDs/count, and `triggered_block`. Skips include `skip_reason` (`disabled`, `not_applicable`, or `terminated_earlier`) and null timing/score; failures include actual error details and a null score. External gate results preserve each endpoint outcome. A completed gate can block: `termination.kind=gate_block` identifies `blocked_gate`; an aggregate threshold block identifies no single gate. Trigger finding IDs reference actual findings.
+
+Behavioural parse failures are recorded as failed with a null audit score. The runtime scoring fallback and Guard decision are unchanged.
 
 #### `event: "session_scan"` — skill scan (on-demand or session-start)
 
@@ -530,7 +523,9 @@ severity, to find low-risk actions.
 | `gen_ai.tool.call.id` | Host tool-call id; same key as the tool-span attribute | PreToolUse · PostToolUse | all |
 | `gen_ai.conversation.id` | Host session id; same key as the turn-span attribute | every audit entry with a session | all |
 | `session.id` | Mirror of `gen_ai.conversation.id` for OTel base-spec consumers | every audit entry with a session | all |
-| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `ask` | guard decision | all |
+| `nio.guard.decision` | Guard verdict — `allow` / `deny` / `confirm` / `error` | guard decision | all |
+| `nio.guard.evaluation_id` | Independent evaluation UUID | structured guard evaluation | all |
+| `nio.guard.termination` / `nio.guard.blocked_gate` | Termination kind; blocking gate when applicable | structured guard evaluation | all |
 | `nio.guard.risk_level` | Guard risk level — `low` / `medium` / `high` / `critical` | guard decision | all |
 | `nio.risk_level` | Nio risk level of the entry — same values, but present on **any** entry carrying one, including a `session_scan` entry that has a risk level and no guard decision. Absent when the entry has none. Not a log level — see the severity note above | guard decision · session scan | all |
 | `nio.guard.risk_score` | Guard risk score, 0–1 | guard decision | all |
@@ -548,7 +543,7 @@ severity, to find low-risk actions.
 | `nio.phase_stopped` | Which Phase 0–6 produced the decision | guard decision | all |
 | `nio.explanation` | Human-readable reason for the verdict | guard decision | all |
 | `nio.transcript_path` | Claude Code-only — path to session transcript JSONL | hook events with transcript | Claude Code only |
-| `nio.phases.{name}.score` | Per-phase score (Phase 0–6) | guard decision | all |
+| `nio.phases.{name}.score` | Per-phase score (array index 0–6 for structured evaluations); null values omitted | guard decision | all |
 | `nio.phases.{name}.finding_count` | Per-phase finding count | guard decision | all |
 | `nio.phases.{name}.duration_ms` | Per-phase wall-clock cost (ms) | guard decision | all |
 

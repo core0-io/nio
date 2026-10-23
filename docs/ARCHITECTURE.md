@@ -913,6 +913,11 @@ falls back to `${NIO_HOME ?? ~/.nio}/`.
 
 The audit log (logs signal) has a local JSONL backup at `collector.logs.path` (default `~/.nio/audit.jsonl`), regardless of whether OTLP export is configured. Every dispatched hook event is written here as one of the `AuditHookEntry` shapes; guard / scan / lifecycle entries land in the same file with their respective `event` discriminator. See [COLLECTOR-SIGNALS.md](COLLECTOR-SIGNALS.md#logs-audit-log) for the full per-`event` field reference.
 
+Guard evaluations use an independent `evaluation_id`, with no required session or trace/span identity. The same structured entry is written locally and exported through the existing `nio-audit` logger and collector endpoint. All seven gates report actual completion, skip, or failure, timing, nullable score, and finding references; all findings and termination identify the actual blocking gate or aggregate block. The canonical structure is [`src/schemas/guard-audit.ts`](../src/schemas/guard-audit.ts), with a generated [receiver JSON Schema](../schemas/guard-audit.schema.json) and [validation reference](../schemas/README.md). Existing top-finding and score summaries remain available. Local writing continues when remote logs are disabled or export fails, unless `collector.logs.local=false`.
+
+A behavioural parse failure is reported as a failed gate with a null audit score; this does not change the runtime score fallback or the Guard decision.
+
+
 Metrics and traces have **no** local file — they are OTLP-only. The disk file [`traces-state-store.json`](../src/scripts/lib/traces-state-store.ts) is internal state used to bridge cross-process span lifecycle for Claude Code / Codex / Hermes; not user-facing observability data.
 
 ---

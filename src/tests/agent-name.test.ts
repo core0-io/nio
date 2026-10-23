@@ -8,7 +8,7 @@
  *   1. NioConfigSchema accepts top-level agent_name
  *   2. genAiInvokeAgentAttributes does NOT emit gen_ai.agent.name (identity on Resource)
  *   3. auditEntryAttributes emits gen_ai.agent.name only when entry carries it
- *   4. buildGuardAuditEntry writes agent_name only when given
+ *   4. buildEvaluatedGuardAuditEntry writes configured or platform agent_name
  *
  * The full end-to-end (config → dispatch → real span) is covered by
  * the dispatchCollectorEvent path; here we cover the seams.
@@ -20,7 +20,8 @@ import assert from 'node:assert/strict';
 import { NioConfigSchema } from '../adapters/config-schema.js';
 import { genAiInvokeAgentAttributes, nioResourceAttributes } from '../scripts/lib/traces-collector.js';
 import { auditEntryAttributes } from '../scripts/lib/logs-collector.js';
-import { buildGuardAuditEntry } from '../adapters/common.js';
+import { GuardEvaluation } from '../core/guard-evaluation.js';
+import { buildEvaluatedGuardAuditEntry } from '../adapters/common.js';
 import type { HookInput } from '../adapters/types.js';
 
 // ── 1. Schema acceptance ────────────────────────────────────────────────
@@ -72,9 +73,9 @@ describe('auditEntryAttributes', () => {
   });
 });
 
-// ── 4. buildGuardAuditEntry — JSONL audit-log shape ─────────────────────
+// ── 4. buildEvaluatedGuardAuditEntry — JSONL audit-log shape ─────────────────────
 
-describe('buildGuardAuditEntry agent_name handling', () => {
+describe('buildEvaluatedGuardAuditEntry agent_name handling', () => {
   const input: HookInput = {
     toolName: 'Bash',
     toolInput: { command: 'ls /tmp' },
@@ -84,20 +85,20 @@ describe('buildGuardAuditEntry agent_name handling', () => {
   } as unknown as HookInput;
 
   it('includes agent_name field when provided', () => {
-    const entry = buildGuardAuditEntry(input, null, null, 'claude-code', undefined, 'alice-laptop');
+    const entry = buildEvaluatedGuardAuditEntry(input, null, null, 'claude-code', new GuardEvaluation(), undefined, 'alice-laptop');
     assert.equal(entry.platform, 'claude-code');
     assert.equal(entry.agent_name, 'alice-laptop');
   });
 
-  it('omits agent_name field when not provided (back-compat)', () => {
-    const entry = buildGuardAuditEntry(input, null, null, 'claude-code');
+  it('uses platform agent_name when not provided', () => {
+    const entry = buildEvaluatedGuardAuditEntry(input, null, null, 'claude-code', new GuardEvaluation());
     assert.equal(entry.platform, 'claude-code');
-    assert.equal(entry.agent_name, undefined);
+    assert.equal(entry.agent_name, 'claude-code');
   });
 
-  it('omits agent_name when given an empty string', () => {
-    const entry = buildGuardAuditEntry(input, null, null, 'claude-code', undefined, '');
-    assert.equal(entry.agent_name, undefined);
+  it('uses platform agent_name when given an empty string', () => {
+    const entry = buildEvaluatedGuardAuditEntry(input, null, null, 'claude-code', new GuardEvaluation(), undefined, '');
+    assert.equal(entry.agent_name, 'claude-code');
   });
 });
 

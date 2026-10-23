@@ -424,3 +424,26 @@ export function add(a: number, b: number): number {
     assert.equal(findings.length, 0);
   });
 });
+
+
+describe('behavioural extraction outcomes', () => {
+  it('keeps concurrent parse outcomes local and preserves findings from successfully parsed files', async () => {
+    const analyser = new BehaviouralAnalyser();
+    const valid = makeFile('valid.js', 'eval("code");');
+    const invalid = makeFile('invalid.js', 'function broken(');
+    const context = { rootDir: '/scan-root', files: [valid], policy: defaultPolicy() };
+    const [mixed, clean, unsupported] = await Promise.all([
+      analyser.analyseWithOutcome({ ...context, files: [invalid, valid] }),
+      analyser.analyseWithOutcome(context),
+      analyser.analyseWithOutcome({ ...context, files: [makeFile('notes.txt', 'ordinary text')] }),
+    ]);
+    assert.equal(mixed.supportedFiles, 2);
+    assert.equal(mixed.parseFailures, 1);
+    assert.equal(clean.parseFailures, 0);
+    assert.ok(clean.findings.some(finding => finding.rule_id === 'CAPABILITY_EVAL'));
+    assert.deepEqual(mixed.findings, clean.findings);
+    assert.deepEqual(await analyser.analyse(context), clean.findings);
+    assert.deepEqual(await analyser.analyse({ ...context, files: [invalid] }), []);
+    assert.deepEqual(unsupported, { findings: [], supportedFiles: 0, parseFailures: 0 });
+  });
+});

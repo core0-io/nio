@@ -18,6 +18,7 @@
  *   Final:   Weighted aggregate → allow/deny/confirm
  */
 
+import { GuardEvaluation, guardError } from './guard-evaluation.js';
 import type { ActionEnvelope } from '../types/action.js';
 import type { RiskLevel } from '../types/scanner.js';
 import type { Finding } from './models.js';
@@ -33,6 +34,7 @@ import {
 } from './scoring.js';
 import {
   scoreToDecision,
+  denyThreshold,
   shouldShortCircuit,
   type ProtectionLevel,
   type GuardDecision,
@@ -74,6 +76,7 @@ export type PhaseTimings = Partial<{
 }>;
 
 export interface ActionDecision {
+  audit?: ReturnType<GuardEvaluation['snapshot']>;
   decision: GuardDecision;
   risk_level: RiskLevel;
   /** Highest severity among all findings (independent of score). */
@@ -155,6 +158,7 @@ export class ActionOrchestrator {
   private llmApiKey?: string;
   private llmModel?: string;
   private externalScorers: ExternalAnalyser[] = [];
+  private disabledExternal: Array<{ name: string; reason: string }> = [];
   private externalWeights: Record<string, number> = {};
 
   constructor(opts?: ActionOrchestratorOptions) {
@@ -169,8 +173,10 @@ export class ActionOrchestrator {
     this.llmModel = opts?.llmModel;
 
     for (const e of opts?.externalAnalysers ?? []) {
-      if (e.enabled === false) continue;
-      if (!e.endpoint) continue;
+      if (e.enabled === false || !e.endpoint) {
+        this.disabledExternal.push({ name: e.name, reason: e.enabled === false ? 'Service is disabled' : 'No endpoint configured' });
+        continue;
+      }
 
       let auth: AuthStrategy | undefined;
       if (e.auth?.type === 'bearer') {
@@ -200,7 +206,25 @@ export class ActionOrchestrator {
    * @param envelope  The action to evaluate
    * @param levelOverride  Optional protection level override (e.g. from config)
    */
-  async evaluate(envelope: ActionEnvelope, levelOverride?: ProtectionLevel): Promise<ActionDecision> {
+  async evaluate(envelope: ActionEnvelope, levelOverride?: ProtectionLevel, audit = new GuardEvaluation()): Promise<ActionDecision> {
+    try {
+      return await this.evaluateStages(envelope, levelOverride, audit);
+    } catch (error) {
+      audit.engineError(error);
+      throw error;
+    }
+  }
+
+  private async evaluateStages(envelope: ActionEnvelope, levelOverride: ProtectionLevel | undefined, audit: GuardEvaluation): Promise<ActionDecision> {
+    const finish = (result: ActionDecision, gate?: 2 | 3 | 4 | 5 | 6): ActionDecision => {
+      const reason = gate !== undefined
+        ? `Gate score ${result.scores.final} reached the ${level} deny threshold ${denyThreshold(level)}`
+        : result.decision === 'deny'
+          ? `Aggregate score ${result.scores.final} reached the ${level} deny threshold ${denyThreshold(level)}`
+          : result.explanation || `Guard evaluation completed: ${result.decision}`;
+      audit.terminate(gate !== undefined ? 'gate_block' : result.decision === 'deny' ? 'aggregate_block' : 'completed', reason, gate);
+      return { ...result, audit: audit.snapshot() };
+    };
     const level = levelOverride ?? this.level;
     const allFindings: Finding[] = [];
     const scores: PhaseScores = {};
@@ -211,12 +235,16 @@ export class ActionOrchestrator {
     const reporter = new DiagnosticCollector();
 
     // ── Phase 1: Allowlist Gate ───────────────────────────────────────
+    audit.start(1);
     const t1 = performance.now();
     const allowlistResult = this.allowlistAnalyser.analyse(envelope);
     const t1End = performance.now();
     timings.allowlist = { score: 0, finding_count: 0, duration_ms: Math.round(t1End - t1) };
+    audit.complete(1, 0, [], allowlistResult.allowed ? 'Matched allowlist' : 'No allowlist match');
     if (allowlistResult.allowed && this.allowlistMode === 'exit') {
+      audit.terminate('allowlist_allow', allowlistResult.auditReason || 'Matched allowlist', 1);
       return {
+        audit: audit.snapshot(),
         decision: 'allow',
         risk_level: allowlistResult.audit ? 'medium' : 'low',
         max_finding_severity: 'low',
@@ -231,6 +259,7 @@ export class ActionOrchestrator {
     }
 
     // ── Phase 2: RuntimeAnalyser (pattern matching) ──────────────────
+    audit.start(2);
     const t2 = performance.now();
     const phase2Findings = this.runtimeAnalyser.analyse(envelope);
     const t2End = performance.now();
@@ -238,9 +267,10 @@ export class ActionOrchestrator {
     const scoreA = findingsToScore(phase2Findings);
     scores.runtime = scoreA;
     timings.runtime = { score: scoreA, finding_count: phase2Findings.length, duration_ms: Math.round(t2End - t2) };
+    audit.complete(2, scoreA, phase2Findings);
 
     if (shouldShortCircuit(scoreA, level)) {
-      return this.buildResult(allFindings, scores, 2, level, timings, scoreA);
+      return finish(this.buildResult(allFindings, scores, 2, level, timings, scoreA), 2);
     }
 
     // ── Resolve content + path for Phase 3/4 analysis ─────────────────
@@ -281,6 +311,7 @@ export class ActionOrchestrator {
 
     // ── Phase 3: StaticAnalyser on resolved content ──────────────────
     if (phase34Content && phase34Path) {
+      audit.start(3);
       const t3 = performance.now();
       const phase3Findings = await this.runStaticOnContent(phase34Content, phase34Path);
       const t3End = performance.now();
@@ -288,9 +319,10 @@ export class ActionOrchestrator {
       const scoreB = findingsToScore(phase3Findings);
       scores.static = scoreB;
       timings.static = { score: scoreB, finding_count: phase3Findings.length, duration_ms: Math.round(t3End - t3) };
+      audit.complete(3, scoreB, phase3Findings);
 
       if (shouldShortCircuit(scoreB, level)) {
-        return this.buildResult(allFindings, scores, 3, level, timings, scoreB);
+        return finish(this.buildResult(allFindings, scores, 3, level, timings, scoreB), 3);
       }
     }
 
@@ -299,22 +331,26 @@ export class ActionOrchestrator {
       const isBehaviouralTarget = /\.(js|ts|mjs|mts|jsx|tsx|py|pyw|sh|bash|zsh|fish|ksh|rb|rake|gemspec|php|phtml|go)$/.test(phase34Path);
 
       if (isBehaviouralTarget) {
+        audit.start(4);
         const t4 = performance.now();
-        const phase4Findings = await this.runBehaviouralOnContent(phase34Content, phase34Path);
+        const phase4Findings = await this.runBehaviouralOnContent(phase34Content, phase34Path, audit);
         const t4End = performance.now();
         allFindings.push(...phase4Findings);
         const scoreC = findingsToScore(phase4Findings);
         scores.behavioural = scoreC;
         timings.behavioural = { score: scoreC, finding_count: phase4Findings.length, duration_ms: Math.round(t4End - t4) };
+        if (audit.isActive(4)) audit.complete(4, scoreC, phase4Findings);
 
         if (shouldShortCircuit(scoreC, level)) {
-          return this.buildResult(allFindings, scores, 4, level, timings, scoreC);
+          return finish(this.buildResult(allFindings, scores, 4, level, timings, scoreC), 4);
         }
       }
     }
 
     // ── Phase 5: LLM (optional, gated on enabled + API key) ──────────
+    if (!this.llmEnabled) audit.skip(5, 'disabled', 'LLM analysis is disabled');
     if (this.llmEnabled && !this.llmApiKey) {
+      audit.fail(5, { kind: 'api_key_missing', message: 'guard.llm_analyser.enabled=true but api_key is empty' });
       // Misconfig: enabled without an API key. Phase 5 cannot run, but the
       // user almost certainly intended for it to — surface it as a
       // diagnostic so /nio report / /nio doctor / the next agent reply
@@ -329,21 +365,39 @@ export class ActionOrchestrator {
       });
     }
     if (this.llmEnabled && this.llmApiKey) {
+      audit.start(5);
       const t5 = performance.now();
-      const phase5Findings = await this.runLLMOnAction(envelope, reporter);
+      const diagnosticStart = reporter.peek().length;
+      const phase5Findings = await this.runLLMOnAction(envelope, reporter, audit);
       const t5End = performance.now();
       allFindings.push(...phase5Findings);
       const scoreD = findingsToScore(phase5Findings);
       scores.llm = scoreD;
       timings.llm = { score: scoreD, finding_count: phase5Findings.length, duration_ms: Math.round(t5End - t5) };
+      if (audit.isActive(5)) audit.complete(5, scoreD, phase5Findings);
+      const llmFailure = reporter.peek().slice(diagnosticStart).find(d => d.severity === 'error');
+      if (llmFailure) {
+        const phase = audit.phases[5];
+        phase.status = 'failed';
+        phase.score = null;
+        phase.reason = llmFailure.message;
+        phase.error = { kind: llmFailure.kind, message: llmFailure.message };
+      }
 
       if (shouldShortCircuit(scoreD, level)) {
-        return this.buildResult(allFindings, scores, 5, level, timings, scoreD, reporter);
+        return finish(this.buildResult(allFindings, scores, 5, level, timings, scoreD, reporter), 5);
       }
     }
 
     // ── Phase 6: External APIs (0..N endpoints, concurrent) ──────────
+    audit.phases[6].external_results = this.disabledExternal.map(({ name, reason }) => ({
+      name, reason, status: 'skipped', score: null, duration_ms: null, finding_ids: [],
+    }));
+    if (this.externalScorers.length === 0) audit.skip(6, 'disabled', 'External analysis is disabled');
     if (this.externalScorers.length > 0) {
+      audit.start(6);
+      const externalFindingStart = allFindings.length;
+      const externalStarted = performance.now();
       // Snapshot of Phase 2-5 scores. All concurrent external scorers see the
       // same snapshot — they do NOT see each other's results (mutually blind).
       const priorScoreSnapshot: Record<string, number | undefined> = {
@@ -355,28 +409,40 @@ export class ActionOrchestrator {
 
       const externalTimings: Record<string, PhaseTimingEntry> = {};
       const externalScores: Record<string, number> = {};
+      const externalReasons: Record<string, string> = {};
 
       const settled = await Promise.allSettled(this.externalScorers.map(async (scorer) => {
         // Per-scorer reporter so concurrent runs don't interleave diagnostics
         // when we later need to attribute a failure kind to a specific endpoint.
         const localReporter = new DiagnosticCollector();
         const t = performance.now();
-        const result = await scorer.scoreAction(
-          envelope.action.type,
-          envelope.action.data as unknown as Record<string, unknown>,
-          priorScoreSnapshot,
-          allFindings,
-          envelope.context.initiating_skill,
-          localReporter,
-        );
-        return { scorer, result, duration: performance.now() - t, localReporter };
+        try {
+          const result = await scorer.scoreAction(
+            envelope.action.type,
+            envelope.action.data as unknown as Record<string, unknown>,
+            priorScoreSnapshot,
+            allFindings,
+            envelope.context.initiating_skill,
+            localReporter,
+          );
+          return { scorer, result, duration: performance.now() - t, localReporter, error: undefined };
+        } catch (error) {
+          return { scorer, result: null, duration: performance.now() - t, localReporter, error: guardError(error) };
+        }
       }));
 
       let maxExternalScore = 0;
 
-      for (const outcome of settled) {
-        if (outcome.status !== 'fulfilled') continue;
-        const { scorer, result, duration, localReporter } = outcome.value;
+      for (const [index, outcome] of settled.entries()) {
+        if (outcome.status !== 'fulfilled') {
+          const detail = guardError(outcome.reason);
+          externalTimings[this.externalScorers[index].name] = {
+            score: 0, finding_count: 0, duration_ms: Math.round(performance.now() - externalStarted),
+            error: { kind: detail.kind, detail: detail.message },
+          };
+          continue;
+        }
+        const { scorer, result, duration, localReporter, error } = outcome.value;
         const localDiags = localReporter.take();
         // Forward this scorer's diagnostics to the main collector (without
         // re-writing — they were already audited at collect time).
@@ -392,14 +458,15 @@ export class ActionOrchestrator {
             finding_count: 0,
             duration_ms: Math.round(duration),
             error: {
-              kind: lastDiag?.kind ?? 'unknown',
-              detail: lastDiag?.detail ?? lastDiag?.message,
+              kind: error?.kind ?? lastDiag?.kind ?? 'unknown',
+              detail: error?.message ?? lastDiag?.detail ?? lastDiag?.message,
             },
           };
           continue;
         }
 
         externalScores[scorer.name] = result.score;
+        externalReasons[scorer.name] = result.reason || 'External analysis completed';
         externalTimings[scorer.name] = {
           score: result.score,
           finding_count: 0,
@@ -431,15 +498,30 @@ export class ActionOrchestrator {
         timings.external = externalTimings;
       }
 
+      audit.complete(6, Object.keys(externalScores).length ? maxExternalScore : null, allFindings.slice(externalFindingStart));
+      const externalPhase = audit.phases[6];
+      externalPhase.external_results = [...(externalPhase.external_results || []), ...Object.entries(externalTimings).map(([name, timing]) => ({
+        name, status: timing.error ? 'failed' as const : 'completed' as const,
+        reason: timing.error?.detail || (timing.error ? 'External analysis failed' : externalReasons[name]),
+        duration_ms: timing.duration_ms, score: timing.error ? null : timing.score,
+        finding_ids: audit.findings.filter(f => f.phase_id === 6 && f.rule_id === `EXTERNAL_SCORE:${name}`).map(f => f.finding_id),
+        ...(timing.error ? { error: { kind: timing.error.kind, message: timing.error.detail || 'External analysis failed' } } : {}),
+      }))];
+      if (!Object.keys(externalScores).length) {
+        externalPhase.status = 'failed';
+        externalPhase.reason = 'All external analyses failed';
+        externalPhase.error = { kind: 'external_failed', message: 'All external analyses failed' };
+      }
+
       // Short-circuit if ANY endpoint crossed the deny threshold — the
       // critical verdict should not be diluted by quieter siblings.
       if (maxExternalScore > 0 && shouldShortCircuit(maxExternalScore, level)) {
-        return this.buildResult(allFindings, scores, 6, level, timings, maxExternalScore, reporter);
+        return finish(this.buildResult(allFindings, scores, 6, level, timings, maxExternalScore, reporter), 6);
       }
     }
 
     // ── Final: Aggregate scores ──────────────────────────────────────
-    return this.buildResult(allFindings, scores, 6, level, timings, undefined, reporter);
+    return finish(this.buildResult(allFindings, scores, 6, level, timings, undefined, reporter));
   }
 
   // ── Phase 3: Static analysis on file content ──────────────────────────
@@ -463,7 +545,7 @@ export class ActionOrchestrator {
 
   // ── Phase 4: Behavioural analysis on file content ──────────────────────
 
-  private async runBehaviouralOnContent(content: string, filePath: string): Promise<Finding[]> {
+  private async runBehaviouralOnContent(content: string, filePath: string, audit: GuardEvaluation): Promise<Finding[]> {
     // Lazy import
     const { BehaviouralAnalyser } = await import('./analysers/behavioural/index.js');
     const { defaultPolicy } = await import('./scan-policy.js');
@@ -480,16 +562,22 @@ export class ActionOrchestrator {
       extension: ext,
     };
 
-    return analyser.analyse({
+    const outcome = await analyser.analyseWithOutcome({
       rootDir: '.',
       files: [fakeFileInfo],
       policy,
     });
+    if (outcome.parseFailures > 0) {
+      audit.fail(4, { kind: 'parse_failed', message: 'Behavioural analysis could not parse the content' });
+    } else if (outcome.supportedFiles === 0) {
+      audit.skip(4, 'not_applicable', 'No supported behavioural input');
+    }
+    return outcome.findings;
   }
 
   // ── Phase 5: LLM analysis on action ────────────────────────────────────
 
-  private async runLLMOnAction(envelope: ActionEnvelope, reporter?: DiagnosticCollector): Promise<Finding[]> {
+  private async runLLMOnAction(envelope: ActionEnvelope, reporter?: DiagnosticCollector, audit?: GuardEvaluation): Promise<Finding[]> {
     // Lazy import to avoid loading Anthropic SDK when not needed
     const { LLMAnalyser } = await import('./analysers/llm/index.js');
     const { defaultPolicy } = await import('./scan-policy.js');
@@ -501,7 +589,10 @@ export class ActionOrchestrator {
     });
 
     const policy = defaultPolicy();
-    if (!analyser.isEnabled(policy)) return [];
+    if (!analyser.isEnabled(policy)) {
+      audit?.skip(5, 'disabled', 'LLM analyser is disabled by the existing scan policy');
+      return [];
+    }
 
     // Build a synthetic file from the action data for LLM analysis
     let content: string;
@@ -524,10 +615,14 @@ export class ActionOrchestrator {
       content = JSON.stringify({ server: data.server, tool: data.tool, args: data.args ?? {} }, null, 2);
       filePath = 'mcp-call.json';
     } else {
+      audit?.skip(5, 'not_applicable', 'Action type has no LLM input');
       return [];
     }
 
-    if (!content) return [];
+    if (!content) {
+      audit?.skip(5, 'not_applicable', 'No content for LLM analysis');
+      return [];
+    }
 
     const ext = '.' + (filePath.split('.').pop() || 'txt');
     return analyser.analyse({

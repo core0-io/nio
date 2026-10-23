@@ -1080,3 +1080,63 @@ describe('Adapter Common Utilities', () => {
   });
 
 });
+
+describe('structured hook audit', () => {
+  it('writes factual tool gate deny, unmapped and successful evaluations', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { evaluateHook } = await import('../adapters/hook-engine.js');
+    const { ActionOrchestrator } = await import('../core/action-orchestrator.js');
+    const { guardAuditSchema } = await import('../schemas/index.js');
+    const dir = mkdtempSync(join(tmpdir(), 'nio-guard-hook-'));
+    try {
+      const path = join(dir, 'audit.jsonl');
+      const adapter = new ClaudeCodeAdapter();
+      adapter.inferInitiatingSkill = async () => null;
+      const nio = { orchestrator: new ActionOrchestrator() };
+      const opts = { logsConfig: { path, enabled: false } };
+      const blocked = await evaluateHook(adapter, { tool_name: 'Bash', tool_input: { command: 'echo hello' } }, { nio, config: { guard: { blocked_tools: { claude_code: ['Bash'] } } } }, opts);
+      assert.equal(blocked.decision, 'deny');
+      await evaluateHook(adapter, { tool_name: 'UnknownTool', tool_input: {} }, { nio, config: {} }, opts);
+      await evaluateHook(adapter, { tool_name: 'Bash', tool_input: { command: 'echo hello' } }, { nio, config: {} }, opts);
+      const post = await evaluateHook(adapter, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: {} }, { nio, config: { guard: { blocked_tools: { claude_code: ['Bash'] } } } }, opts);
+      assert.equal(post.decision, 'deny');
+      const entries = readFileSync(path, 'utf8').trim().split('\n').map(line => guardAuditSchema.parse(JSON.parse(line)));
+      assert.equal(entries.length, 3);
+      assert.ok(entries.every(entry => !Object.hasOwn(entry, 'schema_version')));
+      assert.equal(new Set(entries.map(e => e.evaluation_id)).size, 3);
+      assert.equal(entries[0].termination.blocked_gate, 'tool_gate');
+      assert.equal(entries[0].findings[0].rule_id, 'TOOL_GATE_BLOCKED');
+      assert.ok(entries[0].phases.slice(1).every(p => p.skip_reason === 'terminated_earlier'));
+      assert.equal(entries[1].termination.kind, 'unmapped_allow');
+      assert.ok(entries[1].phases.slice(1).every(p => p.skip_reason === 'not_applicable'));
+      assert.equal(entries[2].phases[0].status, 'completed');
+      assert.equal(entries[2].termination.kind, 'completed');
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('structured hook engine errors', () => {
+  it('retains tool gate history and emits error when envelope construction fails', async () => {
+    const { mkdtempSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { evaluateHook } = await import('../adapters/hook-engine.js');
+    const { ActionOrchestrator } = await import('../core/action-orchestrator.js');
+    const { guardAuditSchema } = await import('../schemas/index.js');
+    const dir = mkdtempSync(join(tmpdir(), 'nio-guard-error-'));
+    try {
+      const path = join(dir, 'audit.jsonl');
+      const adapter = new ClaudeCodeAdapter();
+      adapter.inferInitiatingSkill = async () => null;
+      adapter.buildEnvelope = () => { throw new Error('Envelope fixture failed'); };
+      const result = await evaluateHook(adapter, { tool_name: 'Bash', tool_input: { command: 'echo hello' } }, { nio: { orchestrator: new ActionOrchestrator() }, config: {} }, { logsConfig: { path, enabled: false } });
+      assert.equal(result.decision, 'deny');
+      const entry = guardAuditSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+      assert.equal(entry.decision, 'error');
+      assert.equal(entry.error?.message, 'Envelope fixture failed');
+      assert.equal(entry.risk_score, null);
+      assert.equal(entry.phases[0].status, 'completed');
+      assert.ok(entry.phases.slice(1).every(p => p.skip_reason === 'terminated_earlier'));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

@@ -142,15 +142,7 @@ async function main(): Promise<void> {
     : undefined;
   const logsConfig = config.collector?.logs;
 
-  // Gate telemetry export behind the session's monitor state.
-  //
-  // Two things deliberately stay outside the gate:
-  //   1. evaluateHook below runs unconditionally — enforcement is
-  //      orthogonal to capture. An unmonitored session still gets its
-  //      dangerous commands blocked.
-  //   2. Local audit writes continue — evaluateHook writes those via
-  //      `logsConfig`, not via `loggerProvider`, so nulling the provider
-  //      stops OTLP export without touching ~/.nio/audit.jsonl.
+  // Content telemetry is monitored; Guard evaluations are exported independently.
   const gatePayload = input as Record<string, unknown>;
   const monitored = isSessionMonitored(
     (gatePayload['session_id'] as string) ?? 'unknown',
@@ -164,7 +156,7 @@ async function main(): Promise<void> {
   const tracerProvider = (monitored && collectorConfig.enabled)
     ? createTracerProvider(collectorConfig, PLATFORM, resourceAgentName)
     : null;
-  const loggerProvider = (monitored && logsConfig?.enabled !== false)
+  const loggerProvider = (logsConfig?.enabled !== false)
     ? createLoggerProvider(collectorConfig, PLATFORM, resourceAgentName)
     : null;
 
