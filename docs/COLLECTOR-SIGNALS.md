@@ -330,7 +330,7 @@ Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (wh
 
 ### Entry types (discriminated by `event`)
 
-#### `event: "guard"` — guard decision (per PreToolUse / PostToolUse)
+#### `event: "guard"` — Guard evaluation
 
 Structured Guard evaluations have their own identity and do not depend on trace/span availability or a session id. The canonical definition is [`src/schemas/guard-audit.ts`](../src/schemas/guard-audit.ts); the generated receiver artifact is [`schemas/guard-audit.schema.json`](../schemas/guard-audit.schema.json). See the [schema reference](../schemas/README.md) for validation requirements.
 
@@ -346,7 +346,7 @@ Structured Guard evaluations have their own identity and do not depend on trace/
 | `risk_score / risk_level` | `number \| null / string \| null` | Final risk; unknown values are null |
 | `risk_tags` | `string[]` | Deduplicated rule IDs |
 | `phases` | `GuardPhase[]` | All seven gates in order: tool_gate, allowlist, runtime, static, behavioural, llm, external |
-| `findings` | `GuardFinding[]` | Full findings with unique finding_id, producing phase_id, and rule metadata |
+| `findings` | `GuardFinding[]` | All findings with unique finding_id, producing phase_id, and rule metadata |
 | `termination` | `GuardTermination` | kind, blocked_gate, trigger_finding_ids, and reason |
 | `explanation` | `string` | Human-readable result |
 | `error` | `{kind, message}?` | Actual engine error details |
