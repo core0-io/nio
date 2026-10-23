@@ -86,6 +86,8 @@
         </table>
 
         <h2>Why it's the heaviest weight</h2>
+        <p>When parsing fails, the <a href="../collector-signals-logs.html">Guard audit record</a> reports this phase as failed with error details and a null score. The runtime scoring fallback and Guard decision remain unchanged.</p>
+
         <p>Dataflow tracking has very low false-positive rates compared to regex — a match means there's actually a path from a sensitive source to a dangerous sink in the parsed AST. That's why <a href="../configuration.html#guard.scoring_weights"><code>scoring_weights.behavioural</code></a> defaults to <strong>2.0</strong> (vs 1.0 for runtime/static/llm). Turn it down only if you trust your code reviewers more than the analyser.</p>
 
         <h2>Example</h2>

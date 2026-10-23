@@ -1466,6 +1466,7 @@
       <div class="eyebrow">The Execution Pipeline · PreToolUse</div>
       <h1>Seven phases decide the fate of every <em>tool call</em>.</h1>
       <p>Each call enters at Phase 0 and descends through gates and scoring engines. The pipeline short-circuits the moment any phase emits a score that crosses the active level's deny threshold (strict 0.5, balanced 0.8, permissive 0.9); otherwise the final score is a weighted average across every engine that ran.</p>
+      <p>The <a href="docs/collector-signals-logs.html">Guard audit trail</a> records each evaluation, all seven gate outcomes, full findings, and why evaluation stopped. Keep it locally or export it through OTEL Logs, independently of traces.</p>
     </div>
     <div class="legend">
       <div class="legend-item"><span class="legend-swatch" style="background:var(--sev-0)"></span>score → safe</div>
