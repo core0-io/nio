@@ -41,11 +41,19 @@
 
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Logs</div>
-        <h1><em>Logs</em> — audit-log entries, dual-written</h1>
+        <h1><em>Logs</em> — audit entries and linked content</h1>
         <p class="lead">Audit entries are dual-written: OTEL Logs export to <code>&lt;endpoint&gt;/v1/logs</code> AND a local JSONL file at <code>collector.logs.path</code> (default <code>~/.nio/audit.jsonl</code>). The JSONL line is the entry verbatim; the OTEL LogRecord uses <code>body = JSON.stringify(entry)</code> plus a flat attribute set for indexing. For Guard evaluations, both carry the same evaluation payload; remote export uses the existing <code>nio-audit</code> logger and collector endpoint. Local writing continues without an endpoint, with remote logs disabled, or after export failure unless <code>collector.logs.local=false</code>.</p>
       </div>
 
       <div class="doc">
+
+        <h2 id="content">Conversation content</h2>
+        <p><code>nio-content</code> adds observed prompts, assistant text and host-exposed reasoning as structured <code>gen_ai.input.messages</code> / <code>gen_ai.output.messages</code> attributes, for short and long content alike. One observed message retains ordered <code>parts</code>; the Log body does not duplicate the payload. Built-in <code>traceId</code>/<code>spanId</code> identify the existing turn, not a guessed model call.</p>
+        <p>Existing <code>nio.turn.user_prompt</code>, <code>nio.turn.assistant_reply</code>, <code>gen_ai.tool.call.arguments</code>, <code>gen_ai.tool.call.result</code> and <code>nio.tool_summary</code> remain on their existing Trace paths. Tool content is not forced into duplicate Logs. The <a href="../schemas/content.schema.json">canonical schema</a> follows <code>src/schemas/content.ts</code> and validates a filtered subset against pinned official GenAI message schemas, not a complete inference-event contract.</p>
+        <p>Redaction precedes per-property UTF-8 truncation, preserving valid structured JSON. Optional redaction/truncation provenance and matching <code>nio.trace_id</code>/<code>nio.span_id</code> aid inspection. INFO content records have no Guard decision/risk mapping and are not written to local audit JSONL.</p>
+        <p>Capture requires existing monitor consent, a configured endpoint and both traces/logs enabled. It is not automatically enabled. The existing <code>monitored-sessions.json</code> format and explicit <code>collector.monitor_all_sessions</code> opt-in are honored; no monitor-management commands are added. Guard export and offline local audit remain independent.</p>
+        <p>Claude Code/Codex need readable transcripts; explicit Claude sidechains are excluded without real child-turn routing, and Codex exposes summaries rather than encrypted reasoning. Pi reconciles session output with observed messages without rereading rejected pre-consent content; anonymous snapshots that differ between sources remain ambiguous. opencode uses native final message/part snapshots. OpenClaw requires native <code>lastAssistant</code> content; aggregate-only <code>assistantTexts</code> cannot establish message boundaries. Missing IDs and compacted anonymous history limit replay suppression. Hermes model callbacks retain the existing turn until <code>on_session_end</code>. See <a href="COLLECTOR-SIGNALS.md#logs-conversation-content">all host coverage limits</a>.</p>
+        <p>From a span, query Logs by the matching built-in trace and turn-span IDs plus the GenAI message attributes; no Log ID is added to the span. Tool arguments/results remain directly on tool spans. Backend correlation does not guarantee automatic inline rendering.</p>
 
         <h2 id="entry-types">Entry types</h2>
         <p>Discriminated by the <code>event</code> field. Five shapes — four named entry types plus the catch-all "hook event" record.</p>

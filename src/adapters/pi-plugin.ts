@@ -25,6 +25,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 // ---------------------------------------------------------------------------
 // Structural subset of Pi's extension API
@@ -39,7 +40,7 @@ interface PiContext {
   hasUI: boolean;
   cwd: string;
   ui: PiUi;
-  sessionManager: { getSessionId(): string };
+  sessionManager: { getSessionId(): string; getSessionFile?(): string | null };
 }
 
 export interface PiExtensionApi {
@@ -78,6 +79,7 @@ export interface PiPluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  loggerProvider?: LoggerProvider | null;
 }
 
 /** How long an interactive confirm dialog waits before auto-cancelling. */
@@ -99,10 +101,15 @@ export function registerPiExtension(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    loggerProvider: options.loggerProvider,
   });
 
-  const sid = (ctx: unknown): string =>
-    (ctx as PiContext).sessionManager.getSessionId();
+  const sid = (ctx: unknown): string => {
+    const c = ctx as PiContext;
+    const id = c.sessionManager.getSessionId();
+    rt.setSessionCwd(id, c.cwd);
+    return id;
+  };
 
   // ---- Guard: tool_call can block -----------------------------------------
   pi.on('tool_call', async (event: unknown, ctx: unknown) => {
@@ -192,7 +199,9 @@ export function registerPiExtension(
     try {
       const e = event as {
         message?: {
+          id?: string;
           role?: string;
+          timestamp?: number;
           content?: unknown;
           usage?: {
             input?: number; output?: number;
@@ -203,6 +212,8 @@ export function registerPiExtension(
       if (e.message?.role !== 'assistant') return;
       const sessionId = sid(ctx);
       if (e.message.usage) rt.onLlmUsage(sessionId, e.message.usage);
+      const envelope = { type: 'message', message: e.message, id: e.message.id };
+      rt.recordConversationEvent(sessionId, envelope, e.message.id, e.message.timestamp);
       if (typeof e.message.content === 'string') {
         rt.onAssistantReply(sessionId, e.message.content);
       }
@@ -210,7 +221,11 @@ export function registerPiExtension(
   });
 
   pi.on('session_start', async (_event: unknown, ctx: unknown) => {
-    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      const sessionId = sid(ctx);
+      rt.onSessionStart(sessionId);
+      rt.setTranscriptPath(sessionId, (ctx as PiContext).sessionManager.getSessionFile?.() ?? null);
+    } catch { /* non-critical */ }
   });
 
   pi.on('session_shutdown', async (_event: unknown, ctx: unknown) => {

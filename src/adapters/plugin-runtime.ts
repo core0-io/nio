@@ -17,13 +17,17 @@
  */
 
 import type { HookAdapter, NioInstance } from './types.js';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 import { loadConfig, writeAuditLog } from './common.js';
 import type { WriteAuditLogOptions } from './common.js';
 import type { AuditLifecycleEntry } from './audit-types.js';
 import { ActionOrchestrator } from '../core/action-orchestrator.js';
 import type { ProtectionLevel } from '../core/action-decision.js';
 import { SkillScanner } from '../scanner/index.js';
-import { loadCollectorConfig } from '../scripts/lib/config-loader.js';
+import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
+import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
+import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
+import { emitAssistantContent, emitUserPromptContent } from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
@@ -84,6 +88,10 @@ export interface PluginRuntimeOptions {
    * disabled) semantics as `tracerProvider`.
    */
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  /** Logs injection follows the same undefined/build, null/disabled contract. */
+  loggerProvider?: LoggerProvider | null;
+  /** Host-reported project directory, never the server's launch directory. */
+  defaultCwd?: string;
 }
 
 export type GuardDecisionTag = 'allow' | 'deny' | 'confirm_allowed' | 'confirm_denied' | 'ask';
@@ -108,8 +116,17 @@ export class InProcessPluginRuntime {
   protected readonly meterProvider: ReturnType<typeof createMeterProvider>;
   protected readonly loggerProvider: ReturnType<typeof createLoggerProvider>;
   protected readonly sessionState = new Map<string, CollectorState>();
+  private readonly conversationEvents = new Map<string, Map<string, unknown>>();
+  private readonly transcriptPaths = new Map<string, string>();
+  /** A rejected Pi observation makes transcript replay unsafe for this turn. */
+  private readonly piReplayDisabled = new Set<string>();
+  private readonly sessionCwds = new Map<string, string>();
+  private readonly observedMessages = new Map<string, Set<string>>();
+  private readonly observedPrompts = new Map<string, Set<string>>();
+  private conversationSequence = 0;
 
   private readonly opts: PluginRuntimeOptions;
+  private readonly contentEnabled: boolean;
   private nio: NioInstance | null = null;
   private scannerInstance: SkillScanner | null = null;
 
@@ -126,6 +143,7 @@ export class InProcessPluginRuntime {
     this.confirmAction = opts.confirmAction ?? guard?.confirm_action ?? 'allow';
 
     const collectorConfig = loadCollectorConfig();
+    this.contentEnabled = collectorConfig.enabled && collectorConfig.traces_enabled && collectorConfig.logs_enabled;
     // Resource-level agent name is only set when the operator configured
     // one — empty / unset means "no gen_ai.agent.name on the resource".
     const agentName =
@@ -140,8 +158,9 @@ export class InProcessPluginRuntime {
       ? opts.meterProvider
       : createMeterProvider(collectorConfig, opts.platform, agentName);
     const logsConfig = this.config.collector?.logs;
-    this.loggerProvider =
-      logsConfig?.enabled !== false
+    this.loggerProvider = opts.loggerProvider !== undefined
+      ? opts.loggerProvider
+      : logsConfig?.enabled !== false
         ? createLoggerProvider(collectorConfig, opts.platform, agentName)
         : null;
     this.auditOpts = { loggerProvider: this.loggerProvider, logsConfig };
@@ -195,9 +214,55 @@ export class InProcessPluginRuntime {
     this.sessionState.set(sessionId, state);
   }
 
+  setSessionCwd(sessionId: string, cwd: string | null | undefined): void {
+    if (cwd) this.sessionCwds.set(sessionId, cwd);
+    else this.sessionCwds.delete(sessionId);
+  }
+
+  /** Capture consent applies only to new content, not Guard or baseline signals. */
+  private contentLogger(sessionId: string): LoggerProvider | null {
+    if (!this.contentEnabled || !this.tracerProvider || !this.loggerProvider) return null;
+    const cwd = this.sessionCwds.get(sessionId) ?? this.opts.defaultCwd ?? null;
+    return isSessionMonitored(sessionId, cwd, this.config.collector?.logs)
+      ? this.loggerProvider : null;
+  }
+
+  /** Replace streamed snapshots in their original source position. */
+  recordConversationEvent(sessionId: string, event: unknown, dedupKey?: string, startMs?: number): void {
+    if (!this.contentLogger(sessionId)) {
+      if (this.platform === 'pi') this.piReplayDisabled.add(sessionId);
+      return;
+    }
+    const slots = this.conversationEvents.get(sessionId) ?? new Map<string, unknown>();
+    slots.set(dedupKey === undefined ? `#${this.conversationSequence++}` : `k:${dedupKey}`, event);
+    this.conversationEvents.set(sessionId, slots);
+    // Content-only hosts still need a real turn root to associate their logs.
+    if (this.tracerProvider) {
+      const state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      const observedStart = typeof startMs === 'number' && Number.isFinite(startMs)
+        ? Math.min(state.turn_start_ms, startMs) : state.turn_start_ms;
+      this.sessionState.set(sessionId, { ...state, turn_start_ms: observedStart });
+    }
+  }
+
+  setTranscriptPath(sessionId: string, path: string | null): void {
+    if (path) this.transcriptPaths.set(sessionId, path);
+    else this.transcriptPaths.delete(sessionId);
+  }
+
+  protected conversationInputFor(sessionId: string): SourceInput {
+    const transcriptPath = this.platform === 'pi' && this.piReplayDisabled.has(sessionId)
+      ? undefined : this.transcriptPaths.get(sessionId);
+    return { transcriptPath, events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
+  }
   /** Hard session boundary — drop stale turn numbering, write audit row. */
   onSessionStart(sessionId: string): void {
     this.sessionState.delete(sessionId);
+    this.conversationEvents.delete(sessionId);
+    this.transcriptPaths.delete(sessionId);
+    this.piReplayDisabled.delete(sessionId);
+    this.observedMessages.delete(sessionId);
+    this.observedPrompts.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -205,6 +270,11 @@ export class InProcessPluginRuntime {
   async onSessionEnd(sessionId: string): Promise<void> {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
+    this.transcriptPaths.delete(sessionId);
+    this.piReplayDisabled.delete(sessionId);
+    this.sessionCwds.delete(sessionId);
+    this.observedMessages.delete(sessionId);
+    this.observedPrompts.delete(sessionId);
   }
 
   /**
@@ -274,6 +344,15 @@ export class InProcessPluginRuntime {
    * Idempotent: no-op if no state exists.
    */
   protected async flushSessionTurn(sessionId: string): Promise<void> {
+    try {
+      await this.flushSessionTurnInner(sessionId);
+    } finally {
+      this.conversationEvents.delete(sessionId);
+      this.piReplayDisabled.delete(sessionId);
+    }
+  }
+
+  private async flushSessionTurnInner(sessionId: string): Promise<void> {
     if (!this.tracerProvider) {
       this.sessionState.delete(sessionId);
       return;
@@ -315,7 +394,26 @@ export class InProcessPluginRuntime {
       state = r.state;
     }
 
-    await endTurn(this.tracerProvider, state, process.cwd());
+    const logger = this.contentLogger(sessionId);
+    if (logger && state.turn_trace_id) {
+      try {
+        const seen = this.observedMessages.get(sessionId) ?? new Set<string>();
+        const messages = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId))
+          ?.messagesSince(state.turn_start_ms) ?? [];
+        for (const message of messages) {
+          if (seen.has(message.id)) continue;
+          emitAssistantContent(logger, loadContentLimits(), message,
+            state.turn_trace_id.slice(0, 16), state.turn_trace_id);
+          // Anonymous OpenClaw occurrences are turn-local, real host IDs survive replay.
+          if (this.platform !== 'openclaw'
+            || this.conversationEvents.get(sessionId)?.has(`k:${message.id}`)) seen.add(message.id);
+        }
+        this.observedMessages.set(sessionId, seen);
+      } catch {
+        // Missing/malformed host transcripts do not change Guard or turn export.
+      }
+    }
+    await endTurn(this.tracerProvider, state, process.cwd(), null);
     this.sessionState.delete(sessionId);
     await this.tracerProvider.forceFlush();
   }
@@ -338,15 +436,11 @@ export class InProcessPluginRuntime {
   ): Promise<PreToolResult> {
     if (this.tracerProvider) {
       let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
-      // `spanKey` is the internal correlation key (falls back to the tool
-      // name when the platform gives no id) — it must never leak onto the
-      // span as `gen_ai.tool.call.id`. Only a real platform-supplied id
-      // may produce that attribute; otherwise it's omitted entirely.
       const preAttrs: Record<string, unknown> = {
         ...genAiToolCallInputAttributes(params, opts?.toolCallId),
         ...(opts?.extraPreAttrs ?? {}),
       };
-      state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params), preAttrs);
+      state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params, true), preAttrs);
       this.sessionState.set(sessionId, state);
     }
     if (this.meterProvider) {
@@ -487,12 +581,29 @@ export class InProcessPluginRuntime {
     }
   }
 
-  /** Capture the user prompt onto turn state; applied at endTurn time. */
-  onUserPrompt(sessionId: string, text: string): void {
-    if (!this.tracerProvider || !text) return;
+  /** Preserve the baseline prompt attribute and emit one consented structured message. */
+  onUserPrompt(sessionId: string, text: string, opts?: {
+    sourceId?: string;
+    blocks?: { text: string; index: number; sourceId?: string }[];
+  }): boolean {
+    if (!this.tracerProvider || typeof text !== 'string' || !text) return false;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordUserPrompt(state, text);
     this.sessionState.set(sessionId, state);
+    const logger = this.contentLogger(sessionId);
+    if (!logger && this.platform === 'pi') this.piReplayDisabled.add(sessionId);
+    if (!logger || !state.turn_trace_id) return false;
+    if (opts?.sourceId) {
+      const seen = this.observedPrompts.get(sessionId) ?? new Set<string>();
+      if (seen.has(opts.sourceId)) return false;
+      seen.add(opts.sourceId);
+      this.observedPrompts.set(sessionId, seen);
+    }
+    emitUserPromptContent(logger, loadContentLimits(), {
+      prompt: text, spanId: state.turn_trace_id.slice(0, 16), traceId: state.turn_trace_id,
+      blocks: opts?.blocks, sourceId: opts?.sourceId,
+    });
+    return true;
   }
 
   /** Capture the assistant reply onto turn state. */
@@ -566,6 +677,7 @@ export class InProcessPluginRuntime {
       return `[nio error] ${msg}`;
     }
   }
+
 
   private stashGuardAttrs(
     sessionId: string,

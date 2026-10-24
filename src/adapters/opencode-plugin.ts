@@ -29,6 +29,7 @@ import { InProcessPluginRuntime } from './plugin-runtime.js';
 import type { NioInstance } from './types.js';
 import type { createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 /** Thrown to stop a tool call. Must escape the before-hook. */
 export class NioBlockedError extends Error {
@@ -93,6 +94,7 @@ export interface OpenCodePluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  loggerProvider?: LoggerProvider | null;
 }
 
 export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePlugin {
@@ -108,6 +110,8 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       nioFactory: options.nioFactory,
       tracerProvider: options.tracerProvider,
       meterProvider: options.meterProvider,
+      loggerProvider: options.loggerProvider,
+      defaultCwd: input.directory,
     });
 
     /** Guard verdicts parked by callID so permission.ask can reuse them. */
@@ -188,16 +192,19 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
       async 'chat.message'(_hookInput, hookOutput) {
         try {
           const out = hookOutput as {
-            message?: { sessionID?: string };
-            parts?: Array<{ type?: string; text?: string }>;
+            message?: { id?: string; sessionID?: string };
+            parts?: { id?: string; type?: string; text?: string }[];
           };
           const sessionId = out?.message?.sessionID;
-          if (!sessionId) return;
-          const text = (out.parts ?? [])
-            .filter(p => p.type === 'text' && typeof p.text === 'string')
-            .map(p => p.text)
-            .join('\n');
-          if (text) rt.onUserPrompt(sessionId, text);
+          if (!sessionId || !Array.isArray(out.parts)) return;
+          const blocks = out.parts.flatMap((part, index) =>
+            part?.type === 'text' && typeof part.text === 'string' && part.text
+              ? [{ text: part.text, index, sourceId: part.id }] : []);
+          if (blocks.length) rt.onUserPrompt(sessionId, blocks.map(part => part.text).join('\n'), {
+            sourceId: out.message?.id
+              ?? (blocks.every(part => part.sourceId) ? JSON.stringify(blocks.map(part => part.sourceId)) : undefined),
+            blocks,
+          });
         } catch { /* non-critical */ }
       },
 
@@ -293,12 +300,15 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                 id?: string;
                 sessionID?: string;
                 role?: string;
+                time?: { created?: number };
                 tokens?: {
                   input?: number; output?: number;
                   cache?: { read?: number; write?: number };
                 };
               } | undefined;
               if (info?.role !== 'assistant' || !info.sessionID) return;
+              rt.recordConversationEvent(info.sessionID, { kind: 'message', info },
+                info.id ? `message:${info.id}` : undefined, info.time?.created);
               // message.updated is a cumulative SNAPSHOT, republished on
               // every change to the same message — unlike Pi's
               // message_end, which fires once. Without a message id to
@@ -322,6 +332,12 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
                   cacheWrite: Math.max(0, current.cacheWrite - prev.cacheWrite),
                 });
               }
+              return;
+            }
+            case 'message.part.updated': {
+              const part = props.part as { id?: string; sessionID?: string } | undefined;
+              if (part?.sessionID) rt.recordConversationEvent(part.sessionID, { kind: 'part', part },
+                part.id ? `part:${part.id}` : undefined);
               return;
             }
             default:

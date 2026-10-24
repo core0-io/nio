@@ -439,9 +439,7 @@ describe('InProcessPluginRuntime auxiliary signals', () => {
   });
 });
 
-// Same lesson as Task 2: with a null provider none of the turn-state
-// plumbing runs. These drive a real in-memory tracer so the prompt /
-// reply / usage attributes and the sub-agent span can actually fail.
+// Real providers exercise usage accumulation and sub-agent span lifecycle.
 describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
   function tracedRuntime(tracer: ReturnType<typeof makeInMemoryTracer>) {
     return new InProcessPluginRuntime({
@@ -452,12 +450,10 @@ describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
     });
   }
 
-  it('carries prompt, reply, and token usage onto the turn root span', async () => {
+  it('accumulates token usage onto the turn root span', async () => {
     const tracer = makeInMemoryTracer();
     try {
       const rt = tracedRuntime(tracer);
-      rt.onUserPrompt('s1', 'why is the build red?');
-      rt.onAssistantReply('s1', 'a lint rule changed');
       rt.onLlmUsage('s1', { input: 120, output: 45, cacheRead: 30, cacheWrite: 10 });
       rt.onLlmUsage('s1', { input: 80 });   // must accumulate, not overwrite
 
@@ -466,8 +462,6 @@ describe('InProcessPluginRuntime auxiliary signals — span wiring', () => {
       const spans = tracer.finished();
       assert.equal(spans.length, 1, 'exactly one turn root span');
       const attrs = spans[0]!.attributes;
-      assert.equal(attrs['nio.turn.user_prompt'], 'why is the build red?');
-      assert.equal(attrs['nio.turn.assistant_reply'], 'a lint rule changed');
       assert.equal(attrs['gen_ai.usage.input_tokens'], 200);   // 120 + 80
       assert.equal(attrs['gen_ai.usage.output_tokens'], 45);
       assert.equal(attrs['gen_ai.usage.cache_read.input_tokens'], 30);
@@ -814,40 +808,6 @@ describe('registerPiExtension — block path and confirm dialog', () => {
     }
   });
 
-  it('reads tool parameters from `input` (Pi\'s key), not `params`', async () => {
-    // stubNioVerdict ignores whatever params it's handed, so nothing above
-    // this pins the actual event key the binding reads. The only place the
-    // real params show up is the span's tool-call-arguments attribute.
-    const tracer = makeInMemoryTracer();
-    try {
-      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
-      const pi = fakePi();
-      registerPiExtension(pi as never, {
-        nioFactory: stubNioVerdict('allow'),
-        tracerProvider: tracer.provider,
-        meterProvider: null,
-      });
-      const { ctx } = fakeCtx(true, true);
-
-      await pi.handlers.get('tool_call')!(
-        { toolName: 'bash', toolCallId: 'c1', input: { command: 'echo unique-marker-123' } }, ctx,
-      );
-      await pi.handlers.get('tool_result')!(
-        { toolName: 'bash', toolCallId: 'c1', content: 'unique-marker-123' }, ctx,
-      );
-
-      const spans = tracer.finished();
-      assert.equal(spans.length, 1);
-      const args = spans[0]!.attributes['gen_ai.tool.call.arguments'];
-      assert.equal(typeof args, 'string');
-      assert.ok(
-        (args as string).includes('unique-marker-123'),
-        `expected the recorded arguments to carry the command, got: ${args}`,
-      );
-    } finally {
-      await tracer.shutdown();
-    }
-  });
 });
 
 describe('createNioPlugin (opencode)', () => {

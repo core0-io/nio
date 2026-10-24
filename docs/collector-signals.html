@@ -42,13 +42,13 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Overview</div>
         <h1><em>Collector Signals</em> — what Nio captures while an agent runs</h1>
-        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — covering every tool invocation, every guard decision, every conversation turn. Schemas are aligned across all three host platforms (Claude Code, Hermes, OpenClaw) so the same dashboards work everywhere. This page is the high-level overview; each signal has its own deep-dive page below.</p>
+        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — across Claude Code, Codex, Hermes, OpenClaw, Pi and opencode. Existing turn/tool/task spans and their body attributes remain. Consented observed-message Logs add structured GenAI content linked to the existing turn.</p>
       </div>
 
       <div class="doc">
 
         <h2 id="architecture">Architecture</h2>
-        <p>The three host platforms each have their own runtime model — Claude Code and Hermes spawn a node process per hook event, OpenClaw runs as a long-lived daemon — but they all converge on the same canonical hook event vocabulary, then on the same three collector modules that own the attribute schema. Schema consistency falls out of the architecture: every attribute key string is owned by exactly one module, no matter which platform produced the event.</p>
+        <p>Claude Code, Codex and Hermes spawn a process per hook; OpenClaw, Pi and opencode load an in-process runtime. Shared collectors and the canonical content schema keep signal placement consistent across all six integrations.</p>
         <pre><code>   ┌─────────────┐     ┌────────────────┐     ┌───────────────┐
    │ Claude Code │     │     Hermes     │     │   OpenClaw    │
    │             │     │                │     │               │
@@ -95,10 +95,10 @@
         <h2 id="naming">Naming conventions</h2>
         <ul>
           <li><code>gen_ai.*</code> — keys that follow the OTel <a href="https://opentelemetry.io/docs/specs/semconv/gen-ai/">GenAI semantic conventions</a>. Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.</li>
-          <li><code>nio.*</code> — vendor extensions for concepts the GenAI spec doesn't cover: guard decisions, per-phase scoring, platform tag, redacted prompt / reply previews, per-task subagent metadata.</li>
+          <li><code>nio.*</code> — vendor extensions for guard decisions, per-phase scoring, platform identity, content association and task metadata.</li>
           <li><code>session.id</code> — mirrored alongside <code>gen_ai.conversation.id</code> for OTel base-spec consumers that key off session id rather than conversation id. Same value.</li>
         </ul>
-        <p>Cross-signal: the same key name carries the same meaning across metrics, traces, and logs. <code>gen_ai.tool.name</code> on a metric label is the same string as the matching trace span attribute, which is the same string as the matching audit-log attribute. Joining signals in dashboards Just Works.</p>
+        <p>Shared keys preserve their meanings across signals. Content logs carry built-in OTLP trace/span IDs plus redundant attributes for explicit joins. Backend presentation varies; correlation does not automatically display log bodies inside a trace.</p>
 
         <h2 id="signals">The three signals</h2>
 
@@ -116,7 +116,7 @@
             <span class="tag">Traces</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/traces</code></span>
           </div>
-          <p>One trace per conversation turn, with child spans per tool call and per subagent dispatch. Span names follow GenAI conventions (<code>invoke_agent UserPromptSubmit</code>, <code>execute_tool &lt;name&gt;</code>) where applicable. No local backup.</p>
+          <p>Existing turn roots with child tool and task spans retain timing, token/tool/Guard metadata and their existing bounded prompt/reply/tool fields. No reconstructed chat/model span layer is added. No local trace backup.</p>
           <p><a href="collector-signals-traces.html"><strong>Traces →</strong></a></p>
         </div>
 
@@ -125,7 +125,7 @@
             <span class="tag">Logs</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/logs</code> + local <code>~/.nio/audit.jsonl</code></span>
           </div>
-          <p>An audit-log entry per guard decision, per skill scan, per session lifecycle event, and per dispatched hook event. Dual-written: OTEL Logs export and a local JSONL file (offline / air-gapped friendly).</p>
+          <p>Audit entries remain dual-written to OTLP and local JSONL. Separately, consent-gated <code>nio-content</code> Logs carry structured observed prompts, assistant text and exposed reasoning linked to existing turn spans. Tool arguments/results remain directly on tool spans; content Logs have no local audit fallback.</p>
           <p><a href="collector-signals-logs.html"><strong>Logs →</strong></a></p>
         </div>
 
