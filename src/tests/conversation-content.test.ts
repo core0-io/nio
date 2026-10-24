@@ -44,18 +44,18 @@ describe('conversation content reconstruction', () => {
     const first = { type: 'assistant', uuid: 'entry-a', timestamp: stamp, message: { id: 'message-1', model: 'claude-opus-4-6', content: richBlocks, usage: { input_tokens: 10 } } };
     const second = { type: 'assistant', uuid: 'entry-b', timestamp: stamp, message: { id: 'message-1', content: [{ type: 'text', text: 'last' }], usage: { output_tokens: 5 } } };
     withTranscript([first, first, second], (path) => {
-      const calls = createClaudeCodeSource(path).callsSince(ms);
+      const calls = createClaudeCodeSource(path).messagesSince(ms);
       assert.equal(calls.length, 1);
-      assert.deepEqual(calls[0]!.blocks.map((b) => b.index), [0, 2, 3, 4, 5]);
-      assert.deepEqual(calls[0]!.blocks.map((b) => b.content), ['consider risk', 'repeat', 'repeat', '{"path":"a"}', 'last']);
+      assert.deepEqual(calls[0]!.blocks.map((b) => b.index), [0, 2, 3, 4]);
+      assert.deepEqual(calls[0]!.blocks.map((b) => b.content), ['consider risk', 'repeat', 'repeat', 'last']);
       assert.equal(calls[0]!.blocks[0]!.fidelity, 'full');
       assert.equal(calls[0]!.blocks[1]!.sourceId, 'entry-a:2');
       assert.equal(blockOrderIsSane(calls[0]!), true);
-      assert.deepEqual(createClaudeCodeSource(path).callsSince(ms + 1), []);
+      assert.deepEqual(createClaudeCodeSource(path).messagesSince(ms + 1), []);
     });
   });
 
-  it('keeps Codex summary fidelity, separate text blocks, tool identity and token metadata', () => {
+  it('preserves actual Codex response item boundaries and exposed summaries without replaying tools or inventing generations', () => {
     withTranscript([
       { type: 'turn_context', timestamp: stamp, payload: { model: 'gpt-5' } },
       { type: 'response_item', timestamp: stamp, payload: { type: 'reasoning', id: 'reason-1', summary: [{ type: 'summary_text', text: 'summary' }] } },
@@ -63,19 +63,22 @@ describe('conversation content reconstruction', () => {
       { type: 'response_item', timestamp: stamp, payload: { type: 'function_call', name: 'read', arguments: '{}', call_id: 'tool-1' } },
       { type: 'event_msg', timestamp: stamp, payload: { type: 'token_count', info: { last_token_usage: { input_tokens: 10, output_tokens: 5, reasoning_output_tokens: 3 } } } },
     ], (path) => {
-      const [call] = createCodexSource(path).callsSince(ms);
-      assert.ok(call);
-      assert.equal(call.callId, 'reason-1');
-      assert.deepEqual(call.blocks.map((b) => b.content), ['summary', 'repeat', 'repeat', '{}']);
-      assert.deepEqual(call.blocks.map((b) => b.index), [0, 1, 2, 3]);
-      assert.equal(call.blocks[0]!.fidelity, 'summary');
-      assert.equal(call.blocks[3]!.toolUse?.id, 'tool-1');
-      assert.deepEqual(call.usage, { input: 10, output: 5, reasoning: 3 });
-      assert.equal(buildContentRecords(call, '2'.repeat(16), '1'.repeat(32), DEFAULT_CONTENT_LIMITS).length, 3);
+      const messages = createCodexSource(path).messagesSince(ms);
+      assert.deepEqual(messages.map((message) => message.id), ['reason-1', 'msg-1']);
+      assert.deepEqual(messages[0]!.blocks.map((block) => block.content), ['summary']);
+      assert.deepEqual(messages[1]!.blocks.map((block) => block.content), ['repeat', 'repeat']);
+      assert.deepEqual(messages[1]!.blocks.map((block) => block.index), [0, 1]);
+      assert.equal(messages[0]!.blocks[0]!.fidelity, 'summary');
+      for (const message of messages) {
+        const records = buildContentRecords(message, '2'.repeat(16), '1'.repeat(32), DEFAULT_CONTENT_LIMITS);
+        assert.equal(records.length, 1);
+        assert.ok(!JSON.stringify(records).includes('tool-1'));
+        assert.ok(!('usage' in message));
+      }
     });
   });
 
-  it('reconstructs all current-turn Hermes calls with stable replay identities and exposed unknown-fidelity reasoning', () => {
+  it('reconstructs current-turn Hermes messages with stable replay identities and exposed unknown-fidelity reasoning', () => {
     const messages = [
       { role: 'assistant', id: 'a', content: richBlocks },
       { role: 'assistant', reasoning_content: 'unclassified reasoning', content: 'same' },
@@ -83,17 +86,17 @@ describe('conversation content reconstruction', () => {
       { role: 'assistant', codex_reasoning_items: [{ id: 'r', summary: [{ text: 'step summary' }] }], content: 'final' },
     ];
     const payload = { extra: { conversation_history: [{ role: 'user', content: 'current' }, ...messages], model: 'new-model', assistant_response: 'final' } };
-    const first = createHermesSource(payload).callsSince(ms);
-    const replay = createHermesSource(payload).callsSince(ms + 100000);
+    const first = createHermesSource(payload).messagesSince(ms);
+    const replay = createHermesSource(payload).messagesSince(ms + 100000);
     assert.equal(first.length, 4);
-    assert.deepEqual(first.map((c) => c.callId), replay.map((c) => c.callId));
-    assert.notEqual(first[1]!.callId, first[2]!.callId);
-    assert.deepEqual(first[0]!.blocks.map((b) => b.index), [0, 2, 3, 4]);
+    assert.deepEqual(first.map((c) => c.id), replay.map((c) => c.id));
+    assert.notEqual(first[1]!.id, first[2]!.id);
+    assert.deepEqual(first[0]!.blocks.map((b) => b.index), [0, 2, 3]);
     assert.equal(first[1]!.blocks[0]!.fidelity, 'unknown');
     assert.equal(first[3]!.blocks[0]!.fidelity, 'summary');
     assert.equal(first[3]!.blocks.filter((b) => b.type === 'text').length, 1);
-    const compacted = createHermesSource({ extra: { conversation_history: [{ role: 'user', content: 'current' }, ...messages.slice(1)], model: 'new-model' } }).callsSince(0);
-    assert.equal(compacted[0]!.callId, first[1]!.callId);
+    const compacted = createHermesSource({ extra: { conversation_history: [{ role: 'user', content: 'current' }, ...messages.slice(1)], model: 'new-model' } }).messagesSince(0);
+    assert.equal(compacted[0]!.id, first[1]!.id);
   });
 
   it('preserves Hermes separate reasoning alongside array text and scopes untimestamped history to the current user turn', () => {
@@ -104,33 +107,43 @@ describe('conversation content reconstruction', () => {
       { role: 'assistant', id: 'current-a', reasoning_content: 'exposed thought', content: [{ type: 'text', text: 'repeat' }, { type: 'text', text: 'repeat' }] },
       { role: 'assistant', id: 'current-b', reasoning_content: 'inline thought', content: [{ type: 'thinking', thinking: 'inline thought' }, { type: 'text', text: 'done' }] },
     ];
-    const calls = createHermesSource({ extra: { model: 'claude-opus-4-6', conversation_history: history } }).callsSince(0);
-    assert.deepEqual(calls.map((c) => c.callId), ['current-a', 'current-b']);
+    const calls = createHermesSource({ extra: { model: 'claude-opus-4-6', conversation_history: history } }).messagesSince(0);
+    assert.deepEqual(calls.map((c) => c.id), ['current-a', 'current-b']);
     assert.deepEqual(calls[0]!.blocks.map((b) => [b.index, b.content]), [[0, 'exposed thought'], [1, 'repeat'], [2, 'repeat']]);
     assert.deepEqual(calls[0]!.blocks.map((b) => b.sourceId), ['reasoning_content', 'content:0', 'content:1']);
     assert.equal(calls[0]!.blocks[0]!.fidelity, 'full');
     assert.equal(calls[1]!.blocks.filter((b) => b.type === 'thinking').length, 1);
   });
 
-  it('does not link ambiguous Hermes historical calls but retains an explicitly observed current response', () => {
+  it('does not link ambiguous Hermes history but retains an explicitly observed current response', () => {
     const conversation_history = [{ role: 'assistant', id: 'old', content: 'historical body' }];
-    assert.deepEqual(createHermesSource({ extra: { conversation_history } }).callsSince(0), []);
-    const calls = createHermesSource({ extra: { conversation_history, assistant_response: 'current body' } }).callsSince(0);
+    assert.deepEqual(createHermesSource({ extra: { conversation_history } }).messagesSince(0), []);
+    const calls = createHermesSource({ extra: { conversation_history, assistant_response: 'current body' } }).messagesSince(0);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0]!.blocks.map((b) => [b.content, b.sourceId]), [['current body', 'assistant_response']]);
-    assert.notEqual(calls[0]!.callId, 'old');
+    assert.notEqual(calls[0]!.id, 'old');
+  });
+
+  it('keeps an explicit Hermes response when the latest history message exposes only reasoning', () => {
+    const messages = createHermesSource({ extra: {
+      conversation_history: [{ role: 'user', content: 'current' }, { role: 'assistant', id: 'latest', reasoning_content: 'visible' }],
+      assistant_response: 'actual reply',
+    } }).messagesSince(0);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0]!.id, 'latest');
+    assert.deepEqual(messages[0]!.blocks.map((block) => [block.type, block.content]), [['thinking', 'visible'], ['text', 'actual reply']]);
   });
 
   it('reconstructs Pi session files and ephemeral message events using the same content positions', () => {
     const entry = { type: 'message', id: 'pi-entry', message: { role: 'assistant', model: 'claude-opus-4-6', timestamp: ms, content: richBlocks.map((b) => b.type === 'tool_use' ? { type: 'toolCall', id: b.id, name: b.name, arguments: b.input } : b), usage: { input: 3, output: 4 } } };
-    const fromEvents = createPiSource(undefined, [entry]).callsSince(ms);
-    assert.equal(fromEvents[0]!.callId, 'pi-entry');
-    assert.deepEqual(fromEvents[0]!.blocks.map((b) => b.index), [0, 2, 3, 4]);
+    const fromEvents = createPiSource(undefined, [entry]).messagesSince(ms);
+    assert.equal(fromEvents[0]!.id, 'pi-entry');
+    assert.deepEqual(fromEvents[0]!.blocks.map((b) => b.index), [0, 2, 3]);
     assert.equal(fromEvents[0]!.blocks[0]!.fidelity, 'full');
     withTranscript([entry], (path) => {
-      const fromFile = createPiSource(path).callsSince(ms);
+      const fromFile = createPiSource(path).messagesSince(ms);
       assert.deepEqual(fromFile[0]!.blocks, fromEvents[0]!.blocks);
-      assert.equal(fromFile[0]!.callId, fromEvents[0]!.callId);
+      assert.equal(fromFile[0]!.id, fromEvents[0]!.id);
     });
     assert.ok(createSourceForPlatform('pi', { events: [entry] }));
   });
@@ -146,10 +159,9 @@ describe('conversation content reconstruction', () => {
       { kind: 'part', part: { messageID: 'msg', id: 'b', type: 'text', text: 'repeat' } },
       { kind: 'message', info: { ...info, tokens: { input: 4, output: 6 } } },
     ];
-    const calls = createOpenCodeSource(events).callsSince(ms);
+    const calls = createOpenCodeSource(events).messagesSince(ms);
     assert.equal(calls.length, 1);
     assert.deepEqual(calls[0]!.blocks.map((b) => [b.index, b.sourceId, b.content]), [[1, 'r', 'step'], [2, 'a', 'repeat'], [3, 'b', 'repeat']]);
-    assert.equal(calls[0]!.usage?.output, 6);
     assert.equal(calls[0]!.blocks[0]!.fidelity, 'summary');
   });
 
@@ -157,16 +169,83 @@ describe('conversation content reconstruction', () => {
     const events = [
       { hook: 'message_sending', event: { text: 'Thinking unrelated' } },
       { hook: 'llm_output', event: { runId: 'same-run', model: 'claude-opus-4-6', lastAssistant: { id: 'first', content: richBlocks }, assistantTexts: ['repeat', 'repeat'] } },
-      { hook: 'llm_output', event: { runId: 'same-run', assistantTexts: ['next'] } },
+      { hook: 'llm_output', event: { runId: 'same-run', assistantTexts: ['first message', 'second message'] } },
     ];
-    const calls = createOpenClawSource(events).callsSince(ms);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0]!.callId, 'first');
-    assert.deepEqual(calls[0]!.blocks.map((b) => b.index), [0, 2, 3, 4]);
+    const calls = createOpenClawSource(events).messagesSince(ms);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]!.id, 'first');
+    assert.deepEqual(calls[0]!.blocks.map((b) => b.index), [0, 2, 3]);
     assert.equal(calls[0]!.blocks[0]!.fidelity, 'full');
-    assert.equal(calls[1]!.blocks[0]!.content, 'next');
-    assert.deepEqual(createOpenClawSource(events).callsSince(0).map((c) => c.callId), calls.map((c) => c.callId));
-    assert.equal(createOpenClawSource([{ hook: 'llm_output', event: { runId: 'empty' } }]).callsSince(0)[0]!.blocks.length, 0);
+    assert.deepEqual(createOpenClawSource(events).messagesSince(0).map((c) => c.id), calls.map((c) => c.id));
+    assert.deepEqual(createOpenClawSource([{ hook: 'llm_output', event: { runId: 'empty' } }]).messagesSince(0), []);
+  });
+
+  it('rejects aggregate-only OpenClaw outputs without native message content', () => {
+    const events = [
+      { hook: 'llm_output', event: { assistantTexts: ['first message', 'second message'] } },
+      { hook: 'llm_output', event: { lastAssistant: { id: 'missing-content' }, assistantTexts: ['first message', 'second message'] } },
+      { hook: 'llm_output', event: { content: [{ type: 'text', text: 'unbounded' }], reasoning: 'unbounded', assistantTexts: ['aggregate'] } },
+    ];
+    assert.deepEqual(createOpenClawSource(events).messagesSince(0), []);
+  });
+
+  it('preserves native OpenClaw string content and stopReason without mapping event outcome', () => {
+    const messages = createOpenClawSource([
+      { hook: 'llm_output', event: { outcome: 'incorrect', lastAssistant: { id: 'native', content: 'reply', stopReason: 'host-specific-reason' } } },
+      { hook: 'llm_output', event: { outcome: 'not-a-native-reason', lastAssistant: { id: 'unknown', content: 'reply' } } },
+    ]).messagesSince(0);
+    assert.deepEqual(messages[0]!.blocks.map((block) => [block.index, block.type, block.content]), [[0, 'text', 'reply']]);
+    assert.equal(messages[0]!.finishReason, 'host-specific-reason');
+    assert.equal(messages[1]!.finishReason, undefined);
+  });
+
+  it('captures native separate OpenClaw reasoning with array text and respects inline part order', () => {
+    const messages = createOpenClawSource([
+      { hook: 'llm_output', event: { lastAssistant: { id: 'separate', reasoning_content: 'visible', content: [{ type: 'text', text: 'reply' }] } } },
+      { hook: 'llm_output', event: { lastAssistant: { id: 'inline', reasoning_content: 'fallback not duplicated', content: [
+        { type: 'text', text: 'first' }, { type: 'thinking', thinking: 'visible' }, { type: 'thinking', thinking: 'visible' },
+        { type: 'text', text: 'first' },
+      ] } } },
+    ]).messagesSince(0);
+    assert.deepEqual(messages[0]!.blocks.map((block) => [block.type, block.content]), [['thinking', 'visible'], ['text', 'reply']]);
+    assert.deepEqual(messages[1]!.blocks.map((block) => [block.index, block.type, block.content]), [[0, 'text', 'first'], [1, 'thinking', 'visible'], [2, 'thinking', 'visible'], [3, 'text', 'first']]);
+  });
+
+  it('supports Pi string messages and keeps anonymous equal message occurrences distinct', () => {
+    const entry = { type: 'message', message: { role: 'assistant', timestamp: ms, content: 'same' } };
+    const messages = createPiSource(undefined, [entry, entry]).messagesSince(ms);
+    assert.equal(messages.length, 2);
+    assert.notEqual(messages[0]!.id, messages[1]!.id);
+    assert.deepEqual(messages.map((message) => message.blocks.map((block) => [block.index, block.content])), [[[0, 'same']], [[0, 'same']]]);
+  });
+
+  it('uses actual message identity instead of a shared callback/request identity', () => {
+    withTranscript([
+      { type: 'assistant', requestId: 'request', uuid: 'entry-a', timestamp: stamp, message: { id: 'message-a', content: [{ type: 'text', text: 'equal' }] } },
+      { type: 'assistant', requestId: 'request', uuid: 'entry-b', timestamp: stamp, message: { id: 'message-b', content: [{ type: 'text', text: 'equal' }] } },
+    ], (path) => assert.deepEqual(createClaudeCodeSource(path).messagesSince(ms).map((message) => message.id), ['message-a', 'message-b']));
+    const messages = createOpenClawSource(['a', 'b'].map((id) => ({
+      hook: 'llm_output', event: { callId: 'callback', lastAssistant: { id, content: [{ type: 'text', text: 'equal' }] } },
+    }))).messagesSince(0);
+    assert.deepEqual(messages.map((message) => message.id), ['a', 'b']);
+  });
+
+  it('preserves duplicate native reasoning parts and rejects encrypted or unsupported reasoning', () => {
+    withTranscript([
+      { type: 'response_item', timestamp: stamp, payload: { type: 'reasoning', id: 'encrypted', encrypted_content: 'opaque' } },
+      { type: 'response_item', timestamp: stamp, payload: { type: 'reasoning', id: 'visible', summary: [
+        { type: 'summary_text', text: 'same' }, { type: 'image', text: 'not reasoning' }, { type: 'summary_text', text: 'same' },
+      ] } },
+    ], (path) => {
+      const messages = createCodexSource(path).messagesSince(ms);
+      assert.equal(messages.length, 1);
+      assert.deepEqual(messages[0]!.blocks.map((block) => [block.index, block.sourceId, block.content]), [[0, 'visible:0', 'same'], [2, 'visible:2', 'same']]);
+    });
+    const messages = createHermesSource({ extra: { conversation_history: [
+      { role: 'user', content: 'current' },
+      { role: 'assistant', content: [{ type: 'thinking', thinking: 'same' }, { type: 'thinking', thinking: 'same' }] },
+    ] } }).messagesSince(0);
+    assert.deepEqual(messages[0]!.blocks.map((block) => block.content), ['same', 'same']);
   });
 
   it('extracts actual Claude and Codex user prompts with replay identity, not tool output or metadata', () => {
@@ -204,15 +283,15 @@ describe('conversation content reconstruction', () => {
     withTranscript([
       { type: 'assistant', timestamp: stamp, message: 'not a message' },
       { type: 'assistant', timestamp: stamp, message: { id: 'valid', content: [{ type: 'text', text: 'ok' }] } },
-    ], (path) => assert.equal(createClaudeCodeSource(path).callsSince(ms)[0]!.blocks[0]!.content, 'ok'));
+    ], (path) => assert.equal(createClaudeCodeSource(path).messagesSince(ms)[0]!.blocks[0]!.content, 'ok'));
     withTranscript([
       { type: 'response_item', timestamp: stamp, payload: { type: 'reasoning', summary: 'not an array' } },
       { type: 'response_item', timestamp: stamp, payload: { type: 'message', role: 'assistant', id: 'valid', content: [{ text: 'ok' }] } },
-    ], (path) => assert.equal(createCodexSource(path).callsSince(ms)[0]!.blocks[0]!.content, 'ok'));
-    assert.deepEqual(createHermesSource({ extra: { conversation_history: 'not history' } }).callsSince(0), []);
-    assert.deepEqual(createPiSource(undefined, [{ type: 'message', message: 'not a message' }]).callsSince(0), []);
-    assert.deepEqual(createOpenCodeSource([{ kind: 'message', info: { role: 'assistant', id: 4 } }]).callsSince(0), []);
-    assert.deepEqual(createOpenClawSource([{ hook: 'llm_output', event: { lastAssistant: 'not a message' } }]).callsSince(0), []);
+    ], (path) => assert.equal(createCodexSource(path).messagesSince(ms)[0]!.blocks[0]!.content, 'ok'));
+    assert.deepEqual(createHermesSource({ extra: { conversation_history: 'not history' } }).messagesSince(0), []);
+    assert.deepEqual(createPiSource(undefined, [{ type: 'message', message: 'not a message' }]).messagesSince(0), []);
+    assert.deepEqual(createOpenCodeSource([{ kind: 'message', info: { role: 'assistant', id: 4 } }]).messagesSince(0), []);
+    assert.deepEqual(createOpenClawSource([{ hook: 'llm_output', event: { lastAssistant: 'not a message' } }]).messagesSince(0), []);
   });
 
   it('does not assign raw reasoning fidelity from an unrelated gateway', () => {

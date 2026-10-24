@@ -1,72 +1,77 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-import type { ContentRecord, ContentRecordAttributes, ContentType } from '../../../schemas/content.js';
-import type { ChatCall } from '../conversation/types.js';
+import { contentRecordSchema, type ContentPart, type ContentRecord } from '../../../schemas/content.js';
+import { blockOrderIsSane, type AssistantMessage } from '../conversation/types.js';
 import { redactSecrets } from './redact.js';
-import { truncateContent, type ContentLimits } from './truncate.js';
+import { truncateContent, type ContentKind, type ContentLimits } from './truncate.js';
 
 export type { ContentRecord, ContentRecordAttributes } from '../../../schemas/content.js';
-
-/** Text/reasoning belong to chat spans; tool IO is emitted only at its observing tool hook. */
-export function buildContentRecords(call: ChatCall, spanId: string, traceId: string, limits: ContentLimits): ContentRecord[] {
-  const records: ContentRecord[] = [];
-  for (const block of call.blocks) {
-    if (block.type !== 'thinking' && block.type !== 'text') continue;
-    const record = buildRecord(block.type, block.content, spanId, traceId, limits, {
-      'nio.content.index': block.index,
-      'nio.content.source': call.source ?? 'conversation',
-      'nio.content.call_id': call.callId,
-      ...(block.sourceId ? { 'nio.content.source_id': block.sourceId } : {}),
-      ...(block.type === 'thinking' ? { 'nio.content.fidelity': block.fidelity ?? 'unknown' } : {}),
-    });
-    if (record) records.push(record);
-  }
-  return records;
-}
-
-export interface ContentProvenance {
+export interface UserPromptContent {
+  prompt: string;
+  blocks?: { text: string; index: number; sourceId?: string }[];
+  spanId: string;
+  traceId: string;
+  /** Known identities are accepted for callers' internal deduplication only. */
   source?: string;
   sourceId?: string;
+  id?: string;
   index?: number;
 }
+interface ObservedPart { type: ContentKind; content: string }
 
-export function buildToolInputRecord(input: string, spanId: string, traceId: string, limits: ContentLimits, toolCallId?: string, provenance?: ContentProvenance): ContentRecord | null {
-  return buildObservedRecord('tool_input', input, spanId, traceId, limits, toolCallId, provenance);
+/** One record per observed message; unsupported parts are intentionally omitted. */
+export function buildContentRecords(message: AssistantMessage, spanId: string, traceId: string, limits: ContentLimits): ContentRecord[] {
+  if (!message || typeof message.id !== 'string' || !message.id || !Array.isArray(message.blocks)
+    || !message.blocks.every((block) => block && typeof block.content === 'string') || !blockOrderIsSane(message)) return [];
+  const record = buildRecord(message.blocks.filter((block) => block.type === 'thinking' || block.type === 'text'),
+    'assistant', spanId, traceId, limits, message.finishReason);
+  return record ? [record] : [];
 }
 
-export function buildToolOutputRecord(result: string, spanId: string, traceId: string, limits: ContentLimits, toolCallId?: string, provenance?: ContentProvenance): ContentRecord | null {
-  return buildObservedRecord('tool_output', result, spanId, traceId, limits, toolCallId, provenance);
+/** A submitted prompt is one observed user message, never the complete model input. */
+export function buildUserPromptRecord(opts: UserPromptContent, limits: ContentLimits): ContentRecord | null {
+  if (!opts || typeof opts.prompt !== 'string') return null;
+  let parts: ObservedPart[];
+  if (opts.blocks !== undefined) {
+    if (!Array.isArray(opts.blocks) || !opts.blocks.every((block, i) => block && typeof block.text === 'string'
+      && Number.isInteger(block.index) && block.index >= 0 && (i === 0 || block.index > opts.blocks![i - 1]!.index))) return null;
+    parts = opts.blocks.map((block) => ({ type: 'user_prompt', content: block.text }));
+  } else parts = [{ type: 'user_prompt', content: opts.prompt }];
+  return buildRecord(parts, 'user', opts.spanId, opts.traceId, limits);
 }
 
-export function buildUserPromptRecord(prompt: string, spanId: string, traceId: string, limits: ContentLimits, index = 0, provenance?: ContentProvenance): ContentRecord | null {
-  return buildObservedRecord('user_prompt', prompt, spanId, traceId, limits, undefined, { ...provenance, index });
-}
-
-function buildObservedRecord(type: 'tool_input' | 'tool_output' | 'user_prompt', text: string, spanId: string, traceId: string, limits: ContentLimits, toolCallId?: string, provenance?: ContentProvenance): ContentRecord | null {
-  return buildRecord(type, text, spanId, traceId, limits, {
-    'nio.content.index': provenance?.index ?? 0,
-    'nio.content.source': provenance?.source ?? 'host-event',
-    ...(provenance?.sourceId ? { 'nio.content.source_id': provenance.sourceId } : {}),
-    ...(toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {}),
-  });
-}
-
-function buildRecord(type: ContentType, text: string, spanId: string, traceId: string, limits: ContentLimits, metadata: Pick<ContentRecordAttributes, 'nio.content.index' | 'nio.content.source'> & Partial<ContentRecordAttributes>): ContentRecord | null {
-  if (!spanId || !traceId || text.length === 0) return null;
-  // Redaction must see whole credentials, including those straddling the eventual cut.
-  const redacted = redactSecrets(text);
-  const { text: body, truncated, originalBytes } = truncateContent(redacted.text, limits[type]);
-  if (!body) return null;
-  return {
-    traceId, spanId, body,
-    attributes: {
-      ...metadata,
-      'nio.content.type': type,
-      'nio.trace_id': traceId,
-      'nio.span_id': spanId,
-      ...(truncated ? { 'nio.content.truncated': true, 'nio.content.original_bytes': originalBytes } : {}),
-      ...(redacted.hits ? { 'nio.content.redactions': redacted.hits } : {}),
-    },
+function buildRecord(observed: ObservedPart[], role: 'user' | 'assistant', spanId: string, traceId: string,
+  limits: ContentLimits, finishReason?: string): ContentRecord | null {
+  if (!/^[0-9a-f]{16}$/.test(spanId) || !/^[0-9a-f]{32}$/.test(traceId)) return null;
+  const parts: ContentPart[] = [];
+  let redactions = 0;
+  let originalBytes = 0;
+  let truncated = false;
+  for (const part of observed) {
+    if (!part.content) continue;
+    const limit = limits[part.type];
+    if (!Number.isFinite(limit) || limit < 0) return null;
+    // Redaction sees the entire property, including credentials crossing the byte cut.
+    const redacted = redactSecrets(part.content);
+    const bounded = truncateContent(redacted.text, limit);
+    redactions += redacted.hits;
+    originalBytes += bounded.originalBytes;
+    truncated ||= bounded.truncated;
+    if (bounded.text) parts.push({ type: part.type === 'thinking' ? 'reasoning' : 'text', content: bounded.text });
+  }
+  if (!parts.length) return null;
+  const auxiliary = {
+    'nio.trace_id': traceId,
+    'nio.span_id': spanId,
+    ...(truncated ? { 'nio.content.truncated': true, 'nio.content.original_bytes': originalBytes } : {}),
+    ...(redactions ? { 'nio.content.redactions': redactions } : {}),
   };
+  const result = contentRecordSchema.safeParse({
+    traceId, spanId,
+    attributes: role === 'user'
+      ? { ...auxiliary, 'gen_ai.input.messages': [{ role, parts }] }
+      : { ...auxiliary, 'gen_ai.output.messages': [{ role, parts, finish_reason: finishReason ?? 'unknown' }] },
+  });
+  return result.success ? result.data : null;
 }

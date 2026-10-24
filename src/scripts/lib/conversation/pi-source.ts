@@ -3,23 +3,22 @@
 
 import { z } from 'zod';
 import { readJsonlTail } from './read-jsonl.js';
-import { fidelityForModel, sourceFingerprint, toUsage } from './shared.js';
-import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
+import { fidelityForModel, sourceFingerprint } from './shared.js';
+import type { AssistantMessage, ContentBlock, ConversationSource } from './types.js';
 
 const blockSchema = z.object({
-  type: z.string().optional(), text: z.string().optional(), thinking: z.string().optional(),
-  id: z.string().optional(), name: z.string().optional(), arguments: z.unknown().optional(),
+  type: z.string().optional(), text: z.string().optional(), thinking: z.string().optional(), id: z.string().optional(),
 }).passthrough();
 const entrySchema = z.object({
   type: z.string().optional(), id: z.string().optional(), timestamp: z.string().optional(),
   message: z.object({
     role: z.string().optional(), id: z.string().optional(), timestamp: z.number().finite().optional(),
     model: z.string().optional(), provider: z.string().optional(), stopReason: z.string().optional(),
-    content: z.array(z.unknown()).optional(), usage: z.record(z.unknown()).optional(),
+    content: z.union([z.string(), z.array(z.unknown())]).optional(),
   }).passthrough().optional(),
 }).passthrough();
 
-/** One assistant entry, flattened to what call construction needs. */
+/** One assistant entry and its observed source timestamp. */
 interface PiAssistantEntry {
   msg: Record<string, unknown>;
   /** Unix ms — from `message.timestamp`, falling back to the entry's ISO stamp. */
@@ -29,32 +28,24 @@ interface PiAssistantEntry {
 }
 
 function blocksFrom(content: unknown, model: unknown, provider: unknown): ContentBlock[] {
+  if (typeof content === 'string') return content ? [{ type: 'text', index: 0, content }] : [];
   if (!Array.isArray(content)) return [];
   const out: ContentBlock[] = [];
   for (const [index, raw] of content.entries()) {
     const parsed = blockSchema.safeParse(raw);
     if (!parsed.success) continue;
     const b = parsed.data;
+    const sourceId = b.id;
     if (b.type === 'thinking' && typeof b.thinking === 'string' && b.thinking.length > 0) {
       out.push({
         type: 'thinking',
         index,
         content: b.thinking,
+        sourceId,
         fidelity: fidelityForModel(model, provider),
       });
     } else if (b.type === 'text' && typeof b.text === 'string' && b.text.length > 0) {
-      out.push({ type: 'text', index, content: b.text });
-    } else if (b.type === 'toolCall' && typeof b.id === 'string' && typeof b.name === 'string') {
-      let input = '';
-      try { input = JSON.stringify(b.arguments ?? {}); } catch {
-        // The association is still observable when an SDK object cannot serialize.
-      }
-      out.push({
-        type: 'tool_use',
-        index,
-        content: '',
-        toolUse: { id: b.id, name: b.name, input },
-      });
+      out.push({ type: 'text', index, content: b.text, sourceId });
     }
   }
   return out;
@@ -63,55 +54,62 @@ function blocksFrom(content: unknown, model: unknown, provider: unknown): Conten
 export function createPiSource(sessionFilePath?: string, events: unknown[] = []): ConversationSource {
   return {
     name: 'pi-session',
-    callsSince(sinceMs: number): ChatCall[] {
+    messagesSince(sinceMs: number): AssistantMessage[] {
       const replay: unknown[] = sessionFilePath ? readJsonlTail(sessionFilePath).flatMap((line) => {
         try { return [JSON.parse(line) as unknown]; } catch { return []; }
       }) : [];
-      const entries = replay.length > 0 ? replay : events;
-      const fromEvents = entries === events;
-      const assistants: PiAssistantEntry[] = [];
-      for (const entry of entries) {
-        const parsed = entrySchema.safeParse(entry);
-        if (!parsed.success) continue;
-        const e = parsed.data;
-        if (e.type !== 'message') continue;
-        const msg = e.message;
-        if (!msg || typeof msg !== 'object' || msg.role !== 'assistant') continue;
-        const ts =
-          typeof msg.timestamp === 'number'
-            ? msg.timestamp
-            : Date.parse(String(e.timestamp ?? '')) || 0;
-        assistants.push({
-          msg,
-          ts,
-          entryId: typeof e.id === 'string' ? e.id : undefined,
-        });
-      }
+      const messages = new Map<string, AssistantMessage>();
+      const observations = new Map<string, string>();
+      const hostIds = new Map<string, string>();
+      const collect = (entries: unknown[], fromEvents: boolean): void => {
+        const assistants: PiAssistantEntry[] = [];
+        for (const entry of entries) {
+          const parsed = entrySchema.safeParse(entry);
+          if (!parsed.success) continue;
+          const e = parsed.data;
+          if (e.type !== 'message') continue;
+          const msg = e.message;
+          if (!msg || typeof msg !== 'object' || msg.role !== 'assistant') continue;
+          const ts =
+            typeof msg.timestamp === 'number'
+              ? msg.timestamp
+              : Date.parse(String(e.timestamp ?? '')) || 0;
+          assistants.push({
+            msg,
+            ts,
+            entryId: typeof e.id === 'string' ? e.id : undefined,
+          });
+        }
 
-      const calls: ChatCall[] = [];
-      const occurrences = new Map<string, number>();
-      const emitted = new Set<string>();
-      assistants.forEach(({ msg, ts, entryId }, i) => {
-        const callId = entryId ?? (typeof msg.id === 'string' ? msg.id : sourceFingerprint('pi', [ts, msg], occurrences));
-        if ((!fromEvents && ts < sinceMs) || emitted.has(callId)) return;
-        emitted.add(callId);
-        const blocks = blocksFrom(msg.content, msg.model, msg.provider);
-        if (blocks.length === 0) return;
-        const next = assistants[i + 1];
-        calls.push({
-          callId,
-          source: fromEvents ? 'pi-message-events' : 'pi-session',
-          model: typeof msg.model === 'string' ? msg.model : undefined,
-          startMs: ts,
-          endMs: next ? next.ts : ts,
-          timing: next ? 'inferred' : 'synthetic',
-          usage: toUsage(msg.usage),
-          stopReason: typeof msg.stopReason === 'string' ? msg.stopReason : undefined,
-          blocks,
-          isSidechain: false,
+        const occurrences = new Map<string, number>();
+        assistants.forEach(({ msg, ts, entryId }) => {
+          if (!fromEvents && ts < sinceMs) return;
+          const observation = sourceFingerprint('pi', [ts, msg], occurrences);
+          const messageId = typeof msg.id === 'string' && msg.id ? msg.id : undefined;
+          const id = (entryId ? hostIds.get(entryId) : undefined)
+            ?? (messageId ? hostIds.get(messageId) : undefined)
+            ?? observations.get(observation) ?? entryId ?? messageId ?? observation;
+          const blocks = blocksFrom(msg.content, msg.model, msg.provider);
+          if (blocks.length === 0) return;
+          observations.set(observation, id);
+          if (entryId) hostIds.set(entryId, id);
+          if (messageId) hostIds.set(messageId, id);
+          messages.set(id, {
+            id,
+            source: fromEvents ? 'pi-message-events' : 'pi-session',
+            timestampMs: ts,
+            finishReason: typeof msg.stopReason === 'string' ? msg.stopReason : undefined,
+            blocks,
+            isSidechain: false,
+          });
         });
-      });
-      return calls;
+      };
+      collect(replay, false);
+      collect(events, true);
+      const result = [...messages.values()];
+      const canOrderByTimestamp = result.every(message => (message.timestampMs ?? 0) > 0);
+      if (canOrderByTimestamp) result.sort((a, b) => (a.timestampMs ?? 0) - (b.timestampMs ?? 0));
+      return result;
     },
   };
 }

@@ -2,4 +2,4 @@
 "@core0-io/nio": minor
 ---
 
-Emit consent-gated prompts, assistant text, exposed thinking and tool input/output as canonical OTLP content logs linked to their executing spans across all six integrations, regardless of body length. Keep execution metadata on spans without body copies; preserve Guard evaluations and offline local audit writing. Document source identity, replay and host visibility limits.
+Add consent-gated structured GenAI message logs for observed prompts, assistant text and exposed reasoning, linked to existing turn spans across supported host paths. Preserve the existing turn/tool Trace fields, protect restored summaries before preview truncation, and keep tool arguments/results on tool spans without forced duplicate content logs. Preserve Guard evaluation and offline audit; document replay, consent and host-boundary limits.

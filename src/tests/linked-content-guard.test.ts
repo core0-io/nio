@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { guardAuditSchema } from '../schemas/guard-audit.js';
 
 for (const platform of ['claude-code', 'codex', 'hermes']) {
-  it(`${platform} returns its computed Guard denial when optional content serialization overflows`, async () => {
+  it(`${platform} returns its computed Guard denial when deeply nested tool arguments exceed the attribute redactor stack`, async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nio-guard-content-'));
     const server = createServer((req, res) => {
       req.resume();

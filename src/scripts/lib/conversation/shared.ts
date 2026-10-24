@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { createHash } from 'node:crypto';
-import type { ChatCall, ThinkingFidelity } from './types.js';
+import type { ThinkingFidelity } from './types.js';
 
 interface FidelityRule {
   /** Matched against the lowercased model id, prefixes and tags included. */
@@ -91,18 +91,6 @@ export function fidelityForModel(model: unknown, provider?: unknown): ThinkingFi
   return applyRules(PROVIDER_RULES, provider) ?? 'unknown';
 }
 
-/** Read a usage record defensively; undefined when nothing usable is present. */
-export function toUsage(raw: unknown): NonNullable<ChatCall['usage']> | undefined {
-  if (!raw || typeof raw !== 'object') return undefined;
-  const u = raw as Record<string, unknown>;
-  const out: NonNullable<ChatCall['usage']> = {};
-  if (typeof u.input === 'number') out.input = u.input;
-  if (typeof u.output === 'number') out.output = u.output;
-  if (typeof u.cacheRead === 'number') out.cacheRead = u.cacheRead;
-  if (typeof u.cacheWrite === 'number') out.cacheWrite = u.cacheWrite;
-  if (typeof u.reasoning === 'number') out.reasoning = u.reasoning;
-  return Object.keys(out).length > 0 ? out : undefined;
-}
 
 /** Stable fallback identity; occurrence distinguishes legitimate identical source messages. */
 export function sourceFingerprint(prefix: string, value: unknown, occurrences: Map<string, number>): string {

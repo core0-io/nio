@@ -42,7 +42,7 @@
       <div class="doc-hero">
         <div class="eyebrow">Telemetry · Overview</div>
         <h1><em>Collector Signals</em> — what Nio captures while an agent runs</h1>
-        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — across Claude Code, Codex, Hermes, OpenClaw, Pi and opencode. Execution metadata stays on spans; consent-gated conversation bodies, including short content, are OTLP Logs linked by built-in trace/span IDs.</p>
+        <p class="lead">Nio emits three OTEL signals — <strong>metrics</strong>, <strong>traces</strong>, and <strong>logs</strong> — across Claude Code, Codex, Hermes, OpenClaw, Pi and opencode. Existing turn/tool/task spans and their body attributes remain. Consented observed-message Logs add structured GenAI content linked to the existing turn.</p>
       </div>
 
       <div class="doc">
@@ -116,7 +116,7 @@
             <span class="tag">Traces</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/traces</code></span>
           </div>
-          <p>One trace per conversation turn, with child chat, tool and task spans. Spans retain timing, model/token/tool/Guard metadata and content associations, not conversation body copies. No local backup.</p>
+          <p>Existing turn roots with child tool and task spans retain timing, token/tool/Guard metadata and their existing bounded prompt/reply/tool fields. No reconstructed chat/model span layer is added. No local trace backup.</p>
           <p><a href="collector-signals-traces.html"><strong>Traces →</strong></a></p>
         </div>
 
@@ -125,7 +125,7 @@
             <span class="tag">Logs</span>
             <span>OTLP · <code>&lt;endpoint&gt;/v1/logs</code> + local <code>~/.nio/audit.jsonl</code></span>
           </div>
-          <p>Audit entries remain dual-written to OTLP and local JSONL. Separately, consent-gated <code>nio-content</code> logs carry prompt, reply, exposed thinking and tool input/output bodies with exact built-in trace/span associations; content has no local audit fallback.</p>
+          <p>Audit entries remain dual-written to OTLP and local JSONL. Separately, consent-gated <code>nio-content</code> Logs carry structured observed prompts, assistant text and exposed reasoning linked to existing turn spans. Tool arguments/results remain directly on tool spans; content Logs have no local audit fallback.</p>
           <p><a href="collector-signals-logs.html"><strong>Logs →</strong></a></p>
         </div>
 

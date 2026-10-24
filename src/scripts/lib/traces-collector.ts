@@ -15,7 +15,6 @@ export {};
  * Trace hierarchy (OTel GenAI semantic conventions):
  *
  *   Trace: "invoke_agent UserPromptSubmit" — one trace per conversation turn
- *     └─ Span: "chat <model>" — one per reconstructed call, with linked content Logs
  *     └─ Span: "execute_tool <name>" — one span per tool call (pre→post)
  *     └─ Span: "task:execute" — one span per task lifecycle
  */
@@ -32,42 +31,27 @@ import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
 import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
-import type { ChatCall } from './conversation/types.js';
-import { buildChatSpanNodes, chatSpanAttributes, chatSpanName } from './chat-span.js';
 import { redactSecrets } from './content/redact.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan };
 
-export type ChatContentSink = (call: ChatCall, spanId: string, traceId: string) => void;
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
 // ---------------------------------------------------------------------------
 
 const MAX_ATTR_BYTES = 2048;
-const SECRET_KEY_RE = /(api[_-]?key|secret|token|password|passwd|authorization|bearer|private[_-]?key|mnemonic|seed|credential)/i;
 
 export function redactAndTruncate(value: unknown, maxBytes: number = MAX_ATTR_BYTES): string {
-  const redact = (v: unknown): unknown => {
-    if (v === null || v === undefined) return v;
-    if (typeof v === 'string') return v;
-    if (typeof v !== 'object') return v;
-    if (Array.isArray(v)) return v.map(redact);
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) ? '[REDACTED]' : redact(val);
-    }
-    return out;
-  };
-  let s: string;
+  let serialized: string;
   try {
-    s = typeof value === 'string' ? value : JSON.stringify(redact(value));
+    serialized = typeof value === 'string' ? value : JSON.stringify(value);
   } catch {
-    s = String(value);
+    serialized = String(value);
   }
-  if (s && s.length > maxBytes) s = s.slice(0, maxBytes) + '…[truncated]';
-  return s ?? '';
+  const redacted = redactSecrets(serialized ?? '').text;
+  return redacted.length > maxBytes ? redacted.slice(0, maxBytes) + '…[truncated]' : redacted;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,13 +97,13 @@ export function genAiToolAttributes(
 // one place.
 // ---------------------------------------------------------------------------
 
-/** Content bodies are emitted as linked logs; spans retain identity only. */
+/** Tool-call input attributes retain the existing Trace contract. */
 export function genAiToolCallInputAttributes(
   toolInput: unknown,
   toolCallId?: string,
 ): Record<string, unknown> {
   return {
-    ...(toolInput !== undefined ? { 'nio.content.source': 'logs' } : {}),
+    'gen_ai.tool.call.arguments': redactAndTruncate(toolInput),
     ...(toolCallId ? { 'gen_ai.tool.call.id': toolCallId } : {}),
   };
 }
@@ -131,8 +115,8 @@ export function genAiToolCallOutputAttributes(opts: {
   durationMs?: number;
 }): Record<string, unknown> {
   return {
-    ...(opts.result !== undefined ? { 'nio.content.source': 'logs' } : {}),
-    ...(opts.error ? { 'nio.tool.error': redactAndTruncate(redactSecrets(opts.error).text) } : {}),
+    ...(opts.result !== undefined ? { 'gen_ai.tool.call.result': redactAndTruncate(opts.result) } : {}),
+    ...(opts.error ? { 'nio.tool.error': redactAndTruncate(opts.error) } : {}),
     ...(typeof opts.durationMs === 'number' ? { 'nio.tool.duration_ms': opts.durationMs } : {}),
   };
 }
@@ -210,14 +194,14 @@ export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
 // Turn-state operation helpers (state-in / state-out)
 // ---------------------------------------------------------------------------
 
-/** Mark content association without persisting a prompt body in span state. */
+/** Record the observed prompt using the existing turn attribute and bound. */
 export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
-  return prompt ? setTurnAttributes(state, { 'nio.content.source': 'logs' }) : state;
+  return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(prompt) });
 }
 
-/** Assistant bodies belong to chat-linked content records. */
+/** Later observations overwrite this existing turn-level reply attribute. */
 export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
-  return reply ? setTurnAttributes(state, { 'nio.content.source': 'logs' }) : state;
+  return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(reply) });
 }
 
 /** Add per-event LLM usage delta to state.turn_attributes. */
@@ -441,7 +425,7 @@ export function ensureTurn(
     ...carryPending,
     pending_task_spans: {},
     turn_attributes: {},
-    observed_call_ids: prev?.session_id === sessionId ? prev.observed_call_ids : undefined,
+    observed_message_ids: prev?.session_id === sessionId ? prev.observed_message_ids : undefined,
     observed_prompt_ids: prev?.session_id === sessionId ? prev.observed_prompt_ids : undefined,
   };
 }
@@ -583,6 +567,7 @@ export async function recordPostToolUse(
       startTime: startMs,
       attributes: {
         ...genAiToolAttributes(pending.tool_name, toolCallId),
+        'nio.tool_summary': pending.tool_summary,
         'nio.turn_number': state.turn_number,
         ...(cwd ? { 'nio.cwd': cwd } : {}),
         ...(pending.attributes ?? {}),
@@ -746,7 +731,7 @@ export function parseTranscriptUsage(
 // ---------------------------------------------------------------------------
 
 /**
- * Emits chat spans with their content associations, then the turn root, and returns a fresh
+ * Emits the root span for the full turn duration, then returns a fresh
  * state with the turn marker cleared so the next user message starts a
  * new turn. Returns null if the input state has no active turn — caller
  * should persist nothing in that case (treat as a no-op for idempotency
@@ -757,8 +742,6 @@ export async function endTurn(
   state: CollectorState,
   cwd: string | null,
   transcriptPath?: string | null,
-  calls?: ChatCall[],
-  contentSink?: ChatContentSink,
 ): Promise<CollectorState | null> {
   if (!state.turn_trace_id) return null;
 
@@ -798,23 +781,6 @@ export async function endTurn(
   // trace.getTracer() reads from the other and gets a no-op tracer.
   // Going through the provider directly side-steps the global path.
   const tracer = provider.getTracer('nio-collector', '1.0.0');
-  const observed = new Set(state.observed_call_ids ?? []);
-  const newCalls = (calls ?? []).filter(call => {
-    if (observed.has(call.callId)) return false;
-    observed.add(call.callId);
-    return true;
-  });
-  for (const node of buildChatSpanNodes(newCalls)) {
-    const chat = tracer.startSpan(chatSpanName(node.call), {
-      startTime: node.call.startMs,
-      attributes: chatSpanAttributes(node.call) as Record<string, string | number | boolean>,
-    }, rootCtx);
-    chat.spanContext().spanId = node.span_id;
-    if (contentSink) {
-      try { contentSink(node.call, node.span_id, traceId); } catch { /* telemetry is non-critical */ }
-    }
-    chat.end(node.call.endMs);
-  }
   const span = tracer.startSpan(
     'invoke_agent UserPromptSubmit',
     {
@@ -852,7 +818,7 @@ export async function endTurn(
     pending_task_spans: {},
     pending_guard_attrs: {},
     turn_attributes: {},
-    observed_call_ids: [...observed],
+    observed_message_ids: state.observed_message_ids,
     observed_prompt_ids: state.observed_prompt_ids,
   };
 }

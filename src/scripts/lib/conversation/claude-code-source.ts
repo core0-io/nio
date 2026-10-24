@@ -3,58 +3,41 @@
 
 import { z } from 'zod';
 import { readJsonlTail } from './read-jsonl.js';
-import type { ChatCall, ContentBlock, ConversationSource } from './types.js';
+import type { AssistantMessage, ContentBlock, ConversationSource } from './types.js';
 import { sourceFingerprint } from './shared.js';
 
 const contentBlockSchema = z.object({
   type: z.string().optional(), thinking: z.string().optional(), text: z.string().optional(),
-  id: z.string().optional(), name: z.string().optional(), input: z.unknown().optional(),
-}).passthrough();
-const usageSchema = z.object({
-  input_tokens: z.number().optional(), output_tokens: z.number().optional(),
-  cache_creation_input_tokens: z.number().optional(), cache_read_input_tokens: z.number().optional(),
+  id: z.string().optional(),
 }).passthrough();
 const entrySchema = z.object({
   type: z.string().optional(), uuid: z.string().optional(), timestamp: z.string().optional(),
-  requestId: z.string().optional(), isSidechain: z.boolean().optional(),
+  isSidechain: z.boolean().optional(),
   message: z.object({
-    id: z.string().optional(), model: z.string().optional(), stop_reason: z.string().optional(),
-    usage: usageSchema.optional(), content: z.array(contentBlockSchema).optional(),
+    id: z.string().optional(), stop_reason: z.string().optional(),
+    content: z.array(z.unknown()).optional(),
   }).passthrough().optional(),
 }).passthrough();
 const recordSchema = z.record(z.unknown());
 type RawEntry = z.infer<typeof entrySchema>;
-type RawContentBlock = z.infer<typeof contentBlockSchema>;
-type RawUsage = z.infer<typeof usageSchema>;
 
-type PartialBlock = ContentBlock;
-
-function toBlocks(content: RawContentBlock[] | undefined): ContentBlock[] {
+function toBlocks(content: unknown[] | undefined): ContentBlock[] {
   if (!Array.isArray(content)) return [];
 
-  const partials: PartialBlock[] = [];
-  for (const [index, b] of content.entries()) {
-    if (!b || typeof b !== 'object') continue;
+  const partials: ContentBlock[] = [];
+  for (const [index, raw] of content.entries()) {
+    const parsed = contentBlockSchema.safeParse(raw);
+    if (!parsed.success) continue;
+    const b = parsed.data;
     switch (b.type) {
       case 'thinking':
         if (typeof b.thinking === 'string') {
-          partials.push({ type: 'thinking', index, content: b.thinking, fidelity: 'full' });
+          partials.push({ type: 'thinking', index, sourceId: b.id, content: b.thinking, fidelity: 'full' });
         }
         break;
       case 'text':
         if (typeof b.text === 'string') {
-          partials.push({ type: 'text', index, content: b.text });
-        }
-        break;
-      case 'tool_use':
-        if (typeof b.id === 'string' && typeof b.name === 'string') {
-          const input = b.input !== undefined ? JSON.stringify(b.input) : '{}';
-          partials.push({
-            type: 'tool_use',
-            index,
-            content: input,
-            toolUse: { id: b.id, name: b.name, input },
-          });
+          partials.push({ type: 'text', index, sourceId: b.id, content: b.text });
         }
         break;
       default:
@@ -64,46 +47,27 @@ function toBlocks(content: RawContentBlock[] | undefined): ContentBlock[] {
   return partials;
 }
 
-function toUsage(usage: RawUsage | undefined): ChatCall['usage'] | undefined {
-  if (!usage || typeof usage !== 'object') return undefined;
-  const out: NonNullable<ChatCall['usage']> = {};
-  if (typeof usage.input_tokens === 'number') out.input = usage.input_tokens;
-  if (typeof usage.output_tokens === 'number') out.output = usage.output_tokens;
-  if (typeof usage.cache_read_input_tokens === 'number') out.cacheRead = usage.cache_read_input_tokens;
-  if (typeof usage.cache_creation_input_tokens === 'number') out.cacheWrite = usage.cache_creation_input_tokens;
-  return Object.keys(out).length > 0 ? out : undefined;
-}
 
-/** Converts one transcript line to a call. Returns null for non-assistant lines. */
-function toCall(entry: RawEntry, occurrences: Map<string, number>): ChatCall | null {
-  if (entry.type !== 'assistant' || !entry.message) return null;
+/** Converts one transcript message, without inventing model-call boundaries. */
+function toMessage(entry: RawEntry, occurrences: Map<string, number>): AssistantMessage | null {
+  // Child content has no existing child-turn routing here; never attach it to the parent.
+  if (entry.type !== 'assistant' || !entry.message || entry.isSidechain === true) return null;
   const msg = entry.message;
 
   const parsedMs = entry.timestamp ? Date.parse(entry.timestamp) : NaN;
   const ms = Number.isFinite(parsedMs) ? parsedMs : 0;
 
-  const callId = entry.requestId || msg.id || sourceFingerprint('cc', entry, occurrences);
+  const id = msg.id || entry.uuid || sourceFingerprint('cc', entry, occurrences);
 
   return {
-    callId,
+    id,
     source: 'claude-code-transcript',
-    model: typeof msg.model === 'string' ? msg.model : undefined,
-    startMs: ms,
-    endMs: ms,
-    timing: 'synthetic',
-    usage: toUsage(msg.usage),
-    stopReason: typeof msg.stop_reason === 'string' ? msg.stop_reason : undefined,
-    blocks: toBlocks(msg.content).map((block) => ({ ...block, ...(entry.uuid ? { sourceId: `${entry.uuid}:${block.index}` } : {}) })),
-    isSidechain: entry.isSidechain === true,
+    timestampMs: ms,
+    finishReason: typeof msg.stop_reason === 'string' ? msg.stop_reason : undefined,
+    blocks: toBlocks(msg.content).map((block) => ({ ...block, ...(!block.sourceId && entry.uuid ? { sourceId: `${entry.uuid}:${block.index}` } : {}) })),
   };
 }
 
-function applyTiming(calls: ChatCall[]): void {
-  for (let i = 0; i < calls.length - 1; i++) {
-    calls[i].endMs = calls[i + 1].startMs;
-    calls[i].timing = 'inferred';
-  }
-}
 
 export interface UserPrompt {
   text: string;
@@ -165,11 +129,11 @@ export function lastUserPromptSince(transcriptPath: string, sinceMs: number): Us
 export function createClaudeCodeSource(transcriptPath: string): ConversationSource {
   return {
     name: 'claude-code-transcript',
-    callsSince(sinceMs: number): ChatCall[] {
+    messagesSince(sinceMs: number): AssistantMessage[] {
       const lines = readJsonlTail(transcriptPath);
-      const calls: ChatCall[] = [];
+      const messages: AssistantMessage[] = [];
       const occurrences = new Map<string, number>();
-      const byId = new Map<string, ChatCall>();
+      const byId = new Map<string, AssistantMessage>();
       const seenEntries = new Set<string>();
 
       lines.forEach((line) => {
@@ -181,25 +145,22 @@ export function createClaudeCodeSource(transcriptPath: string): ConversationSour
         } catch {
           return; // malformed line: skip, don't abort the rest of the file
         }
-        if (!entry || typeof entry !== 'object') return;
+        if (!entry || typeof entry !== 'object' || entry.isSidechain === true) return;
         if (entry.uuid && seenEntries.has(entry.uuid)) return;
         if (entry.uuid) seenEntries.add(entry.uuid);
-        const call = toCall(entry, occurrences);
-        if (!call) return;
-        const prior = byId.get(call.callId);
+        const message = toMessage(entry, occurrences);
+        if (!message) return;
+        const prior = byId.get(message.id);
         if (prior) {
           const offset = prior.blocks.length ? prior.blocks[prior.blocks.length - 1]!.index + 1 : 0;
-          prior.blocks.push(...call.blocks.map((block) => ({ ...block, index: block.index + offset })));
-          prior.usage = call.usage ? { ...prior.usage, ...call.usage } : prior.usage;
-          prior.stopReason = call.stopReason ?? prior.stopReason;
+          prior.blocks.push(...message.blocks.map((block) => ({ ...block, index: block.index + offset })));
+          prior.finishReason = message.finishReason ?? prior.finishReason;
         } else {
-          byId.set(call.callId, call);
-          calls.push(call);
+          byId.set(message.id, message);
+          messages.push(message);
         }
       });
-      applyTiming(calls);
-
-      return calls.filter((c) => c.startMs >= sinceMs);
+      return messages.filter((message) => (message.timestampMs ?? 0) >= sinceMs);
     },
   };
 }

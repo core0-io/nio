@@ -1,14 +1,12 @@
 // Copyright 2026 core0-io
 // SPDX-License-Identifier: Apache-2.0
 
-export type ContentKind = 'thinking' | 'text' | 'user_prompt' | 'tool_input' | 'tool_output';
+export type ContentKind = 'thinking' | 'text' | 'user_prompt';
 export type ContentLimits = Record<ContentKind, number>;
 export const DEFAULT_CONTENT_LIMITS: ContentLimits = {
   thinking: 65536,
   text: 65536,
   user_prompt: 32768,
-  tool_input: 16384,
-  tool_output: 32768,
 };
 export interface TruncateResult {
   text: string;

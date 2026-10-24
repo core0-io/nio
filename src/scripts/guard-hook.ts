@@ -23,7 +23,7 @@ export {};
  * PostToolUse: appends audit log entry (async, always exits 0)
  */
 
-import { loadCollectorConfig, loadContentLimits } from './lib/config-loader.js';
+import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import {
@@ -40,8 +40,6 @@ import { spanKey, toolSummary, type HookStdinPayload } from './lib/collector-cor
 import { createNio, ClaudeCodeAdapter, CodexAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter } from '../index.js';
 import { formatDiagnosticsForUser, type Diagnostic } from '../adapters/diagnostics.js';
-import { isSessionMonitored } from './lib/monitor-check.js';
-import { emitToolInputContent } from './lib/content/sink.js';
 
 // ---------------------------------------------------------------------------
 // CLI arg parsing
@@ -214,25 +212,12 @@ async function main(): Promise<void> {
       const cwd = (payload as Record<string, unknown>).cwd as string ?? process.cwd();
       const toolInput = ((payload as Record<string, unknown>).tool_input ?? {}) as Record<string, unknown>;
       const tool_use_id = (payload as Record<string, unknown>).tool_use_id as string | undefined;
-      const summary = toolSummary(toolName, toolInput);
+      const summary = toolSummary(toolName, toolInput, true);
       state = recordPreToolUse(
         state, key, toolName, summary,
         genAiToolCallInputAttributes(toolInput, tool_use_id),
         evalStartMs,
       );
-      if (isSessionMonitored(sessionId, cwd, logsConfig)) {
-        try {
-          emitToolInputContent(loggerProvider, loadContentLimits(), {
-            input: JSON.stringify(toolInput),
-            spanId: state.pending_spans[key]!.span_id,
-            traceId: state.turn_trace_id,
-            toolCallId: tool_use_id,
-            source: PLATFORM,
-          });
-        } catch {
-          // Optional content serialization must not change an already-decided block.
-        }
-      }
       const reason = result.reason || (resolvedDecision === 'deny' ? 'Blocked by Nio' : 'Requires confirmation (Nio)');
       const r = await recordPostToolUse(
         tracerProvider, state, key, cwd,

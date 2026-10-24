@@ -27,8 +27,7 @@ import { SkillScanner } from '../scanner/index.js';
 import { loadCollectorConfig, loadContentLimits } from '../scripts/lib/config-loader.js';
 import { isSessionMonitored } from '../scripts/lib/monitor-check.js';
 import { createSourceForPlatform, type SourceInput } from '../scripts/lib/conversation/factory.js';
-import type { ChatCall } from '../scripts/lib/conversation/types.js';
-import { createContentSink, emitToolInputContent, emitToolOutputContent, emitUserPromptContent } from '../scripts/lib/content/sink.js';
+import { emitAssistantContent, emitUserPromptContent } from '../scripts/lib/content/sink.js';
 import {
   createTracerProvider,
   endTurn,
@@ -54,6 +53,7 @@ import {
   nioGuardAttributes,
   nioReclaimedSpanAttributes,
 } from '../scripts/lib/traces-collector.js';
+import { toolSummary } from '../scripts/lib/collector-core.js';
 import { recordToolUse, recordGuardDecision, recordTurn } from '../scripts/lib/metrics-collector.js';
 import { dispatchNioCommand } from './openclaw-dispatch.js';
 
@@ -118,10 +118,10 @@ export class InProcessPluginRuntime {
   protected readonly sessionState = new Map<string, CollectorState>();
   private readonly conversationEvents = new Map<string, Map<string, unknown>>();
   private readonly transcriptPaths = new Map<string, string>();
+  /** A rejected Pi observation makes transcript replay unsafe for this turn. */
+  private readonly piReplayDisabled = new Set<string>();
   private readonly sessionCwds = new Map<string, string>();
-  private readonly observedCalls = new Map<string, Set<string>>();
-  private readonly observedTools = new Map<string, Set<string>>();
-  private readonly promptIndices = new Map<string, number>();
+  private readonly observedMessages = new Map<string, Set<string>>();
   private readonly observedPrompts = new Map<string, Set<string>>();
   private conversationSequence = 0;
 
@@ -229,7 +229,10 @@ export class InProcessPluginRuntime {
 
   /** Replace streamed snapshots in their original source position. */
   recordConversationEvent(sessionId: string, event: unknown, dedupKey?: string, startMs?: number): void {
-    if (!this.contentLogger(sessionId)) return;
+    if (!this.contentLogger(sessionId)) {
+      if (this.platform === 'pi') this.piReplayDisabled.add(sessionId);
+      return;
+    }
     const slots = this.conversationEvents.get(sessionId) ?? new Map<string, unknown>();
     slots.set(dedupKey === undefined ? `#${this.conversationSequence++}` : `k:${dedupKey}`, event);
     this.conversationEvents.set(sessionId, slots);
@@ -248,7 +251,8 @@ export class InProcessPluginRuntime {
   }
 
   protected conversationInputFor(sessionId: string): SourceInput {
-    const transcriptPath = this.transcriptPaths.get(sessionId);
+    const transcriptPath = this.platform === 'pi' && this.piReplayDisabled.has(sessionId)
+      ? undefined : this.transcriptPaths.get(sessionId);
     return { transcriptPath, events: [...(this.conversationEvents.get(sessionId)?.values() ?? [])] };
   }
   /** Hard session boundary — drop stale turn numbering, write audit row. */
@@ -256,10 +260,9 @@ export class InProcessPluginRuntime {
     this.sessionState.delete(sessionId);
     this.conversationEvents.delete(sessionId);
     this.transcriptPaths.delete(sessionId);
-    this.observedCalls.delete(sessionId);
-    this.observedTools.delete(sessionId);
+    this.piReplayDisabled.delete(sessionId);
+    this.observedMessages.delete(sessionId);
     this.observedPrompts.delete(sessionId);
-    this.promptIndices.delete(sessionId);
     this.writeLifecycle(sessionId, 'session_start');
   }
 
@@ -268,10 +271,10 @@ export class InProcessPluginRuntime {
     this.writeLifecycle(sessionId, 'session_end');
     await this.flushSessionTurn(sessionId);
     this.transcriptPaths.delete(sessionId);
+    this.piReplayDisabled.delete(sessionId);
     this.sessionCwds.delete(sessionId);
-    this.observedCalls.delete(sessionId);
+    this.observedMessages.delete(sessionId);
     this.observedPrompts.delete(sessionId);
-    this.observedTools.delete(sessionId);
   }
 
   /**
@@ -345,7 +348,7 @@ export class InProcessPluginRuntime {
       await this.flushSessionTurnInner(sessionId);
     } finally {
       this.conversationEvents.delete(sessionId);
-      this.promptIndices.delete(sessionId);
+      this.piReplayDisabled.delete(sessionId);
     }
   }
 
@@ -392,25 +395,25 @@ export class InProcessPluginRuntime {
     }
 
     const logger = this.contentLogger(sessionId);
-    let calls: ChatCall[] | undefined;
-    if (logger) {
+    if (logger && state.turn_trace_id) {
       try {
-        const seen = this.observedCalls.get(sessionId) ?? new Set<string>();
-        calls = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId))
-          ?.callsSince(state.turn_start_ms).filter(call => !seen.has(call.callId));
-        for (const call of calls ?? []) {
-          // OpenClaw's synthetic fingerprints identify an occurrence only
-          // inside one turn. Reusing them across turns drops identical replies.
+        const seen = this.observedMessages.get(sessionId) ?? new Set<string>();
+        const messages = createSourceForPlatform(this.platform, this.conversationInputFor(sessionId))
+          ?.messagesSince(state.turn_start_ms) ?? [];
+        for (const message of messages) {
+          if (seen.has(message.id)) continue;
+          emitAssistantContent(logger, loadContentLimits(), message,
+            state.turn_trace_id.slice(0, 16), state.turn_trace_id);
+          // Anonymous OpenClaw occurrences are turn-local, real host IDs survive replay.
           if (this.platform !== 'openclaw'
-            || this.conversationEvents.get(sessionId)?.has(`k:${call.callId}`)) seen.add(call.callId);
+            || this.conversationEvents.get(sessionId)?.has(`k:${message.id}`)) seen.add(message.id);
         }
-        this.observedCalls.set(sessionId, seen);
+        this.observedMessages.set(sessionId, seen);
       } catch {
         // Missing/malformed host transcripts do not change Guard or turn export.
       }
     }
-    const sink = logger ? createContentSink(logger, loadContentLimits()) : undefined;
-    await endTurn(this.tracerProvider, state, process.cwd(), null, calls, sink);
+    await endTurn(this.tracerProvider, state, process.cwd(), null);
     this.sessionState.delete(sessionId);
     await this.tracerProvider.forceFlush();
   }
@@ -432,22 +435,13 @@ export class InProcessPluginRuntime {
     opts?: { toolCallId?: string; extraPreAttrs?: Record<string, unknown> },
   ): Promise<PreToolResult> {
     if (this.tracerProvider) {
-      const seen = this.observedTools.get(sessionId) ?? new Set<string>();
-      const firstObservation = !opts?.toolCallId || !seen.has(opts.toolCallId);
-      if (opts?.toolCallId) seen.add(opts.toolCallId);
-      this.observedTools.set(sessionId, seen);
-      if (firstObservation) {
-        let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
-        // Only real platform identities are exported as tool call IDs.
-        const preAttrs: Record<string, unknown> = {
-          ...genAiToolCallInputAttributes(params, opts?.toolCallId),
-          ...(opts?.extraPreAttrs ?? {}),
-        };
-        state = recordPreToolUse(state, spanKey, toolName, '', preAttrs);
-        this.sessionState.set(sessionId, state);
-        this.emitToolContent(sessionId, 'input',
-          state.pending_spans[spanKey]?.span_id, state.turn_trace_id, params, opts?.toolCallId);
-      }
+      let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
+      const preAttrs: Record<string, unknown> = {
+        ...genAiToolCallInputAttributes(params, opts?.toolCallId),
+        ...(opts?.extraPreAttrs ?? {}),
+      };
+      state = recordPreToolUse(state, spanKey, toolName, toolSummary(toolName, params, true), preAttrs);
+      this.sessionState.set(sessionId, state);
     }
     if (this.meterProvider) {
       recordToolUse(this.meterProvider, toolName, 'PreToolUse').catch(() => {});
@@ -571,9 +565,6 @@ export class InProcessPluginRuntime {
             durationMs: outcome.durationMs,
           }),
         };
-        const pending = drained.pending_spans[spanKey];
-        this.emitToolContent(sessionId, 'output', pending?.span_id, drained.turn_trace_id,
-          outcome.result, pending?.attributes?.['gen_ai.tool.call.id'] as string | undefined);
         const r = await recordPostToolUse(
           this.tracerProvider,
           drained,
@@ -590,13 +581,17 @@ export class InProcessPluginRuntime {
     }
   }
 
-  /** Record prompt metadata on the turn and its body only on consented Logs. */
-  onUserPrompt(sessionId: string, text: string, opts?: { index?: number; sourceId?: string }): boolean {
-    if (!this.tracerProvider || !text) return false;
+  /** Preserve the baseline prompt attribute and emit one consented structured message. */
+  onUserPrompt(sessionId: string, text: string, opts?: {
+    sourceId?: string;
+    blocks?: { text: string; index: number; sourceId?: string }[];
+  }): boolean {
+    if (!this.tracerProvider || typeof text !== 'string' || !text) return false;
     let state = ensureTurn(this.sessionState.get(sessionId) ?? null, sessionId);
     state = recordUserPrompt(state, text);
     this.sessionState.set(sessionId, state);
     const logger = this.contentLogger(sessionId);
+    if (!logger && this.platform === 'pi') this.piReplayDisabled.add(sessionId);
     if (!logger || !state.turn_trace_id) return false;
     if (opts?.sourceId) {
       const seen = this.observedPrompts.get(sessionId) ?? new Set<string>();
@@ -604,12 +599,10 @@ export class InProcessPluginRuntime {
       seen.add(opts.sourceId);
       this.observedPrompts.set(sessionId, seen);
     }
-    const index = opts?.index ?? this.promptIndices.get(sessionId) ?? 0;
     emitUserPromptContent(logger, loadContentLimits(), {
       prompt: text, spanId: state.turn_trace_id.slice(0, 16), traceId: state.turn_trace_id,
-      index, sourceId: opts?.sourceId, source: `${this.platform}-events`,
+      blocks: opts?.blocks, sourceId: opts?.sourceId,
     });
-    this.promptIndices.set(sessionId, index + 1);
     return true;
   }
 
@@ -685,28 +678,6 @@ export class InProcessPluginRuntime {
     }
   }
 
-  private emitToolContent(
-    sessionId: string,
-    kind: 'input' | 'output',
-    spanId: string | undefined,
-    traceId: string | undefined,
-    payload: unknown,
-    toolCallId?: string,
-  ): void {
-    if (!spanId || !traceId) return;
-    const logger = this.contentLogger(sessionId);
-    if (!logger) return;
-    let text: string;
-    try {
-      text = typeof payload === 'string' ? payload : JSON.stringify(payload) ?? '';
-    } catch {
-      return; // Host objects may be cyclic; content must never affect execution.
-    }
-    if (!text) return;
-    const opts = { spanId, traceId, toolCallId, source: `${this.platform}-events`, sourceId: toolCallId };
-    if (kind === 'input') emitToolInputContent(logger, loadContentLimits(), { input: text, ...opts });
-    else emitToolOutputContent(logger, loadContentLimits(), { result: text, ...opts });
-  }
 
   private stashGuardAttrs(
     sessionId: string,

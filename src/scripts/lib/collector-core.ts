@@ -52,6 +52,7 @@ import {
   recordPostTaskToolUse,
   endTurn,
   recordUserPrompt,
+  redactAndTruncate,
   genAiToolCallInputAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
@@ -59,7 +60,7 @@ import {
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
 import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
 import { lastUserPromptSince } from './conversation/claude-code-source.js';
-import { createContentSink, emitToolInputContent, emitToolOutputContent, emitUserPromptContent } from './content/sink.js';
+import { emitAssistantContent, emitUserPromptContent } from './content/sink.js';
 import { loadContentLimits } from './config-loader.js';
 import { isSessionMonitored } from './monitor-check.js';
 
@@ -110,6 +111,8 @@ export interface DispatchOptions {
    */
   logsConfig?: CollectorLogsConfig;
   conversationInput?: SourceInput;
+  /** Model callbacks can capture outputs without closing the encompassing user turn. */
+  closeTurn?: boolean;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -119,7 +122,14 @@ export interface DispatchOptions {
  * and audit log entries. Recognises Claude Code, OpenClaw, and Hermes
  * tool names; falls back to a JSON-stringified preview for unknowns.
  */
-export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
+export function toolSummary(toolName: string, toolInput: Record<string, unknown>, protectContent = false): string {
+  if (protectContent) {
+    try {
+      return toolSummary(toolName, JSON.parse(redactAndTruncate(toolInput, Infinity)) as Record<string, unknown>);
+    } catch {
+      return '[REDACTED]';
+    }
+  }
   switch (toolName) {
     // Claude Code
     case 'Bash':
@@ -263,29 +273,15 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         const identity = input.prompt_id ?? transcriptPrompt?.id;
         const seen = state.observed_prompt_ids ?? [];
         const alreadyObserved = identity !== undefined && seen.includes(identity);
+        if (prompt) state = recordUserPrompt(state, prompt);
         if (prompt && !alreadyObserved && contentProvider) {
-          state = recordUserPrompt(state, prompt);
-          const blocks = transcriptPrompt?.blocks ?? [{ text: prompt, index: 0, sourceId: identity }];
-          const limits = loadContentLimits();
-          const offset = state.prompt_count ?? 0;
-          let nextIndex = offset;
-          for (const block of blocks) {
-            const index = offset + block.index;
-            emitUserPromptContent(contentProvider, limits, {
-              prompt: block.text,
-              spanId: state.turn_trace_id.slice(0, 16),
-              traceId: state.turn_trace_id,
-              index,
-              source: platform,
-              sourceId: block.sourceId ?? (identity ? `${identity}:${block.index}` : undefined),
-            });
-            nextIndex = Math.max(nextIndex, index + 1);
-          }
-          state = {
-            ...state,
-            prompt_count: nextIndex,
-            observed_prompt_ids: identity ? [...seen, identity] : seen,
-          };
+          emitUserPromptContent(contentProvider, loadContentLimits(), {
+            prompt,
+            blocks: transcriptPrompt?.blocks,
+            spanId: state.turn_trace_id.slice(0, 16),
+            traceId: state.turn_trace_id,
+          });
+          state = { ...state, observed_prompt_ids: identity ? [...seen, identity] : seen };
         }
         saveState(logsConfig, state);
       }
@@ -293,7 +289,7 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     } else if (event === 'PreToolUse') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      const summary = toolSummary(toolName, toolInput);
+      const summary = toolSummary(toolName, toolInput, true);
       const key = spanKey(input);
 
       if (tracerProvider) {
@@ -328,7 +324,6 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
         state = drained.state;
         const resp = (input.tool_response ?? {}) as Record<string, unknown>;
         const err = (resp.error ?? resp.stderr) as string | undefined;
-        const toolSpanId = state.pending_spans[key]?.span_id;
         const result = await recordPostToolUse(
           tracerProvider, state, key, cwd,
           {
@@ -337,25 +332,6 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
           },
           err ?? null,
         );
-        if (toolSpanId && contentProvider) {
-          const limits = loadContentLimits();
-          emitToolInputContent(contentProvider, limits, {
-            input: JSON.stringify(toolInput),
-            spanId: toolSpanId,
-            traceId: state.turn_trace_id,
-            source: platform,
-            toolCallId: input.tool_use_id,
-          });
-          const resultText = typeof resp.output === 'string' ? resp.output
-            : Object.keys(resp).length > 0 ? JSON.stringify(resp) : '';
-          emitToolOutputContent(contentProvider, limits, {
-            result: resultText,
-            spanId: toolSpanId,
-            traceId: state.turn_trace_id,
-            source: platform,
-            toolCallId: input.tool_use_id,
-          });
-        }
         saveState(logsConfig, result.state);
       }
 
@@ -406,28 +382,40 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
-      // SessionEnd is a Hermes-driven addition: on Claude Code, Stop /
-      // SubagentStop already close the turn. SessionEnd in Hermes is the
-      // hard session boundary; we treat it the same way as a defensive
-      // turn-close so any in-flight span gets flushed.
+      // Hermes post_llm_call observes output; on_session_end closes the user turn.
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
       if (tracerProvider) {
-        const state = loadState(logsConfig);
+        let state = loadState(logsConfig);
         const matchesSession = sessionId === '' || sessionId === 'unknown' || state?.session_id === sessionId;
         if (state?.turn_trace_id && matchesSession) {
-          const source = contentProvider ? createSourceForPlatform(platform, {
-            transcriptPath,
-            ...(opts.conversationInput ?? {}),
-          }) : null;
-          const calls = source ? await source.callsSince(state.turn_start_ms) : undefined;
-          const sink = createContentSink(contentProvider, loadContentLimits());
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath, calls, sink);
-          if (next) saveState(logsConfig, next);
+          if (contentProvider) {
+            try {
+              const source = createSourceForPlatform(platform, {
+                transcriptPath,
+                ...(opts.conversationInput ?? {}),
+              });
+              const seen = new Set(state.observed_message_ids ?? []);
+              const limits = loadContentLimits();
+              for (const message of source?.messagesSince(state.turn_start_ms) ?? []) {
+                if (seen.has(message.id)) continue;
+                emitAssistantContent(contentProvider, limits, message, state.turn_trace_id.slice(0, 16), state.turn_trace_id);
+                seen.add(message.id);
+              }
+              state = { ...state, observed_message_ids: [...seen] };
+            } catch {
+              // Content-source failures must not suppress the existing turn span.
+            }
+          }
+          if (opts.closeTurn === false) saveState(logsConfig, state);
+          else {
+            const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
+            if (next) saveState(logsConfig, next);
+          }
         }
       }
 
-      if (meterProvider) {
+      if (meterProvider && opts.closeTurn !== false) {
         await recordTurn(meterProvider);
       }
 

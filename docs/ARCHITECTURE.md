@@ -792,8 +792,7 @@ conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where
 applicable; Nio-specific extensions use the `nio.*` prefix.
 
 ```
-Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
-  ├─ Span: chat <model>           (one reconstructed LLM call)
+Trace: invoke_agent UserPromptSubmit  (existing root span; host-specific turn close)
   ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
   ├─ Span: execute_tool <name>     (PreToolUse → PostToolUse)
   └─ Span: task:execute             (TaskCreated → TaskCompleted)
@@ -815,7 +814,8 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 | `nio.turn_number` | Auto-incrementing per session |
 | `nio.platform` | `claude-code`, `codex`, `openclaw`, `hermes`, `pi`, or `opencode` |
 | `nio.cwd` | Working directory when the turn started |
-| `nio.content.source` | `logs`: bodies belong to linked content records, not span previews |
+| `nio.turn.user_prompt` | Existing observed prompt, redacted and bounded to 2048 UTF-16 code units before marker |
+| `nio.turn.assistant_reply` | Existing last-written reply on OpenClaw/Pi string-content paths; same bound, not an aggregate/final-answer guarantee |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)` |
 
 **Token usage collection** differs by platform:
@@ -826,11 +826,11 @@ Trace: invoke_agent UserPromptSubmit  (root span, UserPromptSubmit → Stop)
 - **Pi**: `message_end` carries `message.usage` (`input` / `output` / `cacheRead` / `cacheWrite`) once per assistant message; accumulated the same way as OpenClaw.
 - **opencode**: `message.updated` carries cumulative `info.tokens`, but it is a **snapshot** republished on every change to the same message rather than a one-shot event. The binding keys the last-seen totals by message id and feeds only the delta into `onLlmUsage`, so a re-publish cannot compound the turn's totals. Messages without an id are skipped rather than risk inflating them.
 
-**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `nio.content.source=logs`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` (when set), existing duration/run/Guard metadata. Arguments and results are OTLP content logs, not span attributes.
+**Tool span (`execute_tool <name>`) attributes:** `gen_ai.operation.name` (= `execute_tool`), `gen_ai.tool.name`, `gen_ai.tool.call.id`, `gen_ai.tool.call.arguments`, `gen_ai.tool.call.result` when supplied, `nio.tool_summary`, `nio.turn_number`, `nio.cwd`, `nio.tool.error` when set, and existing duration/run/Guard metadata. Existing serialized arguments/results retain the 2048-code-unit bound. Summaries are redacted before their existing preview limit. No forced tool-content Logs are added.
 
 **Task span (`task:execute`) attributes:** `nio.task_id`, `nio.task_summary`, `nio.platform`, `nio.session_id`, `nio.turn_number`, `nio.cwd`
 
-**Chat span (`chat <model>`)** retains model, timing, token usage, source-call identity and host tool-call IDs. Assistant text and host-exposed thinking are `nio-content` OTLP Logs linked to that exact chat span; prompts link to the turn and tool input/output to the tool. All lengths use the same placement. Spans carry association metadata, not full bodies or previews. Content capture requires existing monitor consent, an endpoint, and traces/logs enabled; Guard evaluation/local audit writing remain independent. See [canonical content schema, ordering and platform limits](COLLECTOR-SIGNALS.md#logs-conversation-content). Generic OTLP backends do not automatically display linked log bodies inside a trace.
+**Observed content Logs:** `nio-content` adds structured `gen_ai.input.messages` / `gen_ai.output.messages` for prompts, assistant text and explicitly exposed reasoning. One observed message keeps ordered parts; unsupported parts are filtered. Built-in trace/span IDs point to the existing turn, not a new chat/model span. Original Trace field names/write behavior remain, including bounded body values. Capture requires consent, an endpoint and traces/logs enabled; Guard evaluation and offline audit remain independent. See [schema, lookup, limits and unsupported host paths](COLLECTOR-SIGNALS.md#logs-conversation-content). Message-payload compatibility does not imply complete inference-event instrumentation or automatic inline rendering by an OTLP backend.
 
 ### Trace state and span lifecycle
 

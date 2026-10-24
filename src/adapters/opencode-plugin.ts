@@ -193,15 +193,18 @@ export function createNioPlugin(options: OpenCodePluginOptions = {}): OpenCodePl
         try {
           const out = hookOutput as {
             message?: { id?: string; sessionID?: string };
-            parts?: Array<{ id?: string; type?: string; text?: string }>;
+            parts?: { id?: string; type?: string; text?: string }[];
           };
           const sessionId = out?.message?.sessionID;
-          if (!sessionId) return;
-          for (const [index, part] of (out.parts ?? []).entries()) {
-            if (part.type !== 'text' || !part.text) continue;
-            const sourceId = part.id ?? (out.message?.id ? `${out.message.id}:${index}` : undefined);
-            rt.onUserPrompt(sessionId, part.text, { index, sourceId });
-          }
+          if (!sessionId || !Array.isArray(out.parts)) return;
+          const blocks = out.parts.flatMap((part, index) =>
+            part?.type === 'text' && typeof part.text === 'string' && part.text
+              ? [{ text: part.text, index, sourceId: part.id }] : []);
+          if (blocks.length) rt.onUserPrompt(sessionId, blocks.map(part => part.text).join('\n'), {
+            sourceId: out.message?.id
+              ?? (blocks.every(part => part.sourceId) ? JSON.stringify(blocks.map(part => part.sourceId)) : undefined),
+            blocks,
+          });
         } catch { /* non-critical */ }
       },
 

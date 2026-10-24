@@ -217,7 +217,6 @@ export function emitContentRecords(provider: LoggerProvider, records: readonly C
     logger.emit({
       severityNumber: SeverityNumber.INFO,
       severityText: 'INFO',
-      body: record.body,
       attributes: { ...record.attributes },
       context: trace.setSpanContext(ROOT_CONTEXT, spanContext),
     });

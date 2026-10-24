@@ -22,7 +22,7 @@ const BUILTIN_PATTERNS: RegExp[] = [
 export function redactSecrets(text: string, extraPatterns: RegExp[] = []): RedactResult {
   let result = text;
   let hits = 0;
-  // Tool payloads are JSON strings here; retain the existing structured-key protection.
+  // Content properties may contain JSON; preserve structured-key protection.
   if (/^\s*[\[{]/.test(text)) {
     try {
       const value: unknown = JSON.parse(text);

@@ -401,8 +401,6 @@ collector:
     thinking: 65536
     text: 65536
     user_prompt: 32768
-    tool_input: 16384
-    tool_output: 32768
 
   # Metrics signal (counters, histograms). Exported via OTLP only — there
   # is no local metrics file. Hook event audit records live in the audit
@@ -410,7 +408,7 @@ collector:
   metrics:
     enabled: true
 
-  # Traces signal (execution metadata for chat, tool, turn and task spans).
+  # Traces signal (existing tool, turn and task spans and their attributes).
   traces:
     enabled: true
 
