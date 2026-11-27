@@ -37,6 +37,7 @@ export {};
 import { createNio, HermesAdapter, evaluateHook, loadConfig } from '../index.js';
 import type { HookAdapter, HookOutput } from '../index.js';
 import { formatDiagnosticsForUser } from '../adapters/diagnostics.js';
+import { createHash } from 'node:crypto';
 import { loadCollectorConfig } from './lib/config-loader.js';
 import { createMeterProvider, recordGuardDecision } from './lib/metrics-collector.js';
 import {
@@ -49,6 +50,7 @@ import {
 import { loadState, saveState } from './lib/traces-state-store.js';
 import { createLoggerProvider } from './lib/logs-collector.js';
 import { reportFlushFailure } from './lib/exporter-diagnostics.js';
+import { isHermesUserMessage } from './lib/conversation/hermes-source.js';
 import {
   dispatchCollectorEvent,
   spanKey,
@@ -161,6 +163,16 @@ function hermesToCollectorInput(
     input.prompt =
       (extra.user_message as string | undefined) ??
       (r.prompt as string | undefined);
+    if (typeof extra.user_message_id === 'string') {
+      input.prompt_id = extra.user_message_id;
+    } else if (Array.isArray(extra.conversation_history)) {
+      const users = extra.conversation_history.filter(isHermesUserMessage);
+      const lastUser: unknown = users.at(-1);
+      if (lastUser && typeof lastUser === 'object' && 'content' in lastUser) {
+        const digest = createHash('sha256').update(JSON.stringify(lastUser)).digest('hex');
+        input.prompt_id = `hermes:user:${users.length}:${digest}`;
+      }
+    }
   } else if (canonicalEvent === 'PostToolUse') {
     const result = extra.result as unknown;
     if (typeof result === 'string') {
@@ -210,6 +222,8 @@ async function runHermesCollector(
     tracerProvider,
     loggerProvider,
     logsConfig,
+    conversationInput: { payload: rawPayload },
+    closeTurn: hermesEvent !== 'post_llm_call',
   });
 
   // Every hook-cli invocation is a fresh subprocess that exits right

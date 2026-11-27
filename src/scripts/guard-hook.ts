@@ -212,7 +212,7 @@ async function main(): Promise<void> {
       const cwd = (payload as Record<string, unknown>).cwd as string ?? process.cwd();
       const toolInput = ((payload as Record<string, unknown>).tool_input ?? {}) as Record<string, unknown>;
       const tool_use_id = (payload as Record<string, unknown>).tool_use_id as string | undefined;
-      const summary = toolSummary(toolName, toolInput);
+      const summary = toolSummary(toolName, toolInput, true);
       state = recordPreToolUse(
         state, key, toolName, summary,
         genAiToolCallInputAttributes(toolInput, tool_use_id),

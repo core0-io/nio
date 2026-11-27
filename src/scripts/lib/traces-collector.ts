@@ -31,37 +31,27 @@ import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
 import type { CollectorState, PendingToolSpan, PendingTaskSpan } from './traces-state-store.js';
+import { redactSecrets } from './content/redact.js';
 
 // Re-export so collector-core / tests can pull state types from a single place.
 export type { CollectorState, PendingToolSpan, PendingTaskSpan };
+
 
 // ---------------------------------------------------------------------------
 // Redaction + truncation for span attribute payloads
 // ---------------------------------------------------------------------------
 
 const MAX_ATTR_BYTES = 2048;
-const SECRET_KEY_RE = /(api[_-]?key|secret|token|password|passwd|authorization|bearer|private[_-]?key|mnemonic|seed|credential)/i;
 
 export function redactAndTruncate(value: unknown, maxBytes: number = MAX_ATTR_BYTES): string {
-  const redact = (v: unknown): unknown => {
-    if (v === null || v === undefined) return v;
-    if (typeof v === 'string') return v;
-    if (typeof v !== 'object') return v;
-    if (Array.isArray(v)) return v.map(redact);
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      out[k] = SECRET_KEY_RE.test(k) ? '[REDACTED]' : redact(val);
-    }
-    return out;
-  };
-  let s: string;
+  let serialized: string;
   try {
-    s = typeof value === 'string' ? value : JSON.stringify(redact(value));
+    serialized = typeof value === 'string' ? value : JSON.stringify(value);
   } catch {
-    s = String(value);
+    serialized = String(value);
   }
-  if (s && s.length > maxBytes) s = s.slice(0, maxBytes) + '…[truncated]';
-  return s ?? '';
+  const redacted = redactSecrets(serialized ?? '').text;
+  return redacted.length > maxBytes ? redacted.slice(0, maxBytes) + '…[truncated]' : redacted;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +97,7 @@ export function genAiToolAttributes(
 // one place.
 // ---------------------------------------------------------------------------
 
-/** Tool-call input attrs (PreToolUse). Used by both deferred (CC/Hermes) and eager (OpenClaw) flows. */
+/** Tool-call input attributes retain the existing Trace contract. */
 export function genAiToolCallInputAttributes(
   toolInput: unknown,
   toolCallId?: string,
@@ -204,12 +194,12 @@ export function nioToolRunIdAttribute(runId: string): Record<string, unknown> {
 // Turn-state operation helpers (state-in / state-out)
 // ---------------------------------------------------------------------------
 
-/** Record user prompt onto turn state (UserPromptSubmit / before_agent_reply). */
+/** Record the observed prompt using the existing turn attribute and bound. */
 export function recordUserPrompt(state: CollectorState, prompt: string): CollectorState {
   return setTurnAttributes(state, { 'nio.turn.user_prompt': redactAndTruncate(prompt) });
 }
 
-/** Record assistant reply onto turn state (currently OpenClaw llm_output). */
+/** Later observations overwrite this existing turn-level reply attribute. */
 export function recordAssistantReply(state: CollectorState, reply: string): CollectorState {
   return setTurnAttributes(state, { 'nio.turn.assistant_reply': redactAndTruncate(reply) });
 }
@@ -435,6 +425,8 @@ export function ensureTurn(
     ...carryPending,
     pending_task_spans: {},
     turn_attributes: {},
+    observed_message_ids: prev?.session_id === sessionId ? prev.observed_message_ids : undefined,
+    observed_prompt_ids: prev?.session_id === sessionId ? prev.observed_prompt_ids : undefined,
   };
 }
 
@@ -584,6 +576,7 @@ export async function recordPostToolUse(
     },
     parentCtx,
   );
+  span.spanContext().spanId = pending.span_id;
   if (error) {
     span.setStatus({ code: SpanStatusCode.ERROR, message: error });
     span.recordException(error);
@@ -825,5 +818,7 @@ export async function endTurn(
     pending_task_spans: {},
     pending_guard_attrs: {},
     turn_attributes: {},
+    observed_message_ids: state.observed_message_ids,
+    observed_prompt_ids: state.observed_prompt_ids,
   };
 }

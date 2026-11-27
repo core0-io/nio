@@ -14,6 +14,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { load as yamlLoad } from 'js-yaml';
+import { DEFAULT_CONTENT_LIMITS, type ContentLimits } from './content/truncate.js';
 
 export interface CollectorConfig {
   endpoint: string;
@@ -138,7 +139,23 @@ export function loadLogsConfig(): LogsConfig {
   return {
     enabled: (logs['enabled'] as boolean) ?? true,
     local: (logs['local'] as boolean) ?? true,
-    path: expandHome((logs['path'] as string) ?? '~/.nio/audit.jsonl'),
+    path: expandHome((logs['path'] as string) ?? join(process.env['NIO_HOME'] || join(homedir(), '.nio'), 'audit.jsonl')),
     max_size_mb: (logs['max_size_mb'] as number) ?? 100,
   };
+}
+
+export function loadMonitorAllSessions(): boolean {
+  const collector = (readRawConfig()['collector'] ?? {}) as Record<string, unknown>;
+  return collector['monitor_all_sessions'] === true;
+}
+
+export function loadContentLimits(): ContentLimits {
+  const collector = (readRawConfig()['collector'] ?? {}) as Record<string, unknown>;
+  const configured = (collector['content_limits'] ?? {}) as Partial<ContentLimits>;
+  const limits = { ...DEFAULT_CONTENT_LIMITS };
+  for (const key of Object.keys(limits) as (keyof ContentLimits)[]) {
+    const value = configured[key];
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) limits[key] = value;
+  }
+  return limits;
 }

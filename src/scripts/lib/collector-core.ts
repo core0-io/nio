@@ -52,11 +52,17 @@ import {
   recordPostTaskToolUse,
   endTurn,
   recordUserPrompt,
+  redactAndTruncate,
   genAiToolCallInputAttributes,
   genAiToolCallOutputAttributes,
   takePendingGuardAttrs,
 } from './traces-collector.js';
 import { loadState, saveState, type CollectorState } from './traces-state-store.js';
+import { createSourceForPlatform, type SourceInput } from './conversation/factory.js';
+import { lastUserPromptSince } from './conversation/claude-code-source.js';
+import { emitAssistantContent, emitUserPromptContent } from './content/sink.js';
+import { loadContentLimits } from './config-loader.js';
+import { isSessionMonitored } from './monitor-check.js';
 
 // ── Public types ────────────────────────────────────────────────────────
 
@@ -66,6 +72,7 @@ export interface HookStdinPayload {
   transcript_path?: string;
   cwd?: string;
   prompt?: string;
+  prompt_id?: string;
   tool_name?: string;
   tool_use_id?: string;
   tool_input?: Record<string, unknown>;
@@ -103,6 +110,9 @@ export interface DispatchOptions {
    * log). When omitted, both default to `${NIO_HOME ?? ~/.nio}/`.
    */
   logsConfig?: CollectorLogsConfig;
+  conversationInput?: SourceInput;
+  /** Model callbacks can capture outputs without closing the encompassing user turn. */
+  closeTurn?: boolean;
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -112,7 +122,14 @@ export interface DispatchOptions {
  * and audit log entries. Recognises Claude Code, OpenClaw, and Hermes
  * tool names; falls back to a JSON-stringified preview for unknowns.
  */
-export function toolSummary(toolName: string, toolInput: Record<string, unknown>): string {
+export function toolSummary(toolName: string, toolInput: Record<string, unknown>, protectContent = false): string {
+  if (protectContent) {
+    try {
+      return toolSummary(toolName, JSON.parse(redactAndTruncate(toolInput, Infinity)) as Record<string, unknown>);
+    } catch {
+      return '[REDACTED]';
+    }
+  }
   switch (toolName) {
     // Claude Code
     case 'Bash':
@@ -220,6 +237,10 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
   const transcriptPath = input.transcript_path ?? null;
   const toolInput = input.tool_input ?? {};
   const auditOpts = { loggerProvider, logsConfig };
+  const captureEnabled = tracerProvider && loggerProvider && opts.config.enabled
+    && opts.config.logs_enabled && opts.config.traces_enabled
+    && isSessionMonitored(sessionId, cwd, logsConfig);
+  const contentProvider = captureEnabled ? loggerProvider : null;
 
   // Shared base fields for every audit entry shape. Branches augment with
   // event-specific fields (task_id/task_summary, …) before writing. We
@@ -244,17 +265,31 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
     if (event === 'UserPromptSubmit') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      if (tracerProvider && input.prompt) {
-        const prev = loadState(logsConfig);
-        let state = ensureTurn(prev, sessionId);
-        state = recordUserPrompt(state, input.prompt);
+      if (tracerProvider) {
+        let state = ensureTurn(loadState(logsConfig), sessionId);
+        const transcriptPrompt = contentProvider && !input.prompt && transcriptPath
+          ? lastUserPromptSince(transcriptPath, state.turn_start_ms - 5000) : null;
+        const prompt = input.prompt ?? transcriptPrompt?.text;
+        const identity = input.prompt_id ?? transcriptPrompt?.id;
+        const seen = state.observed_prompt_ids ?? [];
+        const alreadyObserved = identity !== undefined && seen.includes(identity);
+        if (prompt) state = recordUserPrompt(state, prompt);
+        if (prompt && !alreadyObserved && contentProvider) {
+          emitUserPromptContent(contentProvider, loadContentLimits(), {
+            prompt,
+            blocks: transcriptPrompt?.blocks,
+            spanId: state.turn_trace_id.slice(0, 16),
+            traceId: state.turn_trace_id,
+          });
+          state = { ...state, observed_prompt_ids: identity ? [...seen, identity] : seen };
+        }
         saveState(logsConfig, state);
       }
 
     } else if (event === 'PreToolUse') {
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
-      const summary = toolSummary(toolName, toolInput);
+      const summary = toolSummary(toolName, toolInput, true);
       const key = spanKey(input);
 
       if (tracerProvider) {
@@ -347,22 +382,40 @@ export async function dispatchCollectorEvent(opts: DispatchOptions): Promise<voi
       }
 
     } else if (event === 'Stop' || event === 'SubagentStop' || event === 'SessionEnd') {
-      // SessionEnd is a Hermes-driven addition: on Claude Code, Stop /
-      // SubagentStop already close the turn. SessionEnd in Hermes is the
-      // hard session boundary; we treat it the same way as a defensive
-      // turn-close so any in-flight span gets flushed.
+      // Hermes post_llm_call observes output; on_session_end closes the user turn.
       writeAuditLog({ event, ...baseFields }, auditOpts);
 
       if (tracerProvider) {
-        const prev = loadState(logsConfig);
-        const state = ensureTurn(prev, sessionId);
-        if (state.turn_trace_id) {
-          const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
-          if (next) saveState(logsConfig, next);
+        let state = loadState(logsConfig);
+        const matchesSession = sessionId === '' || sessionId === 'unknown' || state?.session_id === sessionId;
+        if (state?.turn_trace_id && matchesSession) {
+          if (contentProvider) {
+            try {
+              const source = createSourceForPlatform(platform, {
+                transcriptPath,
+                ...(opts.conversationInput ?? {}),
+              });
+              const seen = new Set(state.observed_message_ids ?? []);
+              const limits = loadContentLimits();
+              for (const message of source?.messagesSince(state.turn_start_ms) ?? []) {
+                if (seen.has(message.id)) continue;
+                emitAssistantContent(contentProvider, limits, message, state.turn_trace_id.slice(0, 16), state.turn_trace_id);
+                seen.add(message.id);
+              }
+              state = { ...state, observed_message_ids: [...seen] };
+            } catch {
+              // Content-source failures must not suppress the existing turn span.
+            }
+          }
+          if (opts.closeTurn === false) saveState(logsConfig, state);
+          else {
+            const next = await endTurn(tracerProvider, state, cwd, transcriptPath);
+            if (next) saveState(logsConfig, next);
+          }
         }
       }
 
-      if (meterProvider) {
+      if (meterProvider && opts.closeTurn !== false) {
         await recordTurn(meterProvider);
       }
 

@@ -1,9 +1,8 @@
-# Guard audit schema
+# Collector schemas
 
-`src/schemas/guard-audit.ts` is the only manually maintained structure definition.
-Types, public exports and the draft-07 JSON Schema derive from it. Run
-`pnpm schema:generate` after changes; `pnpm schema:check` and `pnpm test` detect stale
-artifacts. The build regenerates the artifact. Published packages include this directory.
+`src/schemas/guard-audit.ts` and `src/schemas/content.ts` are the canonical manually maintained definitions for their respective signals. Types, exports and draft-07 JSON Schema artifacts derive from them. Run `pnpm schema:generate` after changes; `pnpm schema:check` and `pnpm test` detect stale artifacts. Build regenerates both artifacts; published packages include this directory.
+
+## Guard audit
 
 Structured Guard evaluations use `event=guard` and an `evaluation_id`.
 The generated receiver artifact is `schemas/guard-audit.schema.json`, named
@@ -78,3 +77,13 @@ No JSON Schema-only receiver should claim to verify these semantic invariants.
   "findings": [], "explanation": "Unmapped tool allowed"
 }
 ```
+
+## Conversation content
+
+`schemas/content.schema.json` is generated from `src/schemas/content.ts`, following the same Zod-to-JSON-Schema convention as the existing Guard schema. Each content record has built-in OTLP `traceId` / `spanId` and exactly one structured attribute: `gen_ai.input.messages` or `gen_ai.output.messages`. Its array contains one observed message with ordered `parts`; text uses `type: "text"`, exposed reasoning uses `type: "reasoning"`. Unsupported parts are filtered, not invented. A submitted prompt is not a fabricated copy of the model's complete input history. The LogRecord body does not duplicate the payload.
+
+The supported payload subset is validated against the official [input](opentelemetry/gen-ai-input-messages.json) and [output](opentelemetry/gen-ai-output-messages.json) schemas pinned to OpenTelemetry Semantic Conventions v1.40.0 (`7fe537301d17919af7d7eb65b32e9be35da2c497`). Upstream output messages require `finish_reason`: the observed host reason is retained, otherwise `"unknown"` is used. This is message-payload compatibility, not a claim to emit complete `gen_ai.client.inference.operation.details` events.
+
+Secret redaction precedes independent UTF-8 truncation of each content property, leaving the structured envelope valid. Optional `nio.content.truncated`, `nio.content.original_bytes` (sum of redacted pre-truncation property bytes when truncation occurs), and `nio.content.redactions` describe processing. Optional `nio.trace_id` / `nio.span_id` must match the built-in IDs; runtime Zod validation checks equality, while JSON Schema checks structure only. No private source/call/type/index attribute is required; message/part order is represented by the standard arrays, and source IDs are used internally for replay suppression.
+
+Content records are not Guard decisions. The Guard canonical schema, severity/risk mapping and local audit remain unchanged. See [placement, consent and host limits](../docs/COLLECTOR-SIGNALS.md#logs-conversation-content).

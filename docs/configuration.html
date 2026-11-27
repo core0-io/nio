@@ -315,6 +315,10 @@
           </tbody>
         </table>
 
+        <h3 id="collector.content">Content capture consent and limits</h3>
+        <p>Additional <a href="collector-signals-logs.html#content">structured message Logs</a> require session monitor consent or explicit <code>collector.monitor_all_sessions: true</code> (default <code>false</code>), an endpoint, and both traces/logs enabled. Existing Trace fields and Guard evaluation/local audit keep their independent semantics. No monitor-management command or automatic arming is introduced.</p>
+        <p><code>collector.content_limits</code> caps each message content property after redaction: <code>thinking</code> / <code>text</code> default 65536 UTF-8 bytes, <code>user_prompt</code> 32768. Nonnegative finite overrides apply independently; <code>0</code> is unlimited. Markers count toward the cap; structured JSON is never cut. Tool arguments/results retain their existing span limits and do not use these Log caps.</p>
+
         <hr>
 
         <h2 id="env">Environment variables</h2>

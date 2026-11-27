@@ -68,8 +68,8 @@ unverified — the cell says which.
 | Task span `task:execute` (subagents) | ✓ | — | — | ✓ | **— (Pi has no subagent concept)** | ✓ (`session.created` with `parentID`) |
 | `gen_ai.tool.call.id` | ✓ | ✓ | ✓ | ✓ | ✓ (`toolCallId`) | ✓ (`callID`) |
 | Token usage on the turn span | ✓ (transcript) | **— (parser is Claude-Code-schema-only)** | ✓ when `transcriptPath` supplied | ✓ (`llm_output`) | ✓ (`message_end`) | ✓ (`message.updated`, de-duplicated to a per-message delta) |
-| `nio.turn.user_prompt` | ✓ | ✓ | ✓ | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
-| `nio.turn.assistant_reply` | — | — | — | ✓ (`llm_output`) | ✓ (`message_end`) | — |
+| User prompts as turn-linked content logs | ✓ | ✓ (rollout/payload) | ✓ (host user message) | ✓ | ✓ (`input`) | ✓ (`chat.message`) |
+| Assistant text / exposed thinking as chat-linked logs | ✓ / exposed thinking | ✓ / exposed summaries only | ✓ / exposed reasoning | ✓ / when explicitly exposed in `lastAssistant.content` | ✓ / exposed thinking | ✓ / exposed reasoning |
 | `nio.tool.duration_ms` / `nio.tool.run_id` | — | — | — | ✓ | — | — |
 | Interactive `confirm` (`guard.confirm_action: ask`) | ✓ `permissionDecision: 'ask'` | ~ same payload emitted, host support unverified | **— falls back to _deny_** | — (folds to allow) | ✓ real `ctx.ui.confirm` dialog | ✓ via `permission.ask` |
 | Human-typed shell audited (`lifecycle_type: user_bash`) | — | — | — | — | ✓ (audit only, never blocked) | — |
@@ -115,8 +115,7 @@ Four honest caveats:
   A reclaimed span is still **degraded in two ways**:
   1. Its end timestamp is the turn flush, not the tool's real finish, so
      its duration is an over-estimate.
-  2. It carries **no `gen_ai.tool.call.result`** — nothing ever
-     delivered one.
+  2. It has **no `gen_ai.tool.call.result`** unless the host actually delivered a result.
 
   **The tool's outcome is unknown, and the span does not claim
   otherwise.** Nio deliberately does not mark a reclaimed span `ERROR`:
@@ -162,10 +161,10 @@ Four honest caveats:
 ## Naming conventions
 
 - `gen_ai.*` — keys that follow the OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/). Used wherever there's a spec equivalent: tool name, conversation id, token usage, tool I/O.
-- `nio.*` — vendor extensions for concepts the GenAI spec doesn't cover: guard decisions, per-phase scoring, platform tag, redacted prompt / reply previews, per-task subagent metadata.
+- `nio.*` — vendor extensions for concepts the GenAI spec doesn't cover: guard decisions, per-phase scoring, platform tag, content associations, per-task subagent metadata.
 - `session.id` — mirrored alongside `gen_ai.conversation.id` for OTel base-spec consumers that key off session id rather than conversation id. Same value.
 
-Cross-signal: the same key name carries the same meaning across metrics, traces, and logs. `gen_ai.tool.name` on a metric label is the same string as the matching trace span attribute, which is the same string as the matching audit-log attribute. Joining signals in dashboards Just Works.
+Cross-signal: shared attribute keys preserve their meanings. Content records carry built-in OTLP trace/span IDs and redundant string attributes for explicit joins. Backend query support and UI presentation vary; OTLP correlation does not make a generic backend automatically render log bodies inside a trace.
 
 ---
 
@@ -234,7 +233,7 @@ Metrics have **no local file** — there is no `metrics.jsonl`. If `collector.en
 One trace per conversation turn. Span hierarchy follows OTel [GenAI semantic conventions](https://opentelemetry.io/docs/specs/semconv/gen-ai/) where applicable; Nio-specific extensions use `nio.*` prefix.
 
 ```text
-Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at Stop / SubagentStop)
+Trace: invoke_agent UserPromptSubmit  (existing turn root; host-specific close boundary)
   ├─ Span: execute_tool <name>   (PreToolUse → PostToolUse)
   ├─ Span: execute_tool <name>   (...)
   └─ Span: task:execute          (TaskCreated → TaskCompleted, or OpenClaw subagent_spawning → subagent_ended)
@@ -242,7 +241,7 @@ Trace: invoke_agent UserPromptSubmit  (root, opens at 1st PreToolUse, ends at St
 
 ### Span: `invoke_agent UserPromptSubmit` (turn root)
 
-One per conversation turn. Carries the turn-level metadata: conversation id, accumulated token usage, agent identity, and the redacted user-prompt / assistant-reply previews.
+One per conversation turn. Carries conversation identity, accumulated token usage and content association metadata, not prompt/reply body copies.
 
 | Attribute | Description | Captured at | Platforms |
 | --- | --- | --- | --- |
@@ -258,8 +257,8 @@ One per conversation turn. Carries the turn-level metadata: conversation id, acc
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | turn close | all |
 | `nio.turn_number` | Per-session counter, starts at 1 | turn close | all |
 | `nio.cwd` | Working dir at turn start | turn close (when set) | all |
-| `nio.turn.user_prompt` | First user message of the turn, redacted, ≤2 KB | UserPromptSubmit | all |
-| `nio.turn.assistant_reply` | First assistant reply of the turn, redacted, ≤2 KB | `llm_output` (OpenClaw) · `message_end` (Pi) | OpenClaw + Pi |
+| `nio.turn.user_prompt` | Existing observed prompt attribute; redacted and bounded to 2048 UTF-16 code units before the truncation marker | prompt callback | all, when exposed |
+| `nio.turn.assistant_reply` | Existing last-written reply attribute, not an aggregate or guaranteed final answer; same 2048-code-unit bound | existing reply callback | OpenClaw; Pi string-content path |
 | `nio.turn.cache_hit_rate` | `cache_read / (input + cache_creation + cache_read)`, 0–1 | turn close | all |
 
 **Token usage source** differs by platform. **Claude Code**: `Stop` reads the transcript JSONL and sums `message.usage` from all assistant entries since turn start. **Codex**: none today — `parseTranscriptUsage` matches only Claude-Code-shaped transcript entries (`type: "assistant"` plus `message.usage.{input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens}`), and Codex's transcript JSONL uses different event types and a different shape, so it returns null and the turn span carries no `gen_ai.usage.*`. **Hermes**: same code path as Claude Code if the transcript path is included in the `post_llm_call` payload; otherwise empty. **OpenClaw**: `llm_output` event payload carries usage directly; accumulated incrementally. **Pi**: `message_end` carries `message.usage` once per assistant message; accumulated the same way. **opencode**: `message.updated` carries a *cumulative snapshot* republished on every change to the same message, so the binding tracks last-seen totals per message id and accumulates only the delta — otherwise a re-publish would compound the turn's totals.
@@ -274,12 +273,12 @@ One per tool invocation. Span name is literally `execute_tool ${toolName || 'unk
 | `gen_ai.tool.name` | Host tool name (`Bash`, `WebFetch`, …) | PreToolUse · PostToolUse | all |
 | `gen_ai.tool.type` | Tool type, when known | PostToolUse | all |
 | `gen_ai.tool.call.id` | Host tool-call id (`tool_use_id` on Claude Code, `toolCallId` on OpenClaw / Pi, `callID` on opencode) | PreToolUse · PostToolUse | all |
-| `gen_ai.tool.call.arguments` | Tool input, redacted, ≤2 KB | PreToolUse | all |
-| `gen_ai.tool.call.result` | Tool output, redacted, ≤2 KB | PostToolUse | all |
+| `gen_ai.tool.call.arguments` | Existing redacted serialized tool arguments; 2048-code-unit bound before marker | PreToolUse | all |
+| `gen_ai.tool.call.result` | Existing redacted serialized result; same bound, absent without a result | PostToolUse | all |
+| `nio.tool_summary` | Existing tool-input summary; redacted before the existing command/JSON preview limit | PreToolUse · PostToolUse | all |
 | `nio.tool.error` | Error message when the tool failed | PostToolUse | all |
 | `nio.tool.duration_ms` | Wall-clock tool execution time (ms) — absent on the deny / confirm-denied span (the tool didn't run; use `nio.guard.eval_ms` instead) | PostToolUse | OpenClaw only |
 | `nio.tool.run_id` | OpenClaw-internal run identifier | PreToolUse | OpenClaw only |
-| `nio.tool_summary` | One-line summary derived from tool input | PostToolUse | all |
 | `nio.platform` | Source platform — `claude-code` / `codex` / `hermes` / `openclaw` / `pi` / `opencode` | PostToolUse | all |
 | `nio.turn_number` | Parent turn's number | PostToolUse | all |
 | `nio.cwd` | Working dir at hook fire | PostToolUse (when set) | all |
@@ -324,7 +323,52 @@ Claude Code, Codex, and Hermes spawn a fresh node process per hook event, so a `
 
 ---
 
+## Logs (conversation content)
+
+Canonical definition: [`src/schemas/content.ts`](../src/schemas/content.ts); generated artifact: [`schemas/content.schema.json`](../schemas/content.schema.json). `nio-content` LogRecords use INFO severity and standard structured GenAI message attributes, not plain-string bodies. They are **not Guard evaluations**: no Guard decision/risk fields are added, and Guard schema, severity/risk mapping and local audit writes remain unchanged.
+
+| Observed data | Existing Trace field, unchanged name | Additional content Log payload |
+| --- | --- | --- |
+| User prompt | `nio.turn.user_prompt` on the turn, when exposed | `gen_ai.input.messages[0].parts`: ordered `{type: "text", content: ...}` |
+| Assistant text | `nio.turn.assistant_reply` only on its existing host paths | `gen_ai.output.messages[0].parts`: ordered `{type: "text", content: ...}` |
+| Host-exposed reasoning | No new Trace body field | `gen_ai.output.messages[0].parts`: `{type: "reasoning", content: ...}` alongside text |
+| Tool arguments | `gen_ai.tool.call.arguments` and existing `nio.tool_summary` on the tool span | No forced duplicate content Log; tool-use replay parts are filtered |
+| Tool results | `gen_ai.tool.call.result` on the tool span when supplied | No forced duplicate content Log |
+
+No new chat/model spans are introduced. A turn is the existing user-facing execution interval containing zero or more tool/task spans; it can contain multiple model callbacks. This collector does not reconstruct model-call boundaries. `nio.turn.assistant_reply` retains its original last-write behavior, not an invented aggregation or final-answer guarantee.
+
+Each observed user/assistant message remains one structured message with ordered parts. Repeated equal parts are retained; unsupported images, tool payloads and encrypted reasoning are filtered. Short and long supported text follow the same Log path; the presence of an existing bounded Trace attribute never suppresses the Log. Existing Trace fields and their limits remain readable, so short values can intentionally appear in both signals for compatibility.
+
+The input/output payload subset is validated against [official schemas](../schemas/README.md#conversation-content) pinned to OTel Semantic Conventions v1.40.0. Output `finish_reason` retains the observed reason, otherwise `"unknown"`. These are filtered observed-message logs, **not** complete `gen_ai.client.inference.operation.details` events or a fabricated copy of the model's entire input history.
+
+See OTel's [capturing instructions, inputs and outputs guidance](https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md#capturing-instructions-inputs-and-outputs) for the opt-in capture and structured content conventions; this collector does not invent missing inference metadata to claim a broader event contract.
+
+### Span association and lookup
+
+Every content Log's built-in OTLP `traceId` / `spanId` identifies the **existing turn span**, not a guessed per-model span. Auxiliary `nio.trace_id` / `nio.span_id` carry the same values. To find these Logs from a span, query the backend's Logs for the matching built-in trace and turn-span IDs plus `gen_ai.input.messages` or `gen_ai.output.messages`. No Log ID or new private reference attribute is added to spans. Tool arguments/results remain directly on tool spans; to find turn content from a tool, use its actual parent turn. Backend correlation/rendering varies; OTLP does not promise automatic inline Log display inside a trace.
+
+### Processing and capture
+
+Secret redaction runs on each complete content property **before** its UTF-8 byte cap: thinking/text 64 KiB, user prompt 32 KiB. `collector.content_limits` overrides each independently; `0` means unlimited. Truncation changes the property string, never cuts serialized message JSON. Array order represents message/part order; real source IDs and internal occurrence keys suppress replay without exporting fabricated response IDs. Optional `nio.content.redactions`, `nio.content.truncated` and `nio.content.original_bytes` report actual processing; original bytes sum the redacted pre-truncation properties when truncation occurs.
+
+Capture is off without monitor consent. The collector reads the existing `monitored-sessions.json` format beside the audit log, including 60-second cwd-matched pending arms and seven-day session expiry, or explicit `collector.monitor_all_sessions: true`. No monitor-management commands or automatic arming are added. A missing endpoint, disabled traces or disabled logs suppresses content Logs; they have no local JSONL fallback. Existing Trace capture semantics and Guard evaluation/local audit remain independent.
+
+Pending-arm claims are serialized across hook processes and fail closed on contention. A claimant crash can leave `monitored-sessions.json.lock`; pending claims remain disabled until that abandoned lock is removed, while explicitly armed session IDs still work. OpenClaw cannot claim cwd-scoped pending consent using the server's launch directory; explicit session consent or global opt-in is required.
+
+### Host coverage and limits
+
+- **Claude Code:** reads actual assistant transcript messages and prompt fallback when hook text is absent. Explicit sidechain messages are excluded because this path cannot resolve a separate existing child turn; it does not guess child-span associations.
+- **Codex:** reads observed assistant `response_item` text and exposed reasoning summaries. Distinct response items remain partial observations, not inferred complete generations. Encrypted reasoning is never decoded.
+- **Pi:** combines usable current-turn session JSONL and observed `message_end` messages, reconciling known host IDs or matching timestamp/snapshot occurrences so a partially flushed file does not drop live output. Anonymous snapshots that change between sources cannot always be reconciled without host IDs. A turn with an unconsented prompt/message observation uses only consent-gated live observations, preventing transcript rereads from exporting rejected content.
+- **opencode:** reconstructs final native message/part snapshots in order. A thrown tool can lack a result callback; the reclaimed span cannot invent `gen_ai.tool.call.result`.
+- **OpenClaw:** structured output requires native `lastAssistant` content/reasoning. Aggregate-only `assistantTexts` cannot establish message boundaries and is not fabricated into one message; the existing Trace reply binding is unchanged. `lastAssistant.stopReason` is retained. Reasoning-effort metadata is not reasoning content. Without stable native message IDs, indistinguishable redelivery cannot safely be suppressed without dropping a legitimate identical message.
+- **Hermes:** uses visible history after an actual user-input boundary, excluding tool-result-only pseudo-users; without a boundary, only explicit current `assistant_response` is eligible. Internal anonymous IDs are scoped to the observed user boundary. `pre_llm_call` / `post_llm_call` are model callbacks: post captures outputs without closing/counting a user turn; `on_session_end` closes the existing turn state. Finer user-turn boundaries not exposed by this hook path are not inferred. History compaction/reordering of indistinguishable ID-less messages remains ambiguous; prompt replay detection needs a host prompt ID or actual history boundary.
+- Replay files are read whole up to 8 MiB; larger files contribute the latest 2 MiB. A leading partial JSON item is skipped. Oversized/out-of-window source items cannot be recovered; these bounds are separate from per-property caps.
+
+Replay suppression is not transactional exactly-once delivery. Ordinary OTLP transport and SDK limits still apply; missing host identity or message boundaries are reported as coverage limits, not repaired with fabricated links.
+
 ## Logs (audit log)
+
 
 Audit entries are **dual-written**: OTEL Logs export to `<endpoint>/v1/logs` (when `collector.logs.enabled`) AND a local JSONL file at `collector.logs.path` (when `collector.logs.local`). The JSONL line is the entry verbatim; the OTEL LogRecord uses `body = JSON.stringify(entry)` plus a flat attribute set for indexing. For Guard evaluations, both carry the same evaluation ID and payload; remote export uses the existing `nio-audit` logger and collector endpoint. Local writing continues when the endpoint is absent, remote logs are disabled, or export fails, unless `collector.logs.local=false`.
 
@@ -468,6 +512,7 @@ collector:
     enabled: true                   # OTLP metrics export on/off
   traces:
     enabled: true                   # OTLP traces export on/off
+  monitor_all_sessions: false        # explicit content-capture opt-in; no automatic arming
   logs:
     enabled: true                   # OTLP logs export on/off
     local: true                     # local JSONL backup on/off

@@ -25,6 +25,8 @@ import { Metadata } from '@grpc/grpc-js';
 import { collectorRequestHeaders, type CollectorConfig } from './config-loader.js';
 import { buildNioResource } from './traces-collector.js';
 import { instrumentExporter } from './exporter-diagnostics.js';
+import { trace, ROOT_CONTEXT, TraceFlags, isSpanContextValid } from '@opentelemetry/api';
+import type { ContentRecord } from './content/emit.js';
 
 import type { AuditEntry } from '../../adapters/audit-types.js';
 // ---------------------------------------------------------------------------
@@ -200,4 +202,23 @@ export function emitAuditLog(provider: LoggerProvider, entry: AuditEntry): void 
     body: JSON.stringify(entry),
     attributes: auditEntryAttributes(entry),
   });
+}
+
+export function emitContentRecords(provider: LoggerProvider, records: readonly ContentRecord[]): void {
+  const logger = provider.getLogger('nio-content', '1.0.0');
+  for (const record of records) {
+    const spanContext = {
+      traceId: record.traceId,
+      spanId: record.spanId,
+      traceFlags: TraceFlags.SAMPLED,
+      isRemote: true,
+    };
+    if (!isSpanContextValid(spanContext)) continue;
+    logger.emit({
+      severityNumber: SeverityNumber.INFO,
+      severityText: 'INFO',
+      attributes: { ...record.attributes },
+      context: trace.setSpanContext(ROOT_CONTEXT, spanContext),
+    });
+  }
 }

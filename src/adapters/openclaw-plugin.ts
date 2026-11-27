@@ -21,6 +21,7 @@ import type { NioInstance } from './types.js';
 import { InProcessPluginRuntime } from './plugin-runtime.js';
 import { nioToolRunIdAttribute, type createTracerProvider } from '../scripts/lib/traces-collector.js';
 import type { createMeterProvider } from '../scripts/lib/metrics-collector.js';
+import type { LoggerProvider } from '@opentelemetry/sdk-logs';
 
 // ---------------------------------------------------------------------------
 // OpenClaw Types (subset we use)
@@ -75,6 +76,7 @@ export interface OpenClawPluginOptions {
    */
   tracerProvider?: ReturnType<typeof createTracerProvider>;
   meterProvider?: ReturnType<typeof createMeterProvider>;
+  loggerProvider?: LoggerProvider | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,12 +101,24 @@ export function registerOpenClawPlugin(
     nioFactory: options.nioFactory,
     tracerProvider: options.tracerProvider,
     meterProvider: options.meterProvider,
+    loggerProvider: options.loggerProvider,
   });
 
   /** OpenClaw carries the session id on ctx, with several fallbacks. */
-  const sid = (ctx: unknown, event?: { runId?: string }): string => {
+  const sid = (ctx: unknown, event?: { sessionId?: string; runId?: string }): string => {
     const c = (ctx ?? {}) as { sessionKey?: string; sessionId?: string; runId?: string };
-    return c.sessionKey || c.sessionId || c.runId || event?.runId || 'openclaw';
+    return c.sessionKey || c.sessionId || event?.sessionId || c.runId || event?.runId || 'openclaw';
+  };
+  // The same original user prompt appears on both hooks (and every model
+  // invocation). Collapse that overlap within this turn, never across turns.
+  const promptSeen = new Map<string, Set<string>>();
+  const capturePrompt = (sessionId: string, text: string) => {
+    const seen = promptSeen.get(sessionId) ?? new Set<string>();
+    if (seen.has(text)) return;
+    if (rt.onUserPrompt(sessionId, text)) {
+      seen.add(text);
+      promptSeen.set(sessionId, seen);
+    }
   };
 
   api.on('before_tool_call', async (event: unknown, ctx: unknown) => {
@@ -162,14 +176,32 @@ export function registerOpenClawPlugin(
   api.on('before_agent_reply', async (event: unknown, ctx: unknown) => {
     try {
       const e = event as { cleanedBody?: string };
-      if (e.cleanedBody) rt.onUserPrompt(sid(ctx), e.cleanedBody);
+      if (e.cleanedBody) capturePrompt(sid(ctx), e.cleanedBody);
+    } catch { /* non-critical */ }
+  });
+
+  api.on('llm_input', async (event: unknown, ctx: unknown) => {
+    try {
+      if (!event || typeof event !== 'object' || !('prompt' in event) || typeof event.prompt !== 'string') return;
+      const sessionId = 'sessionId' in event && typeof event.sessionId === 'string' ? event.sessionId : undefined;
+      const runId = 'runId' in event && typeof event.runId === 'string' ? event.runId : undefined;
+      capturePrompt(sid(ctx, { sessionId, runId }), event.prompt);
     } catch { /* non-critical */ }
   });
 
   api.on('llm_output', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { assistantTexts?: string[]; usage?: Record<string, number> };
-      const sessionId = sid(ctx);
+      const e = event as { sessionId?: string; runId?: string; assistantTexts?: string[]; usage?: Record<string, number> };
+      const sessionId = sid(ctx, e);
+      let callId = event && typeof event === 'object' && 'callId' in event
+        && typeof event.callId === 'string' ? event.callId : undefined;
+      if (!callId && event && typeof event === 'object' && 'lastAssistant' in event) {
+        const assistant = event.lastAssistant;
+        if (assistant && typeof assistant === 'object' && 'id' in assistant && typeof assistant.id === 'string') {
+          callId = assistant.id;
+        }
+      }
+      rt.recordConversationEvent(sessionId, { hook: 'llm_output', event }, callId);
       if (e.usage) {
         rt.onLlmUsage(sessionId, {
           input: e.usage['input'], output: e.usage['output'],
@@ -181,18 +213,26 @@ export function registerOpenClawPlugin(
   });
 
   api.on('session_start', async (_e: unknown, ctx: unknown) => {
-    try { rt.onSessionStart(sid(ctx)); } catch { /* non-critical */ }
+    try {
+      const sessionId = sid(ctx);
+      promptSeen.delete(sessionId);
+      rt.onSessionStart(sessionId);
+    } catch { /* non-critical */ }
   });
 
   api.on('session_end', async (_e: unknown, ctx: unknown) => {
-    try { await rt.onSessionEnd(sid(ctx)); } catch { /* non-critical */ }
+    const sessionId = sid(ctx);
+    try { await rt.onSessionEnd(sessionId); } catch { /* non-critical */ }
+    finally { promptSeen.delete(sessionId); }
   });
 
   api.on('agent_end', async (_e: unknown, ctx: unknown) => {
+    const sessionId = sid(ctx);
     try {
-      await rt.onTurnEnd(sid(ctx));
+      await rt.onTurnEnd(sessionId);
       await rt.recordTurnMetric();
     } catch { /* non-critical */ }
+    finally { promptSeen.delete(sessionId); }
   });
 
   if (typeof api.registerTool === 'function') {

@@ -34,6 +34,14 @@ export const CollectorConfigSchema = z.object({
   metrics: CollectorMetricsConfigSchema.optional(),
   traces: CollectorTracesConfigSchema.optional(),
   logs: CollectorLogsConfigSchema.optional(),
+  monitor_all_sessions: z.boolean().optional(),
+  content_limits: z.object({
+    thinking: z.number().finite().nonnegative().optional(),
+    text: z.number().finite().nonnegative().optional(),
+    user_prompt: z.number().finite().nonnegative().optional(),
+    tool_input: z.number().finite().nonnegative().optional(),
+    tool_output: z.number().finite().nonnegative().optional(),
+  }).optional(),
 });
 
 // ---------------------------------------------------------------------------

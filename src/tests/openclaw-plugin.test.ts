@@ -195,7 +195,7 @@ describe('OpenClaw plugin — characterization', () => {
     }
   });
 
-  it('agent_end emits the turn root span with prompt and usage', async () => {
+  it('agent_end emits the turn root span with accumulated usage', async () => {
     const tracer = makeInMemoryTracer();
     try {
       const api = fakeApi();
@@ -210,10 +210,9 @@ describe('OpenClaw plugin — characterization', () => {
       );
       await api.handlers.get('agent_end')!({}, CTX);
 
-      const spans = tracer.finished();
-      assert.equal(spans.length, 1);
-      assert.equal(spans[0]!.attributes['nio.turn.user_prompt'], 'hello there');
-      assert.equal(spans[0]!.attributes['gen_ai.usage.input_tokens'], 10);
+      const turn = tracer.finished().find(span => span.attributes['gen_ai.operation.name'] === 'invoke_agent');
+      assert.ok(turn);
+      assert.equal(turn.attributes['gen_ai.usage.input_tokens'], 10);
     } finally {
       await tracer.shutdown();
     }

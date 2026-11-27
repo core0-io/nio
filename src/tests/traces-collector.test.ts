@@ -9,14 +9,10 @@ import {
   recordPreToolUse,
   recordPreTaskToolUse,
   redactAndTruncate,
-  genAiToolCallInputAttributes,
-  genAiToolCallOutputAttributes,
   nioGuardAttributes,
   nioToolRunIdAttribute,
   genAiUsageAttributes,
   accumulateGenAiUsage,
-  recordUserPrompt,
-  recordAssistantReply,
   recordCacheHitRate,
   setPendingGuardAttrs,
   takePendingGuardAttrs,
@@ -344,55 +340,6 @@ describe('redactAndTruncate', () => {
 
 // ── Attribute builders ─────────────────────────────────────────────────
 
-describe('genAiToolCallInputAttributes', () => {
-  it('produces gen_ai.tool.call.arguments + tool.call.id when toolCallId given', () => {
-    const out = genAiToolCallInputAttributes({ command: 'ls' }, 'tc-1');
-    assert.equal(out['gen_ai.tool.call.id'], 'tc-1');
-    assert.match(out['gen_ai.tool.call.arguments'] as string, /"command":"ls"/);
-    assert.equal(Object.keys(out).length, 2);
-  });
-
-  it('omits tool.call.id when toolCallId absent', () => {
-    const out = genAiToolCallInputAttributes({ x: 1 });
-    assert.equal(out['gen_ai.tool.call.id'], undefined);
-    assert.equal(Object.keys(out).length, 1);
-  });
-
-  it('redacts sensitive keys in input', () => {
-    const out = genAiToolCallInputAttributes({ api_key: 'sk-x', x: 1 });
-    assert.match(out['gen_ai.tool.call.arguments'] as string, /"api_key":"\[REDACTED\]"/);
-  });
-});
-
-describe('genAiToolCallOutputAttributes', () => {
-  it('with result only', () => {
-    const out = genAiToolCallOutputAttributes({ result: { ok: true } });
-    assert.equal(Object.keys(out).length, 1);
-    assert.match(out['gen_ai.tool.call.result'] as string, /"ok":true/);
-  });
-
-  it('with error only', () => {
-    const out = genAiToolCallOutputAttributes({ error: 'boom' });
-    assert.equal(Object.keys(out).length, 1);
-    assert.equal(out['nio.tool.error'], 'boom');
-  });
-
-  it('with all three fields', () => {
-    const out = genAiToolCallOutputAttributes({ result: 'r', error: 'e', durationMs: 42 });
-    assert.equal(Object.keys(out).length, 3);
-    assert.equal(out['nio.tool.duration_ms'], 42);
-  });
-
-  it('with no fields returns empty record', () => {
-    const out = genAiToolCallOutputAttributes({});
-    assert.deepEqual(out, {});
-  });
-
-  it('null error is treated as no error', () => {
-    const out = genAiToolCallOutputAttributes({ result: 'r', error: null });
-    assert.equal(out['nio.tool.error'], undefined);
-  });
-});
 
 describe('nioGuardAttributes', () => {
   it('builds the four-key set when riskTags provided', () => {
@@ -476,27 +423,6 @@ describe('accumulateGenAiUsage', () => {
 
 // ── Turn-state operation helpers ───────────────────────────────────────
 
-describe('recordUserPrompt', () => {
-  it('writes redacted prompt to turn_attributes', () => {
-    const next = recordUserPrompt(seed(), 'hello world');
-    assert.equal(next.turn_attributes!['nio.turn.user_prompt'], 'hello world');
-  });
-
-  it('redacts sensitive content', () => {
-    const next = recordUserPrompt(seed(), JSON.stringify({ api_key: 'sk-x', body: 'hi' }));
-    // recordUserPrompt redacts via redactAndTruncate's secret-key filter.
-    // Plain strings pass through unchanged; structured JSON-strings
-    // remain as-is (redaction operates on object keys, not strings).
-    assert.match(next.turn_attributes!['nio.turn.user_prompt'] as string, /api_key/);
-  });
-});
-
-describe('recordAssistantReply', () => {
-  it('writes redacted reply to turn_attributes', () => {
-    const next = recordAssistantReply(seed(), 'response text');
-    assert.equal(next.turn_attributes!['nio.turn.assistant_reply'], 'response text');
-  });
-});
 
 describe('recordCacheHitRate', () => {
   it('writes 0 for an empty / unused turn', () => {

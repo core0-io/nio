@@ -46,3 +46,16 @@ have been adapted to TypeScript. No code is directly copied;
 acknowledged here for architectural provenance. See file-level
 comments in `src/core/analysers/static/`, `src/core/analysers/behavioural/`,
 `src/core/analysers/llm/`, and `src/core/models.ts`.
+
+-------------------------------------------------------------------------------
+OpenTelemetry Semantic Conventions  (GenAI message schemas)
+-------------------------------------------------------------------------------
+
+The input/output message JSON schemas in `schemas/opentelemetry/` are
+copied from OpenTelemetry Semantic Conventions v1.40.0, commit
+7fe537301d17919af7d7eb65b32e9be35da2c497, with attribution comments added:
+https://github.com/open-telemetry/semantic-conventions/tree/7fe537301d17919af7d7eb65b32e9be35da2c497/docs/gen-ai
+
+Copyright The OpenTelemetry Authors.
+Licensed under the Apache License, Version 2.0; the full license text
+is included in the root `LICENSE` file.
