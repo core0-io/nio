@@ -121,6 +121,49 @@ describe('parseMcpToolName — pi (direct tools, directTools: true)', () => {
   });
 });
 
+describe('parseMcpToolName — pi (`<server>__<tool>` host naming)', () => {
+  it('splits `<server>__<tool>` with no registry', () => {
+    const r = parseMcpToolName('acme-prod__list_items', 'pi');
+    assert.equal(r.isMcp, true);
+    assert.equal(r.server, 'acme-prod');
+    assert.equal(r.local, 'list_items');
+  });
+
+  it('keeps the connection in `local` for `<service>__<connection>__<tool>`', () => {
+    const r = parseMcpToolName('tracker__work__search_issues', 'pi');
+    assert.equal(r.isMcp, true);
+    assert.equal(r.server, 'tracker');
+    assert.equal(r.local, 'work__search_issues');
+  });
+
+  it('does not leave a stray underscore when the connection is also in the registry', () => {
+    const r = parseMcpToolName('acme-prod__list_items', 'pi', ['acme-prod']);
+    assert.equal(r.server, 'acme-prod');
+    assert.equal(r.local, 'list_items');
+  });
+
+  it('exposes the bare tool of a three-segment name, and none for a two-segment one', () => {
+    assert.equal(parseMcpToolName('tracker__work__search_issues', 'pi').tool, 'search_issues');
+    assert.equal(parseMcpToolName('acme-prod__list_items', 'pi').tool, undefined);
+  });
+
+  it('keeps registry attribution for direct-tool names that contain `__`', () => {
+    const fooBar = parseMcpToolName('foo_bar__baz', 'pi', ['foo']);
+    assert.equal(fooBar.server, 'foo');
+    assert.equal(fooBar.local, 'bar__baz');
+
+    const mySrv = parseMcpToolName('my__srv_x', 'pi', ['my__srv']);
+    assert.equal(mySrv.server, 'my__srv');
+    assert.equal(mySrv.local, 'x');
+  });
+
+  it('leaves snake_case host tools and malformed separators alone', () => {
+    for (const name of ['list_items', 'open_item', '__leading', 'trailing__']) {
+      assert.equal(parseMcpToolName(name, 'pi').isMcp, false, name);
+    }
+  });
+});
+
 describe('parseMcpToolName — pi cross-platform non-regression', () => {
   it('opencode does not take the pi proxy-tool path', () => {
     // If the pi branch ran, this would resolve to { isMcp: true, local: 'y' }
