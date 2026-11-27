@@ -14,7 +14,7 @@
  *   node scripts/release.js opencode      # opencode plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
  *
- * Output: releases/nio-{target}-v{version}.zip (pi also writes an identical releases/nio-crew.zip)
+ * Output: releases/nio-{target}-v{version}.zip (pi also writes releases/nio-crew.zip: the same package named `nio`)
  *
  * Single-platform zips extract as a self-contained plugin directory:
  *   claude-code.zip → .claude-plugin/, hooks/, skills/, setup.sh, ...
@@ -32,8 +32,9 @@
  */
 
 import { execSync } from 'node:child_process';
-import { copyFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { cpSync, mkdtempSync, readFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -61,10 +62,24 @@ const EXCLUDES = '-x "*/.DS_Store" "*/node_modules/.package-lock.json" "*/node_m
 function zipFromDir(outName, sourceDir) {
   const outPath = join(RELEASES_DIR, outName);
   execSync(
-    `cd "${join(ROOT, sourceDir)}" && zip -r "${outPath}" . ${EXCLUDES}`,
+    `cd "${resolve(ROOT, sourceDir)}" && zip -r "${outPath}" . ${EXCLUDES}`,
     { stdio: 'inherit' }
   );
   console.log(`\n  Created: ${outPath}\n`);
+}
+
+/**
+ * The pi package again, as plugin `nio` under a file name that never changes,
+ * for hosts that name a plugin after its manifest and update by asset name.
+ */
+function zipCrewPackage() {
+  const stage = mkdtempSync(join(tmpdir(), 'nio-crew-'));
+  cpSync(join(ROOT, 'plugins/pi'), stage, { recursive: true });
+  const manifestPath = join(stage, 'package.json');
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'));
+  writeFileSync(manifestPath, JSON.stringify({ ...manifest, name: 'nio' }, null, 2) + '\n');
+  zipFromDir('nio-crew.zip', stage);
+  rmSync(stage, { recursive: true, force: true });
 }
 
 /**
@@ -106,9 +121,7 @@ for (const t of targets) {
 
     case 'pi':
       zipFromDir(name, 'plugins/pi');
-      // Hosts that update by asset name need a file name that never changes.
-      copyFileSync(join(RELEASES_DIR, name), join(RELEASES_DIR, 'nio-crew.zip'));
-      console.log(`  Created: ${join(RELEASES_DIR, 'nio-crew.zip')}\n`);
+      zipCrewPackage();
       break;
 
     case 'opencode':
