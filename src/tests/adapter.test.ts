@@ -826,16 +826,34 @@ describe('PiAdapter', () => {
       }
     });
 
-    it('gives an eval cell in an unknown language an empty command', () => {
-      const env = envelopeOf('eval', { language: 'rb', code: 'puts 1' });
-      assert.equal((env!.action.data as { command: string }).command, '');
+    it('builds no envelope for an eval cell in an unknown language', () => {
+      assert.equal(envelopeOf('eval', { language: 'rb', code: 'puts 1' }), null);
     });
 
-    it('reads the bash_background command, and an empty command for a cancel', () => {
+    it('reads the bash_background command, and builds no envelope for a cancel', () => {
       const start = envelopeOf('bash_background', { command: 'npm run dev', cancel: null });
       assert.equal((start!.action.data as { command: string }).command, 'npm run dev');
-      const cancel = envelopeOf('bash_background', { command: null, cancel: 'task-1' });
-      assert.equal((cancel!.action.data as { command: string }).command, '');
+      assert.equal(envelopeOf('bash_background', { command: null, cancel: 'task-1' }), null);
+    });
+
+    it('takes the first file target of an input-only edit and scans the whole input', () => {
+      const cases: Array<[string, string]> = [
+        ['*** Begin Patch\n[src/app.ts#1A2B]\nPUT >$:\n+x\n[src/b.ts#FFFF]\nREM\n*** End Patch', 'src/app.ts'],
+        ['*** Begin Patch\n*** Update File: src/app.py\n@@\n-a\n+b\n*** End Patch', 'src/app.py'],
+        ['*** Begin Patch\n*** Edit File: src/app.ts all\n*** Find\na\n*** Replace\nb', 'src/app.ts'],
+        ['*** edit file: docs/a b.md\n*** Find\na\n*** Replace\nb', 'docs/a b.md'],
+      ];
+      for (const [patch, path] of cases) {
+        const env = envelopeOf('edit', { input: patch });
+        assert.equal(env?.action.type, 'write_file');
+        const data = env!.action.data as { path: string; content_preview: string };
+        assert.equal(data.path, path);
+        assert.equal(data.content_preview, patch);
+      }
+    });
+
+    it('builds no envelope for an input-only edit with no file target', () => {
+      assert.equal(envelopeOf('edit', { input: 'PUT >$:\n+x' }), null);
     });
 
     it('carries a web_search query as the outbound payload, with no URL', () => {

@@ -142,9 +142,9 @@ describe('parseMcpToolName — pi (`<server>__<tool>` host naming)', () => {
     assert.equal(r.local, 'list_items');
   });
 
-  it('exposes the bare tool of a three-segment name, and none for a two-segment one', () => {
-    assert.equal(parseMcpToolName('tracker__work__search_issues', 'pi').tool, 'search_issues');
-    assert.equal(parseMcpToolName('acme-prod__list_items', 'pi').tool, undefined);
+  it('never claims a natively mapped OMP host tool, even when a registry server prefixes it', () => {
+    assert.equal(parseMcpToolName('web_search', 'pi', ['web']).isMcp, false);
+    assert.equal(parseMcpToolName('bash_background', 'pi', ['bash']).isMcp, false);
   });
 
   it('keeps registry attribution for direct-tool names that contain `__`', () => {

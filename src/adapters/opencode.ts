@@ -55,19 +55,24 @@ export interface OpenCodeAdapterOptions {
   nativeToolMapping?: Record<string, string>;
 }
 
+/** `*** Add|Update|Delete File: <path>` (packages/opencode/src/patch.ts:76-87). */
+export const APPLY_PATCH_FILE_MARKER = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/;
+
 /**
- * Pull the first file target out of an apply_patch payload. opencode
- * marks each file in the patch body with `*** Add File: <path>`,
- * `*** Update File: <path>` or `*** Delete File: <path>`
- * (packages/opencode/src/patch.ts:76-87). Returns null when the payload
- * carries no marker, so the caller can fall back to an empty path
- * rather than inventing one.
+ * Pull the first file target out of a patch payload: the first capture of
+ * the first line matching one of `markers`. Returns null when the payload
+ * carries no marker, so the caller can fall back rather than inventing one.
  */
-function firstPatchTarget(patchText: string | undefined): string | null {
+export function firstPatchTarget(
+  patchText: string | undefined,
+  markers: readonly RegExp[] = [APPLY_PATCH_FILE_MARKER],
+): string | null {
   if (!patchText) return null;
   for (const line of patchText.split('\n')) {
-    const m = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/.exec(line.trim());
-    if (m) return m[1]!.trim();
+    for (const marker of markers) {
+      const m = marker.exec(line.trim());
+      if (m) return m[1]!.trim();
+    }
   }
   return null;
 }
