@@ -6,7 +6,7 @@ import type {
   ExecCommandData, FileOperationData, NetworkRequestData,
 } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
-import { APPLY_PATCH_FILE_MARKER, firstPatchTarget } from './opencode.js';
+import { editTargets, targetFields } from './edit-targets.js';
 
 /**
  * Default native-tool → action-type mapping for Pi.
@@ -47,16 +47,10 @@ function evalCellAsCommand(toolInput: Record<string, unknown>): string | undefin
   return `${interpreter} "${code.replace(/["\\$`]/g, '\\$&')}"`;
 }
 
-/**
- * File headers of OMP's input-only edit modes: apply_patch
- * (`*** Add|Update|Delete File: <path>`), hashline (`[<path>#<TAG>]`) and
- * sloppy (`*** Edit File: <path>`, optionally followed by ` all`).
- */
-const OMP_EDIT_FILE_MARKERS: readonly RegExp[] = [
-  APPLY_PATCH_FILE_MARKER,
-  /^\[([^#\r\n]+)#[0-9A-F]{4}\]$/,
-  /^\*{3}\s+edit\s+file:\s*(.+?)(?:\s+all)?$/i,
-];
+/** OMP's patch-mode edit entries: `{ op?, rename?, diff? }`. */
+function patchEditEntries(toolInput: Record<string, unknown>): Array<{ rename?: unknown; diff?: unknown }> {
+  return Array.isArray(toolInput.edits) ? toolInput.edits : [];
+}
 
 /**
  * Pi core's seven built-in tools, plus the natively mapped tools that
@@ -153,18 +147,24 @@ export class PiAdapter implements HookAdapter {
       case 'write_file': {
         // Pi's write tool uses `content`; its edit tool uses `newText`
         // (OMP's replace-mode edit: `new_string`) for the replacement body.
-        // OMP's apply_patch / hashline / sloppy edits carry only `input`.
+        // OMP's patch-mode edit adds `edits[{ rename, diff }]`; its
+        // apply_patch / hashline / sloppy modes carry only `input`.
         const patchText = typeof input.toolInput.input === 'string' ? input.toolInput.input : undefined;
-        const path =
-          (input.toolInput.path as string) || firstPatchTarget(patchText, OMP_EDIT_FILE_MARKERS);
-        if (patchText !== undefined && !path) return null;
+        const entries = patchEditEntries(input.toolInput);
+        const targets = [...new Set([
+          input.toolInput.path,
+          ...entries.map(entry => entry.rename),
+          ...editTargets(patchText),
+        ].filter((target): target is string => typeof target === 'string' && target !== ''))];
+        if (patchText !== undefined && targets.length === 0) return null;
+        const patchDiffs = entries.map(entry => entry.diff).filter(diff => typeof diff === 'string').join('\n');
         const content =
           (input.toolInput.content as string) ||
           (input.toolInput.newText as string) ||
           (input.toolInput.new_string as string) ||
-          patchText || '';
+          patchText || patchDiffs;
         const data: FileOperationData = {
-          path: path || '',
+          ...targetFields(targets),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;

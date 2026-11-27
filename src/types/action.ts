@@ -77,6 +77,8 @@ export interface ExecCommandData {
  */
 export interface FileOperationData {
   path: string;
+  /** Further files the same action touches (multi-file patches, renames); checked like `path`. */
+  additional_paths?: string[];
   content_preview?: string;
 }
 

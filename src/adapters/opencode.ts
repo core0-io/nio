@@ -6,6 +6,7 @@ import type {
   ExecCommandData, FileOperationData, NetworkRequestData,
 } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { editTargets, targetFields } from './edit-targets.js';
 
 /**
  * Default native-tool → action-type mapping for opencode.
@@ -53,28 +54,6 @@ export const OPENCODE_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
 export interface OpenCodeAdapterOptions {
   /** Config-driven tool → action type mapping, overrides the built-in default. */
   nativeToolMapping?: Record<string, string>;
-}
-
-/** `*** Add|Update|Delete File: <path>` (packages/opencode/src/patch.ts:76-87). */
-export const APPLY_PATCH_FILE_MARKER = /^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/;
-
-/**
- * Pull the first file target out of a patch payload: the first capture of
- * the first line matching one of `markers`. Returns null when the payload
- * carries no marker, so the caller can fall back rather than inventing one.
- */
-export function firstPatchTarget(
-  patchText: string | undefined,
-  markers: readonly RegExp[] = [APPLY_PATCH_FILE_MARKER],
-): string | null {
-  if (!patchText) return null;
-  for (const line of patchText.split('\n')) {
-    for (const marker of markers) {
-      const m = marker.exec(line.trim());
-      if (m) return m[1]!.trim();
-    }
-  }
-  return null;
 }
 
 /**
@@ -167,8 +146,9 @@ export class OpenCodeAdapter implements HookAdapter {
           (input.toolInput.content as string) ||
           (input.toolInput.newString as string) ||
           patchText || '';
+        const filePath = input.toolInput.filePath as string | undefined;
         const data: FileOperationData = {
-          path: (input.toolInput.filePath as string) || firstPatchTarget(patchText) || '',
+          ...targetFields(filePath ? [filePath] : editTargets(patchText)),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
