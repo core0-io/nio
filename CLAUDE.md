@@ -59,7 +59,7 @@ pnpm run release:pi                # Pi only
 pnpm run release:opencode          # opencode only
 ```
 
-The pi target also writes `releases/nio-pi.zip`, a byte-identical unversioned copy, so hosts that update by asset name always find the newest release.
+The pi target also writes `releases/nio-crew.zip`, a byte-identical unversioned copy, so hosts that update by asset name always find the newest release.
 
 Full release workflow (versioned, tagged, published to GitHub):
 
