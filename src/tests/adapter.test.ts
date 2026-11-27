@@ -836,20 +836,28 @@ describe('PiAdapter', () => {
       assert.equal(envelopeOf('bash_background', { command: null, cancel: 'task-1' }), null);
     });
 
-    it('takes the first file target of an input-only edit and scans the whole input', () => {
-      const cases: Array<[string, string]> = [
-        ['*** Begin Patch\n[src/app.ts#1A2B]\nPUT >$:\n+x\n[src/b.ts#FFFF]\nREM\n*** End Patch', 'src/app.ts'],
-        ['*** Begin Patch\n*** Update File: src/app.py\n@@\n-a\n+b\n*** End Patch', 'src/app.py'],
-        ['*** Begin Patch\n*** Edit File: src/app.ts all\n*** Find\na\n*** Replace\nb', 'src/app.ts'],
-        ['*** edit file: docs/a b.md\n*** Find\na\n*** Replace\nb', 'docs/a b.md'],
-      ];
-      for (const [patch, path] of cases) {
-        const env = envelopeOf('edit', { input: patch });
-        assert.equal(env?.action.type, 'write_file');
-        const data = env!.action.data as { path: string; content_preview: string };
-        assert.equal(data.path, path);
-        assert.equal(data.content_preview, patch);
-      }
+    it('carries every target of an input-only edit and scans the whole input', () => {
+      const patch = '*** Begin Patch\n[src/app.ts#1A2B]\nPUT >$:\n+x\n[src/b.ts#FFFF]\nMV src/c.ts\n*** End Patch';
+      const env = envelopeOf('edit', { input: patch });
+      assert.equal(env?.action.type, 'write_file');
+      assert.deepEqual(env!.action.data, {
+        path: 'src/app.ts', additional_paths: ['src/b.ts', 'src/c.ts'], content_preview: patch,
+      });
+    });
+
+    it('takes patch-mode renames as targets and the joined diffs as content', () => {
+      const env = envelopeOf('edit', {
+        path: 'src/a.ts',
+        edits: [{ op: 'update', rename: 'src/b.ts', diff: '+one' }, { op: 'update', diff: '+two' }],
+      });
+      assert.deepEqual(env!.action.data, {
+        path: 'src/a.ts', additional_paths: ['src/b.ts'], content_preview: '+one\n+two',
+      });
+    });
+
+    it('keeps a single-path write unchanged (no additional_paths)', () => {
+      const env = envelopeOf('write', { path: 'src/a.ts', content: 'x' });
+      assert.deepEqual(env!.action.data, { path: 'src/a.ts', content_preview: 'x' });
     });
 
     it('builds no envelope for an input-only edit with no file target', () => {
@@ -984,6 +992,14 @@ describe('OpenCodeAdapter', () => {
         (env.action.data as { content_preview: string }).content_preview,
         /port = 8080/,
       );
+    });
+
+    it('carries every apply_patch target, not just the first', () => {
+      const patchText = '*** Begin Patch\n*** Update File: src/a.ts\n@@\n+x\n*** Add File: src/b.ts\n+y\n*** End Patch';
+      const env = adapter.buildEnvelope(adapter.parseInput({ tool: 'apply_patch', args: { patchText } }));
+      const data = env!.action.data as { path: string; additional_paths?: string[] };
+      assert.equal(data.path, 'src/a.ts');
+      assert.deepEqual(data.additional_paths, ['src/b.ts']);
     });
 
     it('builds a read_file envelope from filePath', () => {

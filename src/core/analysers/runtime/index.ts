@@ -458,9 +458,13 @@ function analyseNetworkRequest(envelope: ActionEnvelope, extra?: GuardRulesConfi
 }
 
 function analyseFileOperation(envelope: ActionEnvelope, extra?: GuardRulesConfig): Finding[] {
+  const data = envelope.action.data as { path?: string; additional_paths?: string[] };
+  return [data.path || '', ...(data.additional_paths ?? [])]
+    .flatMap(filePath => analyseFilePath(filePath, extra));
+}
+
+function analyseFilePath(filePath: string, extra?: GuardRulesConfig): Finding[] {
   const findings: Finding[] = [];
-  const data = envelope.action.data as { path?: string; content_preview?: string };
-  const filePath = data.path || '';
 
   // Sensitive path
   if (isSensitivePath(filePath, extra?.sensitive_paths, extra?.sensitive_path_patterns)) {
