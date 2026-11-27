@@ -103,6 +103,22 @@ export interface ParsedMcpToolName {
   isMcp: boolean;
   server?: string;
   local?: string;
+  /** Bare tool name when `local` still carries a qualifier (`<connection>__<tool>`). */
+  tool?: string;
+}
+
+/**
+ * Some pi-based hosts name MCP tools `<server>__<tool>` and app-service tools
+ * `<service>__<connection>__<tool>`. Server is the first segment; `tool` is
+ * the last one, for bare-name gating.
+ */
+function parseDoubleUnderscoreToolName(name: string): ParsedMcpToolName | null {
+  const first = name.indexOf('__');
+  if (first <= 0 || first >= name.length - 2) return null;
+  const local = name.slice(first + 2);
+  const last = local.lastIndexOf('__');
+  const tool = last > 0 && last < local.length - 2 ? local.slice(last + 2) : undefined;
+  return { isMcp: true, server: name.slice(0, first), local, ...(tool ? { tool } : {}) };
 }
 
 /**
@@ -118,6 +134,7 @@ export interface ParsedMcpToolName {
  * - Pi core has no MCP; the third-party `pi-mcp-adapter` package supplies
  *   it via a proxy tool `mcp` (target read from `toolInput`) or, opt-in,
  *   direct tools named `<server>_<tool>` / `mcp__<server>_<tool>`.
+ *   Some pi-based hosts name them `<server>__<tool>`.
  */
 export function parseMcpToolName(
   toolName: string,
@@ -184,19 +201,27 @@ export function parseMcpToolName(
     if (PI_BUILTIN_TOOLS.has(name)) return { isMcp: false };
 
     // toolPrefix: "mcp" → `mcp__<server>_<tool>`.
-    const body = name.startsWith('mcp__') ? name.slice(5) : name;
+    const hasMcpPrefix = name.startsWith('mcp__');
+    const body = hasMcpPrefix ? name.slice(5) : name;
     if (!body.includes('_')) return { isMcp: false };
 
     // An absent/empty registry is NOT an early return: it only means
     // nothing can be *attributed*, so attribution is skipped and the
-    // anonymous tier below still gets its chance.
+    // anonymous tier below still gets its chance. An unprefixed
+    // `<server>__…` is left to the `__` split so no `_` leaks into `local`.
     const matches = (knownServers ?? [])
       .filter(s => body.startsWith(`${s}_`) && body.length > s.length + 1)
+      .filter(s => hasMcpPrefix || body[s.length + 1] !== '_')
       .sort((a, b) => b.length - a.length);
 
     if (matches.length > 0) {
       const server = matches[0]!;
       return { isMcp: true, server, local: body.slice(server.length + 1) };
+    }
+
+    if (!hasMcpPrefix) {
+      const qualified = parseDoubleUnderscoreToolName(name);
+      if (qualified) return qualified;
     }
     // Only the explicitly-prefixed form is safe to claim anonymously: a
     // bare `<something>_<something>` we cannot attribute is far more
@@ -366,9 +391,11 @@ function checkToolGate(
 
   const parsed = parseMcpToolName(toolName, platform, knownServers, toolInput);
   const nameMcpCandidates = parsed.isMcp && parsed.local
-    ? (parsed.server
-        ? [parsed.local, `${parsed.server}__${parsed.local}`]
-        : [parsed.local])
+    ? [
+        parsed.local,
+        ...(parsed.server ? [`${parsed.server}__${parsed.local}`] : []),
+        ...(parsed.tool ? [parsed.tool] : []),
+      ]
     : [];
 
   const allShellHits = detectMcpCalls(extractCommandString(toolInput), registry);

@@ -377,6 +377,48 @@ describe('Phase 0 permitted_tools.mcp: pi proxy tool `mcp` (toolInput threading)
   });
 });
 
+describe('Phase 0 tool gate: `<service>__<connection>__<tool>` names on pi', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const gate = (guard: Record<string, unknown>) => {
+    ctx = createTestContext({ level: 'balanced', guard, mcpRegistry: emptyRegistry() });
+    return evaluateHook(
+      new PiAdapter(),
+      { toolName: 'tracker__work__search_issues', input: { query: 'bug' } },
+      ctx.options,
+    );
+  };
+
+  it('is blocked by the bare tool name', async () => {
+    const result = await gate({ blocked_tools: { mcp: ['search_issues'] } });
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
+  });
+
+  it('is permitted by the bare tool name under a non-empty allowlist', async () => {
+    const result = await gate({ permitted_tools: { mcp: ['search_issues'] } });
+    assert.ok(!result.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
+  });
+
+  it('still matches the connection-qualified and full names', async () => {
+    for (const entry of ['work__search_issues', 'tracker__work__search_issues']) {
+      const blocked = await gate({ blocked_tools: { mcp: [entry] } });
+      assert.ok(blocked.riskTags?.includes('TOOL_GATE_BLOCKED'), entry);
+      ctx.cleanup();
+      const permitted = await gate({ permitted_tools: { mcp: [entry] } });
+      assert.ok(!permitted.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'), entry);
+      ctx.cleanup();
+    }
+  });
+
+  it('is denied by an allowlist that names a different tool', async () => {
+    const result = await gate({ permitted_tools: { mcp: ['list_issues'] } });
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'));
+  });
+});
+
 // ── Orchestrator Phase 3: secret in MCP args ────────────────────────────
 
 describe('Orchestrator Phase 3: secret-in-args detection for mcp_tool_call', () => {
