@@ -1063,6 +1063,7 @@ describe('Integration: pi adapter, tools added by OMP-based hosts', () => {
     ['a lowercase hashline tag', { input: patch('[/home/u/.ssh/authorized_keys#ce7d]\nPUT >$:\n+ssh-rsa AAAA x') }, 'SENSITIVE_PATH'],
     ['whitespace inside the hashline brackets', { input: patch('[ /home/u/.ssh/authorized_keys#CE7D ]\nPUT >$:\n+ssh-rsa AAAA x') }, 'SENSITIVE_PATH'],
     ['a hashline MV to ~/.bashrc', { input: patch('[notes.txt#AB12]\nMV /home/u/.bashrc') }, 'SENSITIVE_PATH'],
+    ['a hashline MV to a tilde path', { input: patch('[notes.txt#AB12]\nMV ~/.bashrc') }, 'SENSITIVE_PATH'],
     ['an apply_patch Move to ~/.aws/credentials', { input: patch('*** Update File: notes.txt\n*** Move to: /home/u/.aws/credentials') }, 'SENSITIVE_PATH'],
     ['a sensitive file as the second hashline section', { input: patch('[src/a.ts#AB12]\nPUT >$:\n+x\n[/home/u/.bashrc#AB12]\nPUT >$:\n+export FOO=1') }, 'SENSITIVE_PATH'],
     ['a sensitive file as the second apply_patch file', { input: patch('*** Update File: src/a.ts\n@@\n+x\n*** Add File: /home/u/.npmrc\n+registry=x') }, 'SENSITIVE_PATH'],
@@ -1081,6 +1082,8 @@ describe('Integration: pi adapter, tools added by OMP-based hosts', () => {
     ['two-file hashline', { input: patch('[src/a.ts#AB12]\nPUT 3.=3:\n+export const a = 1;\n[src/b.ts#CD34]\nPUT >$:\n+export const b = 2;') }],
     ['two-file apply_patch', { input: patch('*** Update File: src/a.py\n@@\n-x = 1\n+x = 2\n*** Add File: src/b.py\n+print("hi")') }],
     ['patch-mode', { path: 'src/a.ts', edits: [{ op: 'update', diff: '@@ function greet()\n-  return "hi";\n+  return "hello";\n' }] }],
+    ['apply_patch (shell `mv` context line)', { input: patch('*** Update File: README.md\n@@\n mv .env.example .env\n+npm start') }],
+    ['sloppy (shell `mv` in the body)', { input: '*** Edit File: README.md\n*** Find\nmv .env.example .env\n*** Replace\ncp .env.example .env' }],
   ];
   for (const [name, input] of allowedEdits) {
     it(`allows a benign ${name} project edit`, async () => {
@@ -1144,6 +1147,11 @@ describe('Integration: opencode apply_patch checks every target', () => {
     const result = await applyPatch('*** Begin Patch\n*** Update File: src/a.ts\n@@\n+x\n*** Add File: /home/u/.bashrc\n+export FOO=1\n*** End Patch');
     assert.equal(result.decision, 'deny');
     assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('allows a shell `mv` context line', async () => {
+    const result = await applyPatch('*** Begin Patch\n*** Update File: README.md\n@@\n mv .env.example .env\n+npm start\n*** End Patch');
+    assert.equal(result.decision, 'allow', String(result.riskTags));
   });
 
   it('allows a benign two-file patch', async () => {

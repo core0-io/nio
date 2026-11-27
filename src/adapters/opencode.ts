@@ -148,7 +148,7 @@ export class OpenCodeAdapter implements HookAdapter {
           patchText || '';
         const filePath = input.toolInput.filePath as string | undefined;
         const data: FileOperationData = {
-          ...targetFields(filePath ? [filePath] : editTargets(patchText)),
+          ...targetFields(filePath ? [filePath] : editTargets(patchText, { hashline: false })),
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;
