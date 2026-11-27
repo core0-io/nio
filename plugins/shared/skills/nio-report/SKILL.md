@@ -4,7 +4,7 @@ description: Nio execution audit report. Use when the user wants to review recen
 compatibility: Requires Node.js 18+.
 metadata:
   author: core0-io
-  version: "2.5.2"
+  version: "2.6.0"
 user-invocable: true
 command-arg-mode: raw
 argument-hint: ""
