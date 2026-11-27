@@ -350,6 +350,10 @@ guard:
       write: write_file
       edit: write_file
       read: read_file
+      # Tools that OMP-based hosts add on top of pi's seven.
+      eval: exec_command
+      bash_background: exec_command
+      web_search: network_request
     opencode:
       # opencode ships read/write/edit/apply_patch/glob/grep/list/bash/
       # task/todowrite/todoread/webfetch/websearch/lsp/skill/question.

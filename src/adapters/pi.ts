@@ -17,13 +17,34 @@ import type { HookAdapter, HookInput } from './types.js';
  * deliberately unmapped: they are directory metadata reads, not file
  * content reads, and mapping them would flood the audit log without
  * adding signal.
+ *
+ * The last three entries are tools that OMP-based hosts add: `eval` runs a
+ * Python/JS cell, `bash_background` starts a shell command, `web_search`
+ * sends a query out. Plain pi never emits these names.
  */
 const DEFAULT_NATIVE_TOOL_MAPPING: Record<string, ActionType> = {
   bash: 'exec_command',
   write: 'write_file',
   edit: 'write_file',
   read: 'read_file',
+  eval: 'exec_command',
+  bash_background: 'exec_command',
+  web_search: 'network_request',
 };
+
+const EVAL_INTERPRETERS: Record<string, string> = { py: 'python3 -c', js: 'node -e' };
+
+/**
+ * An `eval` cell (`{ language, code }`) as the equivalent interpreter
+ * invocation, double-quoted so `extractInlineCode` recovers `code` verbatim
+ * for the Phase 3/4 analysers.
+ */
+function evalCellAsCommand(toolInput: Record<string, unknown>): string | undefined {
+  const interpreter = EVAL_INTERPRETERS[toolInput.language as string];
+  const code = toolInput.code;
+  if (!interpreter || typeof code !== 'string' || !code) return undefined;
+  return `${interpreter} "${code.replace(/["\\$`]/g, '\\$&')}"`;
+}
 
 /**
  * Pi core's seven built-in tools.
@@ -106,7 +127,9 @@ export class PiAdapter implements HookAdapter {
     switch (actionType) {
       case 'exec_command': {
         const data: ExecCommandData = {
-          command: (input.toolInput.command as string) || '',
+          command:
+            (input.toolInput.command as string) ||
+            evalCellAsCommand(input.toolInput) || '',
           args: [],
           cwd: input.cwd,
         };
@@ -115,11 +138,12 @@ export class PiAdapter implements HookAdapter {
       }
 
       case 'write_file': {
-        // Pi's write tool uses `content`; its edit tool uses
-        // `newText` for the replacement body.
+        // Pi's write tool uses `content`; its edit tool uses `newText`
+        // (OMP's replace-mode edit: `new_string`) for the replacement body.
         const content =
           (input.toolInput.content as string) ||
-          (input.toolInput.newText as string) || '';
+          (input.toolInput.newText as string) ||
+          (input.toolInput.new_string as string) || '';
         const data: FileOperationData = {
           path: (input.toolInput.path as string) || '',
           content_preview: content.slice(0, 10_000),
@@ -140,7 +164,8 @@ export class PiAdapter implements HookAdapter {
         const data: NetworkRequestData = {
           method: (input.toolInput.method as NetworkRequestData['method']) || 'GET',
           url: (input.toolInput.url as string) || '',
-          body_preview: input.toolInput.body as string | undefined,
+          // A search tool has no URL; its query is the payload that leaves the machine.
+          body_preview: (input.toolInput.body ?? input.toolInput.query) as string | undefined,
         };
         actionData = data;
         break;

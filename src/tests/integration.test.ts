@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evaluateHook } from '../adapters/hook-engine.js';
 import { registerOpenClawPlugin } from '../adapters/openclaw-plugin.js';
+import { PiAdapter } from '../adapters/pi.js';
 import { createTestContext } from './helpers/test-utils.js';
 import type { MCPRegistry, MCPServerEntry } from '../adapters/mcp-registry.js';
 
@@ -1010,6 +1011,44 @@ describe('Integration: Hermes adapter evaluateHook', () => {
 // Codex's PreToolUse stdin is essentially the same shape as Claude Code's
 // (Bash → exec_command), but the platform key differs and the only native
 // tool we map is Bash — write/read/fetch all flow through shell.
+
+describe('Integration: pi adapter, tools added by OMP-based hosts', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const evaluate = (toolName: string, input: Record<string, unknown>) => {
+    ctx = createTestContext('balanced');
+    return evaluateHook(new PiAdapter(), { toolName, input }, ctx.options, {
+      logsConfig: { path: join(ctx.tempDir, 'audit.jsonl') },
+    });
+  };
+
+  it('allows a benign eval cell', async () => {
+    const result = await evaluate('eval', { language: 'py', code: 'print(sum([1, 2, 3]))' });
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('denies an eval cell that deletes the filesystem (Phase 4 on the cell code)', async () => {
+    const result = await evaluate('eval', { language: 'py', code: 'import shutil\nshutil.rmtree("/")' });
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DESTRUCTIVE_FS'));
+  });
+
+  it('denies a dangerous bash_background command', async () => {
+    const result = await evaluate('bash_background', { command: 'rm -rf /', cancel: null });
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  it('allows a plain web_search and flags one that carries a secret', async () => {
+    const plain = await evaluate('web_search', { query: 'node release notes' });
+    assert.equal(plain.decision, 'allow');
+    ctx.cleanup();
+    const leak = await evaluate('web_search', { query: 'why does AKIAIOSFODNN7EXAMPLE fail' });
+    assert.notEqual(leak.decision, 'allow');
+    assert.ok(leak.riskTags?.includes('SECRET_LEAK_AWS_KEY'));
+  });
+});
 
 describe('Integration: Codex adapter evaluateHook', () => {
   let ctx: ReturnType<typeof createTestContext>;

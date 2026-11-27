@@ -9,6 +9,7 @@ import { OpenClawAdapter } from '../adapters/openclaw.js';
 import { HermesAdapter } from '../adapters/hermes.js';
 import { PiAdapter } from '../adapters/pi.js';
 import { OpenCodeAdapter } from '../adapters/opencode.js';
+import { extractInlineCode } from '../core/shared/inline-code.js';
 import {
   isSensitivePath,
   shouldDenyAtLevel,
@@ -800,6 +801,54 @@ describe('PiAdapter', () => {
 
     it('returns null for an unmapped tool', () => {
       assert.equal(adapter.buildEnvelope(adapter.parseInput({ toolName: 'ls', input: {} })), null);
+    });
+  });
+
+  describe('OMP-based host tools', () => {
+    const envelopeOf = (toolName: string, input: Record<string, unknown>) =>
+      adapter.buildEnvelope(adapter.parseInput({ toolName, input }));
+
+    it('maps eval, bash_background and web_search, and leaves ast_edit unmapped', () => {
+      assert.equal(adapter.mapToolToActionType('eval'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('bash_background'), 'exec_command');
+      assert.equal(adapter.mapToolToActionType('web_search'), 'network_request');
+      assert.equal(adapter.mapToolToActionType('ast_edit'), null);
+    });
+
+    it('turns an eval cell into an interpreter command whose inline code is the cell verbatim', () => {
+      const code = 'name = "x"\nprint(f"{name} costs $5 \\ `now`")';
+      for (const [language, prefix] of [['py', 'python3 -c "'], ['js', 'node -e "']] as const) {
+        const env = envelopeOf('eval', { language, code });
+        assert.equal(env?.action.type, 'exec_command');
+        const command = (env!.action.data as { command: string }).command;
+        assert.ok(command.startsWith(prefix), command);
+        assert.equal(extractInlineCode(command)?.content, code);
+      }
+    });
+
+    it('gives an eval cell in an unknown language an empty command', () => {
+      const env = envelopeOf('eval', { language: 'rb', code: 'puts 1' });
+      assert.equal((env!.action.data as { command: string }).command, '');
+    });
+
+    it('reads the bash_background command, and an empty command for a cancel', () => {
+      const start = envelopeOf('bash_background', { command: 'npm run dev', cancel: null });
+      assert.equal((start!.action.data as { command: string }).command, 'npm run dev');
+      const cancel = envelopeOf('bash_background', { command: null, cancel: 'task-1' });
+      assert.equal((cancel!.action.data as { command: string }).command, '');
+    });
+
+    it('carries a web_search query as the outbound payload, with no URL', () => {
+      const env = envelopeOf('web_search', { query: 'node release notes', limit: 5 });
+      assert.equal(env?.action.type, 'network_request');
+      const data = env!.action.data as { url: string; body_preview?: string };
+      assert.equal(data.url, '');
+      assert.equal(data.body_preview, 'node release notes');
+    });
+
+    it('reads the replacement body of a replace-mode edit from new_string', () => {
+      const env = envelopeOf('edit', { path: '/tmp/a.ts', old_string: 'a', new_string: 'b' });
+      assert.equal((env!.action.data as { content_preview: string }).content_preview, 'b');
     });
   });
 
