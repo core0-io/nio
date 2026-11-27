@@ -1,0 +1,8 @@
+# Nio preset for unattended hosts: nobody can answer a confirm prompt, so confirm verdicts are denied.
+# The host replaces the api_key placeholder with a Secret; config.default.yaml lists every option.
+guard:
+  protection_level: balanced
+  confirm_action: deny
+collector:
+  endpoint: ""
+  api_key: "${secret:nio_api_key}"

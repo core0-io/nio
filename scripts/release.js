@@ -14,7 +14,7 @@
  *   node scripts/release.js opencode      # opencode plugin zip
  *   node scripts/release.js all           # All-in-one zip (all platforms)
  *
- * Output: releases/nio-{target}-v{version}.zip
+ * Output: releases/nio-{target}-v{version}.zip (pi also writes an identical releases/nio-pi.zip)
  *
  * Single-platform zips extract as a self-contained plugin directory:
  *   claude-code.zip → .claude-plugin/, hooks/, skills/, setup.sh, ...
@@ -32,7 +32,7 @@
  */
 
 import { execSync } from 'node:child_process';
-import { readFileSync, mkdirSync, rmSync } from 'node:fs';
+import { copyFileSync, readFileSync, mkdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -106,6 +106,9 @@ for (const t of targets) {
 
     case 'pi':
       zipFromDir(name, 'plugins/pi');
+      // Hosts that update by asset name need a file name that never changes.
+      copyFileSync(join(RELEASES_DIR, name), join(RELEASES_DIR, 'nio-pi.zip'));
+      console.log(`  Created: ${join(RELEASES_DIR, 'nio-pi.zip')}\n`);
       break;
 
     case 'opencode':
