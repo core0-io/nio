@@ -419,6 +419,42 @@ describe('Phase 0 tool gate: `<service>__<connection>__<tool>` names on pi', () 
   });
 });
 
+describe('Phase 0 tool gate: registry-attributed pi names that contain `__`', () => {
+  let ctx: ReturnType<typeof createTestContext>;
+  afterEach(() => ctx?.cleanup());
+
+  const gate = (toolName: string, servers: string[], guard: Record<string, unknown>) => {
+    const registry: MCPRegistry = {
+      ...emptyRegistry(),
+      entries: servers.map(serverName => ({
+        serverName, urls: [], sockets: [], binaries: [], cliPackages: [], source: 'manual' as const,
+      })),
+    };
+    ctx = createTestContext({ level: 'balanced', guard, mcpRegistry: registry });
+    return evaluateHook(new PiAdapter(), { toolName, input: {} }, ctx.options);
+  };
+
+  it('blocks `foo_bar__baz` (registry foo) by its full name and by its last segment', async () => {
+    for (const entry of ['foo_bar__baz', 'baz']) {
+      const result = await gate('foo_bar__baz', ['foo'], { blocked_tools: { mcp: [entry] } });
+      assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'), entry);
+      ctx.cleanup();
+    }
+  });
+
+  it('does not gate web_search / bash_background under a registry server that prefixes them', async () => {
+    for (const [toolName, server] of [['web_search', 'web'], ['bash_background', 'bash']] as const) {
+      const permitted = await gate(toolName, [server], { permitted_tools: { mcp: ['list_items'] } });
+      assert.ok(!permitted.riskTags?.includes('TOOL_GATE_NOT_PERMITTED'), toolName);
+      ctx.cleanup();
+      const bare = toolName.slice(server.length + 1);
+      const blocked = await gate(toolName, [server], { blocked_tools: { mcp: [bare] } });
+      assert.ok(!blocked.riskTags?.includes('TOOL_GATE_BLOCKED'), toolName);
+      ctx.cleanup();
+    }
+  });
+});
+
 // ── Orchestrator Phase 3: secret in MCP args ────────────────────────────
 
 describe('Orchestrator Phase 3: secret-in-args detection for mcp_tool_call', () => {

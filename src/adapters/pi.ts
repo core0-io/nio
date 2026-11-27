@@ -6,6 +6,7 @@ import type {
   ExecCommandData, FileOperationData, NetworkRequestData,
 } from '../types/action.js';
 import type { HookAdapter, HookInput } from './types.js';
+import { APPLY_PATCH_FILE_MARKER, firstPatchTarget } from './opencode.js';
 
 /**
  * Default native-tool → action-type mapping for Pi.
@@ -47,18 +48,30 @@ function evalCellAsCommand(toolInput: Record<string, unknown>): string | undefin
 }
 
 /**
- * Pi core's seven built-in tools.
+ * File headers of OMP's input-only edit modes: apply_patch
+ * (`*** Add|Update|Delete File: <path>`), hashline (`[<path>#<TAG>]`) and
+ * sloppy (`*** Edit File: <path>`, optionally followed by ` all`).
+ */
+const OMP_EDIT_FILE_MARKERS: readonly RegExp[] = [
+  APPLY_PATCH_FILE_MARKER,
+  /^\[([^#\r\n]+)#[0-9A-F]{4}\]$/,
+  /^\*{3}\s+edit\s+file:\s*(.+?)(?:\s+all)?$/i,
+];
+
+/**
+ * Pi core's seven built-in tools, plus the natively mapped tools that
+ * OMP-based hosts add.
  *
  * `hook-engine.ts`'s `parseMcpToolName` needs this to short-circuit the
  * Pi anonymous-MCP fallback tier, exactly as `OPENCODE_BUILTIN_TOOLS`
- * does for opencode. None of the seven currently contains an underscore,
- * so the guard is presently redundant — it is here so that a future Pi
- * built-in named like `apply_patch` cannot be silently re-gated under
- * `permitted_tools.mcp` the moment an MCP server is configured. That is
- * the exact defect Task 9 found in the opencode branch.
+ * does for opencode: without it a registry server named `web` or `bash`
+ * would claim `web_search` / `bash_background` as MCP and re-gate them
+ * under `permitted_tools.mcp`. That is the exact defect Task 9 found in
+ * the opencode branch.
  */
 export const PI_BUILTIN_TOOLS: ReadonlySet<string> = new Set([
   'bash', 'read', 'write', 'edit', 'ls', 'find', 'grep',
+  'eval', 'bash_background', 'web_search',
 ]);
 
 export interface PiAdapterOptions {
@@ -126,10 +139,10 @@ export class PiAdapter implements HookAdapter {
 
     switch (actionType) {
       case 'exec_command': {
+        const command = (input.toolInput.command as string) || evalCellAsCommand(input.toolInput);
+        if (!command) return null;
         const data: ExecCommandData = {
-          command:
-            (input.toolInput.command as string) ||
-            evalCellAsCommand(input.toolInput) || '',
+          command,
           args: [],
           cwd: input.cwd,
         };
@@ -140,12 +153,18 @@ export class PiAdapter implements HookAdapter {
       case 'write_file': {
         // Pi's write tool uses `content`; its edit tool uses `newText`
         // (OMP's replace-mode edit: `new_string`) for the replacement body.
+        // OMP's apply_patch / hashline / sloppy edits carry only `input`.
+        const patchText = typeof input.toolInput.input === 'string' ? input.toolInput.input : undefined;
+        const path =
+          (input.toolInput.path as string) || firstPatchTarget(patchText, OMP_EDIT_FILE_MARKERS);
+        if (patchText !== undefined && !path) return null;
         const content =
           (input.toolInput.content as string) ||
           (input.toolInput.newText as string) ||
-          (input.toolInput.new_string as string) || '';
+          (input.toolInput.new_string as string) ||
+          patchText || '';
         const data: FileOperationData = {
-          path: (input.toolInput.path as string) || '',
+          path: path || '',
           content_preview: content.slice(0, 10_000),
         };
         actionData = data;

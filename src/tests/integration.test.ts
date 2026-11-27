@@ -1,6 +1,6 @@
 import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { evaluateHook } from '../adapters/hook-engine.js';
@@ -1038,6 +1038,52 @@ describe('Integration: pi adapter, tools added by OMP-based hosts', () => {
     const result = await evaluate('bash_background', { command: 'rm -rf /', cancel: null });
     assert.equal(result.decision, 'deny');
     assert.ok(result.riskTags?.includes('DANGEROUS_COMMAND'));
+  });
+
+  const auditTags = () =>
+    readFileSync(join(ctx.tempDir, 'audit.jsonl'), 'utf-8').trim().split('\n')
+      .map(line => (JSON.parse(line) as { risk_tags?: string[] }).risk_tags ?? []);
+
+  it('denies a hashline edit that appends to authorized_keys', async () => {
+    const input = '*** Begin Patch\n[/home/u/.ssh/authorized_keys#ABCD]\nPUT >$:\n+ssh-rsa AAAA attacker\n*** End Patch';
+    const result = await evaluate('edit', { input });
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('allows a benign hashline edit to a project file', async () => {
+    const input = '*** Begin Patch\n[src/greet.ts#1A2B]\nPUT 3.=3:\n+export const greeting = "hello";\n*** End Patch';
+    const result = await evaluate('edit', { input });
+    assert.equal(result.decision, 'allow');
+  });
+
+  it('keeps replace-mode edit analysis unchanged', async () => {
+    const benign = await evaluate('edit', { path: 'src/greet.ts', old_string: 'hi', new_string: 'hello' });
+    assert.equal(benign.decision, 'allow');
+    ctx.cleanup();
+    const sensitive = await evaluate('edit', {
+      path: '/home/u/.ssh/authorized_keys', old_string: 'a', new_string: 'ssh-rsa AAAA attacker',
+    });
+    assert.equal(sensitive.decision, 'deny');
+    assert.ok(sensitive.riskTags?.includes('SENSITIVE_PATH'));
+  });
+
+  it('logs an input-only edit with no file target, and an unknown-language eval, as uncategorised', async () => {
+    await evaluate('edit', { input: 'PUT >$:\n+x' });
+    assert.deepEqual(auditTags(), [['UNCATEGORIZED_TOOL:edit']]);
+    ctx.cleanup();
+    await evaluate('eval', { language: 'rb', code: 'puts 1' });
+    assert.deepEqual(auditTags(), [['UNCATEGORIZED_TOOL:eval']]);
+  });
+
+  it('blocks ast_edit through blocked_tools.pi', async () => {
+    ctx = createTestContext({ level: 'balanced', guard: { blocked_tools: { pi: ['ast_edit'] } } });
+    const result = await evaluateHook(
+      new PiAdapter(), { toolName: 'ast_edit', input: { ops: [{ pat: 'a', out: 'b' }], paths: ['src'] } }, ctx.options,
+      { logsConfig: { path: join(ctx.tempDir, 'audit.jsonl') } },
+    );
+    assert.equal(result.decision, 'deny');
+    assert.ok(result.riskTags?.includes('TOOL_GATE_BLOCKED'));
   });
 
   it('allows a plain web_search and flags one that carries a secret', async () => {

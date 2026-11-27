@@ -103,22 +103,24 @@ export interface ParsedMcpToolName {
   isMcp: boolean;
   server?: string;
   local?: string;
-  /** Bare tool name when `local` still carries a qualifier (`<connection>__<tool>`). */
-  tool?: string;
 }
 
 /**
  * Some pi-based hosts name MCP tools `<server>__<tool>` and app-service tools
- * `<service>__<connection>__<tool>`. Server is the first segment; `tool` is
- * the last one, for bare-name gating.
+ * `<service>__<connection>__<tool>`. Server is the first segment.
  */
 function parseDoubleUnderscoreToolName(name: string): ParsedMcpToolName | null {
   const first = name.indexOf('__');
   if (first <= 0 || first >= name.length - 2) return null;
-  const local = name.slice(first + 2);
-  const last = local.lastIndexOf('__');
-  const tool = last > 0 && last < local.length - 2 ? local.slice(last + 2) : undefined;
-  return { isMcp: true, server: name.slice(0, first), local, ...(tool ? { tool } : {}) };
+  return { isMcp: true, server: name.slice(0, first), local: name.slice(first + 2) };
+}
+
+/** A `__`-qualified tool name as the user sees it, plus its last segment. */
+function qualifiedNameCandidates(toolName: string): string[] {
+  const last = toolName.lastIndexOf('__');
+  if (last < 0) return [];
+  const bare = toolName.slice(last + 2);
+  return bare ? [toolName, bare] : [toolName];
 }
 
 /**
@@ -394,7 +396,7 @@ function checkToolGate(
     ? [
         parsed.local,
         ...(parsed.server ? [`${parsed.server}__${parsed.local}`] : []),
-        ...(parsed.tool ? [parsed.tool] : []),
+        ...qualifiedNameCandidates(toolName),
       ]
     : [];
 
