@@ -35,6 +35,11 @@ describe('editTargets', () => {
     assert.deepEqual(editTargets(patch), ['a.ts', 'b.ts', 'c.ts', 'd.ts']);
   });
 
+  it('treats only uppercase MV as a move, and skips hashline forms when asked', () => {
+    assert.deepEqual(editTargets(' mv .env.example .env\nmv a b'), []);
+    assert.deepEqual(editTargets('[a.ts#AB12]\nMV b.ts\n*** Add File: c.ts', { hashline: false }), ['c.ts']);
+  });
+
   it('ignores body rows and empty input', () => {
     assert.deepEqual(editTargets('PUT >$:\n+[x.ts#AB12]\n+*** Add File: y.ts\n-MV z.ts'), []);
     assert.deepEqual(editTargets(''), []);

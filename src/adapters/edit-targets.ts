@@ -19,20 +19,21 @@ const FILE_HEADER = /^\s*\*{0,3}\s*(?:(?:add|update|delete|edit)\s*file|move\s*t
 const BRACKET_HEADER = /^\s*\[([^\]\r\n]+)\]\s*$/;
 const BRACKET_TAG = /#[^\s#/\\]*\s*$/;
 const BRACKET_NOISE = /^\*{0,3}\s*(?:(?:update|add|delete|move)[^A-Za-z0-9]*(?:file|to)?[^A-Za-z0-9]*:)?\s*\*{0,3}\s*/i;
-// Hashline rename `MV <dest>`.
-const MOVE_OP = /^\s*MV\s+(.+?)\s*$/i;
+// Hashline rename `MV <dest>`; OMP rejects lowercase `mv`, and a shell `mv` line is common text.
+const MOVE_OP = /^\s*MV\s+(.+?)\s*$/;
 const SLOPPY_ALL_SUFFIX = /\s+all$/i;
 
 function unquote(path: string): string {
   return path.replace(/^(["'`])(.*)\1$/, '$2').trim();
 }
 
-function lineTargets(line: string): string[] {
+function lineTargets(line: string, hashline: boolean): string[] {
   const header = FILE_HEADER.exec(line);
   if (header) {
     const path = unquote(header[1]!);
     return SLOPPY_ALL_SUFFIX.test(path) ? [path, path.replace(SLOPPY_ALL_SUFFIX, '')] : [path];
   }
+  if (!hashline) return [];
   const bracket = BRACKET_HEADER.exec(line);
   if (bracket) return [unquote(bracket[1]!.replace(BRACKET_TAG, '').replace(BRACKET_NOISE, '').trim())];
   const move = MOVE_OP.exec(line);
@@ -40,10 +41,13 @@ function lineTargets(line: string): string[] {
   return [];
 }
 
-/** Distinct non-empty targets in order of appearance. */
-export function editTargets(patchText: string | undefined): string[] {
+/**
+ * Distinct non-empty targets in order of appearance. `hashline: false` skips
+ * the `[path#tag]` / `MV` forms, which only OMP's hashline mode accepts.
+ */
+export function editTargets(patchText: string | undefined, { hashline = true } = {}): string[] {
   if (!patchText) return [];
-  const targets = patchText.split(/\r?\n/).flatMap(lineTargets).filter(Boolean);
+  const targets = patchText.split(/\r?\n/).flatMap(line => lineTargets(line, hashline)).filter(Boolean);
   return [...new Set(targets)];
 }
 
