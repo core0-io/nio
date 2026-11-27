@@ -180,12 +180,13 @@ export function registerPiExtension(
     } catch { /* non-critical */ }
   });
 
-  pi.on('input', async (event: unknown, ctx: unknown) => {
+  // Not `input`: OMP-based hosts never emit it, while both emit this once per prompt.
+  pi.on('before_agent_start', async (event: unknown, ctx: unknown) => {
     try {
-      const e = event as { text?: string };
-      if (e.text) rt.onUserPrompt(sid(ctx), e.text);
+      const e = event as { prompt?: string };
+      if (e.prompt) rt.onUserPrompt(sid(ctx), e.prompt);
     } catch { /* non-critical */ }
-    return { action: 'continue' };
+    return undefined;
   });
 
   pi.on('message_end', async (event: unknown, ctx: unknown) => {

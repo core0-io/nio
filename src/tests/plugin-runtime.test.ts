@@ -526,7 +526,7 @@ describe('registerPiExtension', () => {
     const pi = fakePi();
     registerPiExtension(pi as never);
     for (const name of [
-      'tool_call', 'tool_result', 'input', 'session_start', 'session_shutdown',
+      'tool_call', 'tool_result', 'before_agent_start', 'session_start', 'session_shutdown',
       'agent_end', 'message_end', 'user_bash', 'resources_discover',
     ]) {
       assert.ok(pi.handlers.has(name), `missing handler: ${name}`);
@@ -625,13 +625,21 @@ describe('registerPiExtension — block path and confirm dialog', () => {
   function fakePi() {
     const handlers = new Map<string, (e: unknown, ctx: unknown) => Promise<unknown>>();
     const commands: string[] = [];
+    const commandHandlers = new Map<string, (args: string, ctx: unknown) => Promise<void>>();
     return {
       handlers,
       commands,
+      commandHandlers,
       on(name: string, fn: (e: unknown, ctx: unknown) => Promise<unknown>) {
         handlers.set(name, fn);
       },
-      registerCommand(name: string) { commands.push(name); },
+      registerCommand(
+        name: string,
+        options: { handler: (args: string, ctx: unknown) => Promise<void> },
+      ) {
+        commands.push(name);
+        commandHandlers.set(name, options.handler);
+      },
       registerTool() { /* unused */ },
     };
   }
@@ -778,6 +786,129 @@ describe('registerPiExtension — block path and confirm dialog', () => {
       // uses (folds "ask" to allow), so the agent is never left hanging.
       assert.equal(out, undefined);
     }, 'guard:\n  confirm_action: ask\n');
+  });
+
+  it('ctx.hasUI === false with confirm_action: deny blocks without prompting', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      const { ctx, confirmCalls } = fakeCtx(false, true);
+      const out = await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      ) as { block?: boolean; reason?: string };
+
+      assert.equal(confirmCalls.length, 0);
+      assert.equal(out.block, true);
+      assert.equal(typeof out.reason, 'string');
+    }, 'guard:\n  confirm_action: deny\n');
+  });
+
+  it('ctx.hasUI === false with confirm_action: allow lets the call through without prompting', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('confirm') });
+      const { ctx, confirmCalls } = fakeCtx(false, true);
+      const out = await pi.handlers.get('tool_call')!(
+        { toolName: 'bash', toolCallId: 'c1', input: { command: 'curl x' } }, ctx,
+      );
+
+      assert.equal(confirmCalls.length, 0);
+      assert.equal(out, undefined);
+    }, 'guard:\n  confirm_action: allow\n');
+  });
+
+  it('every handler and /nio settle without throwing when ctx.ui is absent', async () => {
+    await withIsolatedNioHome(async () => {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, { nioFactory: stubNioVerdict('allow') });
+      const headlessCtx = {
+        hasUI: false,
+        cwd: '/tmp',
+        sessionManager: { getSessionId: () => 'pi-session-1' },
+      };
+      const events: Record<string, unknown> = {
+        session_start: {},
+        before_agent_start: { prompt: 'hello' },
+        tool_call: { toolName: 'read', toolCallId: 'c1', input: { path: '/tmp/x' } },
+        tool_result: { toolName: 'read', toolCallId: 'c1', content: 'ok' },
+        message_end: { message: { role: 'assistant', content: 'done', usage: { input: 1, output: 1 } } },
+        user_bash: { command: 'ls', cwd: '/tmp' },
+        agent_end: {},
+        resources_discover: {},
+        session_shutdown: {},
+      };
+      assert.deepEqual([...pi.handlers.keys()].sort(), Object.keys(events).sort());
+      for (const [name, event] of Object.entries(events)) {
+        await pi.handlers.get(name)!(event, headlessCtx);
+      }
+
+      const printed: unknown[] = [];
+      const log = console.log;
+      console.log = (text: unknown) => { printed.push(text); };
+      try {
+        await pi.commandHandlers.get('nio')!('help', headlessCtx);
+      } finally {
+        console.log = log;
+      }
+      assert.equal(printed.length, 1, '/nio falls back to stdout when there is no ctx.ui');
+    });
+  });
+
+  async function capturePrompts(events: Array<[string, unknown]>) {
+    const recorded: string[] = [];
+    const original = InProcessPluginRuntime.prototype.onUserPrompt;
+    InProcessPluginRuntime.prototype.onUserPrompt = function (sessionId: string, text: string) {
+      recorded.push(text);
+      original.call(this, sessionId, text);
+    };
+    const tracer = makeInMemoryTracer();
+    try {
+      const { registerPiExtension } = await import('../adapters/pi-plugin.js');
+      const pi = fakePi();
+      registerPiExtension(pi as never, {
+        nioFactory: stubNioVerdict('allow'),
+        tracerProvider: tracer.provider,
+        meterProvider: null,
+      });
+      const { ctx } = fakeCtx(false, false);
+      for (const [name, event] of events) {
+        await pi.handlers.get(name)?.(event, ctx);
+      }
+      await pi.handlers.get('agent_end')!({}, ctx);
+      const turn = tracer.finished().at(-1);
+      return { recorded, turnPrompt: turn?.attributes['nio.turn.user_prompt'] };
+    } finally {
+      InProcessPluginRuntime.prototype.onUserPrompt = original;
+      await tracer.shutdown();
+    }
+  }
+
+  it('records the prompt once when input precedes before_agent_start (pi)', async () => {
+    const { recorded, turnPrompt } = await capturePrompts([
+      ['input', { text: '/skill:review src', source: 'interactive' }],
+      ['before_agent_start', { prompt: 'expanded review prompt', systemPrompt: '' }],
+    ]);
+    assert.deepEqual(recorded, ['expanded review prompt']);
+    assert.equal(turnPrompt, 'expanded review prompt');
+  });
+
+  it('records the prompt once when only before_agent_start fires (OMP-based hosts)', async () => {
+    const { recorded, turnPrompt } = await capturePrompts([
+      ['before_agent_start', { type: 'before_agent_start', reason: 'prompt', prompt: 'fix the build', systemPrompt: [] }],
+    ]);
+    assert.deepEqual(recorded, ['fix the build']);
+    assert.equal(turnPrompt, 'fix the build');
+  });
+
+  it('ignores a before_agent_start that carries no prompt', async () => {
+    const { recorded } = await capturePrompts([
+      ['before_agent_start', { reason: 'revive', prompt: '', systemPrompt: [] }],
+      ['before_agent_start', { messageType: 'custom', message: {}, systemPrompt: '' }],
+    ]);
+    assert.deepEqual(recorded, []);
   });
 
   it('forwards the real toolCallId onto the span, never the fallback spanKey', async () => {
